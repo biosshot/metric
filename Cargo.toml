@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/application",
+    "crates/blob",
+    "crates/domain",
+    "crates/mongo",
+    "crates/ports",
+    "crates/sentry-protocol",
+    "crates/server",
+    "crates/symbolication",
+    "crates/testkit",
+    "tools/dependency-check",
+]
+default-members = ["crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/faultkeep/faultkeep"
+
+[workspace.dependencies]
+axum = "0.8.4"
+clap = { version = "4.5.40", features = ["derive"] }
+figment = { version = "0.10.19", features = ["env", "toml"] }
+humantime = "2.2.0"
+metrics = "0.24.2"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+tokio = { version = "1.45.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = "0.7.15"
+tower = { version = "0.5.2", features = ["util"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.16.0", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

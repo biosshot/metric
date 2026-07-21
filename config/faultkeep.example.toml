@@ -1,0 +1,11 @@
+role = "all"
+
+[server]
+http_address = "127.0.0.1:3000"
+shutdown_grace = "10s"
+
+[mongodb]
+uri = { env = "MONGODB_URI" }
+
+[development]
+allow_literal_secrets = false

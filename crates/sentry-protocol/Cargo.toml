@@ -1,0 +1,13 @@
+[package]
+name = "faultkeep-sentry-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+faultkeep-domain = { path = "../domain" }
+
+[lints]
+workspace = true

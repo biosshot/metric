@@ -1,0 +1,6 @@
+[alias]
+dep-graph = "run --quiet -p dependency-check"
+test-fast = "test --workspace --all-targets"
+test-infrastructure = "test --workspace infrastructure_ -- --ignored"
+test-fuzz = "test --workspace fuzz_regression"
+test-performance = "test --release --workspace performance_ -- --ignored"

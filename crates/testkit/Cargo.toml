@@ -1,0 +1,15 @@
+[package]
+name = "faultkeep-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+faultkeep-application = { path = "../application" }
+faultkeep-domain = { path = "../domain" }
+faultkeep-ports = { path = "../ports" }
+
+[lints]
+workspace = true

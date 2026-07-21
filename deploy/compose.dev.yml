@@ -1,0 +1,16 @@
+services:
+  mongodb:
+    image: mongo:8.0.12
+    command: ["mongod", "--bind_ip_all", "--setParameter", "enableTestCommands=1"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: faultkeep
+      MONGO_INITDB_ROOT_PASSWORD: faultkeep-local-only
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /data/db
