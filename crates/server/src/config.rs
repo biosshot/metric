@@ -1,7 +1,7 @@
 use std::{env, fmt, fs, net::SocketAddr, path::PathBuf, str::FromStr};
 
 use clap::{Parser, ValueEnum};
-use faultkeep_domain::BoundedDuration;
+use faultkeep_domain::{BoundedDuration, ByteSize};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
@@ -13,6 +13,8 @@ const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_SHUTDOWN_GRACE_MILLIS: u64 = 5 * 60 * 1_000;
 
 pub type ShutdownGrace = BoundedDuration<MAX_SHUTDOWN_GRACE_MILLIS>;
+pub type RequestTimeout = BoundedDuration<60_000>;
+type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "faultkeep", version, about = "Faultkeep all-in-one server")]
@@ -51,6 +53,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub mongodb: MongoConfig,
     pub development: DevelopmentConfig,
+    pub ingest: IngestConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +70,19 @@ pub struct MongoConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct DevelopmentConfig {
     pub allow_literal_secrets: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestConfig {
+    pub max_compressed_request_bytes: usize,
+    pub max_decompressed_request_bytes: usize,
+    pub max_event_bytes: usize,
+    pub max_envelope_items: usize,
+    pub max_active_requests: usize,
+    pub max_parsing_tasks: usize,
+    pub max_waiting_for_storage: usize,
+    pub request_timeout: RequestTimeout,
+    pub unsupported_backoff_seconds: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -185,6 +201,7 @@ struct RawConfig {
     server: RawServerConfig,
     mongodb: RawMongoConfig,
     development: RawDevelopmentConfig,
+    ingest: RawIngestConfig,
 }
 
 impl Default for RawConfig {
@@ -194,6 +211,7 @@ impl Default for RawConfig {
             server: RawServerConfig::default(),
             mongodb: RawMongoConfig::default(),
             development: RawDevelopmentConfig::default(),
+            ingest: RawIngestConfig::default(),
         }
     }
 }
@@ -226,6 +244,36 @@ struct RawDevelopmentConfig {
     allow_literal_secrets: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawIngestConfig {
+    max_compressed_request_bytes: String,
+    max_decompressed_request_bytes: String,
+    max_event_bytes: String,
+    max_envelope_items: usize,
+    max_active_requests: usize,
+    max_parsing_tasks: usize,
+    max_waiting_for_storage: usize,
+    request_timeout: String,
+    unsupported_backoff_seconds: u64,
+}
+
+impl Default for RawIngestConfig {
+    fn default() -> Self {
+        Self {
+            max_compressed_request_bytes: "20 MiB".to_owned(),
+            max_decompressed_request_bytes: "100 MiB".to_owned(),
+            max_event_bytes: "1 MiB".to_owned(),
+            max_envelope_items: 100,
+            max_active_requests: 512,
+            max_parsing_tasks: 0,
+            max_waiting_for_storage: 512,
+            request_timeout: "10s".to_owned(),
+            unsupported_backoff_seconds: 3600,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("configuration could not be loaded")]
@@ -236,6 +284,8 @@ pub enum ConfigError {
     MissingConfigFile,
     #[error("server.shutdown_grace is invalid or exceeds five minutes")]
     InvalidShutdownGrace,
+    #[error("ingest configuration is invalid or outside supported bounds")]
+    InvalidIngestConfig,
     #[error("secret reference is invalid")]
     InvalidSecretReference,
     #[error("literal secrets require development.allow_literal_secrets=true")]
@@ -289,6 +339,7 @@ impl TryFrom<RawConfig> for AppConfig {
         if let Some(reference) = &raw.mongodb.uri {
             reference.validate(raw.development.allow_literal_secrets)?;
         }
+        let ingest = IngestConfig::try_from(raw.ingest)?;
         Ok(Self {
             role: raw.role,
             server: ServerConfig {
@@ -301,6 +352,7 @@ impl TryFrom<RawConfig> for AppConfig {
             development: DevelopmentConfig {
                 allow_literal_secrets: raw.development.allow_literal_secrets,
             },
+            ingest,
         })
     }
 }
@@ -322,18 +374,68 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\n\n[development]\nallow_literal_secrets = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
             uri,
             self.development.allow_literal_secrets,
+            self.ingest.max_compressed_request_bytes,
+            self.ingest.max_decompressed_request_bytes,
+            self.ingest.max_event_bytes,
+            self.ingest.max_envelope_items,
+            self.ingest.max_active_requests,
+            self.ingest.max_parsing_tasks,
+            self.ingest.max_waiting_for_storage,
+            humantime::format_duration(self.ingest.request_timeout.get()),
+            self.ingest.unsupported_backoff_seconds,
         )
     }
 
     #[must_use]
     pub fn has_literal_secret_warning(&self) -> bool {
         matches!(self.mongodb.uri, Some(SecretReference::Literal(_)))
+    }
+}
+
+impl TryFrom<RawIngestConfig> for IngestConfig {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawIngestConfig) -> Result<Self, Self::Error> {
+        let compressed = ConfiguredBytes::from_str(&raw.max_compressed_request_bytes)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let decompressed = ConfiguredBytes::from_str(&raw.max_decompressed_request_bytes)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let event = ConfiguredBytes::from_str(&raw.max_event_bytes)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let request_timeout = RequestTimeout::from_str(&raw.request_timeout)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let valid = compressed.get() > 0
+            && decompressed.get() >= compressed.get()
+            && event.get() > 0
+            && event.get() <= decompressed.get()
+            && (1..=1000).contains(&raw.max_envelope_items)
+            && raw.max_active_requests > 0
+            && raw.max_waiting_for_storage > 0
+            && !request_timeout.get().is_zero()
+            && raw.unsupported_backoff_seconds > 0;
+        if !valid {
+            return Err(ConfigError::InvalidIngestConfig);
+        }
+        Ok(Self {
+            max_compressed_request_bytes: usize::try_from(compressed.get())
+                .map_err(|_| ConfigError::InvalidIngestConfig)?,
+            max_decompressed_request_bytes: usize::try_from(decompressed.get())
+                .map_err(|_| ConfigError::InvalidIngestConfig)?,
+            max_event_bytes: usize::try_from(event.get())
+                .map_err(|_| ConfigError::InvalidIngestConfig)?,
+            max_envelope_items: raw.max_envelope_items,
+            max_active_requests: raw.max_active_requests,
+            max_parsing_tasks: raw.max_parsing_tasks,
+            max_waiting_for_storage: raw.max_waiting_for_storage,
+            request_timeout,
+            unsupported_backoff_seconds: raw.unsupported_backoff_seconds,
+        })
     }
 }
 

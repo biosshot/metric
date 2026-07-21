@@ -10,6 +10,7 @@ repository.workspace = true
 faultkeep-application = { path = "../application" }
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
+tokio.workspace = true
 
 [lints]
 workspace = true

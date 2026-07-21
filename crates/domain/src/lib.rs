@@ -1,6 +1,6 @@
 //! Transport- and adapter-independent bounded primitives.
 
-use std::{fmt, str::FromStr, time::Duration};
+use std::{fmt, num::NonZeroI32, str::FromStr, time::Duration};
 
 use thiserror::Error;
 
@@ -27,6 +27,12 @@ pub enum PrimitiveError {
     TimestampOutOfRange,
     #[error("invalid stable error code")]
     InvalidErrorCode,
+    #[error("invalid project identifier")]
+    InvalidProjectId,
+    #[error("invalid DSN key")]
+    InvalidDsnKey,
+    #[error("invalid Event identifier")]
+    InvalidEventId,
 }
 
 /// Non-empty UTF-8 identifier with a compile-time byte bound.
@@ -216,6 +222,179 @@ impl fmt::Display for ErrorCode {
     }
 }
 
+/// Stable project identifier shared by Sentry paths and persistence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProjectId(NonZeroI32);
+
+impl ProjectId {
+    pub fn new(value: i32) -> Result<Self, PrimitiveError> {
+        NonZeroI32::new(value)
+            .filter(|value| value.get().is_positive())
+            .map(Self)
+            .ok_or(PrimitiveError::InvalidProjectId)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> i32 {
+        self.0.get()
+    }
+}
+
+/// Sentry-compatible 16-byte ingest credential.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DsnKey([u8; 16]);
+
+impl DsnKey {
+    pub fn parse(value: &str) -> Result<Self, PrimitiveError> {
+        parse_hex_identifier(value)
+            .map(Self)
+            .ok_or(PrimitiveError::InvalidDsnKey)
+    }
+
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    #[must_use]
+    pub const fn as_bytes(self) -> [u8; 16] {
+        self.0
+    }
+}
+
+impl fmt::Debug for DsnKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DsnKey(<redacted>)")
+    }
+}
+
+impl fmt::Display for DsnKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&hex::encode(self.0))
+    }
+}
+
+/// Sentry Event identifier, encoded as 32 hexadecimal characters on the wire.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EventId([u8; 16]);
+
+impl EventId {
+    pub fn parse(value: &str) -> Result<Self, PrimitiveError> {
+        parse_hex_identifier(value)
+            .map(Self)
+            .ok_or(PrimitiveError::InvalidEventId)
+    }
+
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl fmt::Debug for EventId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl fmt::Display for EventId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&hex::encode(self.0))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct SecretBytes([u8; 32]);
+
+impl SecretBytes {
+    #[must_use]
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    #[must_use]
+    pub const fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretBytes(<redacted>)")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpScrubPolicy {
+    Hmac,
+    Keep,
+    Remove,
+    Truncate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrubPolicy {
+    pub revision: u64,
+    pub ip_policy: IpScrubPolicy,
+    pub hmac_key: SecretBytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemCapabilities {
+    pub error: bool,
+    pub client_report: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSnapshot {
+    pub project_id: ProjectId,
+    pub scrub_policy: ScrubPolicy,
+    pub items: ItemCapabilities,
+}
+
+/// Sanitized acceptance payload. The unsanitized wire body cannot inhabit this type.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ScrubbedEventPayload(Box<[u8]>);
+
+impl ScrubbedEventPayload {
+    #[must_use]
+    pub fn new(bytes: impl Into<Box<[u8]>>) -> Self {
+        Self(bytes.into())
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ScrubbedEventPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScrubbedEventPayload")
+            .field("bytes", &self.0.len())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedEvent {
+    pub project_id: ProjectId,
+    pub event_id: EventId,
+    pub received_at: Timestamp,
+    pub policy_revision: u64,
+    pub payload: ScrubbedEventPayload,
+}
+
+fn parse_hex_identifier(value: &str) -> Option<[u8; 16]> {
+    if value.len() != 32 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut bytes = [0_u8; 16];
+    hex::decode_to_slice(value, &mut bytes).ok()?;
+    Some(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +423,13 @@ mod tests {
         assert!(Timestamp::from_unix_millis(MIN_TIMESTAMP_MILLIS).is_ok());
         assert!(Timestamp::from_unix_millis(MAX_TIMESTAMP_MILLIS).is_ok());
         assert!(Timestamp::from_unix_millis(i64::MIN).is_err());
+    }
+
+    #[test]
+    fn sentry_identifiers_have_canonical_fixed_width() {
+        let event = EventId::parse("0123456789abcdef0123456789ABCDEF").unwrap();
+        assert_eq!(event.to_string(), "0123456789abcdef0123456789abcdef");
+        assert!(DsnKey::parse("short").is_err());
+        assert!(ProjectId::new(0).is_err());
     }
 }

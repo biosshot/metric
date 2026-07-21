@@ -1,0 +1,22 @@
+manifest_version = 1
+
+[[fixture]]
+name = "synthetic-envelope-v1"
+transport = "envelope"
+auth = ["header", "query", "envelope_dsn"]
+compression = ["identity", "gzip", "deflate"]
+error_event = "pass"
+mixed_disabled_items = "pass"
+fixture_set = "error-event-v1"
+
+# Official SDK process rows are added only after each exact SDK/runtime pair runs.
+# Phase 1 does not turn protocol similarity into an unsupported compatibility claim.
+[[sdk]]
+name = "python"
+version = "2.32.0"
+runtime = "CPython 3.11"
+transport = "envelope"
+auth = "header"
+compression = "identity"
+error_event = "pass"
+fixture_set = "python-2.32.0-error-event-v1"

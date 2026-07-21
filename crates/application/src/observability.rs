@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
     HttpRequests,
+    IngestRequests,
     Shutdowns,
 }
 
@@ -11,6 +12,7 @@ impl Metric {
     const fn name(self) -> &'static str {
         match self {
             Self::HttpRequests => "faultkeep_http_requests_total",
+            Self::IngestRequests => "faultkeep_ingest_requests_total",
             Self::Shutdowns => "faultkeep_shutdown_total",
         }
     }
@@ -21,6 +23,7 @@ impl Metric {
 pub enum Outcome {
     Ok,
     Error,
+    Rejected,
     Cancelled,
 }
 
@@ -29,6 +32,7 @@ impl Outcome {
         match self {
             Self::Ok => "ok",
             Self::Error => "error",
+            Self::Rejected => "rejected",
             Self::Cancelled => "cancelled",
         }
     }

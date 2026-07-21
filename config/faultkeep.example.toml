@@ -9,3 +9,14 @@ uri = { env = "MONGODB_URI" }
 
 [development]
 allow_literal_secrets = false
+
+[ingest]
+max_compressed_request_bytes = "20 MiB"
+max_decompressed_request_bytes = "100 MiB"
+max_event_bytes = "1 MiB"
+max_envelope_items = 100
+max_active_requests = 512
+max_parsing_tasks = 0
+max_waiting_for_storage = 512
+request_timeout = "10s"
+unsupported_backoff_seconds = 3600

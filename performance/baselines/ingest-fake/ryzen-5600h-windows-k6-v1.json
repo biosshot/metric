@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "source": "phase-1 working tree based on d8f657b5c3f08dd3674ecf005b037df47ac729cc",
+    "fixture_revision": "error-event-v1",
+    "target_rps": 2500,
+    "mode": "arrival-rate",
+    "constant_vus": null,
+    "duration": "15s",
+    "rust_toolchain": "1.88.0",
+    "k6_version": "2.1.0",
+    "hardware": "AMD Ryzen 5 5600H, 6C/12T, 16 GiB RAM, Windows; generator colocated",
+    "command": "k6 run performance/k6/ingest-fake.js",
+    "durability": "deterministic benchmark fake; not MongoDB",
+    "server_config": {
+      "max_compressed_request_bytes": 20971520,
+      "max_decompressed_request_bytes": 104857600,
+      "max_event_bytes": 1048576,
+      "max_envelope_items": 100,
+      "max_active_requests": 512,
+      "max_parsing_tasks": 0,
+      "max_waiting_for_storage": 512,
+      "request_timeout": "10s"
+    }
+  },
+  "metrics": {
+    "iterations": 37501,
+    "achieved_rps": 2499.9201213491533,
+    "error_rate": 0,
+    "bytes_per_second": {
+      "sent": 3092401.1901089028,
+      "received": 372488.09808102384
+    },
+    "latency_ms": {
+      "average": 0.04025136129703208,
+      "p50": 0,
+      "p95": 0.5166,
+      "p99": 0.6184,
+      "maximum": 12.3034
+    },
+    "dropped_iterations": 0
+  },
+  "known_limits": {
+    "3000_rps_repeat_attempt": {
+      "achieved_rps": 2995.1083496845,
+      "error_rate": 0,
+      "p95_ms": 0.5219,
+      "dropped_iterations": 74,
+      "result": "failed dropped-iteration threshold after an earlier passing run; excluded as a stable baseline"
+    },
+    "max_throughput_64_vus": {
+      "achieved_rps": 5451.638718012543,
+      "error_rate": 0,
+      "p95_ms": 22.338,
+      "iterations": 81849,
+      "result": "colocated generator and server; not a controlled reference-host gate"
+    },
+    "5000_rps_attempt": {
+      "achieved_rps": 4972.989524898384,
+      "error_rate": 0,
+      "p95_ms": 1.0491,
+      "dropped_iterations": 398,
+      "result": "failed dropped-iteration threshold; colocated generator limit not hidden"
+    },
+    "module_rps": {
+      "envelope_parser": 3929829,
+      "event_validation_and_scrub": 135113,
+      "minimum_gate_each": 20000
+    }
+  }
+}

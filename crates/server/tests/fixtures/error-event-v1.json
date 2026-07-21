@@ -1,0 +1,1 @@
+{"event_id":"0123456789abcdef0123456789abcdef","message":"synthetic failure","request":{"headers":{"authorization":"Bearer fixture-secret"}},"user":{"ip_address":"192.0.2.10"},"unknown":{"api_key":"fixture-api-key"}}

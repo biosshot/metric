@@ -14,7 +14,7 @@ use faultkeep_application::{
 };
 use serde::Serialize;
 use tokio::{net::TcpListener, task::JoinHandle, time::timeout};
-use tracing::info_span;
+use tracing::{Instrument, info_span};
 
 #[derive(Clone)]
 struct HttpState {
@@ -27,15 +27,17 @@ struct ProbeResponse {
     status: &'static str,
 }
 
-pub fn router(shutdown: ShutdownSignal, metrics: Metrics) -> Router {
+pub fn router(shutdown: ShutdownSignal, metrics: Metrics, application_routes: Router) -> Router {
     let state = HttpState { shutdown, metrics };
-    Router::new()
+    let live_routes = Router::new()
         .route("/live", get(live))
+        .with_state(state.clone());
+    live_routes
+        .merge(application_routes)
         .layer(middleware::from_fn_with_state(
             state.clone(),
             request_context,
         ))
-        .with_state(state)
 }
 
 async fn live(State(state): State<HttpState>) -> Response {
@@ -63,8 +65,7 @@ async fn request_context(
         request_id = %request_id,
         operation = "http.request",
     );
-    let _entered = span.enter();
-    let response = next.run(request).await;
+    let response = next.run(request).instrument(span).await;
     let outcome = if response.status().is_server_error() {
         Outcome::Error
     } else {
@@ -78,9 +79,8 @@ pub async fn run(
     listener: TcpListener,
     shutdown: ShutdownSignal,
     shutdown_grace: Duration,
-    metrics: Metrics,
+    app: Router,
 ) -> io::Result<()> {
-    let app = router(shutdown.clone(), metrics);
     let server_shutdown = shutdown.clone();
     let mut server: JoinHandle<io::Result<()>> = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -116,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn live_is_healthy_before_shutdown() {
         let root = ShutdownRoot::new();
-        let response = router(root.signal(), Metrics)
+        let response = router(root.signal(), Metrics, Router::new())
             .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -126,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn live_reflects_shutdown_fence() {
         let root = ShutdownRoot::new();
-        let app = router(root.signal(), Metrics);
+        let app = router(root.signal(), Metrics, Router::new());
         root.begin();
         let response = app
             .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
@@ -140,7 +140,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let root = ShutdownRoot::new();
         let signal = root.signal();
-        let server = tokio::spawn(run(listener, signal, Duration::from_secs(1), Metrics));
+        let app = router(signal.clone(), Metrics, Router::new());
+        let server = tokio::spawn(run(listener, signal, Duration::from_secs(1), app));
         tokio::task::yield_now().await;
         root.begin();
         timeout(Duration::from_secs(2), server)

@@ -1,7 +1,9 @@
 # faultkeep
 
-Phase 0 provides the bounded Cargo workspace foundation described by ADR-0039. It
-does not implement Event ingestion or persistence.
+Phase 1 adds bounded Sentry Error Event HTTP ingestion over the Phase 0 workspace.
+Production composition deliberately returns unavailable until the real Project and
+durable Event adapters arrive in later phases; deterministic fakes exist only in
+tests and the benchmark binary.
 
 ## Local checks
 
@@ -14,7 +16,10 @@ cargo test-fast --locked
 
 Additional risk-tier commands are `cargo test-infrastructure`, `cargo test-fuzz`,
 and `cargo test-performance`. Infrastructure tests use the exact MongoDB image in
-`deploy/compose.dev.yml`; Phase 0 itself has no database integration tests.
+`deploy/compose.dev.yml`; Phase 1 itself has no database adapter.
+
+The retained k6 workload, JSON baselines, and regression comparator are documented
+in `performance/README.md`.
 
 Validate configuration without starting the server:
 

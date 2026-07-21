@@ -1,3 +1,564 @@
-//! Sentry wire DTOs and parsers are introduced in Phase 1.
-//!
-//! This crate deliberately contains no Event behavior in Phase 0.
+//! Bounded Sentry wire parsing for the Phase 1 Error Event transport.
+
+use std::collections::BTreeSet;
+
+use faultkeep_domain::{DsnKey, EventId, ProjectId};
+use serde::Deserialize;
+use thiserror::Error;
+use url::Url;
+
+const MAX_HEADER_BYTES: usize = 8 * 1024;
+const MAX_AUTH_BYTES: usize = 2 * 1024;
+const MAX_CLIENT_REPORT_ENTRIES: usize = 100;
+const MAX_CLIENT_REPORT_TEXT_BYTES: usize = 64;
+
+#[derive(Debug, Clone, Copy)]
+pub struct EnvelopeLimits {
+    pub max_items: usize,
+    pub max_event_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DsnAuth {
+    pub key: DsnKey,
+    pub project_id: ProjectId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedEnvelope {
+    pub event_id: Option<EventId>,
+    pub dsn: Option<DsnAuth>,
+    pub primary: Option<RawEvent>,
+    pub discarded: Vec<DiscardedItem>,
+    pub client_report_quantity: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawEvent {
+    pub header_event_id: Option<EventId>,
+    pub bytes: Box<[u8]>,
+}
+
+impl std::fmt::Debug for RawEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawEvent")
+            .field("header_event_id", &self.header_event_id)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DisabledCategory {
+    Transaction,
+    Session,
+    Profile,
+    Replay,
+    CheckIn,
+    Span,
+    Statsd,
+    Attachment,
+    OtherKnown,
+}
+
+impl DisabledCategory {
+    #[must_use]
+    pub const fn sentry_name(self) -> &'static str {
+        match self {
+            Self::Transaction => "transaction",
+            Self::Session => "session",
+            Self::Profile => "profile",
+            Self::Replay => "replay",
+            Self::CheckIn => "monitor",
+            Self::Span => "span",
+            Self::Statsd => "metric_bucket",
+            Self::Attachment => "attachment",
+            Self::OtherKnown => "default",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiscardedItem {
+    pub category: Option<DisabledCategory>,
+    pub reason: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolErrorKind {
+    Invalid,
+    TooLarge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("Sentry request is invalid")]
+pub struct ProtocolError {
+    kind: ProtocolErrorKind,
+    code: &'static str,
+}
+
+impl ProtocolError {
+    #[must_use]
+    pub const fn kind(self) -> ProtocolErrorKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        self.code
+    }
+
+    const fn invalid(code: &'static str) -> Self {
+        Self {
+            kind: ProtocolErrorKind::Invalid,
+            code,
+        }
+    }
+
+    const fn too_large(code: &'static str) -> Self {
+        Self {
+            kind: ProtocolErrorKind::TooLarge,
+            code,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WireEnvelopeHeader {
+    event_id: Option<String>,
+    dsn: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireItemHeader {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    length: Option<u64>,
+    event_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireClientReport {
+    discarded_events: Vec<WireClientReportEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireClientReportEntry {
+    reason: String,
+    category: String,
+    quantity: u64,
+}
+
+pub fn parse_envelope(
+    body: &[u8],
+    limits: EnvelopeLimits,
+) -> Result<ParsedEnvelope, ProtocolError> {
+    let (header_bytes, mut cursor) = line_at(body, 0)?;
+    let header: WireEnvelopeHeader = serde_json::from_slice(header_bytes)
+        .map_err(|_| ProtocolError::invalid("invalid_envelope_header"))?;
+    let event_id = parse_optional_event_id(header.event_id.as_deref())?;
+    let dsn = header.dsn.as_deref().map(parse_dsn).transpose()?;
+    let mut primary = None;
+    let mut discarded = Vec::new();
+    let mut client_report_quantity = 0_u64;
+    let mut item_count = 0_usize;
+
+    while cursor < body.len() {
+        item_count += 1;
+        if item_count > limits.max_items {
+            return Err(ProtocolError::too_large("too_many_items"));
+        }
+        let (item_header_bytes, payload_start) = line_at(body, cursor)?;
+        let item_header: WireItemHeader = serde_json::from_slice(item_header_bytes)
+            .map_err(|_| ProtocolError::invalid("invalid_item_header"))?;
+        let length = item_header
+            .length
+            .ok_or_else(|| ProtocolError::invalid("missing_item_length"))?;
+        let length = usize::try_from(length)
+            .map_err(|_| ProtocolError::too_large("item_length_overflow"))?;
+        let payload_end = payload_start
+            .checked_add(length)
+            .ok_or_else(|| ProtocolError::too_large("item_length_overflow"))?;
+        if payload_end > body.len() {
+            return Err(ProtocolError::invalid("truncated_item"));
+        }
+        let payload = &body[payload_start..payload_end];
+        let kind = item_header.kind.as_deref().unwrap_or("event");
+        match classify_item(kind) {
+            ItemClass::Event => {
+                if length > limits.max_event_bytes {
+                    return Err(ProtocolError::too_large("event_too_large"));
+                }
+                if primary.is_some() {
+                    return Err(ProtocolError::invalid("multiple_primary_events"));
+                }
+                primary = Some(RawEvent {
+                    header_event_id: parse_optional_event_id(item_header.event_id.as_deref())?,
+                    bytes: payload.into(),
+                });
+            }
+            ItemClass::ClientReport => {
+                client_report_quantity =
+                    client_report_quantity.saturating_add(parse_client_report(payload)?);
+            }
+            ItemClass::Disabled(category) => discarded.push(DiscardedItem {
+                category: Some(category),
+                reason: if category == DisabledCategory::Attachment {
+                    "attachment_policy_disabled"
+                } else {
+                    "feature_disabled"
+                },
+            }),
+            ItemClass::Unknown => discarded.push(DiscardedItem {
+                category: None,
+                reason: "unknown_item_type",
+            }),
+        }
+        cursor = payload_end;
+        if cursor < body.len() {
+            if body[cursor] != b'\n' {
+                return Err(ProtocolError::invalid("missing_item_separator"));
+            }
+            cursor += 1;
+        }
+    }
+
+    if primary.is_none() && discarded.is_empty() && client_report_quantity == 0 {
+        return Err(ProtocolError::invalid("empty_envelope"));
+    }
+    Ok(ParsedEnvelope {
+        event_id,
+        dsn,
+        primary,
+        discarded,
+        client_report_quantity,
+    })
+}
+
+pub fn parse_store_event(body: &[u8], max_event_bytes: usize) -> Result<RawEvent, ProtocolError> {
+    if body.len() > max_event_bytes {
+        return Err(ProtocolError::too_large("event_too_large"));
+    }
+    if body.is_empty() {
+        return Err(ProtocolError::invalid("empty_event"));
+    }
+    Ok(RawEvent {
+        header_event_id: None,
+        bytes: body.into(),
+    })
+}
+
+pub fn parse_x_sentry_auth(value: &str) -> Result<DsnKey, ProtocolError> {
+    if value.len() > MAX_AUTH_BYTES {
+        return Err(ProtocolError::invalid("auth_header_too_large"));
+    }
+    let fields = value
+        .strip_prefix("Sentry ")
+        .ok_or_else(|| ProtocolError::invalid("invalid_auth_scheme"))?;
+    let mut keys = BTreeSet::new();
+    for field in fields.split(',') {
+        let Some((name, value)) = field.trim().split_once('=') else {
+            return Err(ProtocolError::invalid("invalid_auth_field"));
+        };
+        if name.trim() == "sentry_key" {
+            keys.insert(
+                DsnKey::parse(value.trim())
+                    .map_err(|_| ProtocolError::invalid("invalid_dsn_key"))?,
+            );
+        }
+    }
+    if keys.len() != 1 {
+        return Err(ProtocolError::invalid("missing_or_conflicting_dsn_key"));
+    }
+    Ok(*keys.first().expect("one key was checked"))
+}
+
+pub fn parse_query_auth(query: &str) -> Result<Option<DsnKey>, ProtocolError> {
+    if query.len() > MAX_AUTH_BYTES {
+        return Err(ProtocolError::invalid("auth_query_too_large"));
+    }
+    let mut keys = BTreeSet::new();
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if name == "sentry_key" {
+            keys.insert(
+                DsnKey::parse(&value).map_err(|_| ProtocolError::invalid("invalid_dsn_key"))?,
+            );
+        }
+    }
+    if keys.len() > 1 {
+        return Err(ProtocolError::invalid("conflicting_dsn_key"));
+    }
+    Ok(keys.first().copied())
+}
+
+fn line_at(body: &[u8], start: usize) -> Result<(&[u8], usize), ProtocolError> {
+    let remaining = body
+        .get(start..)
+        .ok_or_else(|| ProtocolError::invalid("invalid_framing"))?;
+    let newline = remaining
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| ProtocolError::invalid("missing_header_newline"))?;
+    if newline > MAX_HEADER_BYTES {
+        return Err(ProtocolError::too_large("header_too_large"));
+    }
+    Ok((&remaining[..newline], start + newline + 1))
+}
+
+fn parse_optional_event_id(value: Option<&str>) -> Result<Option<EventId>, ProtocolError> {
+    value
+        .map(|value| EventId::parse(value).map_err(|_| ProtocolError::invalid("invalid_event_id")))
+        .transpose()
+}
+
+fn parse_dsn(value: &str) -> Result<DsnAuth, ProtocolError> {
+    if value.len() > MAX_AUTH_BYTES {
+        return Err(ProtocolError::invalid("dsn_too_large"));
+    }
+    let dsn = Url::parse(value).map_err(|_| ProtocolError::invalid("invalid_dsn"))?;
+    if !matches!(dsn.scheme(), "http" | "https") {
+        return Err(ProtocolError::invalid("invalid_dsn_scheme"));
+    }
+    let key =
+        DsnKey::parse(dsn.username()).map_err(|_| ProtocolError::invalid("invalid_dsn_key"))?;
+    let project = dsn
+        .path_segments()
+        .and_then(Iterator::last)
+        .ok_or_else(|| ProtocolError::invalid("missing_dsn_project"))?
+        .parse::<i32>()
+        .map_err(|_| ProtocolError::invalid("invalid_dsn_project"))?;
+    let project_id =
+        ProjectId::new(project).map_err(|_| ProtocolError::invalid("invalid_dsn_project"))?;
+    Ok(DsnAuth { key, project_id })
+}
+
+fn parse_client_report(payload: &[u8]) -> Result<u64, ProtocolError> {
+    let report: WireClientReport = serde_json::from_slice(payload)
+        .map_err(|_| ProtocolError::invalid("invalid_client_report"))?;
+    if report.discarded_events.len() > MAX_CLIENT_REPORT_ENTRIES {
+        return Err(ProtocolError::too_large("client_report_too_large"));
+    }
+    let mut quantity = 0_u64;
+    for entry in report.discarded_events {
+        if entry.reason.len() > MAX_CLIENT_REPORT_TEXT_BYTES
+            || entry.category.len() > MAX_CLIENT_REPORT_TEXT_BYTES
+        {
+            return Err(ProtocolError::too_large("client_report_field_too_large"));
+        }
+        quantity = quantity.saturating_add(entry.quantity);
+    }
+    Ok(quantity)
+}
+
+enum ItemClass {
+    Event,
+    ClientReport,
+    Disabled(DisabledCategory),
+    Unknown,
+}
+
+fn classify_item(kind: &str) -> ItemClass {
+    match kind {
+        "event" => ItemClass::Event,
+        "client_report" => ItemClass::ClientReport,
+        "transaction" => ItemClass::Disabled(DisabledCategory::Transaction),
+        "session" | "sessions" => ItemClass::Disabled(DisabledCategory::Session),
+        "profile" | "profile_chunk" => ItemClass::Disabled(DisabledCategory::Profile),
+        "replay_event" | "replay_recording" => ItemClass::Disabled(DisabledCategory::Replay),
+        "check_in" => ItemClass::Disabled(DisabledCategory::CheckIn),
+        "span" => ItemClass::Disabled(DisabledCategory::Span),
+        "statsd" | "metric_buckets" => ItemClass::Disabled(DisabledCategory::Statsd),
+        "attachment" | "view_hierarchy" => ItemClass::Disabled(DisabledCategory::Attachment),
+        "form_data" | "user_report" | "security" => {
+            ItemClass::Disabled(DisabledCategory::OtherKnown)
+        }
+        _ => ItemClass::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EVENT: &str = r#"{"event_id":"0123456789abcdef0123456789abcdef","message":"boom"}"#;
+
+    fn envelope(item_header: &str, payload: &str) -> Vec<u8> {
+        format!("{{}}\n{item_header}\n{payload}").into_bytes()
+    }
+
+    #[test]
+    fn parses_length_delimited_error_event() {
+        let body = envelope(
+            &format!(r#"{{"type":"event","length":{}}}"#, EVENT.len()),
+            EVENT,
+        );
+        let parsed = parse_envelope(
+            &body,
+            EnvelopeLimits {
+                max_items: 100,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn declared_length_is_authoritative() {
+        let body = envelope(r#"{"type":"event","length":999}"#, EVENT);
+        assert_eq!(
+            parse_envelope(
+                &body,
+                EnvelopeLimits {
+                    max_items: 100,
+                    max_event_bytes: 1024,
+                },
+            )
+            .unwrap_err()
+            .code(),
+            "truncated_item"
+        );
+    }
+
+    #[test]
+    fn declared_length_property_never_reads_past_the_available_payload() {
+        for declared in 0..=(EVENT.len() + 16) {
+            let body = envelope(&format!(r#"{{"type":"event","length":{declared}}}"#), EVENT);
+            let result = parse_envelope(
+                &body,
+                EnvelopeLimits {
+                    max_items: 1,
+                    max_event_bytes: EVENT.len() + 16,
+                },
+            );
+            if declared == EVENT.len() {
+                assert_eq!(result.unwrap().primary.unwrap().bytes.len(), declared);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "declared length {declared} must fail closed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_disabled_item_does_not_remove_error() {
+        let body = format!(
+            "{{}}\n{{\"type\":\"event\",\"length\":{}}}\n{}\n{{\"type\":\"transaction\",\"length\":2}}\n{{}}",
+            EVENT.len(),
+            EVENT
+        );
+        let parsed = parse_envelope(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 100,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert!(parsed.primary.is_some());
+        assert_eq!(parsed.discarded[0].reason, "feature_disabled");
+    }
+
+    #[test]
+    fn client_report_quantity_is_bounded_and_saturating() {
+        let payload =
+            r#"{"discarded_events":[{"reason":"queue_overflow","category":"error","quantity":7}]}"#;
+        let body = envelope(
+            &format!(r#"{{"type":"client_report","length":{}}}"#, payload.len()),
+            payload,
+        );
+        let parsed = parse_envelope(
+            &body,
+            EnvelopeLimits {
+                max_items: 1,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.client_report_quantity, 7);
+        assert!(parsed.primary.is_none());
+    }
+
+    #[test]
+    fn parses_supported_auth_forms() {
+        let key = parse_x_sentry_auth(
+            "Sentry sentry_version=7, sentry_client=test/1, sentry_key=0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        assert_eq!(key.to_string(), "0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            parse_query_auth("sentry_version=7&sentry_key=0123456789abcdef0123456789abcdef")
+                .unwrap(),
+            Some(key)
+        );
+    }
+
+    #[test]
+    fn parses_dsn_from_envelope_header() {
+        let body = format!(
+            "{{\"dsn\":\"https://0123456789abcdef0123456789abcdef@example.invalid/42\"}}\n{{\"type\":\"event\",\"length\":{}}}\n{}",
+            EVENT.len(),
+            EVENT
+        );
+        let parsed = parse_envelope(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 100,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.dsn.unwrap().project_id.get(), 42);
+    }
+
+    #[test]
+    fn fuzz_regression_missing_separator_is_rejected() {
+        let body = format!(
+            "{{}}\n{{\"type\":\"transaction\",\"length\":2}}\n{{}}{{\"type\":\"event\",\"length\":{}}}\n{}",
+            EVENT.len(),
+            EVENT
+        );
+        assert!(
+            parse_envelope(
+                body.as_bytes(),
+                EnvelopeLimits {
+                    max_items: 100,
+                    max_event_bytes: 1024,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "performance baseline runs in release mode"]
+    fn performance_envelope_parser_rps() {
+        let body = envelope(
+            &format!(r#"{{"type":"event","length":{}}}"#, EVENT.len()),
+            EVENT,
+        );
+        let iterations = 100_000_u64;
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(
+                parse_envelope(
+                    &body,
+                    EnvelopeLimits {
+                        max_items: 100,
+                        max_event_bytes: 1024,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        let rps = iterations as f64 / started.elapsed().as_secs_f64();
+        eprintln!("envelope parser: {rps:.0} requests/s");
+        assert!(
+            rps >= 20_000.0,
+            "parser baseline {rps:.0} RPS is below gate"
+        );
+    }
+}

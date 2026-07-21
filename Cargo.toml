@@ -22,19 +22,27 @@ license = "MIT"
 repository = "https://github.com/faultkeep/faultkeep"
 
 [workspace.dependencies]
+async-compression = { version = "0.4.27", features = ["gzip", "tokio", "zlib"] }
 axum = "0.8.4"
+bytes = "1.10.1"
 clap = { version = "4.5.40", features = ["derive"] }
 figment = { version = "0.10.19", features = ["env", "toml"] }
+flate2 = "1.1.1"
+futures-util = "0.3.31"
+hex = "0.4.3"
+hmac = "0.12.1"
 humantime = "2.2.0"
 metrics = "0.24.2"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+sha2 = "0.10.9"
 thiserror = "2.0.12"
-tokio = { version = "1.45.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = "0.7.15"
+tokio = { version = "1.45.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.15", features = ["io"] }
 tower = { version = "0.5.2", features = ["util"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
+url = "2.5.4"
 uuid = { version = "1.16.0", features = ["v4"] }
 
 [workspace.lints.rust]
