@@ -1,14 +1,13 @@
 # faultkeep
 
-Phase 4 adds a bounded Dispatcher between durable Event acceptance and the future
-Processor. It deduplicates queued/running Event keys and refills due pending work
-from MongoDB on startup, idle polls, and a low watermark. MongoDB remains the only
-durable backlog, so queue saturation or process restart cannot undo an acknowledged
-acceptance.
+Phase 5 adds a pure deterministic Error Event Normalizer after the bounded Dispatcher
+foundation. It converts scrubbed accepted JSON into a stable adapter-independent
+domain model with canonical timestamps, exception/frame structures, tags, contexts,
+breadcrumbs, SDK identity fields, compatible unknown data, and bounded diagnostics.
 
-The real Processor starts in Phase 7. Until then production composes a deferred
-`WorkHandler` that never falsely completes pending work; deterministic completing
-handlers remain limited to Phase 4 tests.
+The real Processor starts in Phase 10. Until then production still composes a deferred
+`WorkHandler` that never falsely completes pending work; Normalizer has no database,
+network, retry, symbolication, grouping, or finalization side effects.
 
 ## Local checks
 

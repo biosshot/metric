@@ -1,5 +1,7 @@
 //! Transport- and adapter-independent bounded primitives.
 
+pub mod event;
+
 use std::{
     fmt,
     num::{NonZeroI32, NonZeroU32, NonZeroU64},
