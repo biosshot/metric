@@ -1,10 +1,12 @@
 //! MongoDB project-identity adapter and initial empty-schema bootstrap.
 
 mod event;
+mod issue;
 
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
 };
+pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
@@ -25,9 +27,15 @@ use thiserror::Error;
 
 pub const SCHEMA_GENERATION: i32 = 1;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 2] = ["project_identity_v1", "event_storage_v1"];
-const REQUIRED_COLLECTIONS: [&str; 5] = [
+const SCHEMA_MODULES: [&str; 3] = [
+    "project_identity_v1",
+    "event_storage_v1",
+    "issue_storage_v1",
+];
+const REQUIRED_COLLECTIONS: [&str; 7] = [
     "events",
+    "issue_activities",
+    "issues",
     "organizations",
     "project_keys",
     "projects",
@@ -94,6 +102,11 @@ impl MongoProjectStore {
         MongoEventStore::from_database(self.database.clone(), codec)
     }
 
+    #[must_use]
+    pub fn issue_store(&self, codec: IssueCodecConfig) -> MongoIssueStore {
+        MongoIssueStore::from_database(self.database.clone(), codec)
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -139,6 +152,10 @@ impl MongoProjectStore {
         self.create_validated_collection("project_keys", project_key_validator())
             .await?;
         self.create_validated_collection("events", event::event_validator())
+            .await?;
+        self.create_validated_collection("issues", issue::issue_validator())
+            .await?;
+        self.create_validated_collection("issue_activities", issue::issue_activity_validator())
             .await
     }
 
@@ -180,6 +197,7 @@ impl MongoProjectStore {
             ))
             .await?;
         event::create_event_indexes(&self.database).await?;
+        issue::create_issue_indexes(&self.database).await?;
         Ok(())
     }
 
@@ -214,6 +232,9 @@ impl MongoProjectStore {
         if !event::validate_event_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
+        if !issue::validate_issue_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
         self.validate_collection_options().await
     }
 
@@ -232,6 +253,8 @@ impl MongoProjectStore {
                 BTreeSet::from(["_id_", "project_key_administration"]),
             ),
             ("events", event::event_index_names()),
+            ("issues", issue::issue_index_names()),
+            ("issue_activities", issue::issue_activity_index_names()),
         ] {
             let names = self
                 .database
@@ -252,6 +275,8 @@ impl MongoProjectStore {
             ("projects", project_validator()),
             ("project_keys", project_key_validator()),
             ("events", event::event_validator()),
+            ("issues", issue::issue_validator()),
+            ("issue_activities", issue::issue_activity_validator()),
         ] {
             let response = self
                 .database

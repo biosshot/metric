@@ -165,3 +165,24 @@ The comparator requires identical hardware, toolchain, fixture, hash contract, a
 iteration count. It fails below 20,000 Events/s, beyond the RPS regression budget, or
 when the revision-1 corpus component size changes. Exact key and Issue-ID bytes are
 protected separately by immutable Rust golden vectors.
+
+## Phase 8 IssueStore
+
+The retained MongoDB 8.0.12 benchmark executes the same atomic aggregation-pipeline
+upsert used in production. One profile contends on a single Issue; the second spreads
+the same operation count across 250 Issues. Both report explicit RPS with 64 in-flight
+operations. It excludes Event finalization, hourly buckets, Release catalogs and HTTP,
+which remain owned by later phases.
+
+Run at most one candidate per local performance pass, then verify that Cargo and the
+test executable have exited:
+
+```text
+node performance/run-issue-store.mjs
+node performance/compare-issue-store.mjs performance/baselines/issue-store/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+The comparator requires the same hardware, Rust toolchain, MongoDB topology, fixture,
+operation count and concurrency. The local Windows gates are 250 hot-Issue RPS and
+500 distributed-Issue RPS; they are regression sentinels, not ADR-0037 end-to-end
+capacity claims.

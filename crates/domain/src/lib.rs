@@ -2,6 +2,7 @@
 
 pub mod event;
 pub mod grouping;
+pub mod issue;
 pub mod symbolication;
 
 use std::{

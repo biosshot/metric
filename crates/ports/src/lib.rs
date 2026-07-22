@@ -5,6 +5,11 @@ use std::{future::Future, pin::Pin};
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
+    grouping::IssueId,
+    issue::{
+        IssueCommand, IssueCommandResult, IssueMutationResult, IssueOccurrence, IssueSearchQuery,
+        IssueSearchResult, IssueSnapshot,
+    },
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use thiserror::Error;
@@ -193,6 +198,43 @@ pub trait SymbolicationBackend: Send + Sync + 'static {
         &self,
         request: SymbolicationRequest,
     ) -> PortFuture<'_, Result<BackendSymbolicationResult, SymbolicationBackendError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum IssueStoreError {
+    #[error("Issue identity collides with a different complete GroupingKey")]
+    IdentityCollision,
+    #[error("Issue does not exist in the project")]
+    NotFound,
+    #[error("Issue storage contains invalid data")]
+    InvalidData,
+    #[error("Issue storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Project-scoped Issue mutations and bounded title projection used by IssueService.
+pub trait IssueStore: Send + Sync + 'static {
+    fn apply_occurrence(
+        &self,
+        occurrence: IssueOccurrence,
+    ) -> PortFuture<'_, Result<IssueMutationResult, IssueStoreError>>;
+
+    fn apply_command(
+        &self,
+        command: IssueCommand,
+    ) -> PortFuture<'_, Result<IssueCommandResult, IssueStoreError>>;
+
+    fn load(
+        &self,
+        project_id: ProjectId,
+        issue_id: IssueId,
+    ) -> PortFuture<'_, Result<IssueSnapshot, IssueStoreError>>;
+
+    fn search_titles(
+        &self,
+        project_id: ProjectId,
+        query: IssueSearchQuery,
+    ) -> PortFuture<'_, Result<Vec<IssueSearchResult>, IssueStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

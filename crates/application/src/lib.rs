@@ -2,6 +2,7 @@
 
 pub mod dispatcher;
 pub mod ingest;
+pub mod issues;
 pub mod normalizer;
 pub mod observability;
 pub mod projects;
