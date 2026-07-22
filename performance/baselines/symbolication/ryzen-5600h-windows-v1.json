@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "symbolication-disabled-baseline-phase-6",
+    "source_commit": "5d98afd3cd170a509ee90619ad783d6ec95f9f3b",
+    "generated_at": "2026-07-22T17:23:20.0240054Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "round-robin Python no-work, native address, JavaScript frame",
+    "backend": "disabled production baseline; no network"
+  },
+  "metrics": {
+    "rps": 3885396,
+    "events": 100000,
+    "minimum_rps": 20000
+  }
+}

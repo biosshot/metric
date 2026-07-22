@@ -126,3 +126,22 @@ canonical-output growth over the budget, or weighted throughput below 7,500 Even
 The 128 KiB fixture also verifies that compatible unknown strings remain bounded;
 release, dist, and environment are governed separately by exact identity bounds and
 are never truncated.
+
+## Phase 6 Symbolication boundary
+
+The Phase 6 baseline measures only deterministic no-work/native/JavaScript
+classification, raw-frame preservation, and the disabled production fallback. It
+performs no HTTP, debug-file lookup, source-map work, or backend cache access; those
+belong to later adapter phases and require separate workloads.
+
+Run at most one candidate per local performance pass, then verify that no Cargo/test
+process remains:
+
+```text
+node performance/run-symbolication-baseline.mjs
+node performance/compare-symbolication-baseline.mjs performance/baselines/symbolication/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 10
+```
+
+The comparator requires identical hardware, toolchain, fixture, backend mode, and
+iteration count. It fails below 20,000 Events/s or beyond the supplied regression
+budget. External backend latency is intentionally not inferred from this CPU result.
