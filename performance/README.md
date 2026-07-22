@@ -105,3 +105,24 @@ node performance/compare-dispatcher-refill.mjs performance/baselines/dispatcher-
 The separate deterministic Dispatcher soak exercises queue/refill/dedup scheduling;
 the MongoDB runner deliberately excludes future Processor computation and finalizer
 writes so the Phase 4 refill boundary remains measurable.
+
+## Phase 5 Normalizer
+
+The retained Normalizer test runs one release process across the ADR-0037 1, 4, 16,
+and 128 KiB input classes. It reports per-class and 60/30/9/1 weighted RPS plus
+canonical output bytes as an allocation-oriented proxy. The proxy deliberately does
+not claim allocator call counts or bookkeeping bytes.
+
+Run one candidate and compare it only on the same hardware, Rust toolchain, fixture,
+weights, and Normalizer limits:
+
+```text
+node performance/run-normalizer.mjs
+node performance/compare-normalizer.mjs performance/baselines/normalizer/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 10
+```
+
+The comparator fails on a per-size or weighted RPS regression over the budget,
+canonical-output growth over the budget, or weighted throughput below 7,500 Events/s.
+The 128 KiB fixture also verifies that compatible unknown strings remain bounded;
+release, dist, and environment are governed separately by exact identity bounds and
+are never truncated.

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "normalizer-adr0037-phase-5",
+    "source_commit": "e7629793638a34a1dff9a725f1d6fca707fa93b2",
+    "generated_at": "2026-07-22T16:51:51.8523186Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "scrubbed synthetic Rust Error Event at 1/4/16/128 KiB input classes",
+    "weights": "60/30/9/1",
+    "normalizer_limits": "phase-5-default-v1",
+    "allocation_proxy": "canonical output bytes; excludes allocator bookkeeping"
+  },
+  "metrics": {
+    "rps": {
+      "size_1k": 108366,
+      "size_4k": 80897,
+      "size_16k": 40777,
+      "size_128k": 7171,
+      "weighted": 77840
+    },
+    "canonical_output_bytes": {
+      "size_1k": 963,
+      "size_4k": 4035,
+      "size_16k": 16324,
+      "size_128k": 16625
+    },
+    "minimum_weighted_rps": 7500
+  }
+}
