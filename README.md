@@ -1,13 +1,14 @@
 # faultkeep
 
-Phase 5 adds a pure deterministic Error Event Normalizer after the bounded Dispatcher
-foundation. It converts scrubbed accepted JSON into a stable adapter-independent
-domain model with canonical timestamps, exception/frame structures, tags, contexts,
-breadcrumbs, SDK identity fields, compatible unknown data, and bounded diagnostics.
+Phase 6 adds the application-owned Symbolication boundary after the pure Normalizer.
+It classifies no-work, native, and JavaScript/Node traces, preserves raw frames in
+every outcome, validates bounded backend-independent derived frames, and exposes
+typed retry/finalize-raw policy hooks.
 
 The real Processor starts in Phase 10. Until then production still composes a deferred
-`WorkHandler` that never falsely completes pending work; Normalizer has no database,
-network, retry, symbolication, grouping, or finalization side effects.
+`WorkHandler` that never falsely completes pending work. The Phase 6 production
+baseline performs no network work and finalizes required symbolication with raw frames
+plus an unavailable diagnostic; the external HTTP adapter remains deferred.
 
 ## Local checks
 

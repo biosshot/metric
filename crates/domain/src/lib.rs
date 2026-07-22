@@ -1,6 +1,7 @@
 //! Transport- and adapter-independent bounded primitives.
 
 pub mod event;
+pub mod symbolication;
 
 use std::{
     fmt,

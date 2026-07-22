@@ -5,6 +5,7 @@ use std::{future::Future, pin::Pin};
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
+    symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use thiserror::Error;
 
@@ -174,6 +175,24 @@ pub trait EventBacklog: Send + Sync + 'static {
 /// Processing seam. Completion means durable Event eligibility was already changed.
 pub trait WorkHandler: Send + Sync + 'static {
     fn handle(&self, event: AcceptedEvent) -> PortFuture<'_, ()>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SymbolicationBackendError {
+    #[error("symbolication backend is temporarily unavailable")]
+    Unavailable,
+    #[error("symbolication backend timed out internally")]
+    Timeout,
+    #[error("symbolication backend returned an invalid response")]
+    MalformedResponse,
+}
+
+/// Replaceable backend capability. Adapter wire types remain behind this port.
+pub trait SymbolicationBackend: Send + Sync + 'static {
+    fn symbolicate(
+        &self,
+        request: SymbolicationRequest,
+    ) -> PortFuture<'_, Result<BackendSymbolicationResult, SymbolicationBackendError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

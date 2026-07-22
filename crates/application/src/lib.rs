@@ -6,4 +6,5 @@ pub mod normalizer;
 pub mod observability;
 pub mod projects;
 pub mod shutdown;
+pub mod symbolication;
 pub mod writer;

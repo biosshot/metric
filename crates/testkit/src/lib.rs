@@ -5,10 +5,14 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp};
+use faultkeep_domain::{
+    AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
+    symbolication::{BackendSymbolicationResult, SymbolicationRequest},
+};
 use faultkeep_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, OutcomeSink, PortFuture,
-    ProjectResolveError, ProjectResolver, RandomError, RandomSource,
+    ProjectResolveError, ProjectResolver, RandomError, RandomSource, SymbolicationBackend,
+    SymbolicationBackendError,
 };
 
 #[derive(Clone)]
@@ -134,8 +138,92 @@ impl RandomSource for FixedRandom {
     }
 }
 
+/// Reusable backend script for SymbolicationService and future Processor tests.
+#[derive(Clone)]
+pub struct ScriptedSymbolicationBackend {
+    outcome: Result<BackendSymbolicationResult, SymbolicationBackendError>,
+    delay: Duration,
+    requests: Arc<Mutex<Vec<SymbolicationRequest>>>,
+}
+
+impl ScriptedSymbolicationBackend {
+    #[must_use]
+    pub fn new(outcome: Result<BackendSymbolicationResult, SymbolicationBackendError>) -> Self {
+        Self {
+            outcome,
+            delay: Duration::ZERO,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn with_delay(
+        outcome: Result<BackendSymbolicationResult, SymbolicationBackendError>,
+        delay: Duration,
+    ) -> Self {
+        Self {
+            delay,
+            ..Self::new(outcome)
+        }
+    }
+
+    #[must_use]
+    pub fn requests(&self) -> Vec<SymbolicationRequest> {
+        self.requests
+            .lock()
+            .expect("scripted symbolication lock poisoned")
+            .clone()
+    }
+}
+
+impl SymbolicationBackend for ScriptedSymbolicationBackend {
+    fn symbolicate(
+        &self,
+        request: SymbolicationRequest,
+    ) -> PortFuture<'_, Result<BackendSymbolicationResult, SymbolicationBackendError>> {
+        self.requests
+            .lock()
+            .expect("scripted symbolication lock poisoned")
+            .push(request);
+        let delay = self.delay;
+        let outcome = self.outcome.clone();
+        Box::pin(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            outcome
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use faultkeep_domain::{ProjectId, symbolication::*};
+    use faultkeep_ports::SymbolicationBackend;
+
+    use super::ScriptedSymbolicationBackend;
+
+    #[tokio::test]
+    async fn symbolication_fake_adapter_conformance_records_owned_request() {
+        let outcome = BackendSymbolicationResult {
+            status: BackendSymbolicationStatus::Missing,
+            derived: Vec::new(),
+            missing_debug_ids: vec!["debug-a".into()],
+            diagnostics: vec![SymbolicationDiagnosticCode::MissingDebugFile],
+        };
+        let backend = ScriptedSymbolicationBackend::new(Ok(outcome.clone()));
+        let request = SymbolicationRequest {
+            project_id: ProjectId::new(42).unwrap(),
+            kind: SymbolicationKind::Native,
+            traces: Vec::new(),
+            modules: Vec::new(),
+            release: None,
+            dist: None,
+        };
+        assert_eq!(backend.symbolicate(request.clone()).await.unwrap(), outcome);
+        assert_eq!(backend.requests(), vec![request]);
+    }
+
     #[test]
     #[ignore = "requires deploy/compose.dev.yml"]
     fn infrastructure_mongodb_orchestration_is_pinned() {
