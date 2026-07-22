@@ -1,5 +1,13 @@
 import http from "k6/http";
 import { check } from "k6";
+import { Counter } from "k6/metrics";
+
+const tcpErrors = new Counter("faultkeep_tcp_errors");
+const httpResponses = new Counter("faultkeep_http_responses");
+const http200 = new Counter("faultkeep_http_200");
+const http429 = new Counter("faultkeep_http_429");
+const http503 = new Counter("faultkeep_http_503");
+const httpOther = new Counter("faultkeep_http_other");
 
 const target = __ENV.FAULTKEEP_TARGET || "http://127.0.0.1:3101";
 const targetRps = Number(__ENV.FAULTKEEP_RPS || "1158");
@@ -60,6 +68,15 @@ export default function () {
     },
     tags: { fixture: "error-event-v1-mongodb" },
   });
+  if (response.status === 0) {
+    tcpErrors.add(1);
+  } else {
+    httpResponses.add(1);
+    if (response.status === 200) http200.add(1);
+    else if (response.status === 429) http429.add(1);
+    else if (response.status === 503) http503.add(1);
+    else httpOther.add(1, { status: String(response.status) });
+  }
   check(response, { "durable MongoDB accepted": (result) => result.status === 200 });
 }
 
@@ -92,6 +109,14 @@ export function handleSummary(data) {
         maximum: durationMetric.max || 0,
       },
       dropped_iterations: data.metrics.dropped_iterations?.values?.count || 0,
+      failures: {
+        tcp_errors: data.metrics.faultkeep_tcp_errors?.values?.count || 0,
+        http_responses: data.metrics.faultkeep_http_responses?.values?.count || 0,
+        status_200: data.metrics.faultkeep_http_200?.values?.count || 0,
+        status_429: data.metrics.faultkeep_http_429?.values?.count || 0,
+        status_503: data.metrics.faultkeep_http_503?.values?.count || 0,
+        status_other: data.metrics.faultkeep_http_other?.values?.count || 0,
+      },
     },
   };
   return {

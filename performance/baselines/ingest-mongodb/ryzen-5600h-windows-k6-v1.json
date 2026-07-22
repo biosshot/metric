@@ -26,6 +26,14 @@
     },
     "dropped_iterations": 0,
     "durable_documents": 17371,
-    "acknowledged_loss": 0
+    "acknowledged_loss": 0,
+    "failures": {
+      "tcp_errors": 0,
+      "http_responses": 17371,
+      "status_200": 17371,
+      "status_429": 0,
+      "status_503": 0,
+      "status_other": 0
+    }
   }
 }

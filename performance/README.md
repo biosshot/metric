@@ -85,3 +85,7 @@ zero acknowledged loss for that run. Store reviewed JSON under
 `performance/baselines/ingest-mongodb`. The 20,000/s bounded burst remains a
 separate controlled-hardware capacity gate and must not be inferred from a lower
 local rate.
+
+The durable artifact separates transport and overload failures into TCP errors,
+total HTTP responses, and explicit `200`, `429`, `503`, and other-status counters.
+This keeps listener saturation distinct from intentional application backpressure.
