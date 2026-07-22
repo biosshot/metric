@@ -192,7 +192,10 @@ Issue keeps only Release values paired with its first and last occurrence metada
 ```
 
 The timestamp, Event ID, and Release value are updated as one logical pair, including
-deterministic tie-breaking for equal timestamps. Missing Release remains absent.
+deterministic tie-breaking for equal timestamps. Missing Release remains absent from
+the logical value. ADR-0024's compact Issue representation uses its optional `m: true`
+marker only when an existing first release would otherwise make a missing latest
+release indistinguishable from the default `last_seen_release == first_seen_release`.
 Unbounded arrays of every observed Release, distribution, or environment are not
 stored in the Issue document.
 

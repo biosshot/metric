@@ -40,6 +40,7 @@ alone owns short physical field names. The version-one Issue is conceptually:
   d,   // regression summary, optional
   fr,  // first release, optional
   lr,  // last release when different from fr
+  m,   // latest occurrence has no release while fr is present, optional true
   j,   // notification-outbox-ready flag, transient
   n,   // compact notification transitions, transient
   b    // versioned grouping detail
@@ -148,8 +149,11 @@ and receipt-time clock remain those of ADR-0015.
 
 `fr` contains the exact first-seen release when present. `lr` is absent while the
 last-seen release equals `fr`, and appears only after it differs. If `fr` is absent,
-the Issue has no first release. Exact strings are retained because Issues are much
-less numerous than Events and catalog lookups would complicate hot updates.
+the Issue has no first release. `m: true` appears only when `fr` is present and the
+latest occurrence has no release; it distinguishes that state from an absent `lr`
+that defaults to `fr`. `lr` and `m` are mutually exclusive. Exact strings are retained
+because Issues are much less numerous than Events and catalog lookups would
+complicate hot updates.
 
 ### Compact notification outbox
 
@@ -227,4 +231,3 @@ capabilities.
 - Bounded title regeneration when representative selection changes.
 - Exact `ActorRef`, numeric strategy, transition-kind, and status codec registries.
 - Issue-activity retention and compact physical schema.
-
