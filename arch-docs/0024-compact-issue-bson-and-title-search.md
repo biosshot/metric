@@ -47,9 +47,11 @@ alone owns short physical field names. The version-one Issue is conceptually:
 }
 ```
 
-Absence of outer `v` means physical Issue schema version 1. BSON null is forbidden in
-these optional physical fields; absence and default values have precise meanings.
-Collection validators and byte-size golden tests enforce the codec.
+Issue schema version 1 has no separate outer schema-version field; `v` is reserved
+exclusively for the optional latest Event ID described below. The Issue-specific body
+in `b` carries its own format version. BSON null is forbidden in optional physical
+fields; absence and default values have precise meanings. Collection validators and
+byte-size golden tests enforce the codec.
 
 ### Identity and grouping
 
