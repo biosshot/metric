@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "dispatcher-mongodb-refill-phase-4",
+    "source_commit": "560e5a2c2ab9f7afb4a835cc53742ac57a1d63d0",
+    "generated_at": "2026-07-22T14:42:23.631Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "mongo_server": "8.0.12 standalone in Docker Desktop",
+    "mongo_driver": "3.8.0",
+    "fixture": "20000 compact pending Rust Error Events",
+    "query_order": "q.n,r,_id"
+  },
+  "metrics": {
+    "refill_rps": 58715,
+    "events": 20000,
+    "elapsed_ms": 340,
+    "minimum_recovery_rps": 7500
+  }
+}

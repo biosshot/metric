@@ -89,3 +89,19 @@ local rate.
 The durable artifact separates transport and overload failures into TCP errors,
 total HTTP responses, and explicit `200`, `429`, `503`, and other-status counters.
 This keeps listener saturation distinct from intentional application backpressure.
+
+## Phase 4 Dispatcher refill
+
+The Dispatcher runner preloads 20,000 compact pending Events into MongoDB 8.0.12,
+then measures the indexed `q.n,r,_id` query plus strict body decode and project
+fence. Its minimum recovery gate is 7,500 Events/s, 1.5 times the 5,000/s steady
+acceptance target:
+
+```text
+node performance/run-dispatcher-refill.mjs
+node performance/compare-dispatcher-refill.mjs performance/baselines/dispatcher-refill/<baseline>.json performance/results/<candidate>.json 10
+```
+
+The separate deterministic Dispatcher soak exercises queue/refill/dedup scheduling;
+the MongoDB runner deliberately excludes future Processor computation and finalizer
+writes so the Phase 4 refill boundary remains measurable.
