@@ -36,3 +36,26 @@ node performance/compare-k6.mjs performance/baselines/ingest-fake/ryzen-5600h-wi
 For a saturation probe, set `FAULTKEEP_MODE=max-throughput` and
 `FAULTKEEP_VUS=64`. Saturation results document a limit; they do not replace the
 fixed-arrival-rate regression baseline.
+
+## Phase 2 project resolver
+
+The retained Phase 2 runner measures two deliberately separate paths: a warm
+application authorization-cache hit and a direct MongoDB lookup that bypasses that
+cache. Start `mongo:8.0.12` from `deploy/compose.dev.yml`, then write a candidate:
+
+```text
+node performance/run-project-resolver.mjs
+```
+
+The runner prints the ignored release-test output into a timestamped JSON file under
+`performance/results`. Compare it with the reviewed baseline using the same hardware
+and MongoDB topology:
+
+```text
+node performance/compare-project-resolver.mjs performance/baselines/project-resolver/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 10
+```
+
+The comparator fails when warm-cache RPS drops below 20,000 or when warm-cache/direct
+MongoDB RPS or latency regresses beyond the supplied percentage budget. k6 remains
+the black-box HTTP load tool; Phase 2 uses the in-process runner so resolver RPS is
+not conflated with Envelope parsing or a fake/durable Event sink.

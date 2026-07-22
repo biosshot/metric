@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "project-resolver-phase-2",
+    "source_commit": "3851321fc95658ed056a5ca242c0f59e94862c68",
+    "generated_at": "2026-07-22T10:32:55.284Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics; 15.9 GiB RAM; Windows x86_64-pc-windows-msvc",
+    "mongo_server": "8.0.12 standalone in Docker Desktop",
+    "mongo_driver": "3.8.0",
+    "warm_cache_iterations": 200000,
+    "direct_mongo_iterations": 1000
+  },
+  "metrics": {
+    "warm_cache": {
+      "rps": 3549983,
+      "average_ns": 282,
+      "minimum_gate_rps": 20000
+    },
+    "direct_mongodb": {
+      "rps": 366,
+      "average_us": 2736,
+      "p50_us": 2606,
+      "p95_us": 3816,
+      "p99_us": 4798
+    }
+  }
+}
