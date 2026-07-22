@@ -145,3 +145,23 @@ node performance/compare-symbolication-baseline.mjs performance/baselines/symbol
 The comparator requires identical hardware, toolchain, fixture, backend mode, and
 iteration count. It fails below 20,000 Events/s or beyond the supplied regression
 budget. External backend latency is intentionally not inferred from this CPU result.
+
+## Phase 7 Grouper
+
+The Grouper baseline measures pure revision-1 canonical component selection,
+length-delimited encoding, BLAKE3 GroupingKey hashing, and project-scoped Issue-ID
+derivation. Its round-robin corpus covers message, exception stack, native
+module-relative stack, and SDK fingerprint strategies without storage or network.
+
+Run one candidate per local performance pass and check that its Cargo/test process
+has exited before continuing:
+
+```text
+node performance/run-grouper.mjs
+node performance/compare-grouper.mjs performance/baselines/grouper/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 10
+```
+
+The comparator requires identical hardware, toolchain, fixture, hash contract, and
+iteration count. It fails below 20,000 Events/s, beyond the RPS regression budget, or
+when the revision-1 corpus component size changes. Exact key and Issue-ID bytes are
+protected separately by immutable Rust golden vectors.
