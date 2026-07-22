@@ -6,12 +6,12 @@ use faultkeep_application::{
     ingest::IngestService, observability::Metrics, shutdown::ShutdownRoot,
 };
 use faultkeep_domain::{
-    AcceptedEvent, DsnKey, IpScrubPolicy, ItemCapabilities, ProjectId, ProjectSnapshot,
-    ScrubPolicy, SecretBytes, Timestamp,
+    AcceptedEvent, DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
+    ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
 };
 use faultkeep_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, OutcomeSink, PortFuture,
-    ProjectResolveError, ProjectResolver, RandomSource,
+    ProjectResolveError, ProjectResolver, RandomError, RandomSource,
 };
 use faultkeep_server::{config::IngestConfig, http, ingest_http};
 use tokio::net::TcpListener;
@@ -65,8 +65,9 @@ impl Clock for BenchClock {
 struct BenchRandom;
 
 impl RandomSource for BenchRandom {
-    fn fill_bytes(&self, output: &mut [u8]) {
+    fn fill_bytes(&self, output: &mut [u8]) -> Result<(), RandomError> {
         output.fill(0x5a);
+        Ok(())
     }
 }
 
@@ -78,6 +79,8 @@ async fn main() -> std::io::Result<()> {
     let config = benchmark_config();
     let snapshot = ProjectSnapshot {
         project_id: ProjectId::new(42).expect("constant project is valid"),
+        state: ProjectAcceptanceState::Active,
+        key_state: ProjectKeyState::Active,
         scrub_policy: ScrubPolicy {
             revision: 1,
             ip_policy: IpScrubPolicy::Hmac,
@@ -87,6 +90,8 @@ async fn main() -> std::io::Result<()> {
             error: true,
             client_report: true,
         },
+        limits: ProjectIngestLimits::default(),
+        grouping_revision: 1,
     };
     let service = Arc::new(IngestService::new(
         Arc::new(BenchResolver(snapshot)),
@@ -133,5 +138,6 @@ fn benchmark_config() -> IngestConfig {
         max_waiting_for_storage: 4096,
         request_timeout: "10s".parse().expect("constant duration is valid"),
         unsupported_backoff_seconds: 3600,
+        project_cache: Default::default(),
     }
 }

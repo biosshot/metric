@@ -9,8 +9,8 @@ use faultkeep_application::{
     ingest::IngestService, observability::Metrics, shutdown::ShutdownRoot,
 };
 use faultkeep_domain::{
-    DsnKey, IpScrubPolicy, ItemCapabilities, ProjectId, ProjectSnapshot, ScrubPolicy, SecretBytes,
-    Timestamp,
+    DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
+    ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
 };
 use faultkeep_ports::DurableOutcome;
 use faultkeep_server::{config::IngestConfig, http, ingest_http};
@@ -38,12 +38,15 @@ fn config() -> IngestConfig {
         max_waiting_for_storage: 512,
         request_timeout: "10s".parse().unwrap(),
         unsupported_backoff_seconds: 3600,
+        project_cache: Default::default(),
     }
 }
 
 fn snapshot() -> ProjectSnapshot {
     ProjectSnapshot {
         project_id: ProjectId::new(42).unwrap(),
+        state: ProjectAcceptanceState::Active,
+        key_state: ProjectKeyState::Active,
         scrub_policy: ScrubPolicy {
             revision: 1,
             ip_policy: IpScrubPolicy::Hmac,
@@ -53,6 +56,8 @@ fn snapshot() -> ProjectSnapshot {
             error: true,
             client_report: true,
         },
+        limits: ProjectIngestLimits::default(),
+        grouping_revision: 1,
     }
 }
 

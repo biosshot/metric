@@ -1,7 +1,8 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use faultkeep_domain::{
-    AcceptedEvent, DsnKey, EventId, IpScrubPolicy, ProjectId, ProjectSnapshot, ScrubbedEventPayload,
+    AcceptedEvent, DsnKey, EventId, IpScrubPolicy, ProjectAcceptanceState, ProjectId,
+    ProjectKeyState, ProjectSnapshot, ScrubbedEventPayload,
 };
 use faultkeep_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, IngestOutcomeKind,
@@ -221,6 +222,12 @@ impl IngestService {
                 disabled_categories,
             });
         };
+        if primary.raw_json.len() > snapshot.limits.max_event_bytes.get() as usize {
+            return Err(IngestError {
+                kind: IngestErrorKind::TooLarge,
+                code: "project_event_too_large",
+            });
+        }
         if !snapshot.items.error {
             self.outcome_sink.record(IngestOutcome {
                 kind: IngestOutcomeKind::Unsupported,
@@ -295,6 +302,8 @@ fn validate_project_consistency(
     snapshot: &ProjectSnapshot,
 ) -> Result<(), IngestError> {
     if snapshot.project_id != request.path_project_id
+        || snapshot.state != ProjectAcceptanceState::Active
+        || snapshot.key_state != ProjectKeyState::Active
         || request
             .dsn_project_id
             .is_some_and(|project| project != snapshot.project_id)
@@ -512,11 +521,13 @@ fn map_sink_error(error: EventSinkError) -> IngestError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{ItemCapabilities, ScrubPolicy, SecretBytes};
+    use faultkeep_domain::{ItemCapabilities, ProjectIngestLimits, ScrubPolicy, SecretBytes};
 
     fn snapshot() -> ProjectSnapshot {
         ProjectSnapshot {
             project_id: ProjectId::new(42).unwrap(),
+            state: ProjectAcceptanceState::Active,
+            key_state: ProjectKeyState::Active,
             scrub_policy: ScrubPolicy {
                 revision: 7,
                 ip_policy: IpScrubPolicy::Hmac,
@@ -526,6 +537,8 @@ mod tests {
                 error: true,
                 client_report: true,
             },
+            limits: ProjectIngestLimits::default(),
+            grouping_revision: 1,
         }
     }
 

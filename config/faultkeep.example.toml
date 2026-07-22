@@ -6,6 +6,13 @@ shutdown_grace = "10s"
 
 [mongodb]
 uri = { env = "MONGODB_URI" }
+database = "faultkeep"
+bootstrap_timeout = "10s"
+
+[projects]
+scrub_hmac_key = { env = "SCRUB_HMAC_KEY" }
+identity_collision_retries = 16
+max_keys_per_project = 32
 
 [development]
 allow_literal_secrets = false
@@ -20,3 +27,9 @@ max_parsing_tasks = 0
 max_waiting_for_storage = 512
 request_timeout = "10s"
 unsupported_backoff_seconds = 3600
+
+[ingest.project_cache]
+capacity = 100000
+max_inflight = 512
+positive_ttl = "60s"
+negative_ttl = "5s"

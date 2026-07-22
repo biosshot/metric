@@ -11,9 +11,12 @@ use thiserror::Error;
 
 const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_SHUTDOWN_GRACE_MILLIS: u64 = 5 * 60 * 1_000;
+const MAX_PROJECT_CACHE_TTL_MILLIS: u64 = 10 * 60 * 1_000;
 
 pub type ShutdownGrace = BoundedDuration<MAX_SHUTDOWN_GRACE_MILLIS>;
 pub type RequestTimeout = BoundedDuration<60_000>;
+pub type ProjectCacheTtl = BoundedDuration<MAX_PROJECT_CACHE_TTL_MILLIS>;
+pub type MongoBootstrapTimeout = BoundedDuration<60_000>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
@@ -52,6 +55,7 @@ pub struct AppConfig {
     pub role: Role,
     pub server: ServerConfig,
     pub mongodb: MongoConfig,
+    pub projects: ProjectConfig,
     pub development: DevelopmentConfig,
     pub ingest: IngestConfig,
 }
@@ -65,6 +69,15 @@ pub struct ServerConfig {
 #[derive(Debug, Clone)]
 pub struct MongoConfig {
     pub uri: Option<SecretReference>,
+    pub database: String,
+    pub bootstrap_timeout: MongoBootstrapTimeout,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectConfig {
+    pub scrub_hmac_key: Option<SecretReference>,
+    pub identity_collision_retries: usize,
+    pub max_keys_per_project: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,6 +96,26 @@ pub struct IngestConfig {
     pub max_waiting_for_storage: usize,
     pub request_timeout: RequestTimeout,
     pub unsupported_backoff_seconds: u64,
+    pub project_cache: ProjectCacheSettings,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectCacheSettings {
+    pub capacity: usize,
+    pub max_inflight: usize,
+    pub positive_ttl: ProjectCacheTtl,
+    pub negative_ttl: ProjectCacheTtl,
+}
+
+impl Default for ProjectCacheSettings {
+    fn default() -> Self {
+        Self {
+            capacity: 100_000,
+            max_inflight: 512,
+            positive_ttl: "60s".parse().expect("default positive TTL is valid"),
+            negative_ttl: "5s".parse().expect("default negative TTL is valid"),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -200,6 +233,7 @@ struct RawConfig {
     role: Role,
     server: RawServerConfig,
     mongodb: RawMongoConfig,
+    projects: RawProjectConfig,
     development: RawDevelopmentConfig,
     ingest: RawIngestConfig,
 }
@@ -210,6 +244,7 @@ impl Default for RawConfig {
             role: Role::All,
             server: RawServerConfig::default(),
             mongodb: RawMongoConfig::default(),
+            projects: RawProjectConfig::default(),
             development: RawDevelopmentConfig::default(),
             ingest: RawIngestConfig::default(),
         }
@@ -232,10 +267,40 @@ impl Default for RawServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawMongoConfig {
     uri: Option<SecretReference>,
+    database: String,
+    bootstrap_timeout: String,
+}
+
+impl Default for RawMongoConfig {
+    fn default() -> Self {
+        Self {
+            uri: None,
+            database: "faultkeep".to_owned(),
+            bootstrap_timeout: "10s".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawProjectConfig {
+    scrub_hmac_key: Option<SecretReference>,
+    identity_collision_retries: usize,
+    max_keys_per_project: usize,
+}
+
+impl Default for RawProjectConfig {
+    fn default() -> Self {
+        Self {
+            scrub_hmac_key: None,
+            identity_collision_retries: 16,
+            max_keys_per_project: 32,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -256,6 +321,27 @@ struct RawIngestConfig {
     max_waiting_for_storage: usize,
     request_timeout: String,
     unsupported_backoff_seconds: u64,
+    project_cache: RawProjectCacheSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawProjectCacheSettings {
+    capacity: usize,
+    max_inflight: usize,
+    positive_ttl: String,
+    negative_ttl: String,
+}
+
+impl Default for RawProjectCacheSettings {
+    fn default() -> Self {
+        Self {
+            capacity: 100_000,
+            max_inflight: 512,
+            positive_ttl: "60s".to_owned(),
+            negative_ttl: "5s".to_owned(),
+        }
+    }
 }
 
 impl Default for RawIngestConfig {
@@ -270,6 +356,7 @@ impl Default for RawIngestConfig {
             max_waiting_for_storage: 512,
             request_timeout: "10s".to_owned(),
             unsupported_backoff_seconds: 3600,
+            project_cache: RawProjectCacheSettings::default(),
         }
     }
 }
@@ -286,6 +373,16 @@ pub enum ConfigError {
     InvalidShutdownGrace,
     #[error("ingest configuration is invalid or outside supported bounds")]
     InvalidIngestConfig,
+    #[error("MongoDB configuration is invalid or outside supported bounds")]
+    InvalidMongoConfig,
+    #[error("project identity configuration is invalid or outside supported bounds")]
+    InvalidProjectConfig,
+    #[error("projects.scrub_hmac_key is required when MongoDB is configured")]
+    MissingScrubHmacKey,
+    #[error(
+        "projects.scrub_hmac_key must resolve to exactly 32 bytes encoded as 64 hexadecimal characters"
+    )]
+    InvalidScrubHmacKey,
     #[error("secret reference is invalid")]
     InvalidSecretReference,
     #[error("literal secrets require development.allow_literal_secrets=true")]
@@ -339,6 +436,26 @@ impl TryFrom<RawConfig> for AppConfig {
         if let Some(reference) = &raw.mongodb.uri {
             reference.validate(raw.development.allow_literal_secrets)?;
         }
+        if let Some(reference) = &raw.projects.scrub_hmac_key {
+            reference.validate(raw.development.allow_literal_secrets)?;
+        }
+        let valid_database = !raw.mongodb.database.is_empty()
+            && raw.mongodb.database.len() <= 64
+            && !raw.mongodb.database.chars().any(char::is_control)
+            && !raw
+                .mongodb
+                .database
+                .contains(['/', '\\', '.', ' ', '"', '$']);
+        let bootstrap_timeout = MongoBootstrapTimeout::from_str(&raw.mongodb.bootstrap_timeout)
+            .map_err(|_| ConfigError::InvalidMongoConfig)?;
+        if !valid_database || bootstrap_timeout.get().is_zero() {
+            return Err(ConfigError::InvalidMongoConfig);
+        }
+        if raw.projects.identity_collision_retries == 0
+            || !(1..=1024).contains(&raw.projects.max_keys_per_project)
+        {
+            return Err(ConfigError::InvalidProjectConfig);
+        }
         let ingest = IngestConfig::try_from(raw.ingest)?;
         Ok(Self {
             role: raw.role,
@@ -348,6 +465,13 @@ impl TryFrom<RawConfig> for AppConfig {
             },
             mongodb: MongoConfig {
                 uri: raw.mongodb.uri,
+                database: raw.mongodb.database,
+                bootstrap_timeout,
+            },
+            projects: ProjectConfig {
+                scrub_hmac_key: raw.projects.scrub_hmac_key,
+                identity_collision_retries: raw.projects.identity_collision_retries,
+                max_keys_per_project: raw.projects.max_keys_per_project,
             },
             development: DevelopmentConfig {
                 allow_literal_secrets: raw.development.allow_literal_secrets,
@@ -358,12 +482,34 @@ impl TryFrom<RawConfig> for AppConfig {
 }
 
 impl AppConfig {
-    pub fn validate_secrets(&self) -> Result<Option<SecretValue>, ConfigError> {
-        self.mongodb
+    pub fn validate_secrets(&self) -> Result<ResolvedSecrets, ConfigError> {
+        let mongodb_uri = self
+            .mongodb
             .uri
             .as_ref()
             .map(SecretReference::resolve)
-            .transpose()
+            .transpose()?;
+        let scrub_hmac_key = self
+            .projects
+            .scrub_hmac_key
+            .as_ref()
+            .map(SecretReference::resolve)
+            .transpose()?;
+        if mongodb_uri.is_some() && scrub_hmac_key.is_none() {
+            return Err(ConfigError::MissingScrubHmacKey);
+        }
+        let scrub_hmac_key = scrub_hmac_key
+            .map(|value| {
+                let mut bytes = [0_u8; 32];
+                hex::decode_to_slice(value.expose(), &mut bytes)
+                    .map_err(|_| ConfigError::InvalidScrubHmacKey)?;
+                Ok::<_, ConfigError>(faultkeep_domain::SecretBytes::new(bytes))
+            })
+            .transpose()?;
+        Ok(ResolvedSecrets {
+            mongodb_uri,
+            scrub_hmac_key,
+        })
     }
 
     #[must_use]
@@ -373,12 +519,22 @@ impl AppConfig {
             .uri
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
+        let scrub_hmac_key = self
+            .projects
+            .scrub_hmac_key
+            .as_ref()
+            .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
             uri,
+            self.mongodb.database,
+            humantime::format_duration(self.mongodb.bootstrap_timeout.get()),
+            scrub_hmac_key,
+            self.projects.identity_collision_retries,
+            self.projects.max_keys_per_project,
             self.development.allow_literal_secrets,
             self.ingest.max_compressed_request_bytes,
             self.ingest.max_decompressed_request_bytes,
@@ -389,12 +545,20 @@ impl AppConfig {
             self.ingest.max_waiting_for_storage,
             humantime::format_duration(self.ingest.request_timeout.get()),
             self.ingest.unsupported_backoff_seconds,
+            self.ingest.project_cache.capacity,
+            self.ingest.project_cache.max_inflight,
+            humantime::format_duration(self.ingest.project_cache.positive_ttl.get()),
+            humantime::format_duration(self.ingest.project_cache.negative_ttl.get()),
         )
     }
 
     #[must_use]
     pub fn has_literal_secret_warning(&self) -> bool {
         matches!(self.mongodb.uri, Some(SecretReference::Literal(_)))
+            || matches!(
+                self.projects.scrub_hmac_key,
+                Some(SecretReference::Literal(_))
+            )
     }
 }
 
@@ -410,6 +574,10 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             .map_err(|_| ConfigError::InvalidIngestConfig)?;
         let request_timeout = RequestTimeout::from_str(&raw.request_timeout)
             .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let positive_ttl = ProjectCacheTtl::from_str(&raw.project_cache.positive_ttl)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let negative_ttl = ProjectCacheTtl::from_str(&raw.project_cache.negative_ttl)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
         let valid = compressed.get() > 0
             && decompressed.get() >= compressed.get()
             && event.get() > 0
@@ -419,7 +587,11 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             && raw.max_waiting_for_storage > 0
             && !request_timeout.get().is_zero()
             && raw.unsupported_backoff_seconds > 0;
-        if !valid {
+        let valid_cache = (1..=1_000_000).contains(&raw.project_cache.capacity)
+            && (1..=4096).contains(&raw.project_cache.max_inflight)
+            && !positive_ttl.get().is_zero()
+            && !negative_ttl.get().is_zero();
+        if !valid || !valid_cache {
             return Err(ConfigError::InvalidIngestConfig);
         }
         Ok(Self {
@@ -435,8 +607,19 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             max_waiting_for_storage: raw.max_waiting_for_storage,
             request_timeout,
             unsupported_backoff_seconds: raw.unsupported_backoff_seconds,
+            project_cache: ProjectCacheSettings {
+                capacity: raw.project_cache.capacity,
+                max_inflight: raw.project_cache.max_inflight,
+                positive_ttl,
+                negative_ttl,
+            },
         })
     }
+}
+
+pub struct ResolvedSecrets {
+    pub mongodb_uri: Option<SecretValue>,
+    pub scrub_hmac_key: Option<faultkeep_domain::SecretBytes>,
 }
 
 fn validate_secret_bytes(bytes: &[u8]) -> Result<(), ConfigError> {
@@ -468,6 +651,7 @@ mod tests {
                 uri: Some(SecretReference::Literal(LiteralReference {
                     literal: "do-not-print-this".to_owned(),
                 })),
+                ..RawMongoConfig::default()
             },
             development: RawDevelopmentConfig {
                 allow_literal_secrets: true,
@@ -487,6 +671,7 @@ mod tests {
                 uri: Some(SecretReference::Literal(LiteralReference {
                     literal: "secret".to_owned(),
                 })),
+                ..RawMongoConfig::default()
             },
             ..RawConfig::default()
         };

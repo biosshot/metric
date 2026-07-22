@@ -27,6 +27,26 @@ pub enum Outcome {
     Cancelled,
 }
 
+/// Bounded outcomes for the project authorization cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectCacheResult {
+    Hit,
+    Miss,
+    Coalesced,
+    CapacityRejected,
+}
+
+impl ProjectCacheResult {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+            Self::Coalesced => "coalesced",
+            Self::CapacityRejected => "capacity_rejected",
+        }
+    }
+}
+
 impl Outcome {
     const fn label(self) -> &'static str {
         match self {
@@ -45,6 +65,11 @@ pub struct Metrics;
 impl Metrics {
     pub fn increment(self, metric: Metric, outcome: Outcome) {
         metrics::counter!(metric.name(), "outcome" => outcome.label()).increment(1);
+    }
+
+    pub fn project_cache(self, result: ProjectCacheResult) {
+        metrics::counter!("faultkeep_project_cache_lookups_total", "result" => result.label())
+            .increment(1);
     }
 }
 
@@ -87,5 +112,6 @@ mod tests {
     #[test]
     fn metrics_facade_accepts_only_bounded_dimensions() {
         Metrics.increment(Metric::HttpRequests, Outcome::Ok);
+        Metrics.project_cache(ProjectCacheResult::Hit);
     }
 }

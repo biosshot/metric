@@ -35,6 +35,9 @@ fn effective_config_redacts_literal_secret() {
 [mongodb]
 uri = { literal = "must-not-escape" }
 
+[projects]
+scrub_hmac_key = { literal = "0707070707070707070707070707070707070707070707070707070707070707" }
+
 [development]
 allow_literal_secrets = true
 "#,
@@ -53,6 +56,7 @@ allow_literal_secrets = true
     assert!(output.status.success(), "{stderr}");
     assert!(!stdout.contains("must-not-escape"));
     assert!(!stderr.contains("must-not-escape"));
+    assert!(!stdout.contains("0707070707070707"));
     assert!(stdout.contains("<redacted:literal>"));
 }
 

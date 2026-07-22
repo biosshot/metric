@@ -1,6 +1,11 @@
 //! Transport- and adapter-independent bounded primitives.
 
-use std::{fmt, num::NonZeroI32, str::FromStr, time::Duration};
+use std::{
+    fmt,
+    num::{NonZeroI32, NonZeroU32, NonZeroU64},
+    str::FromStr,
+    time::Duration,
+};
 
 use thiserror::Error;
 
@@ -33,6 +38,10 @@ pub enum PrimitiveError {
     InvalidDsnKey,
     #[error("invalid Event identifier")]
     InvalidEventId,
+    #[error("invalid organization identifier")]
+    InvalidOrganizationId,
+    #[error("invalid slug")]
+    InvalidSlug,
 }
 
 /// Non-empty UTF-8 identifier with a compile-time byte bound.
@@ -240,6 +249,75 @@ impl ProjectId {
     }
 }
 
+/// Random positive 63-bit organization identifier stored as BSON `int64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OrganizationId(NonZeroU64);
+
+impl OrganizationId {
+    pub fn new(value: u64) -> Result<Self, PrimitiveError> {
+        NonZeroU64::new(value)
+            .filter(|value| value.get() <= i64::MAX as u64)
+            .map(Self)
+            .ok_or(PrimitiveError::InvalidOrganizationId)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Immutable Sentry-compatible organization or project route slug.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Slug(Box<str>);
+
+impl Slug {
+    pub fn new(value: impl Into<Box<str>>) -> Result<Self, PrimitiveError> {
+        let value = value.into();
+        let bytes = value.as_bytes();
+        let valid = !bytes.is_empty()
+            && bytes.len() <= 63
+            && bytes[0].is_ascii_alphanumeric()
+            && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+            && !bytes.windows(2).any(|pair| pair == b"--");
+        if !valid {
+            return Err(PrimitiveError::InvalidSlug);
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Slug {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_tuple("Slug").field(&self.0).finish()
+    }
+}
+
+impl fmt::Display for Slug {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl FromStr for Slug {
+    type Err = PrimitiveError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
+    }
+}
+
+pub type DisplayName = BoundedId<128>;
+pub type ProjectKeyLabel = BoundedId<64>;
+
 /// Sentry-compatible 16-byte ingest credential.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DsnKey([u8; 16]);
@@ -332,6 +410,39 @@ pub enum IpScrubPolicy {
     Truncate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectAcceptanceState {
+    Active,
+    Disabled,
+    PendingDelete,
+    Purging,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectKeyState {
+    Active,
+    Disabled,
+    SuspendedByDeletion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectIngestLimits {
+    pub max_event_bytes: NonZeroU32,
+    pub max_events_per_second: Option<NonZeroU32>,
+    pub burst: Option<NonZeroU32>,
+}
+
+impl Default for ProjectIngestLimits {
+    fn default() -> Self {
+        Self {
+            max_event_bytes: NonZeroU32::new(1024 * 1024).expect("one MiB is nonzero"),
+            max_events_per_second: None,
+            burst: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScrubPolicy {
     pub revision: u64,
@@ -348,8 +459,44 @@ pub struct ItemCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectSnapshot {
     pub project_id: ProjectId,
+    pub state: ProjectAcceptanceState,
+    pub key_state: ProjectKeyState,
     pub scrub_policy: ScrubPolicy,
     pub items: ItemCapabilities,
+    pub limits: ProjectIngestLimits,
+    pub grouping_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrganizationIdentity {
+    pub id: OrganizationId,
+    pub slug: Slug,
+    pub display_name: DisplayName,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectIdentity {
+    pub id: ProjectId,
+    pub organization_id: OrganizationId,
+    pub slug: Slug,
+    pub display_name: DisplayName,
+    pub state: ProjectAcceptanceState,
+    pub policy_revision: u64,
+    pub ip_policy: IpScrubPolicy,
+    pub items: ItemCapabilities,
+    pub limits: ProjectIngestLimits,
+    pub grouping_revision: u64,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectKeyIdentity {
+    pub key: DsnKey,
+    pub project_id: ProjectId,
+    pub state: ProjectKeyState,
+    pub label: ProjectKeyLabel,
+    pub created_at: Timestamp,
 }
 
 /// Sanitized acceptance payload. The unsanitized wire body cannot inhabit this type.
@@ -431,5 +578,29 @@ mod tests {
         assert_eq!(event.to_string(), "0123456789abcdef0123456789abcdef");
         assert!(DsnKey::parse("short").is_err());
         assert!(ProjectId::new(0).is_err());
+    }
+
+    #[test]
+    fn identity_values_enforce_storage_and_route_bounds() {
+        assert!(OrganizationId::new(1).is_ok());
+        assert!(OrganizationId::new(i64::MAX as u64).is_ok());
+        assert!(OrganizationId::new(0).is_err());
+        assert!(OrganizationId::new(i64::MAX as u64 + 1).is_err());
+        assert_eq!(
+            Slug::new("error-service").unwrap().as_str(),
+            "error-service"
+        );
+        for invalid in [
+            "",
+            "UPPER",
+            "-leading",
+            "trailing-",
+            "two--hyphens",
+            "under_score",
+        ] {
+            assert!(Slug::new(invalid).is_err(), "{invalid}");
+        }
+        assert!(Slug::new("a".repeat(63)).is_ok());
+        assert!(Slug::new("a".repeat(64)).is_err());
     }
 }

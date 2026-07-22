@@ -20,7 +20,9 @@ faultkeep-sentry-protocol = { path = "../sentry-protocol" }
 faultkeep-symbolication = { path = "../symbolication" }
 figment.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 humantime.workspace = true
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -34,6 +36,7 @@ uuid.workspace = true
 [dev-dependencies]
 faultkeep-testkit = { path = "../testkit" }
 flate2.workspace = true
+mongodb.workspace = true
 
 [lints]
 workspace = true

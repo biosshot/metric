@@ -8,7 +8,7 @@ use std::{
 use faultkeep_domain::{AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp};
 use faultkeep_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, OutcomeSink, PortFuture,
-    ProjectResolveError, ProjectResolver, RandomSource,
+    ProjectResolveError, ProjectResolver, RandomError, RandomSource,
 };
 
 #[derive(Clone)]
@@ -128,8 +128,9 @@ impl Clock for FixedClock {
 pub struct FixedRandom(pub u8);
 
 impl RandomSource for FixedRandom {
-    fn fill_bytes(&self, output: &mut [u8]) {
+    fn fill_bytes(&self, output: &mut [u8]) -> Result<(), RandomError> {
         output.fill(self.0);
+        Ok(())
     }
 }
 

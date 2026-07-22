@@ -9,6 +9,13 @@ repository.workspace = true
 [dependencies]
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
+futures-util.workspace = true
+metrics.workspace = true
+mongodb.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
 
 [lints]
 workspace = true

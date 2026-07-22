@@ -16,7 +16,8 @@ cargo test-fast --locked
 
 Additional risk-tier commands are `cargo test-infrastructure`, `cargo test-fuzz`,
 and `cargo test-performance`. Infrastructure tests use the exact MongoDB image in
-`deploy/compose.dev.yml`; Phase 1 itself has no database adapter.
+`deploy/compose.dev.yml`, published on local port `27018` to avoid colliding with a
+developer MongoDB on its standard port.
 
 The retained k6 workload, JSON baselines, and regression comparator are documented
 in `performance/README.md`.
