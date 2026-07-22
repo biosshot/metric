@@ -33,3 +33,12 @@ capacity = 100000
 max_inflight = 512
 positive_ttl = "60s"
 negative_ttl = "5s"
+
+[ingest.batch]
+max_wait = "20ms"
+max_documents = 250
+max_bytes = "8 MiB"
+
+[ingest.event_codec]
+compression_level = 3
+compression_min_savings = 64

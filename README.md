@@ -1,9 +1,9 @@
 # faultkeep
 
-Phase 1 adds bounded Sentry Error Event HTTP ingestion over the Phase 0 workspace.
-Production composition deliberately returns unavailable until the real Project and
-durable Event adapters arrive in later phases; deterministic fakes exist only in
-tests and the benchmark binary.
+Phase 3 adds durable, idempotent Sentry Error Event acceptance through a bounded
+MongoWriter and the compact MongoDB pending Event representation. Production only
+reports ready after the real Project and Event adapters are composed; deterministic
+fakes remain limited to tests and the explicitly named benchmark binaries.
 
 ## Local checks
 

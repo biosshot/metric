@@ -3,7 +3,7 @@
 use std::{future::Future, pin::Pin};
 
 use faultkeep_domain::{
-    AcceptedEvent, DsnKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
+    AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
 };
 use thiserror::Error;
@@ -96,6 +96,53 @@ pub trait EventSink: Send + Sync + 'static {
         &self,
         event: AcceptedEvent,
     ) -> PortFuture<'_, Result<DurableOutcome, EventSinkError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EventPrepareError {
+    #[error("accepted Event cannot be encoded in the persistent format")]
+    InvalidEvent,
+    #[error("accepted Event exceeds the configured encoded size bound")]
+    TooLarge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventWriteStatus {
+    Inserted,
+    Duplicate,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EventStoreError {
+    #[error("Event storage is temporarily unavailable")]
+    Unavailable,
+    #[error("Event write acknowledgement is ambiguous")]
+    Ambiguous,
+}
+
+/// Adapter-owned encoded Event that remains opaque outside the storage boundary.
+pub trait PreparedEvent: Send + 'static {
+    fn key(&self) -> EventKey;
+    fn encoded_len(&self) -> usize;
+    fn into_event(self) -> AcceptedEvent;
+}
+
+/// Capability-specific durable Event insertion port used only by MongoWriter.
+pub trait EventStore: Send + Sync + 'static {
+    type Prepared: PreparedEvent;
+
+    fn prepare(&self, event: AcceptedEvent) -> Result<Self::Prepared, EventPrepareError>;
+
+    fn insert_batch<'a>(
+        &'a self,
+        events: &'a [Self::Prepared],
+    ) -> PortFuture<'a, Result<Vec<EventWriteStatus>, EventStoreError>>;
+}
+
+/// Fresh-payload acceleration seam. MongoDB remains authoritative if an offer fails.
+pub trait AcceptedEventHandoff: Send + Sync + 'static {
+    fn offer(&self, event: AcceptedEvent) -> Result<(), AcceptedEvent>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

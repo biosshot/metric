@@ -17,6 +17,7 @@ pub type ShutdownGrace = BoundedDuration<MAX_SHUTDOWN_GRACE_MILLIS>;
 pub type RequestTimeout = BoundedDuration<60_000>;
 pub type ProjectCacheTtl = BoundedDuration<MAX_PROJECT_CACHE_TTL_MILLIS>;
 pub type MongoBootstrapTimeout = BoundedDuration<60_000>;
+pub type BatchWait = BoundedDuration<1_000>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
@@ -97,6 +98,8 @@ pub struct IngestConfig {
     pub request_timeout: RequestTimeout,
     pub unsupported_backoff_seconds: u64,
     pub project_cache: ProjectCacheSettings,
+    pub batch: BatchSettings,
+    pub event_codec: EventCodecSettings,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +108,38 @@ pub struct ProjectCacheSettings {
     pub max_inflight: usize,
     pub positive_ttl: ProjectCacheTtl,
     pub negative_ttl: ProjectCacheTtl,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BatchSettings {
+    pub max_wait: BatchWait,
+    pub max_documents: usize,
+    pub max_bytes: usize,
+}
+
+impl Default for BatchSettings {
+    fn default() -> Self {
+        Self {
+            max_wait: "20ms".parse().expect("default batch wait is valid"),
+            max_documents: 250,
+            max_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EventCodecSettings {
+    pub compression_level: i32,
+    pub compression_min_savings: usize,
+}
+
+impl Default for EventCodecSettings {
+    fn default() -> Self {
+        Self {
+            compression_level: 3,
+            compression_min_savings: 64,
+        }
+    }
 }
 
 impl Default for ProjectCacheSettings {
@@ -322,6 +357,8 @@ struct RawIngestConfig {
     request_timeout: String,
     unsupported_backoff_seconds: u64,
     project_cache: RawProjectCacheSettings,
+    batch: RawBatchSettings,
+    event_codec: RawEventCodecSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +368,40 @@ struct RawProjectCacheSettings {
     max_inflight: usize,
     positive_ttl: String,
     negative_ttl: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawBatchSettings {
+    max_wait: String,
+    max_documents: usize,
+    max_bytes: String,
+}
+
+impl Default for RawBatchSettings {
+    fn default() -> Self {
+        Self {
+            max_wait: "20ms".to_owned(),
+            max_documents: 250,
+            max_bytes: "8 MiB".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawEventCodecSettings {
+    compression_level: i32,
+    compression_min_savings: usize,
+}
+
+impl Default for RawEventCodecSettings {
+    fn default() -> Self {
+        Self {
+            compression_level: 3,
+            compression_min_savings: 64,
+        }
+    }
 }
 
 impl Default for RawProjectCacheSettings {
@@ -357,6 +428,8 @@ impl Default for RawIngestConfig {
             request_timeout: "10s".to_owned(),
             unsupported_backoff_seconds: 3600,
             project_cache: RawProjectCacheSettings::default(),
+            batch: RawBatchSettings::default(),
+            event_codec: RawEventCodecSettings::default(),
         }
     }
 }
@@ -525,7 +598,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -549,6 +622,11 @@ impl AppConfig {
             self.ingest.project_cache.max_inflight,
             humantime::format_duration(self.ingest.project_cache.positive_ttl.get()),
             humantime::format_duration(self.ingest.project_cache.negative_ttl.get()),
+            humantime::format_duration(self.ingest.batch.max_wait.get()),
+            self.ingest.batch.max_documents,
+            self.ingest.batch.max_bytes,
+            self.ingest.event_codec.compression_level,
+            self.ingest.event_codec.compression_min_savings,
         )
     }
 
@@ -578,6 +656,10 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             .map_err(|_| ConfigError::InvalidIngestConfig)?;
         let negative_ttl = ProjectCacheTtl::from_str(&raw.project_cache.negative_ttl)
             .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let batch_wait = BatchWait::from_str(&raw.batch.max_wait)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let batch_bytes = ConfiguredBytes::from_str(&raw.batch.max_bytes)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
         let valid = compressed.get() > 0
             && decompressed.get() >= compressed.get()
             && event.get() > 0
@@ -591,7 +673,13 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             && (1..=4096).contains(&raw.project_cache.max_inflight)
             && !positive_ttl.get().is_zero()
             && !negative_ttl.get().is_zero();
-        if !valid || !valid_cache {
+        let valid_batch = !batch_wait.get().is_zero()
+            && (100..=500).contains(&raw.batch.max_documents)
+            && batch_bytes.get() > 0
+            && batch_bytes.get() <= 64 * 1024 * 1024;
+        let valid_codec = (-7..=22).contains(&raw.event_codec.compression_level)
+            && (1..=4096).contains(&raw.event_codec.compression_min_savings);
+        if !valid || !valid_cache || !valid_batch || !valid_codec {
             return Err(ConfigError::InvalidIngestConfig);
         }
         Ok(Self {
@@ -612,6 +700,16 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
                 max_inflight: raw.project_cache.max_inflight,
                 positive_ttl,
                 negative_ttl,
+            },
+            batch: BatchSettings {
+                max_wait: batch_wait,
+                max_documents: raw.batch.max_documents,
+                max_bytes: usize::try_from(batch_bytes.get())
+                    .map_err(|_| ConfigError::InvalidIngestConfig)?,
+            },
+            event_codec: EventCodecSettings {
+                compression_level: raw.event_codec.compression_level,
+                compression_min_savings: raw.event_codec.compression_min_savings,
             },
         })
     }

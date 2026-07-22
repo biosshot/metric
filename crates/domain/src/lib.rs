@@ -367,6 +367,11 @@ impl EventId {
     pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
+
+    #[must_use]
+    pub const fn as_bytes(self) -> [u8; 16] {
+        self.0
+    }
 }
 
 impl fmt::Debug for EventId {
@@ -533,6 +538,60 @@ pub struct AcceptedEvent {
     pub payload: ScrubbedEventPayload,
 }
 
+/// Canonical 20-byte MongoDB Event identity from ADR-0022.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventKey([u8; 20]);
+
+impl EventKey {
+    #[must_use]
+    pub fn new(project_id: ProjectId, event_id: EventId) -> Self {
+        let mut bytes = [0_u8; 20];
+        bytes[..4].copy_from_slice(&project_id.get().to_be_bytes());
+        bytes[4..].copy_from_slice(&event_id.as_bytes());
+        Self(bytes)
+    }
+
+    pub fn from_bytes(bytes: [u8; 20]) -> Result<Self, PrimitiveError> {
+        ProjectId::new(i32::from_be_bytes(
+            bytes[..4].try_into().expect("four-byte Event key prefix"),
+        ))?;
+        Ok(Self(bytes))
+    }
+
+    #[must_use]
+    pub const fn as_bytes(self) -> [u8; 20] {
+        self.0
+    }
+
+    #[must_use]
+    pub fn project_id(self) -> ProjectId {
+        ProjectId::new(i32::from_be_bytes(
+            self.0[..4].try_into().expect("four-byte Event key prefix"),
+        ))
+        .expect("validated Event key project ID")
+    }
+
+    #[must_use]
+    pub fn event_id(self) -> EventId {
+        EventId::from_bytes(
+            self.0[4..]
+                .try_into()
+                .expect("sixteen-byte Event key suffix"),
+        )
+    }
+}
+
+impl fmt::Debug for EventKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "EventKey({}:{})",
+            self.project_id().get(),
+            self.event_id()
+        )
+    }
+}
+
 fn parse_hex_identifier(value: &str) -> Option<[u8; 16]> {
     if value.len() != 32 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
@@ -578,6 +637,11 @@ mod tests {
         assert_eq!(event.to_string(), "0123456789abcdef0123456789abcdef");
         assert!(DsnKey::parse("short").is_err());
         assert!(ProjectId::new(0).is_err());
+        let key = EventKey::new(ProjectId::new(0x0102_0304).unwrap(), event);
+        assert_eq!(&key.as_bytes()[..4], &[1, 2, 3, 4]);
+        assert_eq!(key.project_id().get(), 0x0102_0304);
+        assert_eq!(key.event_id(), event);
+        assert!(EventKey::from_bytes([0; 20]).is_err());
     }
 
     #[test]

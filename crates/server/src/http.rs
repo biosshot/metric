@@ -20,6 +20,7 @@ use tracing::{Instrument, info_span};
 struct HttpState {
     shutdown: ShutdownSignal,
     metrics: Metrics,
+    required_ready: bool,
 }
 
 #[derive(Serialize)]
@@ -28,9 +29,23 @@ struct ProbeResponse {
 }
 
 pub fn router(shutdown: ShutdownSignal, metrics: Metrics, application_routes: Router) -> Router {
-    let state = HttpState { shutdown, metrics };
+    router_with_readiness(shutdown, metrics, application_routes, true)
+}
+
+pub fn router_with_readiness(
+    shutdown: ShutdownSignal,
+    metrics: Metrics,
+    application_routes: Router,
+    required_ready: bool,
+) -> Router {
+    let state = HttpState {
+        shutdown,
+        metrics,
+        required_ready,
+    };
     let live_routes = Router::new()
         .route("/live", get(live))
+        .route("/ready", get(ready))
         .with_state(state.clone());
     live_routes
         .merge(application_routes)
@@ -38,6 +53,28 @@ pub fn router(shutdown: ShutdownSignal, metrics: Metrics, application_routes: Ro
             state.clone(),
             request_context,
         ))
+}
+
+async fn ready(State(state): State<HttpState>) -> Response {
+    if state.shutdown.is_cancelled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ProbeResponse {
+                status: "shutting_down",
+            }),
+        )
+            .into_response();
+    }
+    if !state.required_ready {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ProbeResponse {
+                status: "required_dependency_unavailable",
+            }),
+        )
+            .into_response();
+    }
+    (StatusCode::OK, Json(ProbeResponse { status: "ready" })).into_response()
 }
 
 async fn live(State(state): State<HttpState>) -> Response {
@@ -130,6 +167,22 @@ mod tests {
         root.begin();
         let response = app
             .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn ready_requires_composed_durable_dependencies() {
+        let root = ShutdownRoot::new();
+        let app = router_with_readiness(root.signal(), Metrics, Router::new(), false);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);

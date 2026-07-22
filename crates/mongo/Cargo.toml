@@ -12,7 +12,9 @@ faultkeep-ports = { path = "../ports" }
 futures-util.workspace = true
 metrics.workspace = true
 mongodb.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

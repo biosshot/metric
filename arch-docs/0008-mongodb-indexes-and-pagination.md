@@ -43,13 +43,16 @@ In addition to MongoDB's automatic `_id` index, the initial `events` indexes are
 // Absolute event expiration; expireAfterSeconds == 0
 { x: 1 }
 
-// Archive work; partial on h exists and z is absent
+// Archive work; partial on h exists
 { h: 1, _id: 1 }
 ```
 
 The Processor and archive indexes are partial so processed or archive-ineligible
 events do not pay their ongoing storage cost. The global Processor query deliberately
 does not use `project_id` as a prefix because one Dispatcher services all projects.
+MongoDB 8.0 rejects `$exists: false` inside a partial-index filter, so the archive
+index uses only `{ h: { $exists: true } }`. ADR-0022's state invariant removes `h`
+when `z` is installed, making `z` absence implied for every indexed document.
 
 The deterministic composite event `_id` remains the only index required for exact
 project-and-Sentry-event-id lookup. Event index definitions use physical names from

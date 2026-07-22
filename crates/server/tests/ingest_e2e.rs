@@ -39,6 +39,8 @@ fn config() -> IngestConfig {
         request_timeout: "10s".parse().unwrap(),
         unsupported_backoff_seconds: 3600,
         project_cache: Default::default(),
+        batch: Default::default(),
+        event_codec: Default::default(),
     }
 }
 
