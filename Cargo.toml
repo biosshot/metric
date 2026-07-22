@@ -25,6 +25,7 @@ repository = "https://github.com/faultkeep/faultkeep"
 async-compression = { version = "0.4.27", features = ["gzip", "tokio", "zlib"] }
 axum = "0.8.4"
 bytes = "1.10.1"
+blake3 = "1.8.2"
 clap = { version = "4.5.40", features = ["derive"] }
 figment = { version = "0.10.19", features = ["env", "toml"] }
 flate2 = "1.1.1"
