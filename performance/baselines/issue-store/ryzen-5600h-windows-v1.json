@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "issue-store-phase-8",
+    "source_commit": "c8ec39782de1e9c591e0e7ee51ac795fb1c7b605",
+    "generated_at": "2026-07-22T20:30:58.366Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "64-way atomic aggregation-pipeline upsert; hot one-Issue and 250-Issue distribution",
+    "storage": "MongoDB 8.0.12 local Docker tmpfs; retryWrites=false"
+  },
+  "metrics": {
+    "hot_rps": 1315,
+    "distributed_rps": 1896,
+    "operations_per_profile": 4000,
+    "concurrency": 64,
+    "minimum_hot_rps": 250,
+    "minimum_distributed_rps": 500
+  }
+}
