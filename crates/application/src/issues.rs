@@ -45,35 +45,19 @@ impl IssueService {
         event: &NormalizedEvent,
         grouping: &GroupingResult,
     ) -> Result<IssueMutationResult, IssueServiceError> {
-        if !verify_issue_id(event.project_id, grouping.key, grouping.issue_id) {
-            return Err(IssueServiceError::InvalidGroupingIdentity);
-        }
-        let occurrence = IssueOccurrence {
-            project_id: event.project_id,
-            issue_id: grouping.issue_id,
-            grouping_key: grouping.key,
-            event_id: event.event_id,
-            occurred_at: event.body.occurred_at,
-            received_at: event.received_at,
-            release: event
-                .body
-                .release
-                .as_deref()
-                .map(faultkeep_domain::issue::IssueRelease::new)
-                .transpose()
-                .map_err(map_value_error)?,
-            title: build_title(&event.body)?,
-            culprit: build_culprit(&event.body)?,
-            grouping: IssueGroupingDetail {
-                strategy: grouping.strategy,
-                explanation: grouping.explanation.clone(),
-            },
-            increment: NonZeroU64::MIN,
-        };
+        let occurrence = self.prepare_occurrence(event, grouping)?;
         self.store
             .apply_occurrence(occurrence)
             .await
             .map_err(map_store_error)
+    }
+
+    pub fn prepare_occurrence(
+        &self,
+        event: &NormalizedEvent,
+        grouping: &GroupingResult,
+    ) -> Result<IssueOccurrence, IssueServiceError> {
+        prepare_issue_occurrence(event, grouping)
     }
 
     pub async fn apply_command(
@@ -96,6 +80,37 @@ impl IssueService {
             .await
             .map_err(map_store_error)
     }
+}
+
+pub fn prepare_issue_occurrence(
+    event: &NormalizedEvent,
+    grouping: &GroupingResult,
+) -> Result<IssueOccurrence, IssueServiceError> {
+    if !verify_issue_id(event.project_id, grouping.key, grouping.issue_id) {
+        return Err(IssueServiceError::InvalidGroupingIdentity);
+    }
+    Ok(IssueOccurrence {
+        project_id: event.project_id,
+        issue_id: grouping.issue_id,
+        grouping_key: grouping.key,
+        event_id: event.event_id,
+        occurred_at: event.body.occurred_at,
+        received_at: event.received_at,
+        release: event
+            .body
+            .release
+            .as_deref()
+            .map(faultkeep_domain::issue::IssueRelease::new)
+            .transpose()
+            .map_err(map_value_error)?,
+        title: build_title(&event.body)?,
+        culprit: build_culprit(&event.body)?,
+        grouping: IssueGroupingDetail {
+            strategy: grouping.strategy,
+            explanation: grouping.explanation.clone(),
+        },
+        increment: NonZeroU64::MIN,
+    })
 }
 
 fn build_title(body: &NormalizedEventBody) -> Result<IssueTitle, IssueServiceError> {

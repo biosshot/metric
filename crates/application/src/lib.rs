@@ -1,6 +1,7 @@
 //! Application-wide cancellation and operability contracts.
 
 pub mod dispatcher;
+pub mod finalizer;
 pub mod ingest;
 pub mod issues;
 pub mod normalizer;

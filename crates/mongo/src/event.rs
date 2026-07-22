@@ -343,7 +343,10 @@ fn classify_insert_many(
     Ok(statuses)
 }
 
-fn encode_body(canonical: &[u8], config: EventCodecConfig) -> Result<Vec<u8>, EventPrepareError> {
+pub(crate) fn encode_body(
+    canonical: &[u8],
+    config: EventCodecConfig,
+) -> Result<Vec<u8>, EventPrepareError> {
     let compressed = zstd::bulk::compress(canonical, config.compression_level)
         .map_err(|_| EventPrepareError::InvalidEvent)?;
     let use_compressed = compressed
@@ -361,7 +364,7 @@ fn encode_body(canonical: &[u8], config: EventCodecConfig) -> Result<Vec<u8>, Ev
     Ok(body)
 }
 
-fn decode_body(body: &[u8], max_size: usize) -> Result<Vec<u8>, EventCodecError> {
+pub(crate) fn decode_body(body: &[u8], max_size: usize) -> Result<Vec<u8>, EventCodecError> {
     let (&version, rest) = body.split_first().ok_or(EventCodecError::InvalidBody)?;
     let (&codec, payload) = rest.split_first().ok_or(EventCodecError::InvalidBody)?;
     if version != BODY_FORMAT_VERSION {
@@ -500,7 +503,11 @@ pub(crate) fn event_validator() -> Document {
     doc! {
         "$jsonSchema": {
             "bsonType": "object",
-            "required": ["_id", "p", "r", "o", "a", "q", "b"],
+            "required": ["_id", "p", "r", "o", "a", "b"],
+            "oneOf": [
+                { "required": ["q"], "not": { "required": ["u", "x"] } },
+                { "required": ["u", "x"], "not": { "required": ["q"] } },
+            ],
             "additionalProperties": false,
             "properties": {
                 "_id": { "bsonType": "binData" },
@@ -528,7 +535,7 @@ pub(crate) fn event_validator() -> Document {
                 "k": {
                     "bsonType": "array",
                     "items": { "bsonType": "long" },
-                    "maxItems": 128,
+                    "maxItems": 16,
                 },
                 "b": { "bsonType": "binData" },
                 "v": { "bsonType": "int", "minimum": 2 },

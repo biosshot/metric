@@ -305,6 +305,57 @@ impl fmt::Debug for IssueActivityId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IssueNotificationKind {
+    NewIssue = 1,
+    Regression = 2,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IssueTransitionId([u8; 16]);
+
+impl IssueTransitionId {
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    #[must_use]
+    pub const fn as_bytes(self) -> [u8; 16] {
+        self.0
+    }
+}
+
+impl fmt::Debug for IssueTransitionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "IssueTransitionId({})", hex::encode(self.0))
+    }
+}
+
+#[must_use]
+pub fn notification_transition_id(
+    project_id: ProjectId,
+    issue_id: IssueId,
+    kind: IssueNotificationKind,
+    event_id: EventId,
+) -> IssueTransitionId {
+    let mut hasher = blake3::Hasher::new();
+    hash_transition_part(&mut hasher, b"issue-notification/v1");
+    hash_transition_part(&mut hasher, &project_id.get().to_be_bytes());
+    hash_transition_part(&mut hasher, &issue_id.as_bytes());
+    hash_transition_part(&mut hasher, &[kind as u8]);
+    hash_transition_part(&mut hasher, &event_id.as_bytes());
+    let mut id = [0_u8; 16];
+    id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    IssueTransitionId(id)
+}
+
+fn hash_transition_part(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
 #[must_use]
 pub fn command_activity_id(command: IssueCommand) -> IssueActivityId {
     activity_id(

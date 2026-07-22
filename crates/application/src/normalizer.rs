@@ -235,8 +235,12 @@ impl Normalizer {
 
     /// Stable JSON projection used by the later body codec and idempotence tests.
     pub fn canonical_json(&self, body: &NormalizedEventBody) -> Vec<u8> {
-        serde_json::to_vec(&body_to_value(body)).expect("domain Event always maps to JSON")
+        serde_json::to_vec(&canonical_body_value(body)).expect("domain Event always maps to JSON")
     }
+}
+
+pub(crate) fn canonical_body_value(body: &NormalizedEventBody) -> Value {
+    body_to_value(body)
 }
 
 struct Context {

@@ -123,7 +123,7 @@ ADR-0024 defines the compact physical Issue shape:
   f, l,
   e, v, r,
   c, s, a, w, d,
-  fr, lr,
+  fr, lr, m,
   j, n,
   b
 }

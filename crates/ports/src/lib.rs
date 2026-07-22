@@ -5,6 +5,7 @@ use std::{future::Future, pin::Pin};
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
+    finalization::{FinalizationPolicy, FinalizeBatch, FinalizeResult},
     grouping::IssueId,
     issue::{
         IssueCommand, IssueCommandResult, IssueMutationResult, IssueOccurrence, IssueSearchQuery,
@@ -235,6 +236,25 @@ pub trait IssueStore: Send + Sync + 'static {
         project_id: ProjectId,
         query: IssueSearchQuery,
     ) -> PortFuture<'_, Result<Vec<IssueSearchResult>, IssueStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FinalizationStoreError {
+    #[error("FinalizeBatch contains invalid or inconsistent data")]
+    InvalidData,
+    #[error("FinalizeBatch identity collides with existing durable data")]
+    IdentityCollision,
+    #[error("FinalizeBatch storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Durable successful-processing fence owned only by Finalizer.
+pub trait FinalizationStore: Send + Sync + 'static {
+    fn finalize(
+        &self,
+        batch: FinalizeBatch,
+        policy: FinalizationPolicy,
+    ) -> PortFuture<'_, Result<FinalizeResult, FinalizationStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

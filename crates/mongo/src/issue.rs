@@ -8,9 +8,10 @@ use faultkeep_domain::{
     },
     issue::{
         ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueCulprit,
-        IssueGroupingDetail, IssueMutationKind, IssueMutationResult, IssueOccurrence, IssueRelease,
-        IssueSearchQuery, IssueSearchResult, IssueSnapshot, IssueStatus, IssueTitle, IssueWorkflow,
-        RegressionSummary, command_activity_id, regression_activity_id,
+        IssueGroupingDetail, IssueMutationKind, IssueMutationResult, IssueNotificationKind,
+        IssueOccurrence, IssueRelease, IssueSearchQuery, IssueSearchResult, IssueSnapshot,
+        IssueStatus, IssueTitle, IssueWorkflow, RegressionSummary, command_activity_id,
+        notification_transition_id, regression_activity_id,
     },
 };
 use faultkeep_ports::{IssueStore, IssueStoreError, PortFuture};
@@ -79,25 +80,63 @@ impl MongoIssueStore {
         &self,
         occurrence: IssueOccurrence,
     ) -> Result<IssueMutationResult, IssueStoreError> {
-        if !verify_issue_id(
-            occurrence.project_id,
-            occurrence.grouping_key,
-            occurrence.issue_id,
-        ) {
+        self.apply_occurrence_batch(std::slice::from_ref(&occurrence))
+            .await
+    }
+
+    pub(crate) async fn apply_occurrence_batch(
+        &self,
+        occurrences: &[IssueOccurrence],
+    ) -> Result<IssueMutationResult, IssueStoreError> {
+        let summary = occurrences.first().ok_or(IssueStoreError::InvalidData)?;
+        if !verify_issue_id(summary.project_id, summary.grouping_key, summary.issue_id)
+            || occurrences.iter().any(|occurrence| {
+                occurrence.project_id != summary.project_id
+                    || occurrence.issue_id != summary.issue_id
+                    || occurrence.grouping_key != summary.grouping_key
+                    || !verify_issue_id(
+                        occurrence.project_id,
+                        occurrence.grouping_key,
+                        occurrence.issue_id,
+                    )
+            })
+        {
             return Err(IssueStoreError::InvalidData);
         }
-        let increment =
-            i64::try_from(occurrence.increment.get()).map_err(|_| IssueStoreError::InvalidData)?;
-        let body = encode_grouping_body(&occurrence.grouping, self.codec)
+        let first = occurrences
+            .iter()
+            .min_by_key(|occurrence| (occurrence.occurred_at, occurrence.event_id.as_bytes()))
+            .expect("non-empty occurrence batch");
+        let latest = occurrences
+            .iter()
+            .max_by_key(|occurrence| (occurrence.occurred_at, occurrence.event_id.as_bytes()))
+            .expect("non-empty occurrence batch");
+        let regression_candidate = occurrences
+            .iter()
+            .max_by_key(|occurrence| (occurrence.received_at, occurrence.event_id.as_bytes()))
+            .expect("non-empty occurrence batch");
+        let increment = occurrences.iter().try_fold(0_i64, |total, occurrence| {
+            let value = i64::try_from(occurrence.increment.get())
+                .map_err(|_| IssueStoreError::InvalidData)?;
+            total.checked_add(value).ok_or(IssueStoreError::InvalidData)
+        })?;
+        let body = encode_grouping_body(&summary.grouping, self.codec)
             .map_err(|_| IssueStoreError::InvalidData)?;
-        let update = occurrence_pipeline(&occurrence, increment, body);
+        let update = occurrence_pipeline(
+            summary,
+            first,
+            latest,
+            regression_candidate,
+            increment,
+            body,
+        );
         let collection = self.database.collection::<Document>("issues");
         let result = collection
             .find_one_and_update(
                 doc! {
-                    "_id": binary(occurrence.issue_id.as_bytes()),
-                    "p": occurrence.project_id.get(),
-                    "g": binary(occurrence.grouping_key.to_bytes()),
+                    "_id": binary(summary.issue_id.as_bytes()),
+                    "p": summary.project_id.get(),
+                    "g": binary(summary.grouping_key.to_bytes()),
                 },
                 update,
             )
@@ -114,15 +153,18 @@ impl MongoIssueStore {
         };
         let issue =
             decode_issue(&document, self.codec).map_err(|_| IssueStoreError::InvalidData)?;
-        let kind = if issue.occurrence_count == occurrence.increment {
+        let increment =
+            NonZeroU64::new(u64::try_from(increment).map_err(|_| IssueStoreError::InvalidData)?)
+                .ok_or(IssueStoreError::InvalidData)?;
+        let kind = if issue.occurrence_count == increment {
             IssueMutationKind::Created
         } else if issue.status == IssueStatus::Open
-            && issue.regression.as_ref().is_some_and(|regression| {
-                regression.event_id == occurrence.event_id
-                    && regression.at == occurrence.received_at
+            && issue.regression.as_ref().is_some_and(|stored| {
+                stored.event_id == regression_candidate.event_id
+                    && stored.at == regression_candidate.received_at
             })
         {
-            self.insert_regression_activity(&occurrence).await;
+            self.insert_regression_activity(regression_candidate).await;
             IssueMutationKind::Regressed
         } else {
             IssueMutationKind::Updated
@@ -314,29 +356,58 @@ impl IssueStore for MongoIssueStore {
 }
 
 fn occurrence_pipeline(
-    occurrence: &IssueOccurrence,
+    summary: &IssueOccurrence,
+    first_occurrence: &IssueOccurrence,
+    latest_occurrence: &IssueOccurrence,
+    regression_occurrence: &IssueOccurrence,
     increment: i64,
     body: Vec<u8>,
 ) -> Vec<Document> {
-    let incoming_event = Bson::Binary(binary(occurrence.event_id.as_bytes()));
-    let occurred = Bson::DateTime(date(occurrence.occurred_at));
-    let received = Bson::DateTime(date(occurrence.received_at));
-    let incoming_release = release_pair(occurrence.release.as_ref());
+    let first_event = Bson::Binary(binary(first_occurrence.event_id.as_bytes()));
+    let first_occurred = Bson::DateTime(date(first_occurrence.occurred_at));
+    let first_release = release_pair(first_occurrence.release.as_ref());
+    let latest_event = Bson::Binary(binary(latest_occurrence.event_id.as_bytes()));
+    let latest_occurred = Bson::DateTime(date(latest_occurrence.occurred_at));
+    let latest_release = release_pair(latest_occurrence.release.as_ref());
+    let regression_event = Bson::Binary(binary(regression_occurrence.event_id.as_bytes()));
+    let regression_received = Bson::DateTime(date(regression_occurrence.received_at));
+    let new_transition = doc! {
+        "i": binary(notification_transition_id(
+            summary.project_id,
+            summary.issue_id,
+            IssueNotificationKind::NewIssue,
+            first_occurrence.event_id,
+        ).as_bytes()),
+        "k": IssueNotificationKind::NewIssue as i32,
+        "e": binary(first_occurrence.event_id.as_bytes()),
+        "t": date(first_occurrence.received_at),
+    };
+    let regression_transition = doc! {
+        "i": binary(notification_transition_id(
+            summary.project_id,
+            summary.issue_id,
+            IssueNotificationKind::Regression,
+            regression_occurrence.event_id,
+        ).as_bytes()),
+        "k": IssueNotificationKind::Regression as i32,
+        "e": binary(regression_occurrence.event_id.as_bytes()),
+        "t": date(regression_occurrence.received_at),
+    };
     let first = doc! { "$or": [
         { "$eq": [{ "$type": "$f" }, "missing"] },
-        { "$lt": [occurred.clone(), "$f"] },
+        { "$lt": [first_occurred.clone(), "$f"] },
         { "$and": [
-            { "$eq": [occurred.clone(), "$f"] },
-            { "$lt": [incoming_event.clone(), "$e"] },
+            { "$eq": [first_occurred.clone(), "$f"] },
+            { "$lt": [first_event.clone(), "$e"] },
         ] },
     ] };
     let old_latest_event = doc! { "$ifNull": ["$v", "$e"] };
     let latest = doc! { "$or": [
         { "$eq": [{ "$type": "$l" }, "missing"] },
-        { "$gt": [occurred.clone(), "$l"] },
+        { "$gt": [latest_occurred.clone(), "$l"] },
         { "$and": [
-            { "$eq": [occurred.clone(), "$l"] },
-            { "$gt": [incoming_event.clone(), old_latest_event.clone()] },
+            { "$eq": [latest_occurred.clone(), "$l"] },
+            { "$gt": [latest_event.clone(), old_latest_event.clone()] },
         ] },
     ] };
     let old_first_release = doc! { "$cond": [
@@ -360,8 +431,8 @@ fn occurrence_pipeline(
     ] };
     let regression = doc! { "$cond": [
         { "$gt": [regression_count.clone(), 1_i64] },
-        { "t": received.clone(), "e": incoming_event.clone(), "c": regression_count },
-        { "t": received.clone(), "e": incoming_event.clone() },
+        { "t": regression_received.clone(), "e": regression_event.clone(), "c": regression_count },
+        { "t": regression_received.clone(), "e": regression_event.clone() },
     ] };
     vec![
         doc! { "$set": {
@@ -370,29 +441,34 @@ fn occurrence_pipeline(
             "_fk_latest": latest,
             "_fk_regress": { "$and": [
                 { "$eq": ["$s", 1_i32] },
-                { "$gt": [received, "$w.t"] },
+                { "$gt": [regression_received, "$w.t"] },
             ] },
             "_fk_old_latest_event": old_latest_event,
             "_fk_old_first_release": old_first_release,
             "_fk_old_latest_release": old_latest_release,
         } },
         doc! { "$set": {
-            "_fk_first_event": { "$cond": ["$_fk_first", incoming_event.clone(), "$e"] },
-            "_fk_latest_event": { "$cond": ["$_fk_latest", incoming_event, "$_fk_old_latest_event"] },
-            "_fk_first_release": { "$cond": ["$_fk_first", incoming_release.clone(), "$_fk_old_first_release"] },
-            "_fk_latest_release": { "$cond": ["$_fk_latest", incoming_release, "$_fk_old_latest_release"] },
+            "_fk_first_event": { "$cond": ["$_fk_first", first_event, "$e"] },
+            "_fk_latest_event": { "$cond": ["$_fk_latest", latest_event, "$_fk_old_latest_event"] },
+            "_fk_first_release": { "$cond": ["$_fk_first", first_release, "$_fk_old_first_release"] },
+            "_fk_latest_release": { "$cond": ["$_fk_latest", latest_release, "$_fk_old_latest_release"] },
+            "_fk_transition": { "$cond": [
+                "$_fk_new",
+                new_transition,
+                { "$cond": ["$_fk_regress", regression_transition, "$$REMOVE"] },
+            ] },
         } },
         doc! { "$set": {
-            "p": { "$ifNull": ["$p", occurrence.project_id.get()] },
-            "g": { "$ifNull": ["$g", binary(occurrence.grouping_key.to_bytes())] },
-            "t": { "$cond": ["$_fk_new", occurrence.title.as_str(), "$t"] },
+            "p": { "$ifNull": ["$p", summary.project_id.get()] },
+            "g": { "$ifNull": ["$g", binary(summary.grouping_key.to_bytes())] },
+            "t": { "$cond": ["$_fk_new", summary.title.as_str(), "$t"] },
             "q": { "$cond": [
                 "$_fk_new",
-                occurrence.culprit.as_ref().map_or(Bson::String("$$REMOVE".to_owned()), |value| Bson::String(value.as_str().to_owned())),
+                summary.culprit.as_ref().map_or(Bson::String("$$REMOVE".to_owned()), |value| Bson::String(value.as_str().to_owned())),
                 "$q",
             ] },
-            "f": { "$cond": ["$_fk_first", occurred.clone(), "$f"] },
-            "l": { "$cond": ["$_fk_latest", occurred, "$l"] },
+            "f": { "$cond": ["$_fk_first", first_occurred, "$f"] },
+            "l": { "$cond": ["$_fk_latest", latest_occurred, "$l"] },
             "e": "$_fk_first_event",
             "v": { "$cond": [
                 { "$eq": ["$_fk_latest_event", "$_fk_first_event"] },
@@ -403,6 +479,16 @@ fn occurrence_pipeline(
             "s": { "$cond": ["$_fk_regress", "$$REMOVE", "$s"] },
             "w": { "$cond": ["$_fk_regress", "$$REMOVE", "$w"] },
             "d": { "$cond": ["$_fk_regress", regression, "$d"] },
+            "n": { "$cond": [
+                { "$ne": [{ "$type": "$_fk_transition" }, "missing"] },
+                { "$concatArrays": [{ "$ifNull": ["$n", []] }, ["$_fk_transition"]] },
+                "$n",
+            ] },
+            "j": { "$cond": [
+                { "$ne": [{ "$type": "$_fk_transition" }, "missing"] },
+                true,
+                "$j",
+            ] },
             "fr": { "$cond": ["$_fk_first_release.p", "$_fk_first_release.v", "$$REMOVE"] },
             "lr": { "$cond": [
                 { "$and": [
@@ -437,6 +523,7 @@ fn occurrence_pipeline(
             "_fk_latest_event",
             "_fk_first_release",
             "_fk_latest_release",
+            "_fk_transition",
         ] },
     ]
 }
@@ -944,7 +1031,22 @@ pub(crate) fn issue_validator() -> Document {
                 "lr": { "bsonType": "string", "minLength": 1 },
                 "m": { "enum": [true] },
                 "j": { "enum": [true] },
-                "n": { "bsonType": "array", "maxItems": 64 },
+                "n": {
+                    "bsonType": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": {
+                        "bsonType": "object",
+                        "required": ["i", "k", "e", "t"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "i": { "bsonType": "binData" },
+                            "k": { "bsonType": "int", "enum": [1, 2] },
+                            "e": { "bsonType": "binData" },
+                            "t": { "bsonType": "date" },
+                        },
+                    },
+                },
                 "b": { "bsonType": "binData" },
             },
         } },
@@ -986,6 +1088,10 @@ pub(crate) fn issue_validator() -> Document {
                 { "$eq": ["$m", true] },
                 { "$ne": [{ "$type": "$fr" }, "missing"] },
                 true,
+            ] },
+            { "$eq": [
+                { "$ifNull": ["$j", false] },
+                { "$ne": [{ "$type": "$n" }, "missing"] },
             ] },
         ] } },
     ] }

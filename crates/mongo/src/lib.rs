@@ -1,11 +1,15 @@
+#![recursion_limit = "256"]
+
 //! MongoDB project-identity adapter and initial empty-schema bootstrap.
 
 mod event;
+mod finalizer;
 mod issue;
 
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
 };
+pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finalized_event};
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
@@ -27,18 +31,22 @@ use thiserror::Error;
 
 pub const SCHEMA_GENERATION: i32 = 1;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 3] = [
+const SCHEMA_MODULES: [&str; 4] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
+    "finalization_storage_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 7] = [
+const REQUIRED_COLLECTIONS: [&str; 10] = [
+    "environments",
     "events",
     "issue_activities",
     "issues",
+    "issue_stats_hourly",
     "organizations",
     "project_keys",
     "projects",
+    "releases",
     "schema_meta",
 ];
 
@@ -107,6 +115,15 @@ impl MongoProjectStore {
         MongoIssueStore::from_database(self.database.clone(), codec)
     }
 
+    #[must_use]
+    pub fn finalization_store(
+        &self,
+        event_codec: EventCodecConfig,
+        issue_codec: IssueCodecConfig,
+    ) -> MongoFinalizationStore {
+        MongoFinalizationStore::from_database(self.database.clone(), event_codec, issue_codec)
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -156,6 +173,12 @@ impl MongoProjectStore {
         self.create_validated_collection("issues", issue::issue_validator())
             .await?;
         self.create_validated_collection("issue_activities", issue::issue_activity_validator())
+            .await?;
+        self.create_validated_collection("issue_stats_hourly", finalizer::hourly_validator())
+            .await?;
+        self.create_validated_collection("releases", finalizer::release_validator())
+            .await?;
+        self.create_validated_collection("environments", finalizer::environment_validator())
             .await
     }
 
@@ -198,6 +221,7 @@ impl MongoProjectStore {
             .await?;
         event::create_event_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
+        finalizer::create_finalization_indexes(&self.database).await?;
         Ok(())
     }
 
@@ -235,6 +259,9 @@ impl MongoProjectStore {
         if !issue::validate_issue_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
+        if !finalizer::validate_finalization_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
         self.validate_collection_options().await
     }
 
@@ -255,6 +282,15 @@ impl MongoProjectStore {
             ("events", event::event_index_names()),
             ("issues", issue::issue_index_names()),
             ("issue_activities", issue::issue_activity_index_names()),
+            (
+                "issue_stats_hourly",
+                finalizer::finalization_index_names("issue_stats_hourly"),
+            ),
+            ("releases", finalizer::finalization_index_names("releases")),
+            (
+                "environments",
+                finalizer::finalization_index_names("environments"),
+            ),
         ] {
             let names = self
                 .database
@@ -277,6 +313,9 @@ impl MongoProjectStore {
             ("events", event::event_validator()),
             ("issues", issue::issue_validator()),
             ("issue_activities", issue::issue_activity_validator()),
+            ("issue_stats_hourly", finalizer::hourly_validator()),
+            ("releases", finalizer::release_validator()),
+            ("environments", finalizer::environment_validator()),
         ] {
             let response = self
                 .database
@@ -864,6 +903,15 @@ fn project_validator() -> Document {
                 },
             },
             "grouping_revision": { "bsonType": "long", "minimum": 1 },
+            "catalog_usage": {
+                "bsonType": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "rd": { "bsonType": "date" },
+                    "rc": { "bsonType": "int", "minimum": 1 },
+                    "ec": { "bsonType": "int", "minimum": 1 },
+                },
+            },
             "created_at": { "bsonType": "date" },
         }
     }}
