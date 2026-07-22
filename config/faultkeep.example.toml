@@ -42,3 +42,13 @@ max_bytes = "8 MiB"
 [ingest.event_codec]
 compression_level = 3
 compression_min_savings = 64
+
+[dispatcher]
+queue_capacity = 4096
+worker_concurrency = 32
+low_watermark = 1024
+refill_target = 3072
+refill_batch_size = 512
+poll_interval = "100ms"
+metrics_interval = "5s"
+source_timeout = "5s"

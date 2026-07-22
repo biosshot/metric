@@ -10,6 +10,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use faultkeep_application::{
+    dispatcher::{Dispatcher, DispatcherConfig},
     ingest::IngestService,
     observability::Metrics,
     projects::{ProjectCacheConfig, ProjectService},
@@ -24,12 +25,13 @@ use faultkeep_domain::{
 };
 use faultkeep_mongo::{EventCodecConfig, MongoProjectStore, decode_pending_event};
 use faultkeep_ports::{
-    AcceptedEventHandoff, DurableOutcome, EventPrepareError, EventSink, EventStore,
-    EventStoreError, EventWriteStatus, PortFuture, ProjectResolver, ProjectStore,
+    AcceptedEventHandoff, DurableOutcome, EventBacklog, EventPrepareError, EventSink, EventStore,
+    EventStoreError, EventWriteStatus, PortFuture, ProjectResolver, ProjectStore, WorkHandler,
 };
 use faultkeep_server::{config::IngestConfig, http, ingest_http};
 use faultkeep_testkit::{FakeOutcomeSink, FixedClock, FixedRandom};
 use mongodb::{Client, Database, bson::doc};
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 const KEY: DsnKey = DsnKey::from_bytes([4; 16]);
@@ -53,6 +55,35 @@ struct CountingStore {
     batch_sizes: Mutex<Vec<usize>>,
 }
 
+struct CompletingWorkHandler {
+    database: Database,
+    handled: Mutex<Vec<EventKey>>,
+    started: Notify,
+    release: Notify,
+}
+
+impl WorkHandler for CompletingWorkHandler {
+    fn handle(&self, event: AcceptedEvent) -> PortFuture<'_, ()> {
+        Box::pin(async move {
+            let key = EventKey::new(event.project_id, event.event_id);
+            self.handled.lock().unwrap().push(key);
+            self.started.notify_one();
+            self.release.notified().await;
+            self.database
+                .collection::<mongodb::bson::Document>("events")
+                .update_one(
+                    doc! { "_id": mongodb::bson::Binary {
+                        subtype: mongodb::bson::spec::BinarySubtype::Generic,
+                        bytes: key.as_bytes().to_vec(),
+                    }},
+                    doc! { "$set": { "q": { "s": 1_i32, "a": 1_i32, "c": 1_i32 } } },
+                )
+                .await
+                .unwrap();
+        })
+    }
+}
+
 impl EventStore for CountingStore {
     type Prepared = faultkeep_mongo::MongoPreparedEvent;
 
@@ -71,7 +102,7 @@ impl EventStore for CountingStore {
 
 #[tokio::test]
 #[ignore = "requires MongoDB 8.0.12 from deploy/compose.dev.yml"]
-async fn infrastructure_official_sdk_http_to_mongo_writer_and_mongodb() {
+async fn infrastructure_official_sdk_http_to_dispatcher_work_handler() {
     let database = test_database().await.unwrap();
     let result = exercise(&database).await;
     let cleanup = database.drop().await;
@@ -214,10 +245,34 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     )?);
     let codec = EventCodecConfig::default();
     let event_store = Arc::new(control.event_store(codec));
-    let handoff = Arc::new(CapturingHandoff::default());
+    let handler = Arc::new(CompletingWorkHandler {
+        database: database.clone(),
+        handled: Mutex::new(Vec::new()),
+        started: Notify::new(),
+        release: Notify::new(),
+    });
+    let backlog: Arc<dyn EventBacklog> = event_store.clone();
+    let (dispatcher, dispatcher_task) = Dispatcher::start(
+        backlog,
+        handler.clone(),
+        Arc::new(FixedClock(Timestamp::from_unix_millis(2_000)?)),
+        DispatcherConfig {
+            queue_capacity: 32,
+            worker_concurrency: 2,
+            low_watermark: 4,
+            refill_target: 24,
+            refill_batch_size: 24,
+            poll_interval: Duration::from_millis(5),
+            metrics_interval: Duration::from_secs(1),
+            source_timeout: Duration::from_secs(2),
+            shutdown_drain: Duration::from_secs(2),
+        },
+        root.signal(),
+    )
+    .await?;
     let (writer, writer_task) = MongoWriter::start(
         event_store,
-        handoff.clone(),
+        dispatcher,
         MongoWriterConfig {
             channel_capacity: 32,
             max_wait: Duration::from_millis(1),
@@ -245,6 +300,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         app.clone().oneshot(request()).await?.status(),
         StatusCode::OK
     );
+    tokio::time::timeout(Duration::from_secs(2), handler.started.notified()).await?;
     assert_eq!(app.oneshot(request()).await?.status(), StatusCode::OK);
 
     let events = database.collection::<mongodb::bson::Document>("events");
@@ -256,10 +312,22 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         decoded.event_id.to_string(),
         "aa40a14691564910ae6eb2affdba35f9"
     );
-    assert_eq!(handoff.0.lock().unwrap().len(), 1);
+    assert_eq!(handler.handled.lock().unwrap().len(), 1);
+    handler.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let document = events.find_one(doc! {}).await.unwrap().unwrap();
+            if document.get_document("q").unwrap().get_i32("s") == Ok(1) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
 
     root.begin();
     writer_task.wait().await;
+    dispatcher_task.wait().await;
     Ok(())
 }
 

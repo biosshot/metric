@@ -8,6 +8,7 @@ use std::{io, process::ExitCode};
 
 use config::{Cli, ConfigError};
 use faultkeep_application::{
+    dispatcher::{Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask},
     observability::{Metric, Metrics, Outcome},
     projects::{ProjectCacheConfig, ProjectService, ProjectServiceError},
     shutdown::ShutdownRoot,
@@ -16,8 +17,8 @@ use faultkeep_application::{
 use faultkeep_domain::Timestamp;
 use faultkeep_mongo::{EventCodecConfig, MongoBootstrapError, MongoProjectStore};
 use faultkeep_ports::{
-    AcceptedEventHandoff, Clock, EventSink, EventSinkError, OutcomeSink, PortFuture,
-    ProjectResolveError, ProjectResolver, RandomError, RandomSource,
+    Clock, EventBacklog, EventSink, EventSinkError, OutcomeSink, PortFuture, ProjectResolveError,
+    ProjectResolver, RandomError, RandomSource, WorkHandler,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -41,6 +42,15 @@ pub enum ServerError {
     MongoBootstrapTimeout,
     #[error(transparent)]
     Writer(#[from] MongoWriterStartError),
+    #[error(transparent)]
+    Dispatcher(#[from] DispatcherStartError),
+}
+
+struct RuntimeModules {
+    project_resolver: std::sync::Arc<dyn ProjectResolver>,
+    event_sink: std::sync::Arc<dyn EventSink>,
+    writer_task: Option<MongoWriterTask>,
+    dispatcher_task: Option<DispatcherTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -62,11 +72,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let shutdown = ShutdownRoot::new();
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
     let random: std::sync::Arc<dyn RandomSource> = std::sync::Arc::new(SystemRandom);
-    let (project_resolver, event_sink, writer_task): (
-        std::sync::Arc<dyn ProjectResolver>,
-        std::sync::Arc<dyn EventSink>,
-        Option<MongoWriterTask>,
-    ) = if let Some(uri) = secrets.mongodb_uri.take() {
+    let RuntimeModules {
+        project_resolver,
+        event_sink,
+        writer_task,
+        dispatcher_task,
+    } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
             .take()
@@ -104,9 +115,28 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             max_decoded_body_bytes: config.ingest.max_event_bytes,
             max_encoded_document_bytes: config.ingest.max_event_bytes.saturating_add(64 * 1024),
         }));
+        let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
+        let (dispatcher, dispatcher_task) = Dispatcher::start(
+            backlog,
+            std::sync::Arc::new(DeferredWorkHandler),
+            std::sync::Arc::clone(&clock),
+            DispatcherConfig {
+                queue_capacity: config.dispatcher.queue_capacity,
+                worker_concurrency: config.dispatcher.worker_concurrency,
+                low_watermark: config.dispatcher.low_watermark,
+                refill_target: config.dispatcher.refill_target,
+                refill_batch_size: config.dispatcher.refill_batch_size,
+                poll_interval: config.dispatcher.poll_interval.get(),
+                metrics_interval: config.dispatcher.metrics_interval.get(),
+                source_timeout: config.dispatcher.source_timeout.get(),
+                shutdown_drain: config.server.shutdown_grace.get(),
+            },
+            shutdown.signal(),
+        )
+        .await?;
         let (writer, writer_task) = MongoWriter::start(
             event_store,
-            std::sync::Arc::new(DiscardingEventHandoff),
+            dispatcher,
             MongoWriterConfig {
                 channel_capacity: config.ingest.max_waiting_for_storage,
                 max_wait: config.ingest.batch.max_wait.get(),
@@ -118,13 +148,19 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         )?;
         let event_sink: std::sync::Arc<dyn EventSink> = writer;
-        (project_resolver, event_sink, Some(writer_task))
+        RuntimeModules {
+            project_resolver,
+            event_sink,
+            writer_task: Some(writer_task),
+            dispatcher_task: Some(dispatcher_task),
+        }
     } else {
-        (
-            std::sync::Arc::new(UnavailableProjectResolver),
-            std::sync::Arc::new(UnavailableEventSink),
-            None,
-        )
+        RuntimeModules {
+            project_resolver: std::sync::Arc::new(UnavailableProjectResolver),
+            event_sink: std::sync::Arc::new(UnavailableEventSink),
+            writer_task: None,
+            dispatcher_task: None,
+        }
     };
     let ingest = std::sync::Arc::new(faultkeep_application::ingest::IngestService::new(
         project_resolver,
@@ -135,7 +171,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         config.ingest.max_waiting_for_storage,
         shutdown.signal(),
     ));
-    let required_ready = writer_task.is_some();
+    let required_ready = writer_task.is_some() && dispatcher_task.is_some();
     let app = http::router_with_readiness(
         shutdown.signal(),
         metrics,
@@ -167,6 +203,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     }
     shutdown.begin();
     if let Some(task) = writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = dispatcher_task {
         task.wait().await;
     }
     metrics.increment(Metric::Shutdowns, Outcome::Ok);
@@ -202,14 +241,11 @@ impl OutcomeSink for NoopOutcomeSink {
     fn record(&self, _outcome: faultkeep_ports::IngestOutcome) {}
 }
 
-struct DiscardingEventHandoff;
+struct DeferredWorkHandler;
 
-impl AcceptedEventHandoff for DiscardingEventHandoff {
-    fn offer(
-        &self,
-        _event: faultkeep_domain::AcceptedEvent,
-    ) -> Result<(), faultkeep_domain::AcceptedEvent> {
-        Ok(())
+impl WorkHandler for DeferredWorkHandler {
+    fn handle(&self, _event: faultkeep_domain::AcceptedEvent) -> PortFuture<'_, ()> {
+        Box::pin(std::future::pending())
     }
 }
 

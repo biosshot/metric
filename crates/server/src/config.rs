@@ -18,6 +18,7 @@ pub type RequestTimeout = BoundedDuration<60_000>;
 pub type ProjectCacheTtl = BoundedDuration<MAX_PROJECT_CACHE_TTL_MILLIS>;
 pub type MongoBootstrapTimeout = BoundedDuration<60_000>;
 pub type BatchWait = BoundedDuration<1_000>;
+pub type DispatcherInterval = BoundedDuration<60_000>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
@@ -59,6 +60,7 @@ pub struct AppConfig {
     pub projects: ProjectConfig,
     pub development: DevelopmentConfig,
     pub ingest: IngestConfig,
+    pub dispatcher: DispatcherSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +133,33 @@ impl Default for BatchSettings {
 pub struct EventCodecSettings {
     pub compression_level: i32,
     pub compression_min_savings: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DispatcherSettings {
+    pub queue_capacity: usize,
+    pub worker_concurrency: usize,
+    pub low_watermark: usize,
+    pub refill_target: usize,
+    pub refill_batch_size: usize,
+    pub poll_interval: DispatcherInterval,
+    pub metrics_interval: DispatcherInterval,
+    pub source_timeout: DispatcherInterval,
+}
+
+impl Default for DispatcherSettings {
+    fn default() -> Self {
+        Self {
+            queue_capacity: 4_096,
+            worker_concurrency: 32,
+            low_watermark: 1_024,
+            refill_target: 3_072,
+            refill_batch_size: 512,
+            poll_interval: "100ms".parse().expect("default poll interval is valid"),
+            metrics_interval: "5s".parse().expect("default metrics interval is valid"),
+            source_timeout: "5s".parse().expect("default source timeout is valid"),
+        }
+    }
 }
 
 impl Default for EventCodecSettings {
@@ -271,6 +300,7 @@ struct RawConfig {
     projects: RawProjectConfig,
     development: RawDevelopmentConfig,
     ingest: RawIngestConfig,
+    dispatcher: RawDispatcherSettings,
 }
 
 impl Default for RawConfig {
@@ -282,6 +312,7 @@ impl Default for RawConfig {
             projects: RawProjectConfig::default(),
             development: RawDevelopmentConfig::default(),
             ingest: RawIngestConfig::default(),
+            dispatcher: RawDispatcherSettings::default(),
         }
     }
 }
@@ -395,6 +426,35 @@ struct RawEventCodecSettings {
     compression_min_savings: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawDispatcherSettings {
+    queue_capacity: usize,
+    worker_concurrency: usize,
+    low_watermark: usize,
+    refill_target: usize,
+    refill_batch_size: usize,
+    poll_interval: String,
+    metrics_interval: String,
+    source_timeout: String,
+}
+
+impl Default for RawDispatcherSettings {
+    fn default() -> Self {
+        let defaults = DispatcherSettings::default();
+        Self {
+            queue_capacity: defaults.queue_capacity,
+            worker_concurrency: defaults.worker_concurrency,
+            low_watermark: defaults.low_watermark,
+            refill_target: defaults.refill_target,
+            refill_batch_size: defaults.refill_batch_size,
+            poll_interval: "100ms".to_owned(),
+            metrics_interval: "5s".to_owned(),
+            source_timeout: "5s".to_owned(),
+        }
+    }
+}
+
 impl Default for RawEventCodecSettings {
     fn default() -> Self {
         Self {
@@ -450,6 +510,8 @@ pub enum ConfigError {
     InvalidMongoConfig,
     #[error("project identity configuration is invalid or outside supported bounds")]
     InvalidProjectConfig,
+    #[error("dispatcher configuration is invalid or outside supported bounds")]
+    InvalidDispatcherConfig,
     #[error("projects.scrub_hmac_key is required when MongoDB is configured")]
     MissingScrubHmacKey,
     #[error(
@@ -530,6 +592,7 @@ impl TryFrom<RawConfig> for AppConfig {
             return Err(ConfigError::InvalidProjectConfig);
         }
         let ingest = IngestConfig::try_from(raw.ingest)?;
+        let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
         Ok(Self {
             role: raw.role,
             server: ServerConfig {
@@ -550,6 +613,7 @@ impl TryFrom<RawConfig> for AppConfig {
                 allow_literal_secrets: raw.development.allow_literal_secrets,
             },
             ingest,
+            dispatcher,
         })
     }
 }
@@ -598,7 +662,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -627,6 +691,14 @@ impl AppConfig {
             self.ingest.batch.max_bytes,
             self.ingest.event_codec.compression_level,
             self.ingest.event_codec.compression_min_savings,
+            self.dispatcher.queue_capacity,
+            self.dispatcher.worker_concurrency,
+            self.dispatcher.low_watermark,
+            self.dispatcher.refill_target,
+            self.dispatcher.refill_batch_size,
+            humantime::format_duration(self.dispatcher.poll_interval.get()),
+            humantime::format_duration(self.dispatcher.metrics_interval.get()),
+            humantime::format_duration(self.dispatcher.source_timeout.get()),
         )
     }
 
@@ -715,6 +787,41 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
     }
 }
 
+impl TryFrom<RawDispatcherSettings> for DispatcherSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawDispatcherSettings) -> Result<Self, Self::Error> {
+        let poll_interval = DispatcherInterval::from_str(&raw.poll_interval)
+            .map_err(|_| ConfigError::InvalidDispatcherConfig)?;
+        let metrics_interval = DispatcherInterval::from_str(&raw.metrics_interval)
+            .map_err(|_| ConfigError::InvalidDispatcherConfig)?;
+        let source_timeout = DispatcherInterval::from_str(&raw.source_timeout)
+            .map_err(|_| ConfigError::InvalidDispatcherConfig)?;
+        let valid = (1..=100_000).contains(&raw.queue_capacity)
+            && (1..=4_096).contains(&raw.worker_concurrency)
+            && raw.worker_concurrency <= raw.queue_capacity
+            && raw.low_watermark < raw.refill_target
+            && raw.refill_target <= raw.queue_capacity
+            && (1..=raw.refill_target.min(32_768)).contains(&raw.refill_batch_size)
+            && !poll_interval.get().is_zero()
+            && !metrics_interval.get().is_zero()
+            && !source_timeout.get().is_zero();
+        if !valid {
+            return Err(ConfigError::InvalidDispatcherConfig);
+        }
+        Ok(Self {
+            queue_capacity: raw.queue_capacity,
+            worker_concurrency: raw.worker_concurrency,
+            low_watermark: raw.low_watermark,
+            refill_target: raw.refill_target,
+            refill_batch_size: raw.refill_batch_size,
+            poll_interval,
+            metrics_interval,
+            source_timeout,
+        })
+    }
+}
+
 pub struct ResolvedSecrets {
     pub mongodb_uri: Option<SecretValue>,
     pub scrub_hmac_key: Option<faultkeep_domain::SecretBytes>,
@@ -740,6 +847,24 @@ mod tests {
         let config = load(&cli).unwrap();
         assert_eq!(config.role, Role::All);
         assert_eq!(config.server.shutdown_grace.get().as_secs(), 10);
+        assert!(config.dispatcher.low_watermark < config.dispatcher.refill_target);
+        assert!(config.dispatcher.refill_target <= config.dispatcher.queue_capacity);
+    }
+
+    #[test]
+    fn dispatcher_watermarks_fail_closed() {
+        let raw = RawConfig {
+            dispatcher: RawDispatcherSettings {
+                low_watermark: 100,
+                refill_target: 100,
+                ..RawDispatcherSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(raw),
+            Err(ConfigError::InvalidDispatcherConfig)
+        ));
     }
 
     #[test]

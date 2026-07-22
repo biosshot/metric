@@ -4,7 +4,8 @@ use faultkeep_domain::{
     AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, Timestamp,
 };
 use faultkeep_ports::{
-    EventPrepareError, EventStore, EventStoreError, EventWriteStatus, PortFuture, PreparedEvent,
+    BacklogObservation, EventBacklog, EventBacklogError, EventPrepareError, EventStore,
+    EventStoreError, EventWriteStatus, PortFuture, PreparedEvent,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -204,6 +205,116 @@ impl EventStore for MongoEventStore {
     }
 }
 
+impl EventBacklog for MongoEventStore {
+    fn load_due<'a>(
+        &'a self,
+        now: Timestamp,
+        limit: usize,
+        excluded: &'a [EventKey],
+    ) -> PortFuture<'a, Result<Vec<AcceptedEvent>, EventBacklogError>> {
+        Box::pin(async move {
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let mut filter = doc! {
+                "q.s": 0_i32,
+                "q.n": { "$lte": DateTime::from_millis(now.unix_millis()) },
+            };
+            if !excluded.is_empty() {
+                filter.insert(
+                    "_id",
+                    doc! {
+                        "$nin": excluded
+                            .iter()
+                            .map(|key| Bson::Binary(binary(key.as_bytes())))
+                            .collect::<Vec<_>>()
+                    },
+                );
+            }
+            let scan_limit = limit.saturating_mul(8).min(32_768).max(limit);
+            let mut cursor = self
+                .database
+                .collection::<Document>("events")
+                .find(filter)
+                .sort(doc! { "q.n": 1, "r": 1, "_id": 1 })
+                .limit(i64::try_from(scan_limit).map_err(|_| EventBacklogError::InvalidData)?)
+                .await
+                .map_err(|_| EventBacklogError::Unavailable)?;
+            let mut decoded = Vec::with_capacity(scan_limit);
+            let mut project_ids = BTreeSet::new();
+            while let Some(document) = cursor
+                .try_next()
+                .await
+                .map_err(|_| EventBacklogError::Unavailable)?
+            {
+                let event = decode_pending_event(&document, self.codec)
+                    .map_err(|_| EventBacklogError::InvalidData)?;
+                project_ids.insert(event.project_id.get());
+                decoded.push(event);
+            }
+            if decoded.is_empty() {
+                return Ok(decoded);
+            }
+            let mut projects = self
+                .database
+                .collection::<Document>("projects")
+                .find(doc! {
+                    "_id": { "$in": project_ids.into_iter().collect::<Vec<_>>() },
+                    "state": { "$in": ["active", "disabled"] },
+                })
+                .projection(doc! { "_id": 1 })
+                .await
+                .map_err(|_| EventBacklogError::Unavailable)?;
+            let mut processable = BTreeSet::new();
+            while let Some(project) = projects
+                .try_next()
+                .await
+                .map_err(|_| EventBacklogError::Unavailable)?
+            {
+                processable.insert(
+                    project
+                        .get_i32("_id")
+                        .map_err(|_| EventBacklogError::InvalidData)?,
+                );
+            }
+            Ok(decoded
+                .into_iter()
+                .filter(|event| processable.contains(&event.project_id.get()))
+                .take(limit)
+                .collect())
+        })
+    }
+
+    fn observe(&self) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>> {
+        Box::pin(async move {
+            let events = self.database.collection::<Document>("events");
+            let pending_count = events
+                .count_documents(doc! { "q.s": 0_i32 })
+                .await
+                .map_err(|_| EventBacklogError::Unavailable)?;
+            let oldest = events
+                .find_one(doc! { "q.s": 0_i32 })
+                .sort(doc! { "q.n": 1, "r": 1, "_id": 1 })
+                .projection(doc! { "r": 1 })
+                .await
+                .map_err(|_| EventBacklogError::Unavailable)?;
+            let oldest_pending_at = oldest
+                .map(|document| {
+                    let received = document
+                        .get_datetime("r")
+                        .map_err(|_| EventBacklogError::InvalidData)?;
+                    Timestamp::from_unix_millis(received.timestamp_millis())
+                        .map_err(|_| EventBacklogError::InvalidData)
+                })
+                .transpose()?;
+            Ok(BacklogObservation {
+                pending_count,
+                oldest_pending_at,
+            })
+        })
+    }
+}
+
 fn classify_insert_many(
     error: &ErrorKind,
     count: usize,
@@ -314,8 +425,8 @@ pub fn decode_pending_event(
         .get_document("q")
         .map_err(|_| EventCodecError::InvalidDocument)?;
     let pending = pipeline.get_i32("s") == Ok(0)
-        && pipeline.get_i32("a") == Ok(0)
-        && pipeline.get_datetime("n") == document.get_datetime("r");
+        && pipeline.get_i32("a").is_ok_and(|attempts| attempts >= 0)
+        && pipeline.get_datetime("n").is_ok();
     if !pending {
         return Err(EventCodecError::InvalidDocument);
     }
@@ -614,6 +725,17 @@ mod tests {
             decode_pending_event(&malformed, EventCodecConfig::default()),
             Err(EventCodecError::InvalidDocument)
         );
+
+        let mut retry = prepared.document.clone();
+        retry.insert(
+            "q",
+            doc! {
+                "s": 0_i32,
+                "a": 3_i32,
+                "n": DateTime::from_millis(1_700_000_010_000),
+            },
+        );
+        assert!(decode_pending_event(&retry, EventCodecConfig::default()).is_ok());
     }
 
     #[test]

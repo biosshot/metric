@@ -145,6 +145,37 @@ pub trait AcceptedEventHandoff: Send + Sync + 'static {
     fn offer(&self, event: AcceptedEvent) -> Result<(), AcceptedEvent>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EventBacklogError {
+    #[error("pending Event storage is temporarily unavailable")]
+    Unavailable,
+    #[error("pending Event storage contains invalid data")]
+    InvalidData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BacklogObservation {
+    pub pending_count: u64,
+    pub oldest_pending_at: Option<Timestamp>,
+}
+
+/// Capability-specific pending Event discovery used only by Dispatcher.
+pub trait EventBacklog: Send + Sync + 'static {
+    fn load_due<'a>(
+        &'a self,
+        now: Timestamp,
+        limit: usize,
+        excluded: &'a [EventKey],
+    ) -> PortFuture<'a, Result<Vec<AcceptedEvent>, EventBacklogError>>;
+
+    fn observe(&self) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>>;
+}
+
+/// Processing seam. Completion means durable Event eligibility was already changed.
+pub trait WorkHandler: Send + Sync + 'static {
+    fn handle(&self, event: AcceptedEvent) -> PortFuture<'_, ()>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngestOutcomeKind {
     Accepted,

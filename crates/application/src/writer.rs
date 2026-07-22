@@ -464,6 +464,14 @@ mod tests {
         }
     }
 
+    struct RejectingHandoff;
+
+    impl AcceptedEventHandoff for RejectingHandoff {
+        fn offer(&self, event: AcceptedEvent) -> Result<(), AcceptedEvent> {
+            Err(event)
+        }
+    }
+
     fn event(byte: u8) -> AcceptedEvent {
         AcceptedEvent {
             project_id: ProjectId::new(42).unwrap(),
@@ -496,6 +504,23 @@ mod tests {
         assert_eq!(writer.persist(event(1)).await, Ok(DurableOutcome::Accepted));
         assert_eq!(store.batches.lock().unwrap()[0].len(), 1);
         assert_eq!(handoff.0.lock().unwrap().len(), 1);
+        root.begin();
+        task.wait().await;
+    }
+
+    #[tokio::test]
+    async fn full_dispatcher_handoff_does_not_undo_durable_acceptance() {
+        let root = crate::shutdown::ShutdownRoot::new();
+        let store = Arc::new(FakeStore::new(Duration::ZERO, 20));
+        let (writer, task) = MongoWriter::start(
+            Arc::clone(&store),
+            Arc::new(RejectingHandoff),
+            config(),
+            root.signal(),
+        )
+        .unwrap();
+        assert_eq!(writer.persist(event(9)).await, Ok(DurableOutcome::Accepted));
+        assert_eq!(store.batches.lock().unwrap().len(), 1);
         root.begin();
         task.wait().await;
     }

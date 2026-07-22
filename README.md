@@ -1,9 +1,14 @@
 # faultkeep
 
-Phase 3 adds durable, idempotent Sentry Error Event acceptance through a bounded
-MongoWriter and the compact MongoDB pending Event representation. Production only
-reports ready after the real Project and Event adapters are composed; deterministic
-fakes remain limited to tests and the explicitly named benchmark binaries.
+Phase 4 adds a bounded Dispatcher between durable Event acceptance and the future
+Processor. It deduplicates queued/running Event keys and refills due pending work
+from MongoDB on startup, idle polls, and a low watermark. MongoDB remains the only
+durable backlog, so queue saturation or process restart cannot undo an acknowledged
+acceptance.
+
+The real Processor starts in Phase 7. Until then production composes a deferred
+`WorkHandler` that never falsely completes pending work; deterministic completing
+handlers remain limited to Phase 4 tests.
 
 ## Local checks
 
@@ -15,7 +20,7 @@ cargo test-fast --locked
 ```
 
 Additional risk-tier commands are `cargo test-infrastructure`, `cargo test-fuzz`,
-and `cargo test-performance`. Infrastructure tests use the exact MongoDB image in
+and narrowly selected ignored performance tests. Infrastructure tests use the exact MongoDB image in
 `deploy/compose.dev.yml`, published on local port `27018` to avoid colliding with a
 developer MongoDB on its standard port.
 

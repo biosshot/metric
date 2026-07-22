@@ -666,6 +666,7 @@ version = "0.1.0"
 dependencies = [
  "faultkeep-domain",
  "faultkeep-ports",
+ "futures-util",
  "hex",
  "hmac 0.12.1",
  "metrics",

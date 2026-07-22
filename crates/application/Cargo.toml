@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
+futures-util.workspace = true
 hex.workspace = true
 hmac.workspace = true
 metrics.workspace = true

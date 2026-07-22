@@ -1,12 +1,17 @@
 use std::error::Error;
+use std::time::Instant;
 
 use faultkeep_domain::{
-    AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, SecretBytes, Timestamp,
+    AcceptedEvent, DisplayName, EventId, EventKey, IpScrubPolicy, ItemCapabilities, OrganizationId,
+    OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
+    ScrubbedEventPayload, SecretBytes, Slug, Timestamp,
 };
 use faultkeep_mongo::{
     EventCodecConfig, MongoBootstrapError, MongoEventStore, MongoProjectStore, decode_pending_event,
 };
-use faultkeep_ports::{EventStore, EventStoreError, EventWriteStatus, PreparedEvent};
+use faultkeep_ports::{
+    EventBacklog, EventStore, EventStoreError, EventWriteStatus, PreparedEvent, ProjectStore,
+};
 use mongodb::{Client, Database, bson::doc};
 
 #[tokio::test]
@@ -19,9 +24,69 @@ async fn infrastructure_event_schema_unordered_duplicates_and_retry_identity() {
     cleanup.unwrap();
 }
 
+#[tokio::test]
+#[ignore = "performance baseline requires MongoDB 8.0.12 from deploy/compose.dev.yml"]
+async fn performance_dispatcher_mongodb_refill_rps() {
+    let (_, database) = test_database().await.unwrap();
+    let result = measure_refill(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn measure_refill(database: &Database) -> Result<(), Box<dyn Error>> {
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
+    let store = MongoEventStore::from_database(database.clone(), EventCodecConfig::default());
+    const EVENTS: u32 = 20_000;
+    for start in (0..EVENTS).step_by(500) {
+        let prepared = (start..(start + 500).min(EVENTS))
+            .map(|index| store.prepare(refill_event(index)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let statuses = store.insert_batch(&prepared).await?;
+        assert!(
+            statuses
+                .iter()
+                .all(|status| *status == EventWriteStatus::Inserted)
+        );
+    }
+    let started = Instant::now();
+    let loaded = store
+        .load_due(
+            Timestamp::from_unix_millis(1_000_000)?,
+            EVENTS as usize,
+            &[],
+        )
+        .await?;
+    let elapsed = started.elapsed();
+    assert_eq!(loaded.len(), EVENTS as usize);
+    assert_eq!(
+        loaded.first().unwrap().event_id,
+        EventId::from_bytes([0; 16])
+    );
+    assert_eq!(
+        loaded.last().unwrap().event_id,
+        EventId::from_bytes(u128::from(EVENTS - 1).to_be_bytes())
+    );
+    let rps = f64::from(EVENTS) / elapsed.as_secs_f64();
+    eprintln!(
+        "Dispatcher MongoDB refill: {rps:.0} events/s, events={EVENTS}, elapsed_ms={}",
+        elapsed.as_millis()
+    );
+    assert!(
+        rps >= 7_500.0,
+        "Dispatcher refill {rps:.0} RPS is below recovery gate"
+    );
+    Ok(())
+}
+
 async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Error>> {
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
     let store = MongoEventStore::from_database(database.clone(), EventCodecConfig::default());
     let collection = database.collection::<mongodb::bson::Document>("events");
 
@@ -65,6 +130,43 @@ async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Er
         ]
     );
     assert_eq!(collection.count_documents(doc! {}).await?, 3);
+
+    let observation = store.observe().await?;
+    assert_eq!(observation.pending_count, 3);
+    assert_eq!(observation.oldest_pending_at.unwrap().unix_millis(), 1_000);
+    let excluded = EventKey::new(ProjectId::new(42)?, EventId::from_bytes([1; 16]));
+    let due = store
+        .load_due(Timestamp::from_unix_millis(5_000)?, 10, &[excluded])
+        .await?;
+    assert_eq!(
+        due.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+        [EventId::from_bytes([2; 16]), EventId::from_bytes([3; 16])]
+    );
+    collection
+        .update_one(
+            doc! { "_id": mongodb::bson::Binary {
+                subtype: mongodb::bson::spec::BinarySubtype::Generic,
+                bytes: EventKey::new(ProjectId::new(42)?, EventId::from_bytes([2; 16])).as_bytes().to_vec(),
+            }},
+            doc! { "$set": { "q.n": mongodb::bson::DateTime::from_millis(6_000) } },
+        )
+        .await?;
+    let due = store
+        .load_due(Timestamp::from_unix_millis(5_000)?, 10, &[])
+        .await?;
+    assert_eq!(
+        due.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+        [EventId::from_bytes([1; 16]), EventId::from_bytes([3; 16])]
+    );
+    control
+        .set_project_acceptance(ProjectId::new(42)?, ProjectAcceptanceState::PendingDelete)
+        .await?;
+    assert!(
+        store
+            .load_due(Timestamp::from_unix_millis(10_000)?, 10, &[])
+            .await?
+            .is_empty()
+    );
 
     let first_key = EventKey::new(ProjectId::new(42)?, EventId::from_bytes([1; 16]));
     let document = collection
@@ -134,6 +236,34 @@ async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Er
     Ok(())
 }
 
+fn organization() -> OrganizationIdentity {
+    OrganizationIdentity {
+        id: OrganizationId::new(1).unwrap(),
+        slug: Slug::new("phase4-org").unwrap(),
+        display_name: DisplayName::new("Phase 4").unwrap(),
+        created_at: Timestamp::from_unix_millis(1).unwrap(),
+    }
+}
+
+fn project() -> ProjectIdentity {
+    ProjectIdentity {
+        id: ProjectId::new(42).unwrap(),
+        organization_id: OrganizationId::new(1).unwrap(),
+        slug: Slug::new("phase4-project").unwrap(),
+        display_name: DisplayName::new("Phase 4 Project").unwrap(),
+        state: ProjectAcceptanceState::Active,
+        policy_revision: 1,
+        ip_policy: IpScrubPolicy::Hmac,
+        items: ItemCapabilities {
+            error: true,
+            client_report: true,
+        },
+        limits: ProjectIngestLimits::default(),
+        grouping_revision: 1,
+        created_at: Timestamp::from_unix_millis(1).unwrap(),
+    }
+}
+
 fn event(byte: u8, received_at: i64) -> AcceptedEvent {
     AcceptedEvent {
         project_id: ProjectId::new(42).unwrap(),
@@ -144,6 +274,22 @@ fn event(byte: u8, received_at: i64) -> AcceptedEvent {
             format!(
                 r#"{{"event_id":"{}","level":"error","platform":"rust","message":"event-{byte}"}}"#,
                 format!("{byte:02x}").repeat(16)
+            )
+            .into_bytes(),
+        ),
+    }
+}
+
+fn refill_event(index: u32) -> AcceptedEvent {
+    let event_id = EventId::from_bytes(u128::from(index).to_be_bytes());
+    AcceptedEvent {
+        project_id: ProjectId::new(42).unwrap(),
+        event_id,
+        received_at: Timestamp::from_unix_millis(1_000 + i64::from(index)).unwrap(),
+        policy_revision: 1,
+        payload: ScrubbedEventPayload::new(
+            format!(
+                r#"{{"event_id":"{event_id}","platform":"rust","level":"error","message":"refill-{index}"}}"#
             )
             .into_bytes(),
         ),
