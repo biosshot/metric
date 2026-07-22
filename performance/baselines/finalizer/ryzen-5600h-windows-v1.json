@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "finalizer-phase-9",
+    "source_commit": "4fe9bd803a3ceb0c5d5ff9e1253ccb395046ee51",
+    "generated_at": "2026-07-22T21:12:43.653Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "one bounded FinalizeBatch; 1000 Events across 100 Issues; one Release and Environment",
+    "storage": "MongoDB 8.0.12 local Docker tmpfs; retryWrites=false"
+  },
+  "metrics": {
+    "rps": 250,
+    "events": 1000,
+    "issues": 100,
+    "elapsed_ms": 4007,
+    "minimum_rps": 150
+  }
+}

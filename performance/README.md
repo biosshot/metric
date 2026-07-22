@@ -186,3 +186,25 @@ The comparator requires the same hardware, Rust toolchain, MongoDB topology, fix
 operation count and concurrency. The local Windows gates are 250 hot-Issue RPS and
 500 distributed-Issue RPS; they are regression sentinels, not ADR-0037 end-to-end
 capacity claims.
+
+## Phase 9 Finalizer
+
+The retained Finalizer benchmark measures the complete real-MongoDB durable fence:
+one bounded batch replaces pending Event bodies, updates 100 Issues and hourly
+buckets, materializes one Release and Environment, and removes pending state from
+1,000 Events. It reports explicit Event RPS. It excludes Processor orchestration and
+HTTP, so k6 would conflate boundaries and is intentionally not used for this module
+test.
+
+Run at most one candidate per local performance pass. The runner writes a comparable
+artifact, and the comparator enforces fixture identity, a 150 Event/s local Windows
+gate, and the configured regression budget:
+
+```text
+node performance/run-finalizer.mjs
+node performance/compare-finalizer.mjs performance/baselines/finalizer/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+After the run, verify and terminate any lingering Cargo, Rust test, or k6 processes.
+This local result is a regression sentinel, not the Phase 10 end-to-end recovery-rate
+claim.
