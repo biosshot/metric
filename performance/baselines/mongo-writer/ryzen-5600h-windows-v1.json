@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "mongo-writer-phase-3",
+    "source_commit": "9009534e409e793af8f43ddcd24727152834d753",
+    "generated_at": "2026-07-22T11:57:56.861Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "mongo_server": "8.0.12 standalone in Docker Desktop",
+    "mongo_driver": "3.8.0",
+    "unique_events": 20000,
+    "duplicate_retries": 100,
+    "concurrency": 512
+  },
+  "metrics": {
+    "rps": 8747,
+    "batches": 118,
+    "average_batch_occupancy": 169.5,
+    "p95_ms": 46,
+    "p99_ms": 56,
+    "minimum_gate_rps": 5000,
+    "maximum_gate_p95_ms": 100,
+    "maximum_gate_p99_ms": 250,
+    "acknowledged_loss": 0
+  }
+}

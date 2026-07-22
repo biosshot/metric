@@ -59,3 +59,29 @@ The comparator fails when warm-cache RPS drops below 20,000 or when warm-cache/d
 MongoDB RPS or latency regresses beyond the supplied percentage budget. k6 remains
 the black-box HTTP load tool; Phase 2 uses the in-process runner so resolver RPS is
 not conflated with Envelope parsing or a fake/durable Event sink.
+
+## Phase 3 durable writer and HTTP path
+
+The module runner writes a comparable real-MongoDB artifact containing RPS, batch
+occupancy, p95/p99, duplicate retries, and acknowledged-loss count:
+
+```text
+node performance/run-mongo-writer.mjs
+node performance/compare-mongo-writer.mjs performance/baselines/mongo-writer/<baseline>.json performance/results/<candidate>.json 10
+```
+
+For the black-box durable path, build and start `durable-ingest-bench` with fresh,
+explicit benchmark database settings, then run the retained fixed-arrival k6 case:
+
+```text
+cargo build --locked --release --bin durable-ingest-bench
+FAULTKEEP_BENCH_MONGODB_URI=<uri> FAULTKEEP_BENCH_DATABASE=<fresh-db> target/release/durable-ingest-bench
+k6 run -e FAULTKEEP_RPS=5000 -e FAULTKEEP_DURATION=15s -e FAULTKEEP_RESULT=performance/results/ingest-mongodb-5000.json performance/k6/ingest-mongodb.js
+```
+
+`ingest-mongodb.js` uses a unique Event ID per iteration. Compare the k6 iteration
+count with the fresh database's Event count before removing it; equality proves
+zero acknowledged loss for that run. Store reviewed JSON under
+`performance/baselines/ingest-mongodb`. The 20,000/s bounded burst remains a
+separate controlled-hardware capacity gate and must not be inferred from a lower
+local rate.

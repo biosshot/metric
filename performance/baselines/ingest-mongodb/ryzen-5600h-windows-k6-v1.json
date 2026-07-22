@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "commit": "phase3-working-tree",
+    "fixture_revision": "error-event-v1-mongodb",
+    "target_rps": 1158,
+    "duration": "15s",
+    "run_id": "30001158",
+    "rust_toolchain": "rustc 1.88.0",
+    "k6_version": "2.1.0",
+    "hardware": "AMD Ryzen 5 5600H; 15.9 GiB; Windows; Docker Desktop",
+    "mongo": "MongoDB 8.0.12 standalone",
+    "durability": "MongoWriter unordered insert_many to MongoDB",
+    "database_count_verified": true
+  },
+  "metrics": {
+    "iterations": 17371,
+    "achieved_rps": 1155.9867767250903,
+    "error_rate": 0,
+    "latency_ms": {
+      "average": 16.809047659892972,
+      "p50": 16.7392,
+      "p95": 27.7728,
+      "p99": 31.977299999999957,
+      "maximum": 58.7235
+    },
+    "dropped_iterations": 0,
+    "durable_documents": 17371,
+    "acknowledged_loss": 0
+  }
+}
