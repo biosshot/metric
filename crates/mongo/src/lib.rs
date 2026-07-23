@@ -2,11 +2,13 @@
 
 //! MongoDB project-identity adapter and initial empty-schema bootstrap.
 
+mod api;
 mod auth;
 mod event;
 mod finalizer;
 mod issue;
 
+pub use api::MongoInvestigationStore;
 pub use auth::MongoAuthStore;
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
@@ -17,9 +19,10 @@ pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use faultkeep_domain::{
-    DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationIdentity, ProjectAcceptanceState,
-    ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity, ProjectKeyState,
-    ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
+    DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
+    ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
+    ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Slug, Timestamp,
+    api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
 };
 use faultkeep_ports::{PortFuture, ProjectStore, ProjectStoreError};
 use futures_util::TryStreamExt;
@@ -136,6 +139,15 @@ impl MongoProjectStore {
     #[must_use]
     pub fn auth_store(&self) -> MongoAuthStore {
         MongoAuthStore::from_database(self.database.clone())
+    }
+
+    #[must_use]
+    pub fn investigation_store(
+        &self,
+        event_codec: EventCodecConfig,
+        issue_codec: IssueCodecConfig,
+    ) -> MongoInvestigationStore {
+        MongoInvestigationStore::from_database(self.database.clone(), event_codec, issue_codec)
     }
 
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
@@ -467,6 +479,16 @@ impl MongoProjectStore {
         if !project_exists {
             return Err(ProjectStoreError::NotFound);
         }
+        let existing = self
+            .database
+            .collection::<Document>("project_keys")
+            .count_documents(doc! { "project_id": key.project_id.get() })
+            .limit(u64::try_from(self.max_keys_per_project).unwrap_or(u64::MAX))
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?;
+        if existing >= u64::try_from(self.max_keys_per_project).unwrap_or(u64::MAX) {
+            return Err(ProjectStoreError::TooManyKeys);
+        }
         self.database
             .collection::<Document>("project_keys")
             .insert_one(doc! {
@@ -546,6 +568,27 @@ impl MongoProjectStore {
         Ok(project_id)
     }
 
+    async fn set_project_key_state_inner(
+        &self,
+        project_id: ProjectId,
+        key: DsnKey,
+        state: ProjectKeyState,
+    ) -> Result<(), ProjectStoreError> {
+        let result = self
+            .database
+            .collection::<Document>("project_keys")
+            .update_one(
+                doc! { "_id": key_binary(key), "project_id": project_id.get() },
+                doc! { "$set": { "status": key_state_name(state) } },
+            )
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?;
+        if result.matched_count == 0 {
+            return Err(ProjectStoreError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn set_project_acceptance_inner(
         &self,
         project_id: ProjectId,
@@ -616,6 +659,143 @@ impl MongoProjectStore {
         }
         Ok(keys)
     }
+
+    async fn list_projects_inner(
+        &self,
+        organization_id: faultkeep_domain::OrganizationId,
+        limit: usize,
+    ) -> Result<Vec<ProjectView>, ProjectStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(ProjectStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("projects")
+            .find(doc! {
+                "organization_id": i64::try_from(organization_id.get())
+                    .map_err(|_| ProjectStoreError::InvalidData)?,
+            })
+            .sort(doc! { "slug": 1, "_id": 1 })
+            .limit(i64::try_from(limit).unwrap_or(100))
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?;
+        let mut projects = Vec::with_capacity(limit);
+        while let Some(document) = cursor
+            .try_next()
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?
+        {
+            projects.push(decode_project_view(&document)?);
+        }
+        Ok(projects)
+    }
+
+    async fn load_project_by_id_inner(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<ProjectView, ProjectStoreError> {
+        let document = self
+            .database
+            .collection::<Document>("projects")
+            .find_one(doc! { "_id": project_id.get() })
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?
+            .ok_or(ProjectStoreError::NotFound)?;
+        decode_project_view(&document)
+    }
+
+    async fn list_project_keys_inner(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<ProjectKeyView>, ProjectStoreError> {
+        let mut cursor = self
+            .database
+            .collection::<Document>("project_keys")
+            .find(doc! { "project_id": project_id.get() })
+            .sort(doc! { "created_at": 1, "_id": 1 })
+            .limit(i64::try_from(self.max_keys_per_project.saturating_add(1)).unwrap_or(i64::MAX))
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?;
+        let mut keys = Vec::new();
+        while let Some(document) = cursor
+            .try_next()
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?
+        {
+            keys.push(decode_project_key_view(&document)?);
+        }
+        if keys.len() > self.max_keys_per_project {
+            return Err(ProjectStoreError::TooManyKeys);
+        }
+        Ok(keys)
+    }
+
+    async fn update_project_policy_inner(
+        &self,
+        project_id: ProjectId,
+        update: ProjectPolicyUpdate,
+    ) -> Result<(ProjectView, Vec<DsnKey>), ProjectStoreError> {
+        if update.expected_revision == 0 {
+            return Err(ProjectStoreError::InvalidData);
+        }
+        let mut limits = doc! {
+            "max_event_bytes": i32::try_from(update.limits.max_event_bytes.get())
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        };
+        if let Some(value) = update.limits.max_events_per_second {
+            limits.insert("max_events_per_second", i64::from(value.get()));
+        }
+        if let Some(value) = update.limits.burst {
+            limits.insert("burst", i64::from(value.get()));
+        }
+        let projects = self.database.collection::<Document>("projects");
+        let document = projects
+            .find_one_and_update(
+                doc! {
+                    "_id": project_id.get(),
+                    "policy.revision": i64::try_from(update.expected_revision)
+                        .map_err(|_| ProjectStoreError::InvalidData)?,
+                },
+                doc! { "$set": {
+                    "policy": {
+                        "revision": i64::try_from(update.expected_revision.saturating_add(1))
+                            .map_err(|_| ProjectStoreError::InvalidData)?,
+                        "ip": ip_policy_name(update.ip_policy),
+                    },
+                    "items": {
+                        "error": update.items.error,
+                        "client_report": update.items.client_report,
+                    },
+                    "limits": limits,
+                }},
+            )
+            .return_document(mongodb::options::ReturnDocument::After)
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?;
+        let document = match document {
+            Some(document) => document,
+            None => {
+                let exists = projects
+                    .find_one(doc! { "_id": project_id.get() })
+                    .projection(doc! { "_id": 1 })
+                    .await
+                    .map_err(|_| ProjectStoreError::Unavailable)?
+                    .is_some();
+                return Err(if exists {
+                    ProjectStoreError::RevisionConflict
+                } else {
+                    ProjectStoreError::NotFound
+                });
+            }
+        };
+        let keys = self
+            .list_project_keys_inner(project_id)
+            .await?
+            .into_iter()
+            .map(|key| key.key)
+            .collect();
+        Ok((decode_project_view(&document)?, keys))
+    }
 }
 
 impl ProjectStore for MongoProjectStore {
@@ -677,12 +857,51 @@ impl ProjectStore for MongoProjectStore {
         Box::pin(self.set_key_state_inner(key, state))
     }
 
+    fn set_project_key_state(
+        &self,
+        project_id: ProjectId,
+        key: DsnKey,
+        state: ProjectKeyState,
+    ) -> PortFuture<'_, Result<(), ProjectStoreError>> {
+        Box::pin(self.set_project_key_state_inner(project_id, key, state))
+    }
+
     fn set_project_acceptance(
         &self,
         project_id: ProjectId,
         state: ProjectAcceptanceState,
     ) -> PortFuture<'_, Result<Vec<DsnKey>, ProjectStoreError>> {
         Box::pin(self.set_project_acceptance_inner(project_id, state))
+    }
+
+    fn list_projects(
+        &self,
+        organization_id: faultkeep_domain::OrganizationId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ProjectView>, ProjectStoreError>> {
+        Box::pin(self.list_projects_inner(organization_id, limit))
+    }
+
+    fn load_project_by_id(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<ProjectView, ProjectStoreError>> {
+        Box::pin(self.load_project_by_id_inner(project_id))
+    }
+
+    fn list_project_keys(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<Vec<ProjectKeyView>, ProjectStoreError>> {
+        Box::pin(self.list_project_keys_inner(project_id))
+    }
+
+    fn update_project_policy(
+        &self,
+        project_id: ProjectId,
+        update: ProjectPolicyUpdate,
+    ) -> PortFuture<'_, Result<(ProjectView, Vec<DsnKey>), ProjectStoreError>> {
+        Box::pin(self.update_project_policy_inner(project_id, update))
     }
 }
 
@@ -797,6 +1016,120 @@ fn decode_snapshot(
         },
         grouping_revision: positive_i64(project, "grouping_revision")?,
     })
+}
+
+fn decode_project_view(document: &Document) -> Result<ProjectView, ProjectStoreError> {
+    let project_id = ProjectId::new(
+        document
+            .get_i32("_id")
+            .map_err(|_| ProjectStoreError::InvalidData)?,
+    )
+    .map_err(|_| ProjectStoreError::InvalidData)?;
+    let organization_id = OrganizationId::new(
+        u64::try_from(
+            document
+                .get_i64("organization_id")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )
+        .map_err(|_| ProjectStoreError::InvalidData)?,
+    )
+    .map_err(|_| ProjectStoreError::InvalidData)?;
+    let policy = document
+        .get_document("policy")
+        .map_err(|_| ProjectStoreError::InvalidData)?;
+    let items = document
+        .get_document("items")
+        .map_err(|_| ProjectStoreError::InvalidData)?;
+    let limits = document
+        .get_document("limits")
+        .map_err(|_| ProjectStoreError::InvalidData)?;
+    Ok(ProjectView {
+        id: project_id,
+        organization_id,
+        slug: Slug::new(
+            document
+                .get_str("slug")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )
+        .map_err(|_| ProjectStoreError::InvalidData)?,
+        display_name: DisplayName::new(
+            document
+                .get_str("display_name")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )
+        .map_err(|_| ProjectStoreError::InvalidData)?,
+        state: parse_project_state(
+            document
+                .get_str("state")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )?,
+        policy_revision: positive_i64(policy, "revision")?,
+        ip_policy: parse_ip_policy(
+            policy
+                .get_str("ip")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )?,
+        items: ItemCapabilities {
+            error: items
+                .get_bool("error")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            client_report: items
+                .get_bool("client_report")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        },
+        limits: ProjectIngestLimits {
+            max_event_bytes: u32::try_from(
+                limits
+                    .get_i32("max_event_bytes")
+                    .map_err(|_| ProjectStoreError::InvalidData)?,
+            )
+            .ok()
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or(ProjectStoreError::InvalidData)?,
+            max_events_per_second: optional_positive_u32(limits, "max_events_per_second")?,
+            burst: optional_positive_u32(limits, "burst")?,
+        },
+        grouping_revision: positive_i64(document, "grouping_revision")?,
+        created_at: timestamp(document, "created_at")?,
+    })
+}
+
+fn decode_project_key_view(document: &Document) -> Result<ProjectKeyView, ProjectStoreError> {
+    Ok(ProjectKeyView {
+        key: dsn_key_from_slice(
+            document
+                .get_binary_generic("_id")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )?,
+        project_id: ProjectId::new(
+            document
+                .get_i32("project_id")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )
+        .map_err(|_| ProjectStoreError::InvalidData)?,
+        state: parse_key_state(
+            document
+                .get_str("status")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )?,
+        label: ProjectKeyLabel::new(
+            document
+                .get_str("label")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        )
+        .map_err(|_| ProjectStoreError::InvalidData)?,
+        created_at: timestamp(document, "created_at")?,
+    })
+}
+
+fn timestamp(document: &Document, field: &str) -> Result<Timestamp, ProjectStoreError> {
+    Timestamp::from_unix_millis(
+        document
+            .get_datetime(field)
+            .map_err(|_| ProjectStoreError::InvalidData)?
+            .timestamp_millis(),
+    )
+    .map_err(|_| ProjectStoreError::InvalidData)
 }
 
 fn optional_positive_u32(

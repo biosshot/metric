@@ -5,6 +5,11 @@ use std::{future::Future, pin::Pin};
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
+    api::{
+        ActivityPage, ApiTokenView, EnvironmentPage, EventPage, EventView, IssueListQuery,
+        IssuePage, IssueStatBucket, ProjectKeyView, ProjectPolicyUpdate, ProjectView, ReleasePage,
+        SearchStorageQuery,
+    },
     auth::{
         ApiToken, AuditRecord, BootstrapIdentity, CredentialId, EmailAddress, MembershipMutation,
         OrganizationMembership, PasswordHash, SecretDigest, SetupToken, UserAccount, UserId,
@@ -47,6 +52,8 @@ pub enum ProjectStoreError {
     ProjectSlugExists,
     #[error("project identity target does not exist")]
     NotFound,
+    #[error("project policy revision does not match")]
+    RevisionConflict,
     #[error("project has more keys than the bounded command supports")]
     TooManyKeys,
     #[error("stored project identity data is invalid")]
@@ -83,11 +90,50 @@ pub trait ProjectStore: Send + Sync + 'static {
         state: ProjectKeyState,
     ) -> PortFuture<'_, Result<ProjectId, ProjectStoreError>>;
 
+    fn set_project_key_state(
+        &self,
+        _project_id: ProjectId,
+        _key: DsnKey,
+        _state: ProjectKeyState,
+    ) -> PortFuture<'_, Result<(), ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::Unavailable) })
+    }
+
     fn set_project_acceptance(
         &self,
         project_id: ProjectId,
         state: ProjectAcceptanceState,
     ) -> PortFuture<'_, Result<Vec<DsnKey>, ProjectStoreError>>;
+
+    fn list_projects(
+        &self,
+        _organization_id: faultkeep_domain::OrganizationId,
+        _limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ProjectView>, ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::Unavailable) })
+    }
+
+    fn load_project_by_id(
+        &self,
+        _project_id: ProjectId,
+    ) -> PortFuture<'_, Result<ProjectView, ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::Unavailable) })
+    }
+
+    fn list_project_keys(
+        &self,
+        _project_id: ProjectId,
+    ) -> PortFuture<'_, Result<Vec<ProjectKeyView>, ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::Unavailable) })
+    }
+
+    fn update_project_policy(
+        &self,
+        _project_id: ProjectId,
+        _update: ProjectPolicyUpdate,
+    ) -> PortFuture<'_, Result<(ProjectView, Vec<DsnKey>), ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::Unavailable) })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,4 +520,88 @@ pub trait AuthStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, AuthStoreError>>;
 
     fn append_audit(&self, record: AuditRecord) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn list_api_tokens(
+        &self,
+        _user_id: UserId,
+        _organization_id: faultkeep_domain::OrganizationId,
+        _limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ApiTokenView>, AuthStoreError>> {
+        Box::pin(async { Err(AuthStoreError::Unavailable) })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum InvestigationStoreError {
+    #[error("query target does not exist")]
+    NotFound,
+    #[error("query data is invalid")]
+    InvalidData,
+    #[error("query storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Project-scoped query capability for the native API and SearchService.
+///
+/// It deliberately exposes no raw backend filter, projection, sort, or collection.
+pub trait InvestigationStore: Send + Sync + 'static {
+    fn list_issues(
+        &self,
+        project_id: ProjectId,
+        query: IssueListQuery,
+    ) -> PortFuture<'_, Result<IssuePage, InvestigationStoreError>>;
+
+    fn list_events(
+        &self,
+        project_id: ProjectId,
+        issue_id: Option<IssueId>,
+        from: Timestamp,
+        until: Timestamp,
+        before: Option<faultkeep_domain::api::EventAnchor>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<EventPage, InvestigationStoreError>>;
+
+    fn load_event(
+        &self,
+        project_id: ProjectId,
+        event_key: EventKey,
+    ) -> PortFuture<'_, Result<EventView, InvestigationStoreError>>;
+
+    fn search_candidates(
+        &self,
+        project_id: ProjectId,
+        query: SearchStorageQuery,
+    ) -> PortFuture<'_, Result<EventPage, InvestigationStoreError>>;
+
+    fn issue_statistics(
+        &self,
+        project_id: ProjectId,
+        issue_id: IssueId,
+        from: Timestamp,
+        until: Timestamp,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<IssueStatBucket>, InvestigationStoreError>>;
+
+    fn issue_activity(
+        &self,
+        project_id: ProjectId,
+        issue_id: IssueId,
+        before: Option<faultkeep_domain::api::ActivityAnchor>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<ActivityPage, InvestigationStoreError>>;
+
+    fn list_releases(
+        &self,
+        organization_id: faultkeep_domain::OrganizationId,
+        project_id: ProjectId,
+        before: Option<faultkeep_domain::api::ReleaseAnchor>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<ReleasePage, InvestigationStoreError>>;
+
+    fn list_environments(
+        &self,
+        project_id: ProjectId,
+        before: Option<faultkeep_domain::api::EnvironmentAnchor>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<EnvironmentPage, InvestigationStoreError>>;
 }

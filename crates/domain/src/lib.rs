@@ -1,5 +1,6 @@
 //! Transport- and adapter-independent bounded primitives.
 
+pub mod api;
 pub mod auth;
 pub mod event;
 pub mod finalization;

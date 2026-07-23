@@ -433,6 +433,10 @@ pub enum AuditAction {
     UserEnabled,
     ApiTokenCreated,
     ApiTokenRevoked,
+    ProjectCreated,
+    ProjectKeyCreated,
+    ProjectKeyDisabled,
+    ProjectPolicyChanged,
 }
 
 impl AuditAction {
@@ -450,6 +454,10 @@ impl AuditAction {
             Self::UserEnabled => "user.enabled",
             Self::ApiTokenCreated => "api_token.created",
             Self::ApiTokenRevoked => "api_token.revoked",
+            Self::ProjectCreated => "project.created",
+            Self::ProjectKeyCreated => "project_key.created",
+            Self::ProjectKeyDisabled => "project_key.disabled",
+            Self::ProjectPolicyChanged => "project.policy_changed",
         }
     }
 }

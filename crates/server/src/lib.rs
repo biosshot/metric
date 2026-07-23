@@ -3,6 +3,7 @@
 pub mod config;
 pub mod http;
 pub mod ingest_http;
+pub mod native_http;
 
 use std::{io, process::ExitCode};
 
@@ -13,6 +14,7 @@ use faultkeep_application::{
         BacklogGuardedEventSink, Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask,
     },
     finalizer::{Finalizer, FinalizerConfig, FinalizerError},
+    native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
     observability::{Metric, Metrics, Outcome},
     processor::{
@@ -20,6 +22,7 @@ use faultkeep_application::{
         IssuePreparerStage, Processor, ProcessorConfig, ProcessorConfigError,
     },
     projects::{ProjectCacheConfig, ProjectService, ProjectServiceError},
+    search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
     symbolication::BaselineSymbolicationService,
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
@@ -72,6 +75,7 @@ struct RuntimeModules {
     finalizer_batcher: Option<std::sync::Arc<FinalizerBatcher>>,
     finalizer_batch_task: Option<FinalizerBatchTask>,
     identity_service: Option<std::sync::Arc<IdentityService>>,
+    native_api_service: Option<std::sync::Arc<NativeApiService>>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -100,7 +104,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         dispatcher_task,
         finalizer_batcher,
         finalizer_batch_task,
-        identity_service: _identity_service,
+        identity_service,
+        native_api_service,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -120,19 +125,19 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let store = timeout(config.mongodb.bootstrap_timeout.get(), setup)
             .await
             .map_err(|_| ServerError::MongoBootstrapTimeout)??;
-        let project_resolver: std::sync::Arc<dyn ProjectResolver> =
-            std::sync::Arc::new(ProjectService::new(
-                std::sync::Arc::new(store.clone()),
-                std::sync::Arc::clone(&clock),
-                std::sync::Arc::clone(&random),
-                config.projects.identity_collision_retries,
-                ProjectCacheConfig {
-                    capacity: config.ingest.project_cache.capacity,
-                    max_inflight: config.ingest.project_cache.max_inflight,
-                    positive_ttl: config.ingest.project_cache.positive_ttl.get(),
-                    negative_ttl: config.ingest.project_cache.negative_ttl.get(),
-                },
-            )?);
+        let project_service = std::sync::Arc::new(ProjectService::new(
+            std::sync::Arc::new(store.clone()),
+            std::sync::Arc::clone(&clock),
+            std::sync::Arc::clone(&random),
+            config.projects.identity_collision_retries,
+            ProjectCacheConfig {
+                capacity: config.ingest.project_cache.capacity,
+                max_inflight: config.ingest.project_cache.max_inflight,
+                positive_ttl: config.ingest.project_cache.positive_ttl.get(),
+                negative_ttl: config.ingest.project_cache.negative_ttl.get(),
+            },
+        )?);
+        let project_resolver: std::sync::Arc<dyn ProjectResolver> = project_service.clone();
         let identity_service = std::sync::Arc::new(IdentityService::new(
             std::sync::Arc::new(store.auth_store()),
             std::sync::Arc::clone(&clock),
@@ -170,10 +175,32 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             max_decoded_body_bytes: config.ingest.max_event_bytes,
             max_encoded_document_bytes: config.ingest.max_event_bytes.saturating_add(64 * 1024),
         };
+        let issue_codec = IssueCodecConfig::default();
+        let issue_service = std::sync::Arc::new(faultkeep_application::issues::IssueService::new(
+            std::sync::Arc::new(store.issue_store(issue_codec)),
+        ));
+        let investigation: std::sync::Arc<dyn faultkeep_ports::InvestigationStore> =
+            std::sync::Arc::new(store.investigation_store(event_codec, issue_codec));
+        let search = std::sync::Arc::new(
+            SearchService::new(
+                std::sync::Arc::clone(&investigation),
+                std::sync::Arc::clone(&clock),
+                SearchConfig::default(),
+            )
+            .map_err(|_| ServerError::Auth(AuthError::InvalidConfiguration))?,
+        );
+        let native_api_service = std::sync::Arc::new(NativeApiService::new(
+            std::sync::Arc::clone(&identity_service),
+            project_service,
+            issue_service,
+            investigation,
+            search,
+            std::sync::Arc::clone(&clock),
+        ));
         let event_store = std::sync::Arc::new(store.event_store(event_codec));
         let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
         let finalizer = std::sync::Arc::new(Finalizer::new(
-            std::sync::Arc::new(store.finalization_store(event_codec, IssueCodecConfig::default())),
+            std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
             FinalizerConfig::default(),
         )?);
         let (finalizer_batcher, finalizer_batch_task) = FinalizerBatcher::start(
@@ -247,6 +274,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batcher: Some(finalizer_batcher),
             finalizer_batch_task: Some(finalizer_batch_task),
             identity_service: Some(identity_service),
+            native_api_service: Some(native_api_service),
         }
     } else {
         RuntimeModules {
@@ -257,6 +285,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batcher: None,
             finalizer_batch_task: None,
             identity_service: None,
+            native_api_service: None,
         }
     };
     let ingest = std::sync::Arc::new(faultkeep_application::ingest::IngestService::new(
@@ -269,10 +298,17 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         shutdown.signal(),
     ));
     let required_ready = writer_task.is_some() && dispatcher_task.is_some();
+    let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
+        .merge(native_http::router(
+            identity_service,
+            native_api_service,
+            config.auth.secure_cookie,
+            required_ready,
+        ));
     let app = http::router_with_readiness(
         shutdown.signal(),
         metrics,
-        ingest_http::router(ingest, config.ingest.clone(), shutdown.signal()),
+        application_routes,
         required_ready,
     );
     let listener = TcpListener::bind(config.server.http_address).await?;

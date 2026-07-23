@@ -15,6 +15,7 @@ use argon2::{
 };
 use faultkeep_domain::{
     DisplayName, OrganizationId, ProjectId, Slug, Timestamp,
+    api::ApiTokenView,
     auth::{
         Actor, ApiToken, AuditAction, AuditMetadata, AuditMetadataKey, AuditMetadataValue,
         AuditRecord, AuditTargetId, AuthContext, BootstrapIdentity, CredentialId, EmailAddress,
@@ -22,6 +23,7 @@ use faultkeep_domain::{
         PasswordHash, Permission, PermissionSet, PlainSecret, RequestCorrelationId, SecretDigest,
         SetupPurpose, SetupToken, TokenName, UserAccount, UserDisplayName, UserId, WebSession,
     },
+    issue::{ActorKind, ActorRef},
 };
 use faultkeep_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, Clock, RandomSource};
 use sha2::{Digest, Sha256};
@@ -692,9 +694,8 @@ impl IdentityService {
         context: &AuthContext,
         request: CreateApiTokenRequest,
     ) -> Result<IssuedApiToken, AuthError> {
-        let role_permissions = PermissionSet::from_role(context.role);
         if context.actor == Actor::Bootstrap
-            || !request.scopes.is_subset_of(role_permissions)
+            || !request.scopes.is_subset_of(context.permissions)
             || request.expires_at <= self.clock.now()
             || duration_between(self.clock.now(), request.expires_at)
                 > self.config.max_api_token_lifetime
@@ -795,6 +796,73 @@ impl IdentityService {
             AuditMetadata::new([]).expect("empty audit metadata is valid"),
         )
         .await
+    }
+
+    pub async fn list_api_tokens(
+        &self,
+        context: &AuthContext,
+        limit: usize,
+    ) -> Result<Vec<ApiTokenView>, AuthError> {
+        if !(1..=100).contains(&limit) {
+            return Err(AuthError::InvalidTokenPolicy);
+        }
+        self.call(
+            self.store
+                .list_api_tokens(context.user_id, context.organization_id, limit),
+        )
+        .await
+    }
+
+    pub async fn record_project_audit(
+        &self,
+        context: &AuthContext,
+        request_id: RequestCorrelationId,
+        action: AuditAction,
+        target_kind: &'static str,
+        target_id: String,
+    ) -> Result<(), AuthError> {
+        if !matches!(
+            action,
+            AuditAction::ProjectCreated
+                | AuditAction::ProjectKeyCreated
+                | AuditAction::ProjectKeyDisabled
+                | AuditAction::ProjectPolicyChanged
+        ) || !matches!(target_kind, "project" | "project_key")
+        {
+            return Err(AuthError::Forbidden);
+        }
+        self.audit(
+            context,
+            request_id,
+            action,
+            target_kind,
+            target_id,
+            AuditMetadata::new([]).expect("empty audit metadata is valid"),
+        )
+        .await
+    }
+
+    pub async fn validate_issue_assignee(
+        &self,
+        context: &AuthContext,
+        assignee: ActorRef,
+    ) -> Result<(), AuthError> {
+        if assignee.kind() != ActorKind::User || assignee.id()[..8] != [0; 8] {
+            return Err(AuthError::Forbidden);
+        }
+        let user_id = UserId::new(u64::from_be_bytes(
+            assignee.id()[8..]
+                .try_into()
+                .map_err(|_| AuthError::Forbidden)?,
+        ))
+        .map_err(|_| AuthError::Forbidden)?;
+        let (user, _) = self
+            .authoritative_identity(user_id, context.organization_id)
+            .await?;
+        if user.disabled_at.is_some() {
+            return Err(AuthError::Forbidden);
+        }
+        Ok(())
     }
 
     pub async fn mutate_membership(
@@ -2039,6 +2107,26 @@ mod tests {
             !token_context
                 .permissions
                 .contains(Permission::OrganizationDelete)
+        );
+        assert_eq!(
+            service
+                .create_api_token(
+                    &token_context,
+                    CreateApiTokenRequest {
+                        name: TokenName::new("escalation").unwrap(),
+                        scopes: PermissionSet::from_permissions([Permission::IssueWrite]),
+                        expires_at: Timestamp::from_unix_millis(1_751_000_000_000).unwrap(),
+                        request_id: BoundedId::new("token-escalation").unwrap(),
+                    },
+                )
+                .await,
+            Err(AuthError::InvalidTokenPolicy)
+        );
+        assert_eq!(
+            service
+                .validate_issue_assignee(&token_context, ActorRef::system())
+                .await,
+            Err(AuthError::Forbidden)
         );
         let own_project = ProjectId::new(41).unwrap();
         let foreign_project = ProjectId::new(42).unwrap();

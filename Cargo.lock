@@ -724,6 +724,7 @@ name = "faultkeep-application"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "blake3",
  "faultkeep-domain",
  "faultkeep-ports",
  "futures-util",
@@ -733,6 +734,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "time",
  "tokio",
  "tokio-util",
  "url",
@@ -815,12 +817,15 @@ dependencies = [
  "mongodb",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
+ "time",
  "tokio",
  "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

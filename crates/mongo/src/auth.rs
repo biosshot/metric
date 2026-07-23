@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 use faultkeep_domain::{
     OrganizationId, ProjectId, Timestamp,
+    api::ApiTokenView,
     auth::{
         Actor, ApiToken, AuditRecord, BootstrapIdentity, CredentialId, EmailAddress,
         MembershipMutation, MembershipMutationKind, OrganizationMembership, OrganizationRole,
@@ -557,6 +558,46 @@ impl MongoAuthStore {
         decode_api_token(&document)
     }
 
+    async fn list_api_tokens_inner(
+        &self,
+        user_id: UserId,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> Result<Vec<ApiTokenView>, AuthStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(AuthStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("api_tokens")
+            .find(doc! {
+                "user_id": user_i64(user_id)?,
+                "organization_id": organization_i64(organization_id)?,
+                "revoked_at": { "$exists": false },
+            })
+            .sort(doc! { "created_at": -1, "_id": -1 })
+            .limit(i64::try_from(limit).unwrap_or(100))
+            .await
+            .map_err(unavailable)?;
+        let mut values = Vec::with_capacity(limit);
+        while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+            let token = decode_api_token(&document)?;
+            values.push(ApiTokenView {
+                id: token.id,
+                name: token.name.as_str().into(),
+                scopes: token
+                    .scopes
+                    .iter()
+                    .map(|permission| permission.scope().into())
+                    .collect(),
+                created_at: token.created_at,
+                expires_at: token.expires_at,
+                last_used_at: token.last_used_at,
+            });
+        }
+        Ok(values)
+    }
+
     async fn acquire_organization_lock(
         &self,
         organization_id: OrganizationId,
@@ -884,6 +925,15 @@ impl AuthStore for MongoAuthStore {
             Ok(())
         })
     }
+
+    fn list_api_tokens(
+        &self,
+        user_id: UserId,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ApiTokenView>, AuthStoreError>> {
+        Box::pin(self.list_api_tokens_inner(user_id, organization_id, limit))
+    }
 }
 
 pub(crate) async fn create_auth_collections(
@@ -1165,7 +1215,7 @@ pub(crate) fn audit_validator() -> Document {
             "actor": { "enum": ["web_session", "personal_api_token", "bootstrap"] },
             "actor_user_id": { "bsonType": "long", "minimum": 1 },
             "action": { "bsonType": "string", "minLength": 1, "maxLength": 64 },
-            "target_kind": { "enum": ["user", "api_token"] },
+            "target_kind": { "enum": ["user", "api_token", "project", "project_key"] },
             "target_id": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
             "timestamp": { "bsonType": "date" },
             "metadata": {

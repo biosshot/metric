@@ -294,6 +294,11 @@ pub struct IssueActivityId([u8; 16]);
 
 impl IssueActivityId {
     #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    #[must_use]
     pub const fn as_bytes(self) -> [u8; 16] {
         self.0
     }

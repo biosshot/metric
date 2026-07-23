@@ -13,6 +13,7 @@ use faultkeep_domain::{
     DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
     ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, Slug,
+    api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
 };
 use faultkeep_ports::{
     Clock, PortFuture, ProjectResolveError, ProjectResolver, ProjectStore, ProjectStoreError,
@@ -182,6 +183,81 @@ impl ProjectService {
         Err(ProjectServiceError::CollisionExhausted)
     }
 
+    pub async fn create_project_key(
+        &self,
+        project_id: ProjectId,
+        label: ProjectKeyLabel,
+    ) -> Result<DsnKey, ProjectServiceError> {
+        for _ in 0..self.collision_retries {
+            let dsn_key = self.random_dsn_key()?;
+            let key = ProjectKeyIdentity {
+                key: dsn_key,
+                project_id,
+                state: ProjectKeyState::Active,
+                label: label.clone(),
+                created_at: self.clock.now(),
+            };
+            match self.store.insert_project_key(key).await {
+                Ok(()) => {
+                    self.invalidate_key(dsn_key);
+                    return Ok(dsn_key);
+                }
+                Err(ProjectStoreError::KeyCollision) => {}
+                Err(error) => return Err(map_command_store_error(error)),
+            }
+        }
+        Err(ProjectServiceError::CollisionExhausted)
+    }
+
+    pub async fn list_projects(
+        &self,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> Result<Vec<ProjectView>, ProjectServiceError> {
+        self.store
+            .list_projects(organization_id, limit)
+            .await
+            .map_err(map_command_store_error)
+    }
+
+    pub async fn load_project_view(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<ProjectView, ProjectServiceError> {
+        self.store
+            .load_project_by_id(project_id)
+            .await
+            .map_err(map_command_store_error)
+    }
+
+    pub async fn list_project_keys(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<ProjectKeyView>, ProjectServiceError> {
+        self.store
+            .list_project_keys(project_id)
+            .await
+            .map_err(map_command_store_error)
+    }
+
+    pub async fn update_project_policy(
+        &self,
+        project_id: ProjectId,
+        update: ProjectPolicyUpdate,
+    ) -> Result<ProjectView, ProjectServiceError> {
+        let (project, keys) = self
+            .store
+            .update_project_policy(project_id, update)
+            .await
+            .map_err(map_command_store_error)?;
+        self.cache_generation.fetch_add(1, Ordering::AcqRel);
+        let mut cache = self.cache.lock().expect("project cache lock poisoned");
+        for key in keys {
+            cache.invalidate(key);
+        }
+        Ok(project)
+    }
+
     async fn insert_generated_project(
         &self,
         command: &CreateProject,
@@ -227,6 +303,20 @@ impl ProjectService {
             .map_err(map_command_store_error)?;
         self.invalidate_key(key);
         Ok(project_id)
+    }
+
+    pub async fn set_project_key_state(
+        &self,
+        project_id: ProjectId,
+        key: DsnKey,
+        state: ProjectKeyState,
+    ) -> Result<(), ProjectServiceError> {
+        self.store
+            .set_project_key_state(project_id, key, state)
+            .await
+            .map_err(map_command_store_error)?;
+        self.invalidate_key(key);
+        Ok(())
     }
 
     pub async fn set_project_acceptance(
@@ -383,6 +473,7 @@ fn map_command_store_error(error: ProjectStoreError) -> ProjectServiceError {
             ProjectServiceError::AlreadyExists
         }
         ProjectStoreError::NotFound => ProjectServiceError::NotFound,
+        ProjectStoreError::RevisionConflict => ProjectServiceError::AlreadyExists,
         ProjectStoreError::IdentityCollision | ProjectStoreError::KeyCollision => {
             ProjectServiceError::CollisionExhausted
         }

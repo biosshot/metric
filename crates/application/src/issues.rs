@@ -80,6 +80,17 @@ impl IssueService {
             .await
             .map_err(map_store_error)
     }
+
+    pub async fn load(
+        &self,
+        project_id: faultkeep_domain::ProjectId,
+        issue_id: faultkeep_domain::grouping::IssueId,
+    ) -> Result<faultkeep_domain::issue::IssueSnapshot, IssueServiceError> {
+        self.store
+            .load(project_id, issue_id)
+            .await
+            .map_err(map_store_error)
+    }
 }
 
 pub fn prepare_issue_occurrence(
