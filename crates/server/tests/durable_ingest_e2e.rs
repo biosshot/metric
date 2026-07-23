@@ -269,7 +269,7 @@ async fn measure_writer(database: &Database) -> Result<(), Box<dyn Error>> {
 
 async fn measure_processor_recovery(database: &Database) -> Result<(), Box<dyn Error>> {
     const EVENTS: u32 = 1_000;
-    const CONCURRENCY: usize = 64;
+    const CONCURRENCY: usize = 256;
     const ACCEPTED_STEADY_RPS: f64 = 1_158.0;
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;

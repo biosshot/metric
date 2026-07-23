@@ -1,16 +1,17 @@
 //! Ordered, bounded post-acceptance Event orchestration.
 
 use std::{
+    collections::HashMap,
     future::Future,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use faultkeep_domain::{
-    AcceptedEvent, ProjectAcceptanceState, Timestamp,
+    AcceptedEvent, ProjectAcceptanceState, ProjectId, Timestamp,
     event::NormalizedEvent,
     grouping::{GroupingError, GroupingResult, group},
     issue::IssueOccurrence,
@@ -24,6 +25,7 @@ use faultkeep_ports::{
     Clock, PortFuture, ProcessingProjectError, ProcessingProjectStore, ProcessingStateError,
     ProcessingStateStore, SymbolicationBackend,
 };
+use futures_util::{FutureExt, future::Shared};
 use thiserror::Error;
 use tokio::{
     sync::{Semaphore, mpsc, oneshot},
@@ -453,6 +455,24 @@ pub struct Processor {
     permits: Arc<Semaphore>,
     cancellation: CancellationToken,
     config: ProcessorConfig,
+    project_inflight: Mutex<HashMap<ProjectId, Arc<ProjectFlight>>>,
+}
+
+type ProjectLoadFuture = Shared<
+    std::pin::Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        faultkeep_domain::processing::ProcessingProject,
+                        ProcessingProjectError,
+                    >,
+                > + Send,
+        >,
+    >,
+>;
+
+struct ProjectFlight {
+    future: ProjectLoadFuture,
 }
 
 impl Processor {
@@ -481,6 +501,7 @@ impl Processor {
             permits: Arc::new(Semaphore::new(config.max_concurrency)),
             cancellation: CancellationToken::new(),
             config,
+            project_inflight: Mutex::new(HashMap::new()),
         })
     }
 
@@ -547,8 +568,7 @@ impl Processor {
             self.config.stage_timeout,
             total_deadline,
             &self.cancellation,
-            self.projects
-                .load_processing_project(pending.event.project_id),
+            self.load_project_coalesced(pending.event.project_id),
         )
         .await?
         .map_err(map_project_error)?;
@@ -609,6 +629,49 @@ impl Processor {
         )
         .await??;
         Ok(())
+    }
+
+    async fn load_project_coalesced(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<faultkeep_domain::processing::ProcessingProject, ProcessingProjectError> {
+        let flight = {
+            let mut flights = self
+                .project_inflight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            flights
+                .entry(project_id)
+                .or_insert_with(|| {
+                    let projects = self.projects.clone();
+                    let future: std::pin::Pin<
+                        Box<
+                            dyn Future<
+                                    Output = Result<
+                                        faultkeep_domain::processing::ProcessingProject,
+                                        ProcessingProjectError,
+                                    >,
+                                > + Send,
+                        >,
+                    > = Box::pin(async move { projects.load_processing_project(project_id).await });
+                    Arc::new(ProjectFlight {
+                        future: future.shared(),
+                    })
+                })
+                .clone()
+        };
+        let result = flight.future.clone().await;
+        let mut flights = self
+            .project_inflight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if flights
+            .get(&project_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &flight))
+        {
+            flights.remove(&project_id);
+        }
+        result
     }
 
     async fn persist_failure(
