@@ -2,6 +2,8 @@ import type {
   ApiErrorBody,
   CapabilityDocument,
   ComponentStatus,
+  CreateProjectInput,
+  CreateProjectResponse,
   Event,
   Identity,
   Issue,
@@ -148,6 +150,11 @@ export const api = {
   me: () => request<Identity>('/api/v1/auth/me'),
   logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
   projects: () => request<{ items: Project[] }>('/api/v1/projects'),
+  createProject: (project: CreateProjectInput) =>
+    request<CreateProjectResponse>('/api/v1/projects', {
+      method: 'POST',
+      body: JSON.stringify(project),
+    }),
   project: (projectId: string) => request<Project>(`/api/v1/projects/${projectId}`),
   keys: (projectId: string) =>
     request<{ items: ProjectKey[] }>(`/api/v1/projects/${projectId}/keys`),

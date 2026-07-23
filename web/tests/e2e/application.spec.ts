@@ -73,6 +73,11 @@ interface ApiState {
   failIssues: boolean;
   emptyIssues?: boolean;
   slowIssues?: boolean;
+  noProjects?: boolean;
+  bootstrapSeen?: boolean;
+  projectCreationSeen?: boolean;
+  policyRevisionSeen?: boolean;
+  createdProjectBody?: Record<string, unknown>;
   requestedProjects?: string[];
 }
 
@@ -93,6 +98,21 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       body: JSON.stringify(value),
     });
 
+  if (path === '/api/v1/auth/bootstrap') {
+    const body = request.postDataJSON() as Record<string, unknown>;
+    state.bootstrapSeen =
+      body.setup_token === 'a'.repeat(64) &&
+      body.organization_slug === 'acme' &&
+      body.email === 'owner@example.com';
+    return json({
+      actor: 'bootstrap',
+      user_id: '8',
+      organization_id: '7',
+      role: 'owner',
+      permissions: ['organization:admin', 'project:admin'],
+      credential_id: '11',
+    });
+  }
   if (path === '/api/v1/auth/login') {
     const body = request.postDataJSON() as { email: string };
     state.role = body.email.startsWith('viewer') ? 'viewer' : 'owner';
@@ -110,11 +130,50 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       permissions:
         state.role === 'viewer'
           ? ['event:read', 'issue:read', 'project:read']
-          : ['event:read', 'issue:read', 'issue:write', 'project:read', 'project:admin'],
+          : [
+              'event:read',
+              'issue:read',
+              'issue:write',
+              'project:read',
+              'project:admin',
+              'organization:admin',
+            ],
       credential_id: '12',
     });
   }
-  if (path === '/api/v1/projects') return json({ items: [project] });
+  if (path === '/api/v1/projects' && request.method() === 'POST') {
+    state.projectCreationSeen =
+      request.headers()['x-csrf-token'] === 'c'.repeat(64) &&
+      request.headers()['x-faultkeep-organization-id'] === '7';
+    state.createdProjectBody = request.postDataJSON() as Record<string, unknown>;
+    state.noProjects = false;
+    return json({ project_id: project.id, dsn_key: 'e'.repeat(32) }, 201);
+  }
+  if (path === '/api/v1/projects') {
+    return json({ items: state.noProjects ? [] : [project] });
+  }
+  if (path === '/api/v1/projects/42/keys') {
+    return json({
+      items: [
+        {
+          dsn_key: 'e'.repeat(32),
+          project_id: project.id,
+          state: 'active',
+          label: 'Default',
+          created_at: '2026-07-23T08:00:00Z',
+        },
+      ],
+    });
+  }
+  if (path === '/api/v1/projects/42') return json(project);
+  if (path === '/api/v1/projects/42/policy' && request.method() === 'PATCH') {
+    const body = request.postDataJSON() as {
+      expected_revision: number;
+      ip_policy: 'hmac' | 'keep' | 'remove' | 'truncate';
+    };
+    state.policyRevisionSeen = body.expected_revision === 1;
+    return json({ ...project.policy, revision: 2, ip_policy: body.ip_policy });
+  }
   if (path === '/api/v1/projects/42/issues') {
     if (state.slowIssues) await new Promise((resolve) => setTimeout(resolve, 700));
     if (state.failIssues) {
@@ -206,6 +265,54 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await expect(page.locator('.stack-frame')).toHaveCount(40);
   await page.getByRole('button', { name: 'Show all 120' }).click();
   await expect(page.locator('.stack-frame')).toHaveCount(120);
+
+  await page.getByRole('link', { name: /Project settings/ }).click();
+  await page.getByLabel('IP address handling').selectOption('remove');
+  await page.getByRole('button', { name: 'Save policy' }).click();
+  await expect(page.getByRole('status')).toContainText('Project policy saved');
+  expect(state.policyRevisionSeen).toBe(true);
+});
+
+test('first setup creates a project and reaches an actionable SDK DSN', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+    noProjects: true,
+  };
+  await installApi(page, state);
+  await page.goto('/');
+
+  await page.getByRole('tab', { name: 'First setup' }).click();
+  await page.getByLabel('Setup token').fill('a'.repeat(64));
+  await page.getByLabel('Your name').fill('Owner');
+  await page.getByLabel('Email').fill('owner@example.com');
+  await page.getByLabel('Password').fill('correct horse battery staple');
+  await page.getByLabel('Organization', { exact: true }).fill('Acme');
+  await page.getByLabel('Slug').fill('acme');
+  await page.getByRole('button', { name: 'Create owner and organization' }).click();
+
+  await expect(page.getByText('Organization created. Its ID is')).toContainText('7');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Create your first project' })).toBeVisible();
+
+  await page.getByLabel('Project name').fill('Payments API');
+  await expect(page.getByLabel('Slug')).toHaveValue('payments-api');
+  await page.getByRole('button', { name: 'Create project and DSN' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Connect an SDK' })).toBeVisible();
+  await expect(page.getByText('Default')).toBeVisible();
+  await expect(page.locator('.dsn-list code')).toContainText('e'.repeat(32));
+  expect(state.bootstrapSeen).toBe(true);
+  expect(state.projectCreationSeen).toBe(true);
+  expect(state.createdProjectBody).toMatchObject({
+    display_name: 'Payments API',
+    slug: 'payments-api',
+    ip_policy: 'hmac',
+    error_enabled: true,
+    max_event_bytes: 1_048_576,
+  });
 });
 
 test('viewer sees read-only controls and no hidden write action', async ({ page }) => {

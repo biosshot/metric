@@ -11,13 +11,12 @@ use std::{
 use faultkeep_application::{
     auth::{AuthConfig, BootstrapRequest, IdentityService, PasswordConfig, PasswordInput},
     native_api::NativeApiService,
-    projects::{CreateProject, ProjectCacheConfig, ProjectService},
+    projects::{ProjectCacheConfig, ProjectService},
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
 };
 use faultkeep_domain::{
-    DisplayName, IpScrubPolicy, ItemCapabilities, ProjectIngestLimits, SecretBytes, Slug,
-    Timestamp,
+    DisplayName, IpScrubPolicy, SecretBytes, Slug, Timestamp,
     auth::{EmailAddress, RequestCorrelationId, UserDisplayName},
 };
 use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoProjectStore};
@@ -40,7 +39,9 @@ async fn infrastructure_browser_login_session_csrf_and_project_isolation() {
 }
 
 async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
-    if !std::path::Path::new("web/dist/index.html").is_file() {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let web_root = workspace.join("web/dist");
+    if !web_root.join("index.html").is_file() {
         return Err("web/dist is missing; run npm run build in web/".into());
     }
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
@@ -105,30 +106,12 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         search,
         Arc::clone(&clock),
     ));
-    let created = native
-        .create_project(
-            &owner,
-            CreateProject {
-                organization_id: owner.organization_id,
-                slug: Slug::new("backend")?,
-                display_name: DisplayName::new("Backend")?,
-                ip_policy: IpScrubPolicy::Hmac,
-                items: ItemCapabilities {
-                    error: true,
-                    client_report: true,
-                },
-                limits: ProjectIngestLimits::default(),
-            },
-            RequestCorrelationId::new("phase13-web-project")?,
-        )
-        .await?;
-
     let root = ShutdownRoot::new();
     let app = http::router(
         root.signal(),
         faultkeep_application::observability::Metrics,
         native_http::router(Some(identity), Some(Arc::clone(&native)), false, true)
-            .merge(web_http::router()),
+            .merge(web_http::router_with_root(&web_root)),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -139,7 +122,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         app,
     ));
 
-    let script = std::env::current_dir()?.join("web/tests/e2e/real-session.mjs");
+    let script = workspace.join("web/tests/e2e/real-session.mjs");
     let base_url = format!("http://{address}");
     let organization_id = owner.organization_id.get().to_string();
     let browser = tokio::task::spawn_blocking(move || {
@@ -156,7 +139,16 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         return Err(format!("real browser script exited with {browser}").into());
     }
 
-    let updated = native.project(&owner, created.project_id).await?;
+    let visible_projects = native.list_projects(&owner).await?;
+    if visible_projects.len() != 1 || visible_projects[0].slug.as_str() != "backend" {
+        return Err("browser did not create exactly one authoritative project".into());
+    }
+    let created = &visible_projects[0];
+    let keys = native.project_keys(&owner, created.id).await?;
+    if keys.len() != 1 {
+        return Err("browser project creation did not persist exactly one DSN key".into());
+    }
+    let updated = native.project(&owner, created.id).await?;
     if updated.ip_policy != IpScrubPolicy::Remove {
         return Err("browser mutation did not reach the authoritative project service".into());
     }

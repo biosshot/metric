@@ -5,6 +5,7 @@ import AuthView from './views/AuthView.vue';
 import LoadingPanel from './components/LoadingPanel.vue';
 import ApiErrorPanel from './components/ApiErrorPanel.vue';
 import EmptyState from './components/EmptyState.vue';
+import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
 import { useSessionStore } from './stores/session';
 
 const session = useSessionStore();
@@ -96,10 +97,15 @@ async function logout(): Promise<void> {
     </aside>
     <main id="main-content" class="main-content">
       <ApiErrorPanel v-if="logoutError" :error="logoutError" title="Sign out failed" />
+      <FirstProjectOnboarding
+        v-if="
+          !session.selectedProject && $route.name !== 'system' && session.has('organization:admin')
+        "
+      />
       <EmptyState
-        v-if="!session.selectedProject && $route.name !== 'system'"
+        v-else-if="!session.selectedProject && $route.name !== 'system'"
         title="No accessible projects"
-        description="Your account is valid, but it cannot currently access a project."
+        description="Your account is valid, but an organization administrator must grant access to a project."
       />
       <RouterView v-else />
     </main>

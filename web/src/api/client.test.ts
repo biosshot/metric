@@ -40,6 +40,42 @@ describe('native API client', () => {
     });
   });
 
+  it('creates a project through the authenticated CSRF contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          project_id: '9007199254740993',
+          dsn_key: 'd'.repeat(32),
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.createProject({
+      display_name: 'Payments API',
+      slug: 'payments-api',
+      ip_policy: 'hmac',
+      error_enabled: true,
+      client_report_enabled: true,
+      max_event_bytes: 1_048_576,
+      max_events_per_second: null,
+      burst: null,
+    });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Headers;
+    expect(path).toBe('/api/v1/projects');
+    expect(init.method).toBe('POST');
+    expect(headers.get('x-faultkeep-organization-id')).toBe('7');
+    expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      display_name: 'Payments API',
+      slug: 'payments-api',
+      max_event_bytes: 1_048_576,
+    });
+  });
+
   it('refuses a mutation when this tab lost its CSRF token', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

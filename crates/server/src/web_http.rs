@@ -20,10 +20,13 @@ const WEB_ROOT_ENV: &str = "FAULTKEEP_WEB_DIR";
 /// instead of being rewritten to the SPA entry point.
 pub fn router() -> Router {
     let root = std::env::var_os(WEB_ROOT_ENV).unwrap_or_else(|| OsString::from("web/dist"));
-    router_from(PathBuf::from(root))
+    router_with_root(PathBuf::from(root))
 }
 
-fn router_from(root: impl AsRef<Path>) -> Router {
+/// Serves the Web client from an explicit asset root.
+///
+/// Production normally selects the same root through `FAULTKEEP_WEB_DIR`.
+pub fn router_with_root(root: impl AsRef<Path>) -> Router {
     let root = root.as_ref();
     let index = ServeFile::new(root.join("index.html"));
     Router::new()
@@ -79,7 +82,7 @@ mod tests {
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("index.html"), "<main>Faultkeep Web</main>").unwrap();
 
-        let response = router_from(&root)
+        let response = router_with_root(&root)
             .oneshot(
                 Request::builder()
                     .uri("/issues/001122")
@@ -104,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_rewrite_unknown_api_routes() {
-        let response = router_from(std::env::temp_dir().join("faultkeep-web-missing"))
+        let response = router_with_root(std::env::temp_dir().join("faultkeep-web-missing"))
             .oneshot(
                 Request::builder()
                     .uri("/api/v1/not-a-route")

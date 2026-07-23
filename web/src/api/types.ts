@@ -45,6 +45,22 @@ export interface Project {
   created_at: string;
 }
 
+export interface CreateProjectInput {
+  display_name: string;
+  slug: string;
+  ip_policy: ProjectPolicy['ip_policy'];
+  error_enabled: boolean;
+  client_report_enabled: boolean;
+  max_event_bytes: number;
+  max_events_per_second: number | null;
+  burst: number | null;
+}
+
+export interface CreateProjectResponse {
+  project_id: string;
+  dsn_key: string;
+}
+
 export interface ProjectKey {
   dsn_key: string;
   project_id: string;

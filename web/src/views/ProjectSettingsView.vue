@@ -33,7 +33,11 @@ const policy = reactive<ProjectPolicy>({
 watch(
   () => project.data.value?.policy,
   (value) => {
-    if (value) Object.assign(policy, structuredClone(value));
+    if (!value) return;
+    policy.revision = value.revision;
+    policy.ip_policy = value.ip_policy;
+    policy.items = { ...value.items };
+    policy.limits = { ...value.limits };
   },
   { immediate: true },
 );

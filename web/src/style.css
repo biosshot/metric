@@ -785,6 +785,45 @@ summary:focus-visible {
   grid-template-columns: 0.75fr 1.25fr;
   gap: 22px;
 }
+.onboarding-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  align-items: start;
+  gap: 22px;
+}
+.onboarding-summary {
+  position: sticky;
+  top: 28px;
+}
+.onboarding-summary h2 {
+  margin-top: 0;
+}
+.onboarding-summary ol {
+  display: grid;
+  gap: 18px;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+}
+.onboarding-summary li {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: start;
+  gap: 11px;
+  color: #4e4853;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.onboarding-summary li > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--purple);
+  background: var(--purple-soft);
+  border-radius: 50%;
+  font-weight: 800;
+}
 .setup-steps ol {
   display: grid;
   gap: 25px;
@@ -1127,8 +1166,12 @@ summary:focus-visible {
     grid-template-columns: repeat(2, 1fr);
   }
   .detail-columns,
-  .setup-grid {
+  .setup-grid,
+  .onboarding-grid {
     grid-template-columns: 1fr;
+  }
+  .onboarding-summary {
+    position: static;
   }
   .capability-list {
     grid-template-columns: repeat(2, 1fr);
