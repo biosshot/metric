@@ -172,19 +172,29 @@ pub fn parse_envelope(
         let (item_header_bytes, payload_start) = line_at(body, cursor)?;
         let item_header: WireItemHeader = serde_json::from_slice(item_header_bytes)
             .map_err(|_| ProtocolError::invalid("invalid_item_header"))?;
-        let length = item_header
-            .length
-            .ok_or_else(|| ProtocolError::invalid("missing_item_length"))?;
-        let length = usize::try_from(length)
-            .map_err(|_| ProtocolError::too_large("item_length_overflow"))?;
-        let payload_end = payload_start
-            .checked_add(length)
-            .ok_or_else(|| ProtocolError::too_large("item_length_overflow"))?;
-        if payload_end > body.len() {
-            return Err(ProtocolError::invalid("truncated_item"));
-        }
-        let payload = &body[payload_start..payload_end];
         let kind = item_header.kind.as_deref().unwrap_or("event");
+        let (payload, next_cursor) = match item_header.length {
+            Some(length) => {
+                let length = usize::try_from(length)
+                    .map_err(|_| ProtocolError::too_large("item_length_overflow"))?;
+                let payload_end = payload_start
+                    .checked_add(length)
+                    .ok_or_else(|| ProtocolError::too_large("item_length_overflow"))?;
+                if payload_end > body.len() {
+                    return Err(ProtocolError::invalid("truncated_item"));
+                }
+                let mut next_cursor = payload_end;
+                if next_cursor < body.len() {
+                    if body[next_cursor] != b'\n' {
+                        return Err(ProtocolError::invalid("missing_item_separator"));
+                    }
+                    next_cursor += 1;
+                }
+                (&body[payload_start..payload_end], next_cursor)
+            }
+            None => lengthless_payload(body, payload_start, limits.max_event_bytes)?,
+        };
+        let length = payload.len();
         match classify_item(kind) {
             ItemClass::Event => {
                 if length > limits.max_event_bytes {
@@ -215,13 +225,7 @@ pub fn parse_envelope(
                 reason: "unknown_item_type",
             }),
         }
-        cursor = payload_end;
-        if cursor < body.len() {
-            if body[cursor] != b'\n' {
-                return Err(ProtocolError::invalid("missing_item_separator"));
-            }
-            cursor += 1;
-        }
+        cursor = next_cursor;
     }
 
     if primary.is_none() && discarded.is_empty() && client_report_quantity == 0 {
@@ -304,6 +308,24 @@ fn line_at(body: &[u8], start: usize) -> Result<(&[u8], usize), ProtocolError> {
         return Err(ProtocolError::too_large("header_too_large"));
     }
     Ok((&remaining[..newline], start + newline + 1))
+}
+
+fn lengthless_payload(
+    body: &[u8],
+    start: usize,
+    max_bytes: usize,
+) -> Result<(&[u8], usize), ProtocolError> {
+    let remaining = body
+        .get(start..)
+        .ok_or_else(|| ProtocolError::invalid("truncated_item"))?;
+    let bounded = remaining.len().min(max_bytes.saturating_add(1));
+    if let Some(newline) = remaining[..bounded].iter().position(|byte| *byte == b'\n') {
+        return Ok((&remaining[..newline], start + newline + 1));
+    }
+    if remaining.len() > max_bytes {
+        return Err(ProtocolError::too_large("lengthless_item_too_large"));
+    }
+    Ok((remaining, body.len()))
 }
 
 fn parse_optional_event_id(value: Option<&str>) -> Result<Option<EventId>, ProtocolError> {
@@ -402,6 +424,55 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn parses_official_lengthless_error_event() {
+        let body = envelope(
+            r#"{"type":"event","content_type":"application/json"}"#,
+            EVENT,
+        );
+        let parsed = parse_envelope(
+            &body,
+            EnvelopeLimits {
+                max_items: 100,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn lengthless_items_remain_bounded_and_newline_framed() {
+        let body = format!(
+            "{{}}\n{{\"type\":\"event\"}}\n{EVENT}\n{{\"type\":\"client_report\"}}\n\
+             {{\"discarded_events\":[{{\"reason\":\"queue_overflow\",\"category\":\"error\",\"quantity\":2}}]}}"
+        );
+        let parsed = parse_envelope(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 2,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert!(parsed.primary.is_some());
+        assert_eq!(parsed.client_report_quantity, 2);
+
+        let oversized = envelope(r#"{"type":"event"}"#, &"x".repeat(17));
+        assert_eq!(
+            parse_envelope(
+                &oversized,
+                EnvelopeLimits {
+                    max_items: 1,
+                    max_event_bytes: 16,
+                },
+            )
+            .unwrap_err()
+            .code(),
+            "lengthless_item_too_large"
+        );
     }
 
     #[test]
