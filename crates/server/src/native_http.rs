@@ -299,7 +299,26 @@ async fn bootstrap(
 struct LoginBody {
     email: String,
     password: String,
-    organization_id: u64,
+    organization_id: LoginOrganizationId,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum LoginOrganizationId {
+    Decimal(String),
+    LegacyNumber(u64),
+}
+
+impl LoginOrganizationId {
+    fn parse(self) -> Result<faultkeep_domain::OrganizationId, HttpApiError> {
+        let value = match self {
+            Self::Decimal(value) => value
+                .parse::<u64>()
+                .map_err(|_| HttpApiError::InvalidRequest)?,
+            Self::LegacyNumber(value) => value,
+        };
+        faultkeep_domain::OrganizationId::new(value).map_err(|_| HttpApiError::InvalidRequest)
+    }
 }
 
 async fn login(
@@ -309,8 +328,7 @@ async fn login(
     body: Result<Json<LoginBody>, JsonRejection>,
 ) -> Result<Response, HttpApiError> {
     let body = json_body(body)?;
-    let organization_id = faultkeep_domain::OrganizationId::new(body.organization_id)
-        .map_err(|_| HttpApiError::InvalidRequest)?;
+    let organization_id = body.organization_id.parse()?;
     let issued = identity(&state)?
         .login(LoginRequest {
             email: body.email.into(),
@@ -1476,6 +1494,26 @@ mod tests {
             ),
         );
         assert!(session_secret(&headers).is_some());
+    }
+
+    #[test]
+    fn login_organization_id_preserves_large_decimal_strings_and_legacy_numbers() {
+        let large = 9_007_199_254_740_993_u64;
+        let body: LoginBody = serde_json::from_value(json!({
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "organization_id": large.to_string(),
+        }))
+        .unwrap();
+        assert_eq!(body.organization_id.parse().unwrap().get(), large);
+
+        let legacy: LoginBody = serde_json::from_value(json!({
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "organization_id": 7,
+        }))
+        .unwrap();
+        assert_eq!(legacy.organization_id.parse().unwrap().get(), 7);
     }
 
     #[test]

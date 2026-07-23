@@ -140,7 +140,7 @@ export const api = {
       '/api/v1/auth/login',
       {
         method: 'POST',
-        body: JSON.stringify({ email, password, organization_id: Number(organizationId) }),
+        body: JSON.stringify({ email, password, organization_id: organizationId }),
       },
       { public: true },
     );

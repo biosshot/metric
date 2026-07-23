@@ -19,6 +19,27 @@ describe('native API client', () => {
     expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
   });
 
+  it('sends large organization IDs without JavaScript precision loss', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          csrf_token: 'b'.repeat(64),
+          expires_at: '2030-01-01T00:00:00Z',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const organizationId = '9007199254740993';
+    await api.login('owner@example.com', 'correct horse battery staple', organizationId);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      organization_id: organizationId,
+    });
+  });
+
   it('refuses a mutation when this tab lost its CSRF token', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
