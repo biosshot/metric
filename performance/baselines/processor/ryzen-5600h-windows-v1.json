@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "processor-recovery-phase-10",
+    "source_commit": "2b2533830f45a670576440e27cf49c0c354c1f05",
+    "generated_at": "2026-07-23T07:48:30.206Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "1000 pending Error Events in one hot Issue; full baseline Processor stages; bounded Finalizer batches",
+    "storage": "MongoDB 8.0.12 local Docker tmpfs; retryWrites=false; MongoDB 8 bulk_write"
+  },
+  "metrics": {
+    "recovery_rps": 1810,
+    "events": 1000,
+    "concurrency": 256,
+    "accepted_steady_rps": 1158,
+    "recovery_ratio": 1.56,
+    "elapsed_ms": 552,
+    "minimum_recovery_ratio": 1.5
+  }
+}

@@ -208,3 +208,28 @@ node performance/compare-finalizer.mjs performance/baselines/finalizer/ryzen-560
 After the run, verify and terminate any lingering Cargo, Rust test, or k6 processes.
 This local result is a regression sentinel, not the Phase 10 end-to-end recovery-rate
 claim.
+
+## Phase 10 Processor recovery
+
+The retained recovery benchmark starts with 1,000 durable pending Error Events in one
+hot Issue and measures the complete baseline Processor chain through terminal Event,
+Issue and hourly-stat writes. Processor concurrency is 256; prepared results enter the
+same bounded Finalizer batcher used by production composition. The artifact reports
+explicit recovery RPS and its ratio to the ADR-0037 1,158 Event/s accepted-average
+target.
+
+This is an in-process completion benchmark with real MongoDB, so k6 is not used:
+HTTP response throughput cannot prove that Events reached terminal processing state.
+The separate retained k6 ingest suite continues to cover TCP and HTTP
+`200`/`429`/`503` behavior.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-processor.mjs
+node performance/compare-processor.mjs performance/baselines/processor/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+The comparator requires identical fixture, hardware, toolchain and MongoDB topology,
+and fails below the 1.5x recovery ratio. After the run, terminate any lingering
+Cargo, Rust test or k6 processes.
