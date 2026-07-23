@@ -11,26 +11,28 @@ const hardDeadline = setTimeout(() => {
   exit(2);
 }, 15_000);
 
-try {
-  Sentry.init({
-    dsn,
-    tracesSampleRate: 0,
-    environment: 'sdk-compatibility',
-    release: 'faultkeep-node-sdk-test@1.0.0',
-    sendDefaultPii: false,
-  });
-  Sentry.setTag('faultkeep.sdk_test', 'node');
+(async function main() {
+  try {
+    Sentry.init({
+      dsn,
+      tracesSampleRate: 0,
+      environment: 'sdk-compatibility',
+      release: 'faultkeep-node-sdk-test@1.0.0',
+      sendDefaultPii: false,
+    });
+    Sentry.setTag('faultkeep.sdk_test', 'node');
 
-  const error = new Error('Faultkeep real Node SDK compatibility event');
-  error.name = 'FaultkeepSdkCompatibilityError';
-  const eventId = Sentry.captureException(error);
-  const flushed = await Sentry.flush(8_000);
-  await Sentry.close(2_000);
-  if (!flushed) {
-    throw new Error('the real Node SDK did not flush the captured Event');
+    const error = new Error('Faultkeep real Node SDK compatibility event');
+    error.name = 'FaultkeepSdkCompatibilityError';
+    const eventId = Sentry.captureException(error);
+    const flushed = await Sentry.flush(8_000);
+    await Sentry.close(2_000);
+    if (!flushed) {
+      throw new Error('the real Node SDK did not flush the captured Event');
+    }
+
+    stdout.write(`${JSON.stringify({ event_id: eventId, flushed })}\n`);
+  } finally {
+    clearTimeout(hardDeadline);
   }
-
-  stdout.write(`${JSON.stringify({ event_id: eventId, flushed })}\n`);
-} finally {
-  clearTimeout(hardDeadline);
-}
+})();
