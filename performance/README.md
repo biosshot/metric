@@ -233,3 +233,26 @@ node performance/compare-processor.mjs performance/baselines/processor/ryzen-560
 The comparator requires identical fixture, hardware, toolchain and MongoDB topology,
 and fails below the 1.5x recovery ratio. After the run, terminate any lingering
 Cargo, Rust test or k6 processes.
+
+## Phase 11 login rate limiter
+
+The retained authentication benchmark saturates the in-process account-and-network
+login limiter with 500,000 attempts after its configured allowance is exhausted. It
+reports explicit RPS, requires every measured attempt to be rejected and confirms the
+bounded 10,000-entry state limit. It intentionally excludes Argon2id: rate-limited
+attempts must be rejected before password work.
+
+This is a security-control regression sentinel, not an ingest or successful-login
+capacity claim. k6 is not used because Phase 11 has no HTTP login route; the native
+API transport starts in Phase 12.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-auth-rate-limit.mjs
+node performance/compare-auth-rate-limit.mjs performance/baselines/auth-rate-limit/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+The comparator requires identical hardware, toolchain, fixture and limiter
+configuration, enforces 100,000 RPS and rejects regressions beyond the supplied
+budget. After the run, terminate any lingering Cargo, Rust test or k6 processes.

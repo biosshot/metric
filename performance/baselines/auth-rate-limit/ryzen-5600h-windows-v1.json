@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "auth-login-rate-limit-phase-11",
+    "source_commit": "8d6e6ee6d4d330c42c09ab75b83aed18184efbb2",
+    "generated_at": "2026-07-23T08:43:15.698Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "500000 saturated rejected login attempts using one account digest and one network digest",
+    "configuration": "max_attempts=5; window=60s; capacity=10000"
+  },
+  "metrics": {
+    "rate_limit_rps": 5277089,
+    "attempts": 500000,
+    "rejected": 500000,
+    "capacity": 10000,
+    "elapsed_ms": 94,
+    "minimum_rps": 100000
+  }
+}
