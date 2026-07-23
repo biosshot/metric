@@ -1,10 +1,10 @@
 # faultkeep
 
-Phase 11 adds the authoritative self-hosted identity boundary: first-owner bootstrap,
-Argon2id passwords, opaque Web sessions with CSRF, scoped personal API tokens,
-organization roles/permissions, final-owner protection and bounded audit records.
-The production Processor from Phase 10 remains the sole ordered path from durable
-Events to finalized Issues and hourly statistics.
+Faultkeep provides Sentry-compatible Error Event ingestion, durable processing,
+native investigation APIs, and a minimal Vue Web interface. The authoritative
+identity boundary uses Argon2id passwords, opaque Web sessions with CSRF, scoped
+personal API tokens, organization roles/permissions, final-owner protection, and
+bounded audit records.
 
 ## Local checks
 
@@ -20,8 +20,21 @@ and narrowly selected ignored performance tests. Infrastructure tests use the ex
 `deploy/compose.dev.yml`, published on local port `27018` to avoid colliding with a
 developer MongoDB on its standard port.
 
-The retained k6 workload, JSON baselines, and regression comparator are documented
+The retained k6 workloads, JSON baselines, and regression comparators are documented
 in `performance/README.md`.
+
+## Web development
+
+The Phase 13 Vue 3 client lives in `web/` and consumes only `/api/v1`. Run
+`npm install` once, then `npm run dev` in that directory while Faultkeep listens
+on `127.0.0.1:3000`.
+
+`npm run build` creates `web/dist`, which the Rust server serves on the supported
+Web routes. `FAULTKEEP_WEB_DIR` can point to an alternative production asset
+directory.
+
+Web checks are `npm run format:check`, `npm run lint`, `npm test`,
+`npm run build`, and `npm run test:e2e`.
 
 Validate configuration without starting the server:
 
@@ -35,6 +48,6 @@ always redacted.
 
 On the first MongoDB-backed startup, the server prints one
 `FAULTKEEP_BOOTSTRAP_TOKEN`. It is shown only when its digest is first persisted;
-store the plaintext securely. Phase 12/13 will expose the API/Web transport that
-consumes it. Insecure session cookies require both `auth.secure_cookie = false` and
+store the plaintext securely. The Web first-setup form consumes it once.
+Insecure session cookies require both `auth.secure_cookie = false` and
 the explicit local-only `development.allow_insecure_cookies = true`.

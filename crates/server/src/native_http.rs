@@ -947,7 +947,8 @@ async fn capabilities() -> Json<Value> {
         },
         "features": {
             "native_api": true,
-            "web": false,
+            "web": true,
+            "retention": false,
             "mcp": false,
             "migrations": false,
             "nats": false,

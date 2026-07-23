@@ -4,6 +4,7 @@ pub mod config;
 pub mod http;
 pub mod ingest_http;
 pub mod native_http;
+pub mod web_http;
 
 use std::{io, process::ExitCode};
 
@@ -304,7 +305,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_api_service,
             config.auth.secure_cookie,
             required_ready,
-        ));
+        ))
+        .merge(web_http::router());
     let app = http::router_with_readiness(
         shutdown.signal(),
         metrics,

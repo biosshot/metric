@@ -1,0 +1,220 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue';
+import { useQuery } from '@tanstack/vue-query';
+import { api } from '../api/client';
+import ApiErrorPanel from '../components/ApiErrorPanel.vue';
+import EmptyState from '../components/EmptyState.vue';
+import LoadingPanel from '../components/LoadingPanel.vue';
+import StatusBadge from '../components/StatusBadge.vue';
+import { useSessionStore } from '../stores/session';
+import type { Event, Issue, Page } from '../api/types';
+
+type InvestigationResult = Page<Issue> | (Page<Event> & { candidates_examined: number });
+
+const session = useSessionStore();
+const status = ref('');
+const search = ref('');
+const submittedSearch = ref('');
+const cursor = ref<string | null>(null);
+const history = ref<(string | null)[]>([]);
+
+const projectId = computed(() => session.selectedProjectId ?? '');
+const queryKey = computed(() => [
+  submittedSearch.value ? 'event-search' : 'issues',
+  projectId.value,
+  status.value,
+  submittedSearch.value,
+  cursor.value,
+]);
+
+const result = useQuery<InvestigationResult>({
+  queryKey,
+  queryFn: () =>
+    submittedSearch.value
+      ? api.search(projectId.value, submittedSearch.value, cursor.value)
+      : api.issues(projectId.value, status.value || undefined, cursor.value),
+  enabled: computed(() => Boolean(projectId.value)),
+});
+const issueItems = computed(() =>
+  submittedSearch.value ? [] : ((result.data.value?.items ?? []) as Issue[]),
+);
+const eventItems = computed(() =>
+  submittedSearch.value ? ((result.data.value?.items ?? []) as Event[]) : [],
+);
+const candidatesExamined = computed(() => {
+  const value = result.data.value;
+  return value && 'candidates_examined' in value ? value.candidates_examined : null;
+});
+
+watch([projectId, status], () => resetPage());
+
+function submitSearch(): void {
+  submittedSearch.value = search.value.trim();
+  resetPage(false);
+}
+
+function clearSearch(): void {
+  search.value = '';
+  submittedSearch.value = '';
+  resetPage(false);
+}
+
+function nextPage(): void {
+  const next = result.data.value?.next_cursor;
+  if (!next) return;
+  history.value.push(cursor.value);
+  cursor.value = next;
+}
+
+function previousPage(): void {
+  cursor.value = history.value.pop() ?? null;
+}
+
+function resetPage(clear = true): void {
+  cursor.value = null;
+  history.value = [];
+  if (clear) {
+    search.value = '';
+    submittedSearch.value = '';
+  }
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+</script>
+
+<template>
+  <section>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">{{ session.selectedProject?.slug }}</p>
+        <h1>Issues</h1>
+        <p>Errors grouped by their stable failure signature.</p>
+      </div>
+      <RouterLink class="button button--secondary" to="/project/setup">Configure SDK</RouterLink>
+    </header>
+
+    <form class="issue-toolbar" role="search" @submit.prevent="submitSearch">
+      <label class="search-field">
+        <span class="sr-only">Search events</span>
+        <input
+          v-model="search"
+          type="search"
+          placeholder="Search events, for example: environment:production level:error"
+          maxlength="4096"
+        />
+      </label>
+      <button class="button button--primary" type="submit">Search</button>
+      <button
+        v-if="submittedSearch"
+        class="button button--secondary"
+        type="button"
+        @click="clearSearch"
+      >
+        Clear
+      </button>
+      <label v-if="!submittedSearch" class="status-filter">
+        <span>Status</span>
+        <select v-model="status">
+          <option value="">All</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+          <option value="ignored">Ignored</option>
+        </select>
+      </label>
+    </form>
+
+    <div v-if="submittedSearch" class="search-context">
+      Showing matching Events for <code>{{ submittedSearch }}</code>
+      <span v-if="candidatesExamined !== null">
+        · {{ candidatesExamined }} candidates examined
+      </span>
+    </div>
+
+    <LoadingPanel v-if="result.isPending.value" label="Loading investigation data…" />
+    <ApiErrorPanel
+      v-else-if="result.error.value"
+      :error="result.error.value"
+      @retry="result.refetch()"
+    />
+    <EmptyState
+      v-else-if="!result.data.value?.items.length"
+      :title="submittedSearch ? 'No matching events' : 'No Issues in this view'"
+      :description="
+        submittedSearch
+          ? 'Check the indexed field names and make the expression more specific.'
+          : 'Events sent by your SDK will appear here after processing.'
+      "
+    >
+      <RouterLink v-if="!submittedSearch" class="button button--primary" to="/project/setup">
+        View SDK setup
+      </RouterLink>
+    </EmptyState>
+
+    <div v-else class="issue-table-wrap">
+      <table v-if="!submittedSearch" class="issue-table">
+        <thead>
+          <tr>
+            <th scope="col">Issue</th>
+            <th scope="col">Status</th>
+            <th scope="col">Events</th>
+            <th scope="col">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="issue in issueItems" :key="issue.id">
+            <td>
+              <RouterLink :to="`/issues/${issue.id}`" class="issue-title">
+                {{ issue.title }}
+              </RouterLink>
+              <span>{{ issue.culprit || issue.grouping.summary }}</span>
+            </td>
+            <td><StatusBadge :status="issue.status" /></td>
+            <td>
+              {{ issue.occurrence_count.toLocaleString() }}
+              <abbr v-if="issue.occurrence_count_approximate" title="Approximate count">~</abbr>
+            </td>
+            <td>{{ formatTime(issue.last_seen) }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="event-results">
+        <RouterLink
+          v-for="event in eventItems"
+          :key="event.event_id"
+          :to="`/events/${event.event_id}`"
+          class="event-row"
+        >
+          <span class="level-dot" :class="`level-dot--${event.level}`"></span>
+          <strong>{{ event.level }}</strong>
+          <span>{{ event.platform }}</span>
+          <code>{{ event.event_id }}</code>
+          <time :datetime="event.occurred_at">{{ formatTime(event.occurred_at) }}</time>
+        </RouterLink>
+      </div>
+      <nav class="pagination" aria-label="Results pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="history.length === 0"
+          @click="previousPage"
+        >
+          Previous
+        </button>
+        <span>Page {{ history.length + 1 }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="!result.data.value.next_cursor"
+          @click="nextPage"
+        >
+          Next
+        </button>
+      </nav>
+    </div>
+  </section>
+</template>
