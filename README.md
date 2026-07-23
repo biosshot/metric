@@ -39,8 +39,21 @@ Web checks are `npm run format:check`, `npm run lint`, `npm test`,
 Validate configuration without starting the server:
 
 ```text
-cargo run -p faultkeep-server -- --config config/faultkeep.example.toml --check-config
+cargo run -p faultkeep-server --bin faultkeep-server -- --config config/faultkeep.example.toml --check-config
 ```
+
+For local development, copy `.env.local.example` to `.env.local`, replace the
+placeholder secret, and pass it explicitly:
+
+```text
+cargo run -p faultkeep-server --bin faultkeep-server -- --env-file .env.local --config config/faultkeep.example.toml
+```
+
+Faultkeep never searches for dotenv files implicitly. The named file must be a
+regular file no larger than 256 KiB and must parse completely. Existing process
+environment variables take precedence over values in the file; `APP__...`
+values then override matching TOML settings. Effective configuration and errors
+never print secret values.
 
 The example secret reference expects `MONGODB_URI` to be present. Effective
 configuration can be printed with `--print-effective-config`; secret values are

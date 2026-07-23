@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const MAX_SECRET_BYTES: usize = 64 * 1024;
+const MAX_ENV_FILE_BYTES: u64 = 256 * 1024;
 const MAX_SHUTDOWN_GRACE_MILLIS: u64 = 5 * 60 * 1_000;
 const MAX_PROJECT_CACHE_TTL_MILLIS: u64 = 10 * 60 * 1_000;
 const MAX_AUTH_DURATION_MILLIS: u64 = 10 * 365 * 24 * 60 * 60 * 1_000;
@@ -31,6 +32,9 @@ pub struct Cli {
     /// TOML configuration file.
     #[arg(long)]
     pub config: Option<PathBuf>,
+    /// Explicit dotenv file. Existing process variables take precedence.
+    #[arg(long, value_name = "PATH")]
+    pub env_file: Option<PathBuf>,
     /// Deployment role. Version one accepts only `all`.
     #[arg(long, value_enum)]
     pub role: Option<Role>,
@@ -688,6 +692,12 @@ pub enum ConfigError {
     InvalidHttpAddress,
     #[error("configuration file does not exist or is not a regular file")]
     MissingConfigFile,
+    #[error("environment file does not exist or is not a regular file")]
+    MissingEnvironmentFile,
+    #[error("environment file exceeds the 256 KiB limit")]
+    EnvironmentFileTooLarge,
+    #[error("environment file could not be parsed")]
+    InvalidEnvironmentFile,
     #[error("server.shutdown_grace is invalid or exceeds five minutes")]
     InvalidShutdownGrace,
     #[error("ingest configuration is invalid or outside supported bounds")]
@@ -735,6 +745,9 @@ impl From<figment::Error> for ConfigError {
 }
 
 pub fn load(cli: &Cli) -> Result<AppConfig, ConfigError> {
+    if let Some(path) = &cli.env_file {
+        load_environment_file(path)?;
+    }
     let mut figment = Figment::from(Serialized::defaults(RawConfig::default()));
     if let Some(path) = &cli.config {
         if !path.is_file() {
@@ -748,6 +761,19 @@ pub fn load(cli: &Cli) -> Result<AppConfig, ConfigError> {
         raw.role = role;
     }
     AppConfig::try_from(raw)
+}
+
+fn load_environment_file(path: &std::path::Path) -> Result<(), ConfigError> {
+    let metadata = fs::metadata(path).map_err(|_| ConfigError::MissingEnvironmentFile)?;
+    if !metadata.is_file() {
+        return Err(ConfigError::MissingEnvironmentFile);
+    }
+    if metadata.len() > MAX_ENV_FILE_BYTES {
+        return Err(ConfigError::EnvironmentFileTooLarge);
+    }
+    dotenvy::from_path(path)
+        .map(|_| ())
+        .map_err(|_| ConfigError::InvalidEnvironmentFile)
 }
 
 impl TryFrom<RawConfig> for AppConfig {
@@ -1333,6 +1359,76 @@ mod tests {
             "--check-config",
         ]);
         assert!(load(&cli).is_err());
+    }
+
+    #[test]
+    fn explicit_env_file_is_loaded_and_process_environment_wins() {
+        let path = temporary_path("environment");
+        let name = format!("FAULTKEEP_ENV_FILE_TEST_{}", uuid::Uuid::new_v4().simple());
+        let existing_path = env::var("PATH").expect("test process has PATH");
+        fs::write(
+            &path,
+            format!("{name}='loaded value'\nPATH=must-not-override-process\n"),
+        )
+        .unwrap();
+        let cli = Cli::parse_from([
+            "faultkeep",
+            "--env-file",
+            path.to_str().unwrap(),
+            "--check-config",
+        ]);
+
+        load(&cli).unwrap();
+
+        assert_eq!(env::var(name).unwrap(), "loaded value");
+        assert_eq!(env::var("PATH").unwrap(), existing_path);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn env_file_is_explicit_bounded_and_fail_closed() {
+        let missing = Cli::parse_from([
+            "faultkeep",
+            "--env-file",
+            "definitely-missing.env",
+            "--check-config",
+        ]);
+        assert!(matches!(
+            load(&missing),
+            Err(ConfigError::MissingEnvironmentFile)
+        ));
+
+        let invalid_path = temporary_path("invalid-environment");
+        fs::write(&invalid_path, "BROKEN='unterminated\n").unwrap();
+        let invalid = Cli::parse_from([
+            "faultkeep",
+            "--env-file",
+            invalid_path.to_str().unwrap(),
+            "--check-config",
+        ]);
+        assert!(matches!(
+            load(&invalid),
+            Err(ConfigError::InvalidEnvironmentFile)
+        ));
+        fs::remove_file(invalid_path).unwrap();
+
+        let oversized_path = temporary_path("oversized-environment");
+        fs::write(
+            &oversized_path,
+            vec![b'x'; usize::try_from(MAX_ENV_FILE_BYTES).unwrap() + 1],
+        )
+        .unwrap();
+        let oversized = Cli::parse_from([
+            "faultkeep",
+            "--env-file",
+            oversized_path.to_str().unwrap(),
+            "--check-config",
+        ]);
+        assert!(matches!(
+            load(&oversized),
+            Err(ConfigError::EnvironmentFileTooLarge)
+        ));
+        fs::remove_file(oversized_path).unwrap();
     }
 
     #[test]

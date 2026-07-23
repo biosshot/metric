@@ -29,3 +29,5 @@ web/dist/
 web/coverage/
 web/playwright-report/
 web/test-results/
+.env.local
+.env.*.local

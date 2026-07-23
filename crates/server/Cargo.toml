@@ -11,6 +11,7 @@ async-compression.workspace = true
 axum.workspace = true
 bytes.workspace = true
 clap.workspace = true
+dotenvy.workspace = true
 faultkeep-application = { path = "../application" }
 faultkeep-blob = { path = "../blob" }
 faultkeep-domain = { path = "../domain" }

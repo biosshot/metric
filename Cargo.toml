@@ -28,6 +28,7 @@ axum = "0.8.4"
 bytes = "1.10.1"
 blake3 = "1.8.2"
 clap = { version = "4.5.40", features = ["derive"] }
+dotenvy = "0.15.7"
 figment = { version = "0.10.19", features = ["env", "toml"] }
 flate2 = "1.1.1"
 futures-util = "0.3.31"
