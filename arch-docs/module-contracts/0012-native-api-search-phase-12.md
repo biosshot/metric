@@ -1,6 +1,6 @@
 # Phase 12 contract: native query/command API and MongoDB Search v1
 
-Status: Implementing  
+Status: implemented and verified by the Phase 12 exit gate.
 Owning ADRs: ADR-0003, ADR-0008, ADR-0009, ADR-0015, ADR-0017, ADR-0019,
 ADR-0021, ADR-0022, ADR-0023, ADR-0024, ADR-0034, ADR-0035, ADR-0036, ADR-0039
 

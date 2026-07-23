@@ -1,6 +1,6 @@
 # Phase 13 contract: Minimal Web
 
-Status: implemented and verified by the Phase 13 exit gate.
+Status: implemented and verified by the completed Phase 13 exit gate.
 
 ## Boundary
 
@@ -27,7 +27,8 @@ rewritten to `index.html`.
 ## Initial routes
 
 - `/`: login and one-time bootstrap;
-- `/issues`: Issue list, status filtering and bounded Event Search v1;
+- `/issues`: first-project onboarding when the organization has no accessible
+  project; otherwise Issue list, status filtering and bounded Event Search v1;
 - `/issues/{issue_id}`: Issue statistics, activity, events and lifecycle;
 - `/events/{event_id}`: exact derived body, bounded stack rendering and raw
   normalized Event;
@@ -69,6 +70,9 @@ server limits and opaque keyset cursors are passed through without decoding.
   and accessibility smoke checks.
 - Rust tests cover known SPA routing, CSP/security headers, and preservation of
   unknown API 404 responses.
+- A real browser/Rust/MongoDB integration creates the first project and DSN
+  through `/api/v1`, verifies the HttpOnly session and CSRF mutation, and checks
+  the resulting project policy through the authoritative application service.
 
 Web load or RPS testing is not a Phase 13 gate. Server query baselines remain
 owned by Phase 12.
