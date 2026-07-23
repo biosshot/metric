@@ -8,6 +8,7 @@ use std::{io, process::ExitCode};
 
 use config::{Cli, ConfigError};
 use faultkeep_application::{
+    auth::{AuthConfig, AuthError, IdentityService, LoginRateLimitConfig, PasswordConfig},
     dispatcher::{
         BacklogGuardedEventSink, Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask,
     },
@@ -59,6 +60,8 @@ pub enum ServerError {
     Finalizer(#[from] FinalizerError),
     #[error(transparent)]
     Processor(#[from] ProcessorConfigError),
+    #[error(transparent)]
+    Auth(#[from] AuthError),
 }
 
 struct RuntimeModules {
@@ -68,6 +71,7 @@ struct RuntimeModules {
     dispatcher_task: Option<DispatcherTask>,
     finalizer_batcher: Option<std::sync::Arc<FinalizerBatcher>>,
     finalizer_batch_task: Option<FinalizerBatchTask>,
+    identity_service: Option<std::sync::Arc<IdentityService>>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -96,6 +100,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         dispatcher_task,
         finalizer_batcher,
         finalizer_batch_task,
+        identity_service: _identity_service,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -128,6 +133,37 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     negative_ttl: config.ingest.project_cache.negative_ttl.get(),
                 },
             )?);
+        let identity_service = std::sync::Arc::new(IdentityService::new(
+            std::sync::Arc::new(store.auth_store()),
+            std::sync::Arc::clone(&clock),
+            std::sync::Arc::clone(&random),
+            AuthConfig {
+                identity_collision_retries: config.auth.identity_collision_retries,
+                session_idle_timeout: config.auth.session_idle_timeout.get(),
+                session_absolute_timeout: config.auth.session_absolute_timeout.get(),
+                activity_touch_interval: config.auth.activity_touch_interval.get(),
+                setup_token_timeout: config.auth.setup_token_timeout.get(),
+                max_api_token_lifetime: config.auth.max_api_token_lifetime.get(),
+                store_timeout: config.auth.store_timeout.get(),
+                password: PasswordConfig {
+                    memory_kib: config.auth.password_memory_kib,
+                    iterations: config.auth.password_iterations,
+                    parallelism: config.auth.password_parallelism,
+                    max_concurrency: config.auth.password_max_concurrency,
+                },
+                login_rate_limit: LoginRateLimitConfig {
+                    max_attempts: config.auth.login_max_attempts,
+                    window: config.auth.login_window.get(),
+                    capacity: config.auth.login_capacity,
+                },
+            },
+        )?);
+        if let Some(token) = identity_service.ensure_bootstrap_token().await? {
+            eprintln!(
+                "FAULTKEEP_BOOTSTRAP_TOKEN={} (shown once; store it securely)",
+                token.encode_hex()
+            );
+        }
         let event_codec = EventCodecConfig {
             compression_level: config.ingest.event_codec.compression_level,
             compression_min_savings: config.ingest.event_codec.compression_min_savings,
@@ -210,6 +246,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             dispatcher_task: Some(dispatcher_task),
             finalizer_batcher: Some(finalizer_batcher),
             finalizer_batch_task: Some(finalizer_batch_task),
+            identity_service: Some(identity_service),
         }
     } else {
         RuntimeModules {
@@ -219,6 +256,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             dispatcher_task: None,
             finalizer_batcher: None,
             finalizer_batch_task: None,
+            identity_service: None,
         }
     };
     let ingest = std::sync::Arc::new(faultkeep_application::ingest::IngestService::new(

@@ -1,5 +1,6 @@
 //! Application-wide cancellation and operability contracts.
 
+pub mod auth;
 pub mod dispatcher;
 pub mod finalizer;
 pub mod ingest;

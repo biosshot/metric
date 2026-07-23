@@ -16,6 +16,7 @@ max_keys_per_project = 32
 
 [development]
 allow_literal_secrets = false
+allow_insecure_cookies = false
 
 [ingest]
 max_compressed_request_bytes = "20 MiB"
@@ -43,6 +44,10 @@ max_bytes = "8 MiB"
 compression_level = 3
 compression_min_savings = 64
 
+[ingest.backlog]
+max_pending_events = 1000000
+max_oldest_pending_age = "1h"
+
 [dispatcher]
 queue_capacity = 4096
 worker_concurrency = 32
@@ -52,3 +57,35 @@ refill_batch_size = 512
 poll_interval = "100ms"
 metrics_interval = "5s"
 source_timeout = "5s"
+
+[processor]
+max_concurrency = 32
+max_attempts = 5
+retry_base = "1s"
+retry_max = "5m"
+stage_timeout = "15s"
+total_timeout = "1m"
+state_timeout = "5s"
+
+[auth]
+identity_collision_retries = 16
+store_timeout = "5s"
+setup_token_timeout = "24h"
+max_api_token_lifetime = "365d"
+activity_touch_interval = "5m"
+secure_cookie = true
+
+[auth.session]
+idle_timeout = "7d"
+absolute_timeout = "30d"
+
+[auth.password]
+memory_kib = 19456
+iterations = 2
+parallelism = 1
+max_concurrency = 2
+
+[auth.login]
+max_attempts = 5
+window = "1m"
+capacity = 10000

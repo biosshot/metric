@@ -1,13 +1,10 @@
 # faultkeep
 
-Phase 7 adds the pure revision-pinned Grouper after Normalizer and the Symbolication
-boundary. It selects SDK fingerprint, exception stack, native module-relative stack,
-or normalized-message components; encodes them canonically; and derives a fixed
-GroupingKey and project-scoped Issue ID with BLAKE3.
-
-The real Processor starts in Phase 10. Until then production still composes a deferred
-`WorkHandler` that never falsely completes pending work. Grouper performs no storage,
-network, clock, Issue mutation, finalization, or automatic revision upgrade.
+Phase 11 adds the authoritative self-hosted identity boundary: first-owner bootstrap,
+Argon2id passwords, opaque Web sessions with CSRF, scoped personal API tokens,
+organization roles/permissions, final-owner protection and bounded audit records.
+The production Processor from Phase 10 remains the sole ordered path from durable
+Events to finalized Issues and hourly statistics.
 
 ## Local checks
 
@@ -35,3 +32,9 @@ cargo run -p faultkeep-server -- --config config/faultkeep.example.toml --check-
 The example secret reference expects `MONGODB_URI` to be present. Effective
 configuration can be printed with `--print-effective-config`; secret values are
 always redacted.
+
+On the first MongoDB-backed startup, the server prints one
+`FAULTKEEP_BOOTSTRAP_TOKEN`. It is shown only when its digest is first persisted;
+store the plaintext securely. Phase 12/13 will expose the API/Web transport that
+consumes it. Insecure session cookies require both `auth.secure_cookie = false` and
+the explicit local-only `development.allow_insecure_cookies = true`.

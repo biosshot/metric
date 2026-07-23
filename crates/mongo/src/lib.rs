@@ -2,10 +2,12 @@
 
 //! MongoDB project-identity adapter and initial empty-schema bootstrap.
 
+mod auth;
 mod event;
 mod finalizer;
 mod issue;
 
+pub use auth::MongoAuthStore;
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
 };
@@ -29,25 +31,32 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 1;
+pub const SCHEMA_GENERATION: i32 = 2;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 4] = [
+const SCHEMA_MODULES: [&str; 5] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
     "finalization_storage_v1",
+    "identity_authorization_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 10] = [
+const REQUIRED_COLLECTIONS: [&str; 16] = [
+    "api_tokens",
+    "audit_log",
     "environments",
     "events",
     "issue_activities",
     "issues",
     "issue_stats_hourly",
+    "organization_memberships",
     "organizations",
+    "password_setup_tokens",
     "project_keys",
     "projects",
     "releases",
     "schema_meta",
+    "users",
+    "web_sessions",
 ];
 
 #[derive(Debug, Error)]
@@ -124,6 +133,11 @@ impl MongoProjectStore {
         MongoFinalizationStore::from_database(self.database.clone(), event_codec, issue_codec)
     }
 
+    #[must_use]
+    pub fn auth_store(&self) -> MongoAuthStore {
+        MongoAuthStore::from_database(self.database.clone())
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -179,7 +193,8 @@ impl MongoProjectStore {
         self.create_validated_collection("releases", finalizer::release_validator())
             .await?;
         self.create_validated_collection("environments", finalizer::environment_validator())
-            .await
+            .await?;
+        auth::create_auth_collections(&self.database).await
     }
 
     async fn create_validated_collection(
@@ -222,6 +237,7 @@ impl MongoProjectStore {
         event::create_event_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
+        auth::create_auth_indexes(&self.database).await?;
         Ok(())
     }
 
@@ -262,6 +278,9 @@ impl MongoProjectStore {
         if !finalizer::validate_finalization_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
+        if !auth::validate_auth_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
         self.validate_collection_options().await
     }
 
@@ -291,6 +310,18 @@ impl MongoProjectStore {
                 "environments",
                 finalizer::finalization_index_names("environments"),
             ),
+            ("users", auth::auth_index_names("users")),
+            (
+                "organization_memberships",
+                auth::auth_index_names("organization_memberships"),
+            ),
+            ("web_sessions", auth::auth_index_names("web_sessions")),
+            ("api_tokens", auth::auth_index_names("api_tokens")),
+            (
+                "password_setup_tokens",
+                auth::auth_index_names("password_setup_tokens"),
+            ),
+            ("audit_log", auth::auth_index_names("audit_log")),
         ] {
             let names = self
                 .database
@@ -316,6 +347,12 @@ impl MongoProjectStore {
             ("issue_stats_hourly", finalizer::hourly_validator()),
             ("releases", finalizer::release_validator()),
             ("environments", finalizer::environment_validator()),
+            ("users", auth::user_validator()),
+            ("organization_memberships", auth::membership_validator()),
+            ("web_sessions", auth::session_validator()),
+            ("api_tokens", auth::api_token_validator()),
+            ("password_setup_tokens", auth::setup_token_validator()),
+            ("audit_log", auth::audit_validator()),
         ] {
             let response = self
                 .database
@@ -859,6 +896,15 @@ fn organization_validator() -> Document {
             "slug": { "bsonType": "string", "minLength": 1, "maxLength": 63 },
             "display_name": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
             "created_at": { "bsonType": "date" },
+            "auth_lock": {
+                "bsonType": "object",
+                "required": ["operation_id", "expires_at"],
+                "additionalProperties": false,
+                "properties": {
+                    "operation_id": { "bsonType": "long", "minimum": 1 },
+                    "expires_at": { "bsonType": "date" },
+                },
+            },
         }
     }}
 }

@@ -12,6 +12,7 @@ use thiserror::Error;
 const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_SHUTDOWN_GRACE_MILLIS: u64 = 5 * 60 * 1_000;
 const MAX_PROJECT_CACHE_TTL_MILLIS: u64 = 10 * 60 * 1_000;
+const MAX_AUTH_DURATION_MILLIS: u64 = 10 * 365 * 24 * 60 * 60 * 1_000;
 
 pub type ShutdownGrace = BoundedDuration<MAX_SHUTDOWN_GRACE_MILLIS>;
 pub type RequestTimeout = BoundedDuration<60_000>;
@@ -21,6 +22,7 @@ pub type BatchWait = BoundedDuration<1_000>;
 pub type DispatcherInterval = BoundedDuration<60_000>;
 pub type ProcessorDuration = BoundedDuration<600_000>;
 pub type BacklogAge = BoundedDuration<604_800_000>;
+pub type AuthDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
@@ -64,6 +66,7 @@ pub struct AppConfig {
     pub ingest: IngestConfig,
     pub dispatcher: DispatcherSettings,
     pub processor: ProcessorSettings,
+    pub auth: AuthSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +92,7 @@ pub struct ProjectConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct DevelopmentConfig {
     pub allow_literal_secrets: bool,
+    pub allow_insecure_cookies: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +179,25 @@ pub struct ProcessorSettings {
     pub stage_timeout: ProcessorDuration,
     pub total_timeout: ProcessorDuration,
     pub state_timeout: ProcessorDuration,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AuthSettings {
+    pub identity_collision_retries: usize,
+    pub store_timeout: AuthDuration,
+    pub setup_token_timeout: AuthDuration,
+    pub max_api_token_lifetime: AuthDuration,
+    pub activity_touch_interval: AuthDuration,
+    pub secure_cookie: bool,
+    pub session_idle_timeout: AuthDuration,
+    pub session_absolute_timeout: AuthDuration,
+    pub password_memory_kib: u32,
+    pub password_iterations: u32,
+    pub password_parallelism: u32,
+    pub password_max_concurrency: usize,
+    pub login_max_attempts: u32,
+    pub login_window: AuthDuration,
+    pub login_capacity: usize,
 }
 
 impl Default for DispatcherSettings {
@@ -332,6 +355,7 @@ struct RawConfig {
     ingest: RawIngestConfig,
     dispatcher: RawDispatcherSettings,
     processor: RawProcessorSettings,
+    auth: RawAuthSettings,
 }
 
 impl Default for RawConfig {
@@ -345,6 +369,7 @@ impl Default for RawConfig {
             ingest: RawIngestConfig::default(),
             dispatcher: RawDispatcherSettings::default(),
             processor: RawProcessorSettings::default(),
+            auth: RawAuthSettings::default(),
         }
     }
 }
@@ -405,6 +430,7 @@ impl Default for RawProjectConfig {
 #[serde(default, deny_unknown_fields)]
 struct RawDevelopmentConfig {
     allow_literal_secrets: bool,
+    allow_insecure_cookies: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -435,6 +461,90 @@ struct RawProcessorSettings {
     stage_timeout: String,
     total_timeout: String,
     state_timeout: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawAuthSettings {
+    identity_collision_retries: usize,
+    store_timeout: String,
+    setup_token_timeout: String,
+    max_api_token_lifetime: String,
+    activity_touch_interval: String,
+    secure_cookie: bool,
+    session: RawAuthSessionSettings,
+    password: RawAuthPasswordSettings,
+    login: RawAuthLoginSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawAuthSessionSettings {
+    idle_timeout: String,
+    absolute_timeout: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawAuthPasswordSettings {
+    memory_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+    max_concurrency: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawAuthLoginSettings {
+    max_attempts: u32,
+    window: String,
+    capacity: usize,
+}
+
+impl Default for RawAuthSettings {
+    fn default() -> Self {
+        Self {
+            identity_collision_retries: 16,
+            store_timeout: "5s".to_owned(),
+            setup_token_timeout: "24h".to_owned(),
+            max_api_token_lifetime: "365d".to_owned(),
+            activity_touch_interval: "5m".to_owned(),
+            secure_cookie: true,
+            session: RawAuthSessionSettings::default(),
+            password: RawAuthPasswordSettings::default(),
+            login: RawAuthLoginSettings::default(),
+        }
+    }
+}
+
+impl Default for RawAuthSessionSettings {
+    fn default() -> Self {
+        Self {
+            idle_timeout: "7d".to_owned(),
+            absolute_timeout: "30d".to_owned(),
+        }
+    }
+}
+
+impl Default for RawAuthPasswordSettings {
+    fn default() -> Self {
+        Self {
+            memory_kib: 19 * 1024,
+            iterations: 2,
+            parallelism: 1,
+            max_concurrency: 2,
+        }
+    }
+}
+
+impl Default for RawAuthLoginSettings {
+    fn default() -> Self {
+        Self {
+            max_attempts: 5,
+            window: "1m".to_owned(),
+            capacity: 10_000,
+        }
+    }
 }
 
 impl Default for RawProcessorSettings {
@@ -590,6 +700,8 @@ pub enum ConfigError {
     InvalidDispatcherConfig,
     #[error("processor configuration is invalid or outside supported bounds")]
     InvalidProcessorConfig,
+    #[error("auth configuration is invalid or outside supported bounds")]
+    InvalidAuthConfig,
     #[error("projects.scrub_hmac_key is required when MongoDB is configured")]
     MissingScrubHmacKey,
     #[error(
@@ -672,6 +784,10 @@ impl TryFrom<RawConfig> for AppConfig {
         let ingest = IngestConfig::try_from(raw.ingest)?;
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
         let processor = ProcessorSettings::try_from(raw.processor)?;
+        let auth = AuthSettings::try_from(raw.auth)?;
+        if !auth.secure_cookie && !raw.development.allow_insecure_cookies {
+            return Err(ConfigError::InvalidAuthConfig);
+        }
         Ok(Self {
             role: raw.role,
             server: ServerConfig {
@@ -690,10 +806,12 @@ impl TryFrom<RawConfig> for AppConfig {
             },
             development: DevelopmentConfig {
                 allow_literal_secrets: raw.development.allow_literal_secrets,
+                allow_insecure_cookies: raw.development.allow_insecure_cookies,
             },
             ingest,
             dispatcher,
             processor,
+            auth,
         })
     }
 }
@@ -742,7 +860,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -753,6 +871,7 @@ impl AppConfig {
             self.projects.identity_collision_retries,
             self.projects.max_keys_per_project,
             self.development.allow_literal_secrets,
+            self.development.allow_insecure_cookies,
             self.ingest.max_compressed_request_bytes,
             self.ingest.max_decompressed_request_bytes,
             self.ingest.max_event_bytes,
@@ -791,6 +910,21 @@ impl AppConfig {
             humantime::format_duration(self.processor.stage_timeout.get()),
             humantime::format_duration(self.processor.total_timeout.get()),
             humantime::format_duration(self.processor.state_timeout.get()),
+            self.auth.identity_collision_retries,
+            humantime::format_duration(self.auth.store_timeout.get()),
+            humantime::format_duration(self.auth.setup_token_timeout.get()),
+            humantime::format_duration(self.auth.max_api_token_lifetime.get()),
+            humantime::format_duration(self.auth.activity_touch_interval.get()),
+            self.auth.secure_cookie,
+            humantime::format_duration(self.auth.session_idle_timeout.get()),
+            humantime::format_duration(self.auth.session_absolute_timeout.get()),
+            self.auth.password_memory_kib,
+            self.auth.password_iterations,
+            self.auth.password_parallelism,
+            self.auth.password_max_concurrency,
+            self.auth.login_max_attempts,
+            humantime::format_duration(self.auth.login_window.get()),
+            self.auth.login_capacity,
         )
     }
 
@@ -959,6 +1093,56 @@ impl TryFrom<RawProcessorSettings> for ProcessorSettings {
     }
 }
 
+impl TryFrom<RawAuthSettings> for AuthSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawAuthSettings) -> Result<Self, Self::Error> {
+        let parse =
+            |value: &str| AuthDuration::from_str(value).map_err(|_| ConfigError::InvalidAuthConfig);
+        let store_timeout = parse(&raw.store_timeout)?;
+        let setup_token_timeout = parse(&raw.setup_token_timeout)?;
+        let max_api_token_lifetime = parse(&raw.max_api_token_lifetime)?;
+        let activity_touch_interval = parse(&raw.activity_touch_interval)?;
+        let session_idle_timeout = parse(&raw.session.idle_timeout)?;
+        let session_absolute_timeout = parse(&raw.session.absolute_timeout)?;
+        let login_window = parse(&raw.login.window)?;
+        let valid = (1..=1_024).contains(&raw.identity_collision_retries)
+            && !store_timeout.get().is_zero()
+            && !setup_token_timeout.get().is_zero()
+            && !max_api_token_lifetime.get().is_zero()
+            && !activity_touch_interval.get().is_zero()
+            && activity_touch_interval.get() < session_idle_timeout.get()
+            && session_idle_timeout.get() <= session_absolute_timeout.get()
+            && (19 * 1024..=1024 * 1024).contains(&raw.password.memory_kib)
+            && (2..=20).contains(&raw.password.iterations)
+            && (1..=16).contains(&raw.password.parallelism)
+            && (1..=64).contains(&raw.password.max_concurrency)
+            && (1..=10_000).contains(&raw.login.max_attempts)
+            && !login_window.get().is_zero()
+            && (2..=1_000_000).contains(&raw.login.capacity);
+        if !valid {
+            return Err(ConfigError::InvalidAuthConfig);
+        }
+        Ok(Self {
+            identity_collision_retries: raw.identity_collision_retries,
+            store_timeout,
+            setup_token_timeout,
+            max_api_token_lifetime,
+            activity_touch_interval,
+            secure_cookie: raw.secure_cookie,
+            session_idle_timeout,
+            session_absolute_timeout,
+            password_memory_kib: raw.password.memory_kib,
+            password_iterations: raw.password.iterations,
+            password_parallelism: raw.password.parallelism,
+            password_max_concurrency: raw.password.max_concurrency,
+            login_max_attempts: raw.login.max_attempts,
+            login_window,
+            login_capacity: raw.login.capacity,
+        })
+    }
+}
+
 pub struct ResolvedSecrets {
     pub mongodb_uri: Option<SecretValue>,
     pub scrub_hmac_key: Option<faultkeep_domain::SecretBytes>,
@@ -987,6 +1171,8 @@ mod tests {
         assert!(config.dispatcher.low_watermark < config.dispatcher.refill_target);
         assert!(config.dispatcher.refill_target <= config.dispatcher.queue_capacity);
         assert_eq!(config.processor.max_attempts, 5);
+        assert_eq!(config.auth.password_memory_kib, 19 * 1024);
+        assert!(config.auth.secure_cookie);
         assert_eq!(
             config.ingest.backlog.max_oldest_pending_age.get(),
             std::time::Duration::from_secs(60 * 60)
@@ -1039,6 +1225,61 @@ mod tests {
     }
 
     #[test]
+    fn auth_cost_session_and_cookie_bounds_fail_closed() {
+        let weak = RawConfig {
+            auth: RawAuthSettings {
+                password: RawAuthPasswordSettings {
+                    memory_kib: 1024,
+                    ..RawAuthPasswordSettings::default()
+                },
+                ..RawAuthSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(weak),
+            Err(ConfigError::InvalidAuthConfig)
+        ));
+        let inverted = RawConfig {
+            auth: RawAuthSettings {
+                session: RawAuthSessionSettings {
+                    idle_timeout: "31d".to_owned(),
+                    absolute_timeout: "30d".to_owned(),
+                },
+                ..RawAuthSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(inverted),
+            Err(ConfigError::InvalidAuthConfig)
+        ));
+        let insecure = RawConfig {
+            auth: RawAuthSettings {
+                secure_cookie: false,
+                ..RawAuthSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(insecure),
+            Err(ConfigError::InvalidAuthConfig)
+        ));
+        let local = RawConfig {
+            development: RawDevelopmentConfig {
+                allow_insecure_cookies: true,
+                ..RawDevelopmentConfig::default()
+            },
+            auth: RawAuthSettings {
+                secure_cookie: false,
+                ..RawAuthSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(!AppConfig::try_from(local).unwrap().auth.secure_cookie);
+    }
+
+    #[test]
     fn redacted_view_never_uses_secret_debug_or_display() {
         let raw = RawConfig {
             mongodb: RawMongoConfig {
@@ -1049,6 +1290,7 @@ mod tests {
             },
             development: RawDevelopmentConfig {
                 allow_literal_secrets: true,
+                ..RawDevelopmentConfig::default()
             },
             ..RawConfig::default()
         };

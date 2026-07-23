@@ -5,6 +5,11 @@ use std::{future::Future, pin::Pin};
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
+    auth::{
+        ApiToken, AuditRecord, BootstrapIdentity, CredentialId, EmailAddress, MembershipMutation,
+        OrganizationMembership, PasswordHash, SecretDigest, SetupToken, UserAccount, UserId,
+        WebSession,
+    },
     finalization::{FinalizationPolicy, FinalizeBatch, FinalizeResult},
     grouping::IssueId,
     issue::{
@@ -323,4 +328,150 @@ pub struct RandomError;
 
 pub trait RandomSource: Send + Sync + 'static {
     fn fill_bytes(&self, output: &mut [u8]) -> Result<(), RandomError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapTokenInstall {
+    Created,
+    AlreadyInstalled,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum AuthStoreError {
+    #[error("authentication record does not exist")]
+    NotFound,
+    #[error("identity or credential already exists")]
+    AlreadyExists,
+    #[error("generated identity or credential collides with an existing record")]
+    IdentityCollision,
+    #[error("bootstrap is no longer available")]
+    BootstrapClosed,
+    #[error("the operation would remove the final organization owner")]
+    FinalOwner,
+    #[error("credential is invalid, expired, consumed, or revoked")]
+    InvalidCredential,
+    #[error("authentication storage contains invalid data")]
+    InvalidData,
+    #[error("authentication storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Authoritative identity and credential persistence. No caller receives a raw
+/// collection or an unscoped filter surface.
+pub trait AuthStore: Send + Sync + 'static {
+    fn install_bootstrap_token(
+        &self,
+        token: SetupToken,
+    ) -> PortFuture<'_, Result<BootstrapTokenInstall, AuthStoreError>>;
+
+    fn consume_bootstrap(
+        &self,
+        identity: BootstrapIdentity,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn create_invited_user(
+        &self,
+        user: UserAccount,
+        membership: OrganizationMembership,
+        setup_token: SetupToken,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn create_password_setup_token(
+        &self,
+        token: SetupToken,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn consume_password_setup(
+        &self,
+        digest: SecretDigest,
+        now: Timestamp,
+        password_hash: PasswordHash,
+    ) -> PortFuture<'_, Result<UserId, AuthStoreError>>;
+
+    fn load_user_by_email<'a>(
+        &'a self,
+        email: &'a EmailAddress,
+    ) -> PortFuture<'a, Result<UserAccount, AuthStoreError>>;
+
+    fn load_user(&self, user_id: UserId) -> PortFuture<'_, Result<UserAccount, AuthStoreError>>;
+
+    fn update_password_hash(
+        &self,
+        user_id: UserId,
+        password_hash: PasswordHash,
+        changed_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn load_membership(
+        &self,
+        user_id: UserId,
+        organization_id: faultkeep_domain::OrganizationId,
+    ) -> PortFuture<'_, Result<OrganizationMembership, AuthStoreError>>;
+
+    fn mutate_membership(
+        &self,
+        mutation: MembershipMutation,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn set_user_disabled(
+        &self,
+        user_id: UserId,
+        disabled_at: Option<Timestamp>,
+        operation_id: CredentialId,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn create_session(&self, session: WebSession) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn load_session(
+        &self,
+        digest: SecretDigest,
+    ) -> PortFuture<'_, Result<WebSession, AuthStoreError>>;
+
+    fn touch_session(
+        &self,
+        session_id: CredentialId,
+        last_seen_at: Timestamp,
+        idle_expires_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn revoke_session(
+        &self,
+        digest: SecretDigest,
+        revoked_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn revoke_user_sessions(
+        &self,
+        user_id: UserId,
+        revoked_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn create_api_token(&self, token: ApiToken) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn load_api_token(
+        &self,
+        digest: SecretDigest,
+    ) -> PortFuture<'_, Result<ApiToken, AuthStoreError>>;
+
+    fn touch_api_token(
+        &self,
+        token_id: CredentialId,
+        last_used_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn revoke_api_token(
+        &self,
+        token_id: CredentialId,
+        user_id: UserId,
+        organization_id: faultkeep_domain::OrganizationId,
+        revoked_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
+    fn project_organization(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, AuthStoreError>>;
+
+    fn append_audit(&self, record: AuditRecord) -> PortFuture<'_, Result<(), AuthStoreError>>;
 }

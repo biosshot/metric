@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+argon2.workspace = true
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
 futures-util.workspace = true
