@@ -9,13 +9,14 @@ use faultkeep_domain::{
         MAX_SEARCH_TOKENS_PER_EVENT, ProcessedEventPayload, SearchToken,
     },
     grouping::GroupingResult,
+    issue::IssueOccurrence,
     symbolication::{RawTraceOrigin, SymbolicatedFrame, SymbolicationResult},
 };
 use faultkeep_ports::{FinalizationStore, FinalizationStoreError};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::{issues::prepare_issue_occurrence, normalizer::canonical_body_value};
+use crate::normalizer::canonical_body_value;
 
 const HARD_MAX_BATCH_EVENTS: usize = 10_000;
 const HARD_MAX_PROCESSED_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -107,9 +108,11 @@ impl Finalizer {
         event: &NormalizedEvent,
         symbolication: &SymbolicationResult,
         grouping: &GroupingResult,
+        issue: IssueOccurrence,
     ) -> Result<FinalizeEvent, FinalizerError> {
-        let issue = prepare_issue_occurrence(event, grouping)
-            .map_err(|_| FinalizerError::InvalidIdentity)?;
+        if issue.issue_id != grouping.issue_id || issue.grouping_key != grouping.key {
+            return Err(FinalizerError::InvalidIdentity);
+        }
         let payload = processed_payload(event, symbolication)?;
         if payload.len() > self.config.max_processed_body_bytes {
             return Err(FinalizerError::OutputTooLarge);
@@ -303,6 +306,7 @@ mod tests {
     use faultkeep_ports::PortFuture;
 
     use super::*;
+    use crate::issues::prepare_issue_occurrence;
 
     #[derive(Default)]
     struct FakeFinalizationStore {
@@ -379,7 +383,12 @@ mod tests {
         let event = event();
         let grouping = group(event.project_id, 1, &event.body, None).unwrap();
         let prepared = finalizer
-            .prepare(&event, &symbolication(), &grouping)
+            .prepare(
+                &event,
+                &symbolication(),
+                &grouping,
+                prepare_issue_occurrence(&event, &grouping).unwrap(),
+            )
             .unwrap();
         assert_eq!(prepared.search_tokens.len(), 3);
         let body: Value = serde_json::from_slice(prepared.payload.as_bytes()).unwrap();
@@ -402,7 +411,12 @@ mod tests {
         let event = event();
         let grouping = group(event.project_id, 1, &event.body, None).unwrap();
         let prepared = finalizer
-            .prepare(&event, &symbolication(), &grouping)
+            .prepare(
+                &event,
+                &symbolication(),
+                &grouping,
+                prepare_issue_occurrence(&event, &grouping).unwrap(),
+            )
             .unwrap();
         assert_eq!(
             finalizer.finalize(vec![prepared.clone(), prepared]).await,

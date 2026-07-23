@@ -15,7 +15,7 @@ use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
     error::{Error as MongoError, ErrorKind, WriteFailure},
-    options::{IndexOptions, ReturnDocument},
+    options::{IndexOptions, ReturnDocument, UpdateOneModel},
 };
 
 use crate::{
@@ -440,7 +440,8 @@ impl MongoFinalizationStore {
     ) -> Result<usize, FinalizationStoreError> {
         let retention = duration_millis(policy.event_retention)?;
         let collection = self.database.collection::<Document>("events");
-        let mut finalized = 0_usize;
+        let namespace = collection.namespace();
+        let mut models = Vec::with_capacity(events.len());
         for event in events {
             let expire = checked_add_millis(event.received_at, retention)?;
             let body = event::encode_body(event.payload.as_bytes(), self.event_codec)
@@ -472,21 +473,26 @@ impl MongoFinalizationStore {
             if event.search_tokens.is_empty() {
                 unset.insert("k", "");
             }
-            let result = collection
-                .update_one(
-                    doc! {
+            models.push(
+                UpdateOneModel::builder()
+                    .namespace(namespace.clone())
+                    .filter(doc! {
                         "_id": binary(event.key().as_bytes()),
                         "p": event.project_id.get(),
                         "q.s": 0_i32,
-                    },
-                    doc! { "$set": set, "$unset": unset },
-                )
-                .await
-                .map_err(|_| FinalizationStoreError::Unavailable)?;
-            finalized += usize::try_from(result.modified_count)
-                .map_err(|_| FinalizationStoreError::InvalidData)?;
+                    })
+                    .update(doc! { "$set": set, "$unset": unset })
+                    .build(),
+            );
         }
-        Ok(finalized)
+        let result = self
+            .database
+            .client()
+            .bulk_write(models)
+            .ordered(false)
+            .await
+            .map_err(|_| FinalizationStoreError::Unavailable)?;
+        usize::try_from(result.modified_count).map_err(|_| FinalizationStoreError::InvalidData)
     }
 }
 

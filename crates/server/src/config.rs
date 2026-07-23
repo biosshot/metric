@@ -19,6 +19,8 @@ pub type ProjectCacheTtl = BoundedDuration<MAX_PROJECT_CACHE_TTL_MILLIS>;
 pub type MongoBootstrapTimeout = BoundedDuration<60_000>;
 pub type BatchWait = BoundedDuration<1_000>;
 pub type DispatcherInterval = BoundedDuration<60_000>;
+pub type ProcessorDuration = BoundedDuration<600_000>;
+pub type BacklogAge = BoundedDuration<604_800_000>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
@@ -61,6 +63,7 @@ pub struct AppConfig {
     pub development: DevelopmentConfig,
     pub ingest: IngestConfig,
     pub dispatcher: DispatcherSettings,
+    pub processor: ProcessorSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +105,7 @@ pub struct IngestConfig {
     pub project_cache: ProjectCacheSettings,
     pub batch: BatchSettings,
     pub event_codec: EventCodecSettings,
+    pub backlog: BacklogSettings,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +140,21 @@ pub struct EventCodecSettings {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct BacklogSettings {
+    pub max_pending_events: Option<u64>,
+    pub max_oldest_pending_age: BacklogAge,
+}
+
+impl Default for BacklogSettings {
+    fn default() -> Self {
+        Self {
+            max_pending_events: None,
+            max_oldest_pending_age: "1h".parse().expect("default backlog age is valid"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct DispatcherSettings {
     pub queue_capacity: usize,
     pub worker_concurrency: usize,
@@ -145,6 +164,17 @@ pub struct DispatcherSettings {
     pub poll_interval: DispatcherInterval,
     pub metrics_interval: DispatcherInterval,
     pub source_timeout: DispatcherInterval,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessorSettings {
+    pub max_concurrency: usize,
+    pub max_attempts: u32,
+    pub retry_base: ProcessorDuration,
+    pub retry_max: ProcessorDuration,
+    pub stage_timeout: ProcessorDuration,
+    pub total_timeout: ProcessorDuration,
+    pub state_timeout: ProcessorDuration,
 }
 
 impl Default for DispatcherSettings {
@@ -301,6 +331,7 @@ struct RawConfig {
     development: RawDevelopmentConfig,
     ingest: RawIngestConfig,
     dispatcher: RawDispatcherSettings,
+    processor: RawProcessorSettings,
 }
 
 impl Default for RawConfig {
@@ -313,6 +344,7 @@ impl Default for RawConfig {
             development: RawDevelopmentConfig::default(),
             ingest: RawIngestConfig::default(),
             dispatcher: RawDispatcherSettings::default(),
+            processor: RawProcessorSettings::default(),
         }
     }
 }
@@ -390,6 +422,33 @@ struct RawIngestConfig {
     project_cache: RawProjectCacheSettings,
     batch: RawBatchSettings,
     event_codec: RawEventCodecSettings,
+    backlog: RawBacklogSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawProcessorSettings {
+    max_concurrency: usize,
+    max_attempts: u32,
+    retry_base: String,
+    retry_max: String,
+    stage_timeout: String,
+    total_timeout: String,
+    state_timeout: String,
+}
+
+impl Default for RawProcessorSettings {
+    fn default() -> Self {
+        Self {
+            max_concurrency: 32,
+            max_attempts: 5,
+            retry_base: "1s".to_owned(),
+            retry_max: "5m".to_owned(),
+            stage_timeout: "15s".to_owned(),
+            total_timeout: "1m".to_owned(),
+            state_timeout: "5s".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,6 +549,23 @@ impl Default for RawIngestConfig {
             project_cache: RawProjectCacheSettings::default(),
             batch: RawBatchSettings::default(),
             event_codec: RawEventCodecSettings::default(),
+            backlog: RawBacklogSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawBacklogSettings {
+    max_pending_events: Option<u64>,
+    max_oldest_pending_age: String,
+}
+
+impl Default for RawBacklogSettings {
+    fn default() -> Self {
+        Self {
+            max_pending_events: None,
+            max_oldest_pending_age: "1h".to_owned(),
         }
     }
 }
@@ -512,6 +588,8 @@ pub enum ConfigError {
     InvalidProjectConfig,
     #[error("dispatcher configuration is invalid or outside supported bounds")]
     InvalidDispatcherConfig,
+    #[error("processor configuration is invalid or outside supported bounds")]
+    InvalidProcessorConfig,
     #[error("projects.scrub_hmac_key is required when MongoDB is configured")]
     MissingScrubHmacKey,
     #[error(
@@ -593,6 +671,7 @@ impl TryFrom<RawConfig> for AppConfig {
         }
         let ingest = IngestConfig::try_from(raw.ingest)?;
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
+        let processor = ProcessorSettings::try_from(raw.processor)?;
         Ok(Self {
             role: raw.role,
             server: ServerConfig {
@@ -614,6 +693,7 @@ impl TryFrom<RawConfig> for AppConfig {
             },
             ingest,
             dispatcher,
+            processor,
         })
     }
 }
@@ -662,7 +742,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -691,6 +771,11 @@ impl AppConfig {
             self.ingest.batch.max_bytes,
             self.ingest.event_codec.compression_level,
             self.ingest.event_codec.compression_min_savings,
+            self.ingest
+                .backlog
+                .max_pending_events
+                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+            humantime::format_duration(self.ingest.backlog.max_oldest_pending_age.get()),
             self.dispatcher.queue_capacity,
             self.dispatcher.worker_concurrency,
             self.dispatcher.low_watermark,
@@ -699,6 +784,13 @@ impl AppConfig {
             humantime::format_duration(self.dispatcher.poll_interval.get()),
             humantime::format_duration(self.dispatcher.metrics_interval.get()),
             humantime::format_duration(self.dispatcher.source_timeout.get()),
+            self.processor.max_concurrency,
+            self.processor.max_attempts,
+            humantime::format_duration(self.processor.retry_base.get()),
+            humantime::format_duration(self.processor.retry_max.get()),
+            humantime::format_duration(self.processor.stage_timeout.get()),
+            humantime::format_duration(self.processor.total_timeout.get()),
+            humantime::format_duration(self.processor.state_timeout.get()),
         )
     }
 
@@ -751,7 +843,11 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             && batch_bytes.get() <= 64 * 1024 * 1024;
         let valid_codec = (-7..=22).contains(&raw.event_codec.compression_level)
             && (1..=4096).contains(&raw.event_codec.compression_min_savings);
-        if !valid || !valid_cache || !valid_batch || !valid_codec {
+        let backlog_age = BacklogAge::from_str(&raw.backlog.max_oldest_pending_age)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let valid_backlog = raw.backlog.max_pending_events.is_none_or(|value| value > 0)
+            && !backlog_age.get().is_zero();
+        if !valid || !valid_cache || !valid_batch || !valid_codec || !valid_backlog {
             return Err(ConfigError::InvalidIngestConfig);
         }
         Ok(Self {
@@ -782,6 +878,10 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             event_codec: EventCodecSettings {
                 compression_level: raw.event_codec.compression_level,
                 compression_min_savings: raw.event_codec.compression_min_savings,
+            },
+            backlog: BacklogSettings {
+                max_pending_events: raw.backlog.max_pending_events,
+                max_oldest_pending_age: backlog_age,
             },
         })
     }
@@ -822,6 +922,43 @@ impl TryFrom<RawDispatcherSettings> for DispatcherSettings {
     }
 }
 
+impl TryFrom<RawProcessorSettings> for ProcessorSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawProcessorSettings) -> Result<Self, Self::Error> {
+        let retry_base = ProcessorDuration::from_str(&raw.retry_base)
+            .map_err(|_| ConfigError::InvalidProcessorConfig)?;
+        let retry_max = ProcessorDuration::from_str(&raw.retry_max)
+            .map_err(|_| ConfigError::InvalidProcessorConfig)?;
+        let stage_timeout = ProcessorDuration::from_str(&raw.stage_timeout)
+            .map_err(|_| ConfigError::InvalidProcessorConfig)?;
+        let total_timeout = ProcessorDuration::from_str(&raw.total_timeout)
+            .map_err(|_| ConfigError::InvalidProcessorConfig)?;
+        let state_timeout = ProcessorDuration::from_str(&raw.state_timeout)
+            .map_err(|_| ConfigError::InvalidProcessorConfig)?;
+        let valid = (1..=4_096).contains(&raw.max_concurrency)
+            && (1..=100).contains(&raw.max_attempts)
+            && !retry_base.get().is_zero()
+            && retry_base.get() <= retry_max.get()
+            && !stage_timeout.get().is_zero()
+            && stage_timeout.get() <= total_timeout.get()
+            && !state_timeout.get().is_zero()
+            && state_timeout.get() <= total_timeout.get();
+        if !valid {
+            return Err(ConfigError::InvalidProcessorConfig);
+        }
+        Ok(Self {
+            max_concurrency: raw.max_concurrency,
+            max_attempts: raw.max_attempts,
+            retry_base,
+            retry_max,
+            stage_timeout,
+            total_timeout,
+            state_timeout,
+        })
+    }
+}
+
 pub struct ResolvedSecrets {
     pub mongodb_uri: Option<SecretValue>,
     pub scrub_hmac_key: Option<faultkeep_domain::SecretBytes>,
@@ -849,6 +986,11 @@ mod tests {
         assert_eq!(config.server.shutdown_grace.get().as_secs(), 10);
         assert!(config.dispatcher.low_watermark < config.dispatcher.refill_target);
         assert!(config.dispatcher.refill_target <= config.dispatcher.queue_capacity);
+        assert_eq!(config.processor.max_attempts, 5);
+        assert_eq!(
+            config.ingest.backlog.max_oldest_pending_age.get(),
+            std::time::Duration::from_secs(60 * 60)
+        );
     }
 
     #[test]
@@ -864,6 +1006,35 @@ mod tests {
         assert!(matches!(
             AppConfig::try_from(raw),
             Err(ConfigError::InvalidDispatcherConfig)
+        ));
+    }
+
+    #[test]
+    fn processor_and_backlog_bounds_fail_closed() {
+        let raw = RawConfig {
+            processor: RawProcessorSettings {
+                max_attempts: 0,
+                ..RawProcessorSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(raw),
+            Err(ConfigError::InvalidProcessorConfig)
+        ));
+        let raw = RawConfig {
+            ingest: RawIngestConfig {
+                backlog: RawBacklogSettings {
+                    max_pending_events: Some(0),
+                    ..RawBacklogSettings::default()
+                },
+                ..RawIngestConfig::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(raw),
+            Err(ConfigError::InvalidIngestConfig)
         ));
     }
 

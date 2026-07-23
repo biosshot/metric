@@ -1,11 +1,17 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use faultkeep_domain::{
-    AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, Timestamp,
+    AcceptedEvent, EventId, EventKey, ProjectAcceptanceState, ProjectId, ScrubbedEventPayload,
+    Timestamp,
+    processing::{
+        PendingEvent, ProcessingFailure, ProcessingFailureDisposition, ProcessingProject,
+        ProcessingStateChange,
+    },
 };
 use faultkeep_ports::{
     BacklogObservation, EventBacklog, EventBacklogError, EventPrepareError, EventStore,
-    EventStoreError, EventWriteStatus, PortFuture, PreparedEvent,
+    EventStoreError, EventWriteStatus, PortFuture, PreparedEvent, ProcessingProjectError,
+    ProcessingProjectStore, ProcessingStateError, ProcessingStateStore,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -211,7 +217,7 @@ impl EventBacklog for MongoEventStore {
         now: Timestamp,
         limit: usize,
         excluded: &'a [EventKey],
-    ) -> PortFuture<'a, Result<Vec<AcceptedEvent>, EventBacklogError>> {
+    ) -> PortFuture<'a, Result<Vec<PendingEvent>, EventBacklogError>> {
         Box::pin(async move {
             if limit == 0 {
                 return Ok(Vec::new());
@@ -249,8 +255,15 @@ impl EventBacklog for MongoEventStore {
             {
                 let event = decode_pending_event(&document, self.codec)
                     .map_err(|_| EventBacklogError::InvalidData)?;
+                let attempts = u32::try_from(
+                    document
+                        .get_document("q")
+                        .and_then(|pipeline| pipeline.get_i32("a"))
+                        .map_err(|_| EventBacklogError::InvalidData)?,
+                )
+                .map_err(|_| EventBacklogError::InvalidData)?;
                 project_ids.insert(event.project_id.get());
-                decoded.push(event);
+                decoded.push(PendingEvent { event, attempts });
             }
             if decoded.is_empty() {
                 return Ok(decoded);
@@ -279,7 +292,7 @@ impl EventBacklog for MongoEventStore {
             }
             Ok(decoded
                 .into_iter()
-                .filter(|event| processable.contains(&event.project_id.get()))
+                .filter(|pending| processable.contains(&pending.event.project_id.get()))
                 .take(limit)
                 .collect())
         })
@@ -310,6 +323,110 @@ impl EventBacklog for MongoEventStore {
             Ok(BacklogObservation {
                 pending_count,
                 oldest_pending_at,
+            })
+        })
+    }
+}
+
+impl ProcessingProjectStore for MongoEventStore {
+    fn load_processing_project(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<ProcessingProject, ProcessingProjectError>> {
+        Box::pin(async move {
+            let document = self
+                .database
+                .collection::<Document>("projects")
+                .find_one(doc! { "_id": project_id.get() })
+                .projection(doc! { "state": 1, "items.error": 1, "grouping_revision": 1 })
+                .await
+                .map_err(|_| ProcessingProjectError::Unavailable)?
+                .ok_or(ProcessingProjectError::NotFound)?;
+            let state = match document
+                .get_str("state")
+                .map_err(|_| ProcessingProjectError::InvalidData)?
+            {
+                "active" => ProjectAcceptanceState::Active,
+                "disabled" => ProjectAcceptanceState::Disabled,
+                "pending_delete" => ProjectAcceptanceState::PendingDelete,
+                "purging" => ProjectAcceptanceState::Purging,
+                "deleted" => ProjectAcceptanceState::Deleted,
+                _ => return Err(ProcessingProjectError::InvalidData),
+            };
+            let error_events_enabled = document
+                .get_document("items")
+                .and_then(|items| items.get_bool("error"))
+                .map_err(|_| ProcessingProjectError::InvalidData)?;
+            let grouping_revision = u64::try_from(
+                document
+                    .get_i64("grouping_revision")
+                    .map_err(|_| ProcessingProjectError::InvalidData)?,
+            )
+            .map_err(|_| ProcessingProjectError::InvalidData)?;
+            Ok(ProcessingProject {
+                project_id,
+                state,
+                error_events_enabled,
+                grouping_revision,
+            })
+        })
+    }
+}
+
+impl ProcessingStateStore for MongoEventStore {
+    fn record_processing_failure(
+        &self,
+        failure: ProcessingFailure,
+    ) -> PortFuture<'_, Result<ProcessingStateChange, ProcessingStateError>> {
+        Box::pin(async move {
+            let expected = i32::try_from(failure.expected_attempts)
+                .map_err(|_| ProcessingStateError::InvalidData)?;
+            let next = i32::try_from(failure.new_attempts)
+                .map_err(|_| ProcessingStateError::InvalidData)?;
+            if failure.new_attempts != failure.expected_attempts.saturating_add(1) {
+                return Err(ProcessingStateError::InvalidData);
+            }
+            let (set, unset) = match failure.disposition {
+                ProcessingFailureDisposition::RetryAt(at) => (
+                    doc! {
+                        "q.s": 0_i32,
+                        "q.a": next,
+                        "q.n": DateTime::from_millis(at.unix_millis()),
+                        "q.c": failure.code.stored(),
+                    },
+                    None,
+                ),
+                ProcessingFailureDisposition::PermanentlyFailed => (
+                    doc! {
+                        "q.s": 1_i32,
+                        "q.a": next,
+                        "q.c": failure.code.stored(),
+                    },
+                    Some(doc! { "q.n": "" }),
+                ),
+            };
+            let mut update = doc! { "$set": set };
+            if let Some(unset) = unset {
+                update.insert("$unset", unset);
+            }
+            let result = self
+                .database
+                .collection::<Document>("events")
+                .update_one(
+                    doc! {
+                        "_id": binary(failure.key.as_bytes()),
+                        "p": failure.key.project_id().get(),
+                        "q.s": 0_i32,
+                        "q.a": expected,
+                    },
+                    update,
+                )
+                .await
+                .map_err(|_| ProcessingStateError::Unavailable)?;
+            Ok(if result.matched_count == 1 {
+                ProcessingStateChange::Updated
+            } else {
+                ProcessingStateChange::StaleOrCompleted
             })
         })
     }

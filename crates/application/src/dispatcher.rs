@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::{AcceptedEvent, EventKey};
+use faultkeep_domain::{AcceptedEvent, EventKey, processing::PendingEvent};
 use faultkeep_ports::{AcceptedEventHandoff, Clock, EventBacklog, EventBacklogError, WorkHandler};
 use futures_util::FutureExt;
 use thiserror::Error;
@@ -33,6 +33,8 @@ pub struct DispatcherConfig {
     pub metrics_interval: Duration,
     pub source_timeout: Duration,
     pub shutdown_drain: Duration,
+    pub max_pending_events: Option<u64>,
+    pub max_oldest_pending_age: Option<Duration>,
 }
 
 impl Default for DispatcherConfig {
@@ -47,6 +49,8 @@ impl Default for DispatcherConfig {
             metrics_interval: Duration::from_secs(5),
             source_timeout: Duration::from_secs(5),
             shutdown_drain: Duration::from_secs(10),
+            max_pending_events: None,
+            max_oldest_pending_age: Some(Duration::from_secs(60 * 60)),
         }
     }
 }
@@ -62,10 +66,103 @@ pub enum DispatcherStartError {
 }
 
 pub struct Dispatcher {
-    sender: mpsc::Sender<AcceptedEvent>,
+    sender: mpsc::Sender<PendingEvent>,
     keys: Arc<Mutex<HashSet<EventKey>>>,
     accepting: Arc<AtomicBool>,
     shutdown: ShutdownSignal,
+    backlog_guard: BacklogGuard,
+}
+
+#[derive(Debug, Clone)]
+pub struct BacklogGuard {
+    critical: Arc<AtomicBool>,
+    max_pending_events: Option<u64>,
+    max_oldest_pending_age: Option<Duration>,
+}
+
+impl BacklogGuard {
+    fn new(config: DispatcherConfig) -> Self {
+        Self {
+            critical: Arc::new(AtomicBool::new(false)),
+            max_pending_events: config.max_pending_events,
+            max_oldest_pending_age: config.max_oldest_pending_age,
+        }
+    }
+
+    #[must_use]
+    pub fn is_critical(&self) -> bool {
+        self.critical.load(Ordering::Acquire)
+    }
+
+    fn observe(
+        &self,
+        observation: faultkeep_ports::BacklogObservation,
+        now: faultkeep_domain::Timestamp,
+    ) {
+        let age = observation
+            .oldest_pending_at
+            .map_or(Duration::ZERO, |oldest| {
+                Duration::from_millis(
+                    u64::try_from(
+                        now.unix_millis()
+                            .saturating_sub(oldest.unix_millis())
+                            .max(0),
+                    )
+                    .unwrap_or(u64::MAX),
+                )
+            });
+        let crossed = self
+            .max_pending_events
+            .is_some_and(|maximum| observation.pending_count >= maximum)
+            || self
+                .max_oldest_pending_age
+                .is_some_and(|maximum| age >= maximum);
+        let recovered = self
+            .max_pending_events
+            .is_none_or(|maximum| observation.pending_count <= maximum.saturating_mul(4) / 5)
+            && self
+                .max_oldest_pending_age
+                .is_none_or(|maximum| age <= maximum.checked_mul(4).unwrap_or(maximum) / 5);
+        let was_critical = self.is_critical();
+        let critical = if was_critical { !recovered } else { crossed };
+        if critical != was_critical {
+            self.critical.store(critical, Ordering::Release);
+            metrics::counter!(
+                "faultkeep_backlog_guard_transitions_total",
+                "state" => if critical { "critical" } else { "recovered" }
+            )
+            .increment(1);
+        }
+        metrics::gauge!("faultkeep_backlog_guard_critical").set(if critical { 1.0 } else { 0.0 });
+    }
+}
+
+pub struct BacklogGuardedEventSink {
+    inner: Arc<dyn faultkeep_ports::EventSink>,
+    guard: BacklogGuard,
+}
+
+impl BacklogGuardedEventSink {
+    #[must_use]
+    pub fn new(inner: Arc<dyn faultkeep_ports::EventSink>, guard: BacklogGuard) -> Self {
+        Self { inner, guard }
+    }
+}
+
+impl faultkeep_ports::EventSink for BacklogGuardedEventSink {
+    fn persist(
+        &self,
+        event: AcceptedEvent,
+    ) -> faultkeep_ports::PortFuture<
+        '_,
+        Result<faultkeep_ports::DurableOutcome, faultkeep_ports::EventSinkError>,
+    > {
+        if self.guard.is_critical() {
+            metrics::counter!("faultkeep_backlog_guard_rejections_total").increment(1);
+            return Box::pin(async { Err(faultkeep_ports::EventSinkError::Unavailable) });
+        }
+        self.inner.persist(event)
+    }
 }
 
 impl Dispatcher {
@@ -87,6 +184,7 @@ impl Dispatcher {
             ))),
             accepting: Arc::new(AtomicBool::new(true)),
             shutdown: shutdown.clone(),
+            backlog_guard: BacklogGuard::new(config),
         });
         refill_once(&dispatcher, &source, &clock, config, true).await?;
         let join = tokio::spawn(run_dispatcher(
@@ -118,16 +216,21 @@ impl Dispatcher {
         lock(&self.keys).len()
     }
 
-    fn offer_with_source(
+    #[must_use]
+    pub fn backlog_guard(&self) -> BacklogGuard {
+        self.backlog_guard.clone()
+    }
+
+    fn offer_pending_with_source(
         &self,
-        event: AcceptedEvent,
+        event: PendingEvent,
         source: &'static str,
-    ) -> Result<(), AcceptedEvent> {
+    ) -> Result<(), PendingEvent> {
         if !self.is_accepting() {
             record_admission(source, "closed");
             return Err(event);
         }
-        let key = EventKey::new(event.project_id, event.event_id);
+        let key = event.key();
         {
             let mut keys = lock(&self.keys);
             if !keys.insert(key) {
@@ -162,7 +265,8 @@ impl Dispatcher {
 
 impl AcceptedEventHandoff for Dispatcher {
     fn offer(&self, event: AcceptedEvent) -> Result<(), AcceptedEvent> {
-        self.offer_with_source(event, "fresh")
+        self.offer_pending_with_source(PendingEvent::fresh(event), "fresh")
+            .map_err(|pending| pending.event)
     }
 }
 
@@ -187,6 +291,11 @@ fn validate_config(config: DispatcherConfig) -> Result<(), DispatcherStartError>
         && !config.metrics_interval.is_zero()
         && !config.source_timeout.is_zero()
         && !config.shutdown_drain.is_zero();
+    let valid = valid
+        && config.max_pending_events.is_none_or(|maximum| maximum > 0)
+        && config
+            .max_oldest_pending_age
+            .is_none_or(|maximum| !maximum.is_zero());
     if valid {
         Ok(())
     } else {
@@ -199,7 +308,7 @@ async fn run_dispatcher(
     source: Arc<dyn EventBacklog>,
     handler: Arc<dyn WorkHandler>,
     clock: Arc<dyn Clock>,
-    mut receiver: mpsc::Receiver<AcceptedEvent>,
+    mut receiver: mpsc::Receiver<PendingEvent>,
     config: DispatcherConfig,
     shutdown: ShutdownSignal,
 ) {
@@ -231,7 +340,12 @@ async fn run_dispatcher(
                 }
             }
             _ = metrics_tick.tick() => {
-                observe_backlog(&source, &clock, config.source_timeout).await;
+                observe_backlog(
+                    &source,
+                    &clock,
+                    config.source_timeout,
+                    &dispatcher.backlog_guard,
+                ).await;
             }
         }
     }
@@ -244,9 +358,9 @@ async fn run_dispatcher(
 fn spawn_work(
     running: &mut JoinSet<(EventKey, bool)>,
     handler: Arc<dyn WorkHandler>,
-    event: AcceptedEvent,
+    event: PendingEvent,
 ) {
-    let key = EventKey::new(event.project_id, event.event_id);
+    let key = event.key();
     running.spawn(async move {
         let completed = AssertUnwindSafe(handler.handle(event))
             .catch_unwind()
@@ -321,7 +435,7 @@ async fn refill_once(
     };
     let count = events.len();
     for event in events {
-        let _ = dispatcher.offer_with_source(event, "refill");
+        let _ = dispatcher.offer_pending_with_source(event, "refill");
     }
     record_refill("ok", count);
     Ok(())
@@ -331,6 +445,7 @@ async fn observe_backlog(
     source: &Arc<dyn EventBacklog>,
     clock: &Arc<dyn Clock>,
     source_timeout: Duration,
+    guard: &BacklogGuard,
 ) {
     let Ok(Ok(observation)) = timeout(source_timeout, source.observe()).await else {
         metrics::counter!("faultkeep_dispatcher_observation_total", "outcome" => "unavailable")
@@ -347,13 +462,14 @@ async fn observe_backlog(
             / 1_000.0
     });
     metrics::gauge!("faultkeep_dispatcher_oldest_pending_age_seconds").set(age_seconds);
+    guard.observe(observation, clock.now());
     metrics::counter!("faultkeep_dispatcher_observation_total", "outcome" => "ok").increment(1);
 }
 
 async fn drain_dispatcher(
     dispatcher: &Dispatcher,
     handler: &Arc<dyn WorkHandler>,
-    receiver: &mut mpsc::Receiver<AcceptedEvent>,
+    receiver: &mut mpsc::Receiver<PendingEvent>,
     running: &mut JoinSet<(EventKey, bool)>,
     config: DispatcherConfig,
 ) {
@@ -410,7 +526,9 @@ mod tests {
     use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
     use faultkeep_domain::{EventId, ProjectId, ScrubbedEventPayload, Timestamp};
-    use faultkeep_ports::{BacklogObservation, PortFuture};
+    use faultkeep_ports::{
+        BacklogObservation, DurableOutcome, EventSink, EventSinkError, PortFuture,
+    };
     use tokio::sync::Notify;
 
     use super::*;
@@ -421,6 +539,17 @@ mod tests {
     impl Clock for TestClock {
         fn now(&self) -> Timestamp {
             self.0
+        }
+    }
+
+    struct AcceptingSink;
+
+    impl EventSink for AcceptingSink {
+        fn persist(
+            &self,
+            _event: AcceptedEvent,
+        ) -> PortFuture<'_, Result<DurableOutcome, EventSinkError>> {
+            Box::pin(async { Ok(DurableOutcome::Accepted) })
         }
     }
 
@@ -453,7 +582,7 @@ mod tests {
             now: Timestamp,
             limit: usize,
             excluded: &'a [EventKey],
-        ) -> PortFuture<'a, Result<Vec<AcceptedEvent>, EventBacklogError>> {
+        ) -> PortFuture<'a, Result<Vec<PendingEvent>, EventBacklogError>> {
             Box::pin(async move {
                 if self.fail.load(Ordering::Relaxed) {
                     return Err(EventBacklogError::Unavailable);
@@ -467,7 +596,7 @@ mod tests {
                 Ok(events
                     .into_iter()
                     .take(limit)
-                    .map(|(_, event)| event)
+                    .map(|(_, event)| PendingEvent::fresh(event))
                     .collect())
             })
         }
@@ -491,13 +620,13 @@ mod tests {
     }
 
     impl WorkHandler for FakeHandler {
-        fn handle(&self, event: AcceptedEvent) -> PortFuture<'_, ()> {
+        fn handle(&self, event: PendingEvent) -> PortFuture<'_, ()> {
             Box::pin(async move {
                 self.started.fetch_add(1, Ordering::Relaxed);
                 if let Some(gate) = &self.gate {
                     gate.notified().await;
                 }
-                let key = key(&event);
+                let key = event.key();
                 self.backlog.complete(key);
                 lock(&self.handled).push(key);
             })
@@ -531,7 +660,46 @@ mod tests {
             metrics_interval: Duration::from_secs(1),
             source_timeout: Duration::from_secs(1),
             shutdown_drain: Duration::from_secs(1),
+            max_pending_events: None,
+            max_oldest_pending_age: Some(Duration::from_secs(60 * 60)),
         }
+    }
+
+    #[tokio::test]
+    async fn critical_backlog_guard_rejects_then_recovers_with_hysteresis() {
+        let guard_config = DispatcherConfig {
+            max_pending_events: Some(10),
+            max_oldest_pending_age: Some(Duration::from_secs(100)),
+            ..config()
+        };
+        let guard = BacklogGuard::new(guard_config);
+        let now = Timestamp::from_unix_millis(200_000).unwrap();
+        guard.observe(
+            BacklogObservation {
+                pending_count: 10,
+                oldest_pending_at: Some(Timestamp::from_unix_millis(190_000).unwrap()),
+            },
+            now,
+        );
+        assert!(guard.is_critical());
+        let sink = BacklogGuardedEventSink::new(Arc::new(AcceptingSink), guard.clone());
+        assert_eq!(
+            sink.persist(event(1, 1)).await,
+            Err(EventSinkError::Unavailable)
+        );
+
+        guard.observe(
+            BacklogObservation {
+                pending_count: 8,
+                oldest_pending_at: Some(Timestamp::from_unix_millis(195_000).unwrap()),
+            },
+            now,
+        );
+        assert!(!guard.is_critical());
+        assert_eq!(
+            sink.persist(event(2, 2)).await,
+            Ok(DurableOutcome::Accepted)
+        );
     }
 
     async fn wait_until(mut predicate: impl FnMut() -> bool) {
@@ -780,6 +948,8 @@ mod tests {
             metrics_interval: Duration::from_secs(1),
             source_timeout: Duration::from_secs(1),
             shutdown_drain: Duration::from_secs(1),
+            max_pending_events: None,
+            max_oldest_pending_age: Some(Duration::from_secs(60 * 60)),
         };
         let (dispatcher, task) = Dispatcher::start(
             backlog,

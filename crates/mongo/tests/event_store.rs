@@ -63,11 +63,11 @@ async fn measure_refill(database: &Database) -> Result<(), Box<dyn Error>> {
     let elapsed = started.elapsed();
     assert_eq!(loaded.len(), EVENTS as usize);
     assert_eq!(
-        loaded.first().unwrap().event_id,
+        loaded.first().unwrap().event.event_id,
         EventId::from_bytes([0; 16])
     );
     assert_eq!(
-        loaded.last().unwrap().event_id,
+        loaded.last().unwrap().event.event_id,
         EventId::from_bytes(u128::from(EVENTS - 1).to_be_bytes())
     );
     let rps = f64::from(EVENTS) / elapsed.as_secs_f64();
@@ -139,7 +139,9 @@ async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Er
         .load_due(Timestamp::from_unix_millis(5_000)?, 10, &[excluded])
         .await?;
     assert_eq!(
-        due.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+        due.iter()
+            .map(|event| event.event.event_id)
+            .collect::<Vec<_>>(),
         [EventId::from_bytes([2; 16]), EventId::from_bytes([3; 16])]
     );
     collection
@@ -155,7 +157,9 @@ async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Er
         .load_due(Timestamp::from_unix_millis(5_000)?, 10, &[])
         .await?;
     assert_eq!(
-        due.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+        due.iter()
+            .map(|event| event.event.event_id)
+            .collect::<Vec<_>>(),
         [EventId::from_bytes([1; 16]), EventId::from_bytes([3; 16])]
     );
     control

@@ -4,6 +4,7 @@ pub mod event;
 pub mod finalization;
 pub mod grouping;
 pub mod issue;
+pub mod processing;
 pub mod symbolication;
 
 use std::{

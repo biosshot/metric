@@ -11,6 +11,7 @@ use faultkeep_domain::{
         IssueCommand, IssueCommandResult, IssueMutationResult, IssueOccurrence, IssueSearchQuery,
         IssueSearchResult, IssueSnapshot,
     },
+    processing::{PendingEvent, ProcessingFailure, ProcessingProject, ProcessingStateChange},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use thiserror::Error;
@@ -173,14 +174,46 @@ pub trait EventBacklog: Send + Sync + 'static {
         now: Timestamp,
         limit: usize,
         excluded: &'a [EventKey],
-    ) -> PortFuture<'a, Result<Vec<AcceptedEvent>, EventBacklogError>>;
+    ) -> PortFuture<'a, Result<Vec<PendingEvent>, EventBacklogError>>;
 
     fn observe(&self) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>>;
 }
 
 /// Processing seam. Completion means durable Event eligibility was already changed.
 pub trait WorkHandler: Send + Sync + 'static {
-    fn handle(&self, event: AcceptedEvent) -> PortFuture<'_, ()>;
+    fn handle(&self, event: PendingEvent) -> PortFuture<'_, ()>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProcessingProjectError {
+    #[error("processing project does not exist")]
+    NotFound,
+    #[error("processing project data is invalid")]
+    InvalidData,
+    #[error("processing project storage is temporarily unavailable")]
+    Unavailable,
+}
+
+pub trait ProcessingProjectStore: Send + Sync + 'static {
+    fn load_processing_project(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<ProcessingProject, ProcessingProjectError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProcessingStateError {
+    #[error("processing Event state is invalid")]
+    InvalidData,
+    #[error("processing Event state storage is temporarily unavailable")]
+    Unavailable,
+}
+
+pub trait ProcessingStateStore: Send + Sync + 'static {
+    fn record_processing_failure(
+        &self,
+        failure: ProcessingFailure,
+    ) -> PortFuture<'_, Result<ProcessingStateChange, ProcessingStateError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

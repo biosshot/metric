@@ -41,6 +41,7 @@ fn config() -> IngestConfig {
         project_cache: Default::default(),
         batch: Default::default(),
         event_codec: Default::default(),
+        backlog: Default::default(),
     }
 }
 

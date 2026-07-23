@@ -8,17 +8,26 @@ use std::{io, process::ExitCode};
 
 use config::{Cli, ConfigError};
 use faultkeep_application::{
-    dispatcher::{Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask},
+    dispatcher::{
+        BacklogGuardedEventSink, Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask,
+    },
+    finalizer::{Finalizer, FinalizerConfig, FinalizerError},
+    normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
     observability::{Metric, Metrics, Outcome},
+    processor::{
+        FinalizerBatchConfig, FinalizerBatchTask, FinalizerBatcher, GrouperStage,
+        IssuePreparerStage, Processor, ProcessorConfig, ProcessorConfigError,
+    },
     projects::{ProjectCacheConfig, ProjectService, ProjectServiceError},
     shutdown::ShutdownRoot,
+    symbolication::BaselineSymbolicationService,
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
 };
 use faultkeep_domain::Timestamp;
-use faultkeep_mongo::{EventCodecConfig, MongoBootstrapError, MongoProjectStore};
+use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use faultkeep_ports::{
     Clock, EventBacklog, EventSink, EventSinkError, OutcomeSink, PortFuture, ProjectResolveError,
-    ProjectResolver, RandomError, RandomSource, WorkHandler,
+    ProjectResolver, RandomError, RandomSource,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -44,6 +53,12 @@ pub enum ServerError {
     Writer(#[from] MongoWriterStartError),
     #[error(transparent)]
     Dispatcher(#[from] DispatcherStartError),
+    #[error(transparent)]
+    Normalizer(#[from] NormalizerConfigError),
+    #[error(transparent)]
+    Finalizer(#[from] FinalizerError),
+    #[error(transparent)]
+    Processor(#[from] ProcessorConfigError),
 }
 
 struct RuntimeModules {
@@ -51,6 +66,8 @@ struct RuntimeModules {
     event_sink: std::sync::Arc<dyn EventSink>,
     writer_task: Option<MongoWriterTask>,
     dispatcher_task: Option<DispatcherTask>,
+    finalizer_batcher: Option<std::sync::Arc<FinalizerBatcher>>,
+    finalizer_batch_task: Option<FinalizerBatchTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -77,6 +94,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         event_sink,
         writer_task,
         dispatcher_task,
+        finalizer_batcher,
+        finalizer_batch_task,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -109,16 +128,47 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     negative_ttl: config.ingest.project_cache.negative_ttl.get(),
                 },
             )?);
-        let event_store = std::sync::Arc::new(store.event_store(EventCodecConfig {
+        let event_codec = EventCodecConfig {
             compression_level: config.ingest.event_codec.compression_level,
             compression_min_savings: config.ingest.event_codec.compression_min_savings,
             max_decoded_body_bytes: config.ingest.max_event_bytes,
             max_encoded_document_bytes: config.ingest.max_event_bytes.saturating_add(64 * 1024),
-        }));
+        };
+        let event_store = std::sync::Arc::new(store.event_store(event_codec));
         let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
+        let finalizer = std::sync::Arc::new(Finalizer::new(
+            std::sync::Arc::new(store.finalization_store(event_codec, IssueCodecConfig::default())),
+            FinalizerConfig::default(),
+        )?);
+        let (finalizer_batcher, finalizer_batch_task) = FinalizerBatcher::start(
+            finalizer,
+            FinalizerBatchConfig {
+                shutdown_drain: config.server.shutdown_grace.get(),
+                ..FinalizerBatchConfig::default()
+            },
+        )?;
+        let processor = std::sync::Arc::new(Processor::new(
+            event_store.clone(),
+            event_store.clone(),
+            std::sync::Arc::new(Normalizer::new(NormalizerLimits::default())?),
+            std::sync::Arc::new(BaselineSymbolicationService),
+            std::sync::Arc::new(GrouperStage),
+            std::sync::Arc::new(IssuePreparerStage),
+            finalizer_batcher.clone(),
+            std::sync::Arc::clone(&clock),
+            ProcessorConfig {
+                max_concurrency: config.processor.max_concurrency,
+                max_attempts: config.processor.max_attempts,
+                retry_base: config.processor.retry_base.get(),
+                retry_max: config.processor.retry_max.get(),
+                stage_timeout: config.processor.stage_timeout.get(),
+                total_timeout: config.processor.total_timeout.get(),
+                state_timeout: config.processor.state_timeout.get(),
+            },
+        )?);
         let (dispatcher, dispatcher_task) = Dispatcher::start(
             backlog,
-            std::sync::Arc::new(DeferredWorkHandler),
+            processor,
             std::sync::Arc::clone(&clock),
             DispatcherConfig {
                 queue_capacity: config.dispatcher.queue_capacity,
@@ -130,10 +180,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 metrics_interval: config.dispatcher.metrics_interval.get(),
                 source_timeout: config.dispatcher.source_timeout.get(),
                 shutdown_drain: config.server.shutdown_grace.get(),
+                max_pending_events: config.ingest.backlog.max_pending_events,
+                max_oldest_pending_age: Some(config.ingest.backlog.max_oldest_pending_age.get()),
             },
             shutdown.signal(),
         )
         .await?;
+        let backlog_guard = dispatcher.backlog_guard();
         let (writer, writer_task) = MongoWriter::start(
             event_store,
             dispatcher,
@@ -147,12 +200,16 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             },
             shutdown.signal(),
         )?;
-        let event_sink: std::sync::Arc<dyn EventSink> = writer;
+        let writer: std::sync::Arc<dyn EventSink> = writer;
+        let event_sink: std::sync::Arc<dyn EventSink> =
+            std::sync::Arc::new(BacklogGuardedEventSink::new(writer, backlog_guard));
         RuntimeModules {
             project_resolver,
             event_sink,
             writer_task: Some(writer_task),
             dispatcher_task: Some(dispatcher_task),
+            finalizer_batcher: Some(finalizer_batcher),
+            finalizer_batch_task: Some(finalizer_batch_task),
         }
     } else {
         RuntimeModules {
@@ -160,6 +217,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             writer_task: None,
             dispatcher_task: None,
+            finalizer_batcher: None,
+            finalizer_batch_task: None,
         }
     };
     let ingest = std::sync::Arc::new(faultkeep_application::ingest::IngestService::new(
@@ -208,6 +267,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(task) = dispatcher_task {
         task.wait().await;
     }
+    if let Some(batcher) = finalizer_batcher {
+        batcher.close();
+    }
+    if let Some(task) = finalizer_batch_task {
+        task.wait().await;
+    }
     metrics.increment(Metric::Shutdowns, Outcome::Ok);
     info!(operation = "runtime.stopped", "graceful shutdown complete");
     Ok(ExitCode::SUCCESS)
@@ -239,14 +304,6 @@ struct NoopOutcomeSink;
 
 impl OutcomeSink for NoopOutcomeSink {
     fn record(&self, _outcome: faultkeep_ports::IngestOutcome) {}
-}
-
-struct DeferredWorkHandler;
-
-impl WorkHandler for DeferredWorkHandler {
-    fn handle(&self, _event: faultkeep_domain::AcceptedEvent) -> PortFuture<'_, ()> {
-        Box::pin(std::future::pending())
-    }
 }
 
 struct SystemClock;
