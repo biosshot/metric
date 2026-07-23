@@ -40,3 +40,21 @@ official `@sentry/node` process with a real DSN, waits for `captureException` an
 `flush`, and verifies the accepted Event ID, exception, release, environment and
 exact SDK metadata. The same real Envelope includes a safe JSON attachment; the gate
 also verifies blob-first metadata and the exact bytes read back from BlobStore.
+
+## Sentry CLI debug files
+
+`sentry-cli/` pins current 3.x (`3.6.2`) and retained 2.x (`2.58.6`) contracts.
+Install with `npm ci`, verify both binaries with `npm run versions`, then point a
+real upload at Faultkeep:
+
+```powershell
+$env:SENTRY_URL = "http://127.0.0.1:4001/"
+$env:SENTRY_AUTH_TOKEN = "<personal token with debug_file:write>"
+$env:SENTRY_ORG = "<organization slug>"
+$env:SENTRY_PROJECT = "<project slug>"
+npx sentry-cli debug-files upload fixtures/faultkeep.sym
+```
+
+`symbolicator/26.6.0-native-contract.json` pins the external native HTTP schema
+used by the adapter test. The external process remains separately deployed and is
+never bundled into Faultkeep.

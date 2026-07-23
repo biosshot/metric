@@ -30,6 +30,16 @@ enabled = false
 max_bytes = "100 MiB"
 chunk_bytes = "64 KiB"
 
+[symbolicator]
+# Leave endpoint unset to keep native Events on the explicit baseline path.
+# endpoint = "http://127.0.0.1:3021/symbolicate"
+callback_base_url = "http://127.0.0.1:4001/"
+request_timeout = "20s"
+maximum_concurrency = 8
+circuit_failure_threshold = 5
+circuit_cooldown = "30s"
+maximum_response_bytes = "4 MiB"
+
 [ingest]
 max_compressed_request_bytes = "20 MiB"
 max_decompressed_request_bytes = "100 MiB"

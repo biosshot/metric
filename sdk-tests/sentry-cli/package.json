@@ -1,0 +1,13 @@
+{
+  "name": "faultkeep-sentry-cli-contract",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "versions": "node verify-versions.mjs",
+    "check:fixture": "sentry-cli debug-files check fixtures/faultkeep.sym"
+  },
+  "devDependencies": {
+    "@sentry/cli": "3.6.2",
+    "sentry-cli-v2": "npm:@sentry/cli@2.58.6"
+  }
+}

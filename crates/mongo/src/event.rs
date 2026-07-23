@@ -424,11 +424,19 @@ impl ProcessingProjectStore for MongoEventStore {
                     .map_err(|_| ProcessingProjectError::InvalidData)?,
             )
             .map_err(|_| ProcessingProjectError::InvalidData)?;
+            let debug_file_revision = match document.get_i64("dr") {
+                Ok(value) => {
+                    u64::try_from(value).map_err(|_| ProcessingProjectError::InvalidData)?
+                }
+                Err(_) if !document.contains_key("dr") => 0,
+                Err(_) => return Err(ProcessingProjectError::InvalidData),
+            };
             Ok(ProcessingProject {
                 project_id,
                 state,
                 error_events_enabled,
                 grouping_revision,
+                debug_file_revision,
             })
         })
     }

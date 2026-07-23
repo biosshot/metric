@@ -264,6 +264,7 @@ async fn blob_and_event_failure_matrix_never_accepts_a_missing_attachment() {
     assert!(failed_sink.events().is_empty());
     let page = blob
         .scan(BlobScanRequest {
+            namespace: faultkeep_domain::blob::BlobNamespace::EventOwned,
             older_than: Timestamp::from_unix_millis(2_000_000_000_000).unwrap(),
             cursor: None,
             limit: 10,

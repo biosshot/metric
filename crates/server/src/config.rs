@@ -72,6 +72,7 @@ pub struct AppConfig {
     pub ingest: IngestConfig,
     pub blob: BlobConfig,
     pub native_crash: NativeCrashConfig,
+    pub symbolicator: SymbolicatorSettings,
     pub dispatcher: DispatcherSettings,
     pub scheduler: SchedulerSettings,
     pub retention: RetentionSettings,
@@ -90,6 +91,17 @@ pub struct MinidumpSettings {
     pub enabled: bool,
     pub max_bytes: u64,
     pub chunk_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolicatorSettings {
+    pub endpoint: Option<url::Url>,
+    pub callback_base_url: url::Url,
+    pub request_timeout: RequestTimeout,
+    pub maximum_concurrency: usize,
+    pub circuit_failure_threshold: u32,
+    pub circuit_cooldown: DispatcherInterval,
+    pub maximum_response_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -485,6 +497,7 @@ struct RawConfig {
     ingest: RawIngestConfig,
     blob: RawBlobConfig,
     native_crash: RawNativeCrashConfig,
+    symbolicator: RawSymbolicatorSettings,
     dispatcher: RawDispatcherSettings,
     scheduler: RawSchedulerSettings,
     retention: RawRetentionSettings,
@@ -504,6 +517,7 @@ impl Default for RawConfig {
             ingest: RawIngestConfig::default(),
             blob: RawBlobConfig::default(),
             native_crash: RawNativeCrashConfig::default(),
+            symbolicator: RawSymbolicatorSettings::default(),
             dispatcher: RawDispatcherSettings::default(),
             scheduler: RawSchedulerSettings::default(),
             retention: RawRetentionSettings::default(),
@@ -518,6 +532,32 @@ impl Default for RawConfig {
 #[serde(default, deny_unknown_fields)]
 struct RawNativeCrashConfig {
     minidump: RawMinidumpSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawSymbolicatorSettings {
+    endpoint: Option<String>,
+    callback_base_url: String,
+    request_timeout: String,
+    maximum_concurrency: usize,
+    circuit_failure_threshold: u32,
+    circuit_cooldown: String,
+    maximum_response_bytes: String,
+}
+
+impl Default for RawSymbolicatorSettings {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            callback_base_url: "http://127.0.0.1:3000/".to_owned(),
+            request_timeout: "20s".to_owned(),
+            maximum_concurrency: 8,
+            circuit_failure_threshold: 5,
+            circuit_cooldown: "30s".to_owned(),
+            maximum_response_bytes: "4 MiB".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -992,6 +1032,8 @@ pub enum ConfigError {
     InvalidBlobConfig,
     #[error("native crash configuration is invalid or outside supported bounds")]
     InvalidNativeCrashConfig,
+    #[error("Symbolicator configuration is invalid or outside supported bounds")]
+    InvalidSymbolicatorConfig,
     #[error("MongoDB configuration is invalid or outside supported bounds")]
     InvalidMongoConfig,
     #[error("project identity configuration is invalid or outside supported bounds")]
@@ -1114,6 +1156,23 @@ impl TryFrom<RawConfig> for AppConfig {
             .map_err(|_| ConfigError::InvalidNativeCrashConfig)?;
         let minidump_chunk = ConfiguredBytes::from_str(&raw.native_crash.minidump.chunk_bytes)
             .map_err(|_| ConfigError::InvalidNativeCrashConfig)?;
+        let symbolicator_endpoint = raw
+            .symbolicator
+            .endpoint
+            .as_deref()
+            .map(url::Url::parse)
+            .transpose()
+            .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?;
+        let callback_base_url = url::Url::parse(&raw.symbolicator.callback_base_url)
+            .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?;
+        let symbolicator_timeout = RequestTimeout::from_str(&raw.symbolicator.request_timeout)
+            .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?;
+        let symbolicator_cooldown =
+            DispatcherInterval::from_str(&raw.symbolicator.circuit_cooldown)
+                .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?;
+        let symbolicator_response =
+            ConfiguredBytes::from_str(&raw.symbolicator.maximum_response_bytes)
+                .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?;
         if raw.blob.root.as_os_str().is_empty()
             || capacity.get() == 0
             || reserve.get() >= capacity.get()
@@ -1127,6 +1186,19 @@ impl TryFrom<RawConfig> for AppConfig {
             || !(4 * 1024..=1024 * 1024).contains(&minidump_chunk.get())
         {
             return Err(ConfigError::InvalidNativeCrashConfig);
+        }
+        let valid_symbolicator_urls = symbolicator_endpoint
+            .iter()
+            .chain(std::iter::once(&callback_base_url))
+            .all(|url| matches!(url.scheme(), "http" | "https"));
+        if !valid_symbolicator_urls
+            || symbolicator_timeout.get().is_zero()
+            || !(1..=1024).contains(&raw.symbolicator.maximum_concurrency)
+            || raw.symbolicator.circuit_failure_threshold == 0
+            || symbolicator_cooldown.get().is_zero()
+            || !(1024..=16 * 1024 * 1024).contains(&symbolicator_response.get())
+        {
+            return Err(ConfigError::InvalidSymbolicatorConfig);
         }
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
         let scheduler = SchedulerSettings::try_from(raw.scheduler)?;
@@ -1171,6 +1243,16 @@ impl TryFrom<RawConfig> for AppConfig {
                     chunk_bytes: usize::try_from(minidump_chunk.get())
                         .map_err(|_| ConfigError::InvalidNativeCrashConfig)?,
                 },
+            },
+            symbolicator: SymbolicatorSettings {
+                endpoint: symbolicator_endpoint,
+                callback_base_url,
+                request_timeout: symbolicator_timeout,
+                maximum_concurrency: raw.symbolicator.maximum_concurrency,
+                circuit_failure_threshold: raw.symbolicator.circuit_failure_threshold,
+                circuit_cooldown: symbolicator_cooldown,
+                maximum_response_bytes: usize::try_from(symbolicator_response.get())
+                    .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?,
             },
             dispatcher,
             scheduler,
@@ -1225,7 +1307,7 @@ impl AppConfig {
             .scrub_hmac_key
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
-        format!(
+        let rendered = format!(
             "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
@@ -1326,6 +1408,20 @@ impl AppConfig {
             self.auth.login_max_attempts,
             humantime::format_duration(self.auth.login_window.get()),
             self.auth.login_capacity,
+        );
+        let endpoint = self
+            .symbolicator
+            .endpoint
+            .as_ref()
+            .map_or("<disabled>", url::Url::as_str);
+        format!(
+            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n",
+            self.symbolicator.callback_base_url,
+            humantime::format_duration(self.symbolicator.request_timeout.get()),
+            self.symbolicator.maximum_concurrency,
+            self.symbolicator.circuit_failure_threshold,
+            humantime::format_duration(self.symbolicator.circuit_cooldown.get()),
+            self.symbolicator.maximum_response_bytes,
         )
     }
 
@@ -1713,10 +1809,38 @@ mod tests {
         assert_eq!(config.retention.issue_stats_hourly_days, 400);
         assert_eq!(config.auth.password_memory_kib, 19 * 1024);
         assert!(config.auth.secure_cookie);
+        assert!(config.symbolicator.endpoint.is_none());
         assert_eq!(
             config.ingest.backlog.max_oldest_pending_age.get(),
             std::time::Duration::from_secs(60 * 60)
         );
+    }
+
+    #[test]
+    fn symbolicator_transport_bounds_fail_closed() {
+        for symbolicator in [
+            RawSymbolicatorSettings {
+                endpoint: Some("file:///tmp/symbolicator".to_owned()),
+                ..RawSymbolicatorSettings::default()
+            },
+            RawSymbolicatorSettings {
+                maximum_concurrency: 0,
+                ..RawSymbolicatorSettings::default()
+            },
+            RawSymbolicatorSettings {
+                maximum_response_bytes: "32 MiB".to_owned(),
+                ..RawSymbolicatorSettings::default()
+            },
+        ] {
+            let raw = RawConfig {
+                symbolicator,
+                ..RawConfig::default()
+            };
+            assert!(matches!(
+                AppConfig::try_from(raw),
+                Err(ConfigError::InvalidSymbolicatorConfig)
+            ));
+        }
     }
 
     #[test]

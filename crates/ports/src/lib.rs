@@ -15,7 +15,10 @@ use faultkeep_domain::{
         OrganizationMembership, PasswordHash, SecretDigest, SetupToken, UserAccount, UserId,
         WebSession,
     },
-    blob::{BlobKey, BlobKind, BlobObject, BlobObjectId},
+    blob::{BlobKey, BlobKind, BlobNamespace, BlobObject, BlobObjectId},
+    debug_files::{
+        CodeId, DebugFile, DebugFileId, DebugId, DebugUpload, DebugUploadRecord, DebugUploadState,
+    },
     deletion::{
         ProjectDeletionChange, ProjectDeletionOperationId, ProjectDeletionRequest,
         ProjectDeletionStatus,
@@ -69,6 +72,7 @@ pub trait BlobReadSession: Send + 'static {
 
 #[derive(Debug, Clone)]
 pub struct BlobScanRequest {
+    pub namespace: BlobNamespace,
     pub older_than: Timestamp,
     pub cursor: Option<Box<str>>,
     pub limit: usize,
@@ -128,6 +132,83 @@ pub trait BlobReferenceStore: Send + Sync + 'static {
         &self,
         reference: BlobReference,
     ) -> PortFuture<'_, Result<bool, BlobStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DebugFileStoreError {
+    #[error("debug file target does not exist")]
+    NotFound,
+    #[error("debug file already exists with conflicting metadata")]
+    Conflict,
+    #[error("debug file quota is exhausted")]
+    Quota,
+    #[error("stored debug file data is invalid")]
+    InvalidData,
+    #[error("debug file storage is temporarily unavailable")]
+    Unavailable,
+}
+
+pub trait DebugFileStore: Send + Sync + 'static {
+    fn project_organization(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, DebugFileStoreError>>;
+
+    fn resolve_project_slugs(
+        &self,
+        organization_slug: Box<str>,
+        project_slug: Box<str>,
+    ) -> PortFuture<'_, Result<(faultkeep_domain::OrganizationId, ProjectView), DebugFileStoreError>>;
+
+    fn load_by_sha1(
+        &self,
+        project_id: ProjectId,
+        sha1: [u8; 20],
+    ) -> PortFuture<'_, Result<Option<DebugFile>, DebugFileStoreError>>;
+
+    fn upsert_upload(
+        &self,
+        upload: DebugUpload,
+    ) -> PortFuture<'_, Result<DebugUploadRecord, DebugFileStoreError>>;
+
+    fn set_upload_state(
+        &self,
+        upload_id: [u8; 16],
+        state: DebugUploadState,
+        now: Timestamp,
+        error_code: Option<Box<str>>,
+    ) -> PortFuture<'_, Result<(), DebugFileStoreError>>;
+
+    fn publish_debug_file(
+        &self,
+        upload_id: [u8; 16],
+        file: DebugFile,
+    ) -> PortFuture<'_, Result<u64, DebugFileStoreError>>;
+
+    fn find_debug_files(
+        &self,
+        project_id: ProjectId,
+        debug_id: Option<DebugId>,
+        code_id: Option<CodeId>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<DebugFile>, DebugFileStoreError>>;
+
+    fn load_debug_file(
+        &self,
+        project_id: ProjectId,
+        file_id: DebugFileId,
+    ) -> PortFuture<'_, Result<DebugFile, DebugFileStoreError>>;
+
+    fn delete_debug_file(
+        &self,
+        project_id: ProjectId,
+        file_id: DebugFileId,
+    ) -> PortFuture<'_, Result<Option<(DebugFile, u64)>, DebugFileStoreError>>;
+
+    fn recoverable_uploads(
+        &self,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<DebugUploadRecord>, DebugFileStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

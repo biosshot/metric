@@ -471,14 +471,17 @@ async fn verify_file(
 
 fn scan_objects(root: &Path, request: BlobScanRequest) -> Result<BlobScanPage, BlobStoreError> {
     let mut selected = BinaryHeap::with_capacity(request.limit.saturating_add(1));
-    select_page_keys(
-        root,
-        root,
-        request.cursor.as_deref(),
-        request.older_than,
-        request.limit.saturating_add(1),
-        &mut selected,
-    )?;
+    let namespace_root = root.join(request.namespace.prefix().trim_end_matches('/'));
+    if namespace_root.exists() {
+        select_page_keys(
+            root,
+            &namespace_root,
+            request.cursor.as_deref(),
+            request.older_than,
+            request.limit.saturating_add(1),
+            &mut selected,
+        )?;
+    }
     let mut keys = selected.into_vec();
     keys.sort_unstable();
     let has_more = keys.len() > request.limit;
@@ -487,9 +490,13 @@ fn scan_objects(root: &Path, request: BlobScanRequest) -> Result<BlobScanPage, B
     for key in keys {
         let full = root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
         let metadata = std::fs::symlink_metadata(&full).map_err(|_| BlobStoreError::Unavailable)?;
+        let key = BlobKey::new(key).map_err(|_| BlobStoreError::Invalid)?;
         objects.push(BlobObject {
-            key: BlobKey::new(key).map_err(|_| BlobStoreError::Invalid)?,
-            kind: BlobKind::EventAttachment,
+            kind: request
+                .namespace
+                .kind_for_key(&key)
+                .map_err(|_| BlobStoreError::Invalid)?,
+            key,
             size: metadata.len(),
             checksum: checksum_file(&full)?,
             created_at: modified_timestamp(&metadata)?,

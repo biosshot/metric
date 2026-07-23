@@ -1,5 +1,19 @@
 # Performance regression artifacts
 
+Phase 17 retains the real `sentry-cli` upload, private debug index hit/miss RPS,
+and open-circuit backend-failure RPS in `baselines/debug-files/`. Compare a newly
+captured JSON result with:
+
+```text
+node performance/compare-debug-files.mjs <baseline.json> <candidate.json>
+```
+
+The comparator rejects a regression greater than 20% in any retained RPS metric.
+The short local profile is a regression signal, not a server-capacity claim.
+Capture at most one candidate per pass by setting `FAULTKEEP_PHASE17_PERF=1` before
+running the ignored `debug_files_e2e` test; without that opt-in the compatibility
+and recovery assertions run without a load profile.
+
 `k6/ingest-fake.js` measures the Phase 1 black-box path through HTTP, bounded body
 decode, Envelope/auth parsing, mandatory scrubbing, and the deterministic benchmark
 `EventSink`. It does not measure MongoDB durability and must not be quoted as the

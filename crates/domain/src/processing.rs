@@ -24,6 +24,7 @@ pub struct ProcessingProject {
     pub state: ProjectAcceptanceState,
     pub error_events_enabled: bool,
     pub grouping_revision: u64,
+    pub debug_file_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

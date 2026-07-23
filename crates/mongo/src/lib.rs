@@ -4,6 +4,7 @@
 
 mod api;
 mod auth;
+mod debug_files;
 mod deletion;
 mod event;
 mod finalizer;
@@ -12,6 +13,7 @@ mod maintenance;
 
 pub use api::MongoInvestigationStore;
 pub use auth::MongoAuthStore;
+pub use debug_files::{DebugFileQuota, MongoDebugFileStore};
 pub use deletion::{
     DATASET_REGISTRY, DELETION_PLAN_VERSION, DatasetOwnership, DatasetRegistration,
     FILESYSTEM_NAMESPACE_REGISTRY,
@@ -41,21 +43,24 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 3;
+pub const SCHEMA_GENERATION: i32 = 4;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 6] = [
+const SCHEMA_MODULES: [&str; 7] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
     "finalization_storage_v1",
     "identity_authorization_v1",
     "project_deletion_v1",
+    "native_debug_files_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 17] = [
+const REQUIRED_COLLECTIONS: [&str; 19] = [
     "api_tokens",
     "audit_log",
     "environments",
     "events",
+    "debug_files",
+    "debug_uploads",
     "issue_activities",
     "issues",
     "issue_stats_hourly",
@@ -164,6 +169,11 @@ impl MongoProjectStore {
         MongoMaintenanceStore::from_database(self.database.clone())
     }
 
+    #[must_use]
+    pub fn debug_file_store(&self, quota: DebugFileQuota) -> MongoDebugFileStore {
+        MongoDebugFileStore::from_database(self.database.clone(), quota)
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -209,6 +219,10 @@ impl MongoProjectStore {
         self.create_validated_collection("project_keys", project_key_validator())
             .await?;
         self.create_validated_collection("project_deletions", deletion::deletion_validator())
+            .await?;
+        self.create_validated_collection("debug_uploads", debug_files::debug_upload_validator())
+            .await?;
+        self.create_validated_collection("debug_files", debug_files::debug_file_validator())
             .await?;
         self.create_validated_collection("events", event::event_validator())
             .await?;
@@ -277,6 +291,7 @@ impl MongoProjectStore {
                 .create_index(model)
                 .await?;
         }
+        debug_files::create_debug_file_indexes(&self.database).await?;
         event::create_event_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
@@ -325,6 +340,9 @@ impl MongoProjectStore {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !deletion::validate_deletion_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
+        if !debug_files::validate_debug_file_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !self.validate_project_slug_index().await? {
@@ -1080,7 +1098,7 @@ fn decode_snapshot(
     })
 }
 
-fn decode_project_view(document: &Document) -> Result<ProjectView, ProjectStoreError> {
+pub(crate) fn decode_project_view(document: &Document) -> Result<ProjectView, ProjectStoreError> {
     let project_id = ProjectId::new(
         document
             .get_i32("_id")
@@ -1344,6 +1362,9 @@ fn project_validator() -> Document {
                 },
             },
             "grouping_revision": { "bsonType": "long", "minimum": 1 },
+            "dr": { "bsonType": "long", "minimum": 1 },
+            "db": { "bsonType": "long", "minimum": 0 },
+            "dc": { "bsonType": "long", "minimum": 0 },
             "catalog_usage": {
                 "bsonType": "object",
                 "additionalProperties": false,

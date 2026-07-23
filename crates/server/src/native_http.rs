@@ -56,6 +56,7 @@ struct NativeHttpState {
     required_ready: bool,
     retention: Option<RetentionCapability>,
     project_deletion: Option<ProjectDeletionCapability>,
+    debug_files: Option<DebugFileCapability>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +70,11 @@ pub struct ProjectDeletionCapability {
     pub grace_period_seconds: u64,
     pub delete_batch_documents: usize,
     pub slug_reservation_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DebugFileCapability {
+    pub external_symbolicator: bool,
 }
 
 #[derive(Debug)]
@@ -172,6 +178,7 @@ pub fn router(
     required_ready: bool,
     retention: Option<RetentionCapability>,
     project_deletion: Option<ProjectDeletionCapability>,
+    debug_files: Option<DebugFileCapability>,
 ) -> Router {
     let state = NativeHttpState {
         identity,
@@ -180,6 +187,7 @@ pub fn router(
         required_ready,
         retention,
         project_deletion,
+        debug_files,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -1153,7 +1161,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "delete_batch_documents": policy.delete_batch_documents,
             "slug_reservation_seconds": policy.slug_reservation_seconds,
             "final_reconciliation": true,
-            "filesystem_namespaces": 1,
+            "filesystem_namespaces": 3,
         })
     });
     Json(json!({
@@ -1175,6 +1183,10 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "local_blob_store": true,
             "event_attachments": true,
             "minidump_endpoint": true,
+            "debug_files": state.debug_files.is_some(),
+            "external_symbolicator": state
+                .debug_files
+                .is_some_and(|capability| capability.external_symbolicator),
             "mcp": false,
             "migrations": false,
             "nats": false,
@@ -1183,6 +1195,11 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
         },
         "retention": retention,
         "project_deletion": project_deletion,
+        "debug_files": state.debug_files.map(|capability| json!({
+            "sentry_cli_chunk_upload": true,
+            "private_symbolicator_source": true,
+            "external_symbolicator": capability.external_symbolicator,
+        })),
     }))
 }
 
@@ -1202,7 +1219,15 @@ async fn component_status(
             "project_deletion": if state.project_deletion.is_some() { "running" } else { "stopped" },
             "blob_store": "available",
             "blob_cleanup": if state.required_ready { "running" } else { "stopped" },
-            "symbolication": "baseline",
+            "debug_files": if state.debug_files.is_some() { "available" } else { "unavailable" },
+            "symbolication": if state
+                .debug_files
+                .is_some_and(|capability| capability.external_symbolicator)
+            {
+                "external"
+            } else {
+                "baseline"
+            },
         }
     })))
 }

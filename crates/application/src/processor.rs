@@ -135,6 +135,7 @@ pub trait SymbolicationStage: Send + Sync + 'static {
     fn symbolicate<'a>(
         &'a self,
         event: &'a NormalizedEvent,
+        debug_file_revision: u64,
         cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>>;
 }
@@ -179,6 +180,7 @@ impl SymbolicationStage for BaselineSymbolicationService {
     fn symbolicate<'a>(
         &'a self,
         event: &'a NormalizedEvent,
+        _debug_file_revision: u64,
         _cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
         Box::pin(async move { Ok(Self::symbolicate(event)) })
@@ -189,10 +191,13 @@ impl<B: SymbolicationBackend> SymbolicationStage for SymbolicationService<B> {
     fn symbolicate<'a>(
         &'a self,
         event: &'a NormalizedEvent,
+        debug_file_revision: u64,
         cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
         Box::pin(async move {
-            let result = self.symbolicate(event, cancellation).await;
+            let result = self
+                .symbolicate_with_revision(event, debug_file_revision, cancellation)
+                .await;
             if result.disposition == SymbolicationDisposition::Retryable {
                 Err(StageFailure::temporary(
                     ProcessingErrorCode::SymbolicationRetryable,
@@ -598,8 +603,11 @@ impl Processor {
             self.config.stage_timeout,
             total_deadline,
             &self.cancellation,
-            self.symbolicator
-                .symbolicate(&normalized, &self.cancellation),
+            self.symbolicator.symbolicate(
+                &normalized,
+                project.debug_file_revision,
+                &self.cancellation,
+            ),
         )
         .await??;
         let grouping = run_stage(
@@ -1007,6 +1015,7 @@ mod tests {
         fn symbolicate<'a>(
             &'a self,
             event: &'a NormalizedEvent,
+            _debug_file_revision: u64,
             _cancellation: &'a CancellationToken,
         ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
             Box::pin(async move {
@@ -1081,6 +1090,7 @@ mod tests {
             state: ProjectAcceptanceState::Active,
             error_events_enabled: true,
             grouping_revision: 1,
+            debug_file_revision: 0,
         }
     }
 

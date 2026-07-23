@@ -84,6 +84,7 @@ impl SymbolicationStage for RetryOnceSymbolicator {
     fn symbolicate<'a>(
         &'a self,
         event: &'a NormalizedEvent,
+        _debug_file_revision: u64,
         _cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
         Box::pin(async move {

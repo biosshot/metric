@@ -4,7 +4,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::{EventId, ProjectId, Timestamp};
+use crate::{EventId, OrganizationId, ProjectId, Timestamp, debug_files::DebugFileId};
 
 pub const MAX_BLOB_KEY_BYTES: usize = 512;
 pub const MAX_ATTACHMENT_FILENAME_BYTES: usize = 128;
@@ -50,6 +50,23 @@ impl BlobKey {
     }
 
     #[must_use]
+    pub fn debug_chunk(organization_id: OrganizationId, sha1: [u8; 20]) -> Self {
+        Self(
+            format!(
+                "debug-chunks/{}/{}",
+                organization_id.get(),
+                hex::encode(sha1)
+            )
+            .into(),
+        )
+    }
+
+    #[must_use]
+    pub fn debug_file(project_id: ProjectId, file_id: DebugFileId) -> Self {
+        Self(format!("d/{}/{}", base36(project_id.get()), file_id).into())
+    }
+
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -67,6 +84,18 @@ impl BlobKey {
         let event_id = EventId::parse(segments[3]).map_err(|_| BlobValueError::InvalidKey)?;
         let object_id = BlobObjectId::parse(segments[4])?;
         Ok((project_id, event_id, object_id))
+    }
+
+    pub fn debug_file_relation(&self) -> Result<(ProjectId, DebugFileId), BlobValueError> {
+        let segments = self.0.split('/').collect::<Vec<_>>();
+        if segments.len() != 3 || segments[0] != "d" {
+            return Err(BlobValueError::InvalidKey);
+        }
+        let project_value =
+            i32::from_str_radix(segments[1], 36).map_err(|_| BlobValueError::InvalidKey)?;
+        let project_id = ProjectId::new(project_value).map_err(|_| BlobValueError::InvalidKey)?;
+        let file_id = DebugFileId::parse(segments[2]).map_err(|_| BlobValueError::InvalidKey)?;
+        Ok((project_id, file_id))
     }
 }
 
@@ -149,6 +178,8 @@ impl fmt::Debug for BlobChecksum {
 pub enum BlobKind {
     EventAttachment,
     Minidump,
+    DebugChunk,
+    DebugFile,
 }
 
 impl BlobKind {
@@ -157,7 +188,38 @@ impl BlobKind {
         match self {
             Self::EventAttachment => "event_attachment",
             Self::Minidump => "minidump",
+            Self::DebugChunk => "debug_chunk",
+            Self::DebugFile => "debug_file",
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobNamespace {
+    EventOwned,
+    DebugChunks,
+    DebugFiles,
+}
+
+impl BlobNamespace {
+    #[must_use]
+    pub const fn prefix(&self) -> &'static str {
+        match self {
+            Self::EventOwned => "projects/",
+            Self::DebugChunks => "debug-chunks/",
+            Self::DebugFiles => "d/",
+        }
+    }
+
+    pub fn kind_for_key(&self, key: &BlobKey) -> Result<BlobKind, BlobValueError> {
+        if !key.as_str().starts_with(self.prefix()) {
+            return Err(BlobValueError::InvalidKey);
+        }
+        Ok(match self {
+            Self::EventOwned => BlobKind::EventAttachment,
+            Self::DebugChunks => BlobKind::DebugChunk,
+            Self::DebugFiles => BlobKind::DebugFile,
+        })
     }
 }
 
@@ -231,6 +293,18 @@ fn valid_segment(segment: &str) -> bool {
         && segment
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
+}
+
+fn base36(value: i32) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut value = u32::try_from(value).expect("ProjectId is positive");
+    let mut output = Vec::new();
+    while value > 0 {
+        output.push(DIGITS[(value % 36) as usize]);
+        value /= 36;
+    }
+    output.reverse();
+    String::from_utf8(output).expect("base36 is ASCII")
 }
 
 #[cfg(test)]

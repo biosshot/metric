@@ -3,6 +3,7 @@
 pub mod api;
 pub mod auth;
 pub mod blob;
+pub mod debug_files;
 pub mod deletion;
 pub mod event;
 pub mod finalization;

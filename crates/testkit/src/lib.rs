@@ -214,6 +214,7 @@ mod tests {
         let backend = ScriptedSymbolicationBackend::new(Ok(outcome.clone()));
         let request = SymbolicationRequest {
             project_id: ProjectId::new(42).unwrap(),
+            debug_file_revision: 0,
             kind: SymbolicationKind::Native,
             traces: Vec::new(),
             modules: Vec::new(),

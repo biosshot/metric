@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use faultkeep_domain::Timestamp;
+use faultkeep_domain::{Timestamp, blob::BlobNamespace};
 use faultkeep_ports::{
     BlobReference, BlobReferenceStore, BlobScanRequest, BlobStore, BlobStoreError, Clock,
 };
@@ -92,6 +92,7 @@ impl BlobCleanupService {
             let page = self
                 .blobs
                 .scan(BlobScanRequest {
+                    namespace: BlobNamespace::EventOwned,
                     older_than: cutoff,
                     cursor,
                     limit: self.config.batch_size,

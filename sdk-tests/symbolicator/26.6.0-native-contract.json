@@ -1,0 +1,21 @@
+{
+  "image": "ghcr.io/getsentry/symbolicator:26.6.0",
+  "endpoint": "/symbolicate",
+  "request_contract": {
+    "platform": "native",
+    "threads": [],
+    "modules": [],
+    "options": {
+      "dif_candidates": true,
+      "apply_source_context": true,
+      "frame_order": "caller_first"
+    }
+  },
+  "response": {
+    "status": "complete",
+    "stacktraces": [],
+    "missing_debug_ids": [
+      "67e9247c-814e-392b-a027-dbde6748fcbf-1"
+    ]
+  }
+}

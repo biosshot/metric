@@ -116,6 +116,15 @@ impl<B: SymbolicationBackend> SymbolicationService<B> {
         event: &NormalizedEvent,
         cancellation: &CancellationToken,
     ) -> SymbolicationResult {
+        self.symbolicate_with_revision(event, 0, cancellation).await
+    }
+
+    pub async fn symbolicate_with_revision(
+        &self,
+        event: &NormalizedEvent,
+        debug_file_revision: u64,
+        cancellation: &CancellationToken,
+    ) -> SymbolicationResult {
         let raw = collect_raw_traces(&event.body);
         let kind = classify(&event.body, &raw);
         if kind == SymbolicationKind::NotRequired {
@@ -148,6 +157,7 @@ impl<B: SymbolicationBackend> SymbolicationService<B> {
         }
         let request = SymbolicationRequest {
             project_id: event.project_id,
+            debug_file_revision,
             kind,
             traces: raw.clone(),
             modules,

@@ -46,6 +46,7 @@ pub struct SymbolicationModule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolicationRequest {
     pub project_id: ProjectId,
+    pub debug_file_revision: u64,
     pub kind: SymbolicationKind,
     pub traces: Vec<RawStacktrace>,
     pub modules: Vec<SymbolicationModule>,

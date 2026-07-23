@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "phase": 17,
+  "recorded_at": "2026-07-23",
+  "machine": {
+    "cpu": "AMD Ryzen 5 5600H",
+    "os": "Windows",
+    "profile": "local development machine; not server-tuned"
+  },
+  "workload": {
+    "adapter": "local MongoDB and local filesystem BlobStore",
+    "real_sentry_cli_versions": ["3.6.2", "2.58.6"],
+    "index_samples_per_outcome": 500,
+    "profile": "debug test build",
+    "lookup_limit": 20
+  },
+  "result": {
+    "private_index_hit_rps": 1604,
+    "private_index_miss_rps": 1735,
+    "backend_failure_circuit_rps": 2775003,
+    "real_cli_upload": "pass",
+    "assembly_crash_recovery": "pass",
+    "expired_chunk_and_orphan_cleanup": "pass",
+    "private_download": "pass",
+    "private_cross_project_isolation": "pass",
+    "exact_id_delete": "pass",
+    "leftover_scoped_processes": 0
+  },
+  "command": "$env:FAULTKEEP_PHASE17_PERF='1'; cargo test -p faultkeep-server --test debug_files_e2e -- --ignored --nocapture"
+}

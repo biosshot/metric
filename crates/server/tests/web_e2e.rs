@@ -120,6 +120,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                 issue_stats_hourly_days: 400,
             }),
             None,
+            None,
         )
         .merge(web_http::router_with_root(&web_root)),
     );

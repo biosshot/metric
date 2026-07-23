@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 17] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 19] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -60,6 +60,16 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 17] = [
     DatasetRegistration {
         code: 10,
         name: "events",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 52,
+        name: "debug_files",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 54,
+        name: "debug_uploads",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -130,13 +140,25 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 17] = [
 ];
 
 /// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 1] = [DatasetRegistration {
-    code: 90,
-    name: "blob:projects/{project_id}/events",
-    ownership: DatasetOwnership::ProjectOwned,
-}];
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 3] = [
+    DatasetRegistration {
+        code: 90,
+        name: "blob:projects/{project_id}/events",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 91,
+        name: "blob:d/{project_id_base36}",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 0,
+        name: "blob:debug-chunks/{organization_id}",
+        ownership: DatasetOwnership::OrganizationShared,
+    },
+];
 
-const PURGE_CODES: [u16; 7] = [10, 20, 30, 40, 50, 60, 70];
+const PURGE_CODES: [u16; 9] = [10, 20, 30, 40, 50, 52, 54, 60, 70];
 
 impl MongoProjectStore {
     async fn request_deletion_inner(
@@ -436,6 +458,14 @@ impl MongoProjectStore {
                     batch_size,
                 )
                 .await
+            }
+            52 => {
+                self.delete_owned_batch("debug_files", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            54 => {
+                self.delete_owned_batch("debug_uploads", "p", project_id, cursor, batch_size)
+                    .await
             }
             60 => {
                 self.detach_release_batch(project_id, cursor, batch_size)

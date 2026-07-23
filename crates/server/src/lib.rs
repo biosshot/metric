@@ -1,6 +1,7 @@
 //! Configuration and composition root for the single `all` role.
 
 pub mod config;
+pub mod debug_http;
 pub mod http;
 pub mod ingest_http;
 pub mod native_http;
@@ -14,6 +15,10 @@ use faultkeep_application::{
     blob_cleanup::{
         BlobCleanupConfig, BlobCleanupError, BlobCleanupService, BlobCleanupTask,
         start_blob_cleanup_worker,
+    },
+    debug_files::{
+        DebugFileCleanupTask, DebugFileConfig, DebugFileError, DebugFileService,
+        start_debug_file_cleanup,
     },
     deletion::{
         ProjectDeletionConfig, ProjectDeletionError, ProjectDeletionService, ProjectDeletionTask,
@@ -34,7 +39,7 @@ use faultkeep_application::{
     scheduler::{Scheduler, SchedulerConfig, SchedulerStartError, SchedulerTask},
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
-    symbolication::BaselineSymbolicationService,
+    symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
 };
 use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
@@ -44,6 +49,7 @@ use faultkeep_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
     OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource,
 };
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
@@ -84,6 +90,10 @@ pub enum ServerError {
     Blob(#[from] BlobStoreError),
     #[error(transparent)]
     BlobCleanup(#[from] BlobCleanupError),
+    #[error(transparent)]
+    DebugFiles(#[from] DebugFileError),
+    #[error("external Symbolicator configuration is invalid")]
+    Symbolicator,
 }
 
 struct RuntimeModules {
@@ -98,6 +108,9 @@ struct RuntimeModules {
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
+    debug_file_service: Option<std::sync::Arc<DebugFileService>>,
+    private_source_signer: Option<faultkeep_symbolication::PrivateSourceSigner>,
+    debug_file_cleanup_task: Option<DebugFileCleanupTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -130,6 +143,17 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         )
         .await?,
     );
+    let private_source_signer = secrets
+        .scrub_hmac_key
+        .as_ref()
+        .map(|key| {
+            let mut derivation = Sha256::new();
+            derivation.update(b"faultkeep/private-symbol-source-key/v1");
+            derivation.update(key.expose());
+            faultkeep_symbolication::PrivateSourceSigner::new(derivation.finalize().to_vec(), None)
+                .map_err(|_| ServerError::Symbolicator)
+        })
+        .transpose()?;
     let RuntimeModules {
         project_resolver,
         event_sink,
@@ -142,6 +166,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         native_api_service,
         project_deletion_task,
         blob_cleanup_task,
+        debug_file_service,
+        private_source_signer: runtime_private_source_signer,
+        debug_file_cleanup_task,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -260,6 +287,27 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_project_deletion(deletion_service)
             .with_blob_store(std::sync::Arc::clone(&blob_store)),
         );
+        let debug_metadata: std::sync::Arc<dyn faultkeep_ports::DebugFileStore> =
+            std::sync::Arc::new(store.debug_file_store(faultkeep_mongo::DebugFileQuota::default()));
+        let debug_file_service = std::sync::Arc::new(DebugFileService::new(
+            debug_metadata,
+            std::sync::Arc::clone(&blob_store),
+            std::sync::Arc::clone(&clock),
+            DebugFileConfig {
+                max_file_bytes: config
+                    .blob
+                    .max_object_bytes
+                    .min(faultkeep_application::debug_files::SENTRY_CLI_MAX_FILE_BYTES),
+                ..DebugFileConfig::default()
+            },
+        )?);
+        debug_file_service.recover(100).await?;
+        let _ = debug_file_service.cleanup_once().await;
+        let debug_file_cleanup_task = start_debug_file_cleanup(
+            std::sync::Arc::clone(&debug_file_service),
+            config.ingest.attachments.cleanup_interval.get(),
+            shutdown.signal(),
+        )?;
         let event_store = std::sync::Arc::new(store.event_store(event_codec));
         let blob_references: std::sync::Arc<dyn BlobReferenceStore> = event_store.clone();
         let blob_cleanup_task = start_blob_cleanup_worker(
@@ -292,11 +340,39 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 ..FinalizerBatchConfig::default()
             },
         )?;
+        let symbolicator: std::sync::Arc<dyn faultkeep_application::processor::SymbolicationStage> =
+            if let Some(endpoint) = config.symbolicator.endpoint.clone() {
+                let signer = private_source_signer
+                    .clone()
+                    .ok_or(ServerError::Symbolicator)?;
+                let backend = faultkeep_symbolication::ExternalSymbolicator::new(
+                    faultkeep_symbolication::ExternalSymbolicatorConfig {
+                        endpoint,
+                        callback_base_url: config.symbolicator.callback_base_url.clone(),
+                        request_timeout: config.symbolicator.request_timeout.get(),
+                        maximum_concurrency: config.symbolicator.maximum_concurrency,
+                        circuit_failure_threshold: config.symbolicator.circuit_failure_threshold,
+                        circuit_cooldown: config.symbolicator.circuit_cooldown.get(),
+                        maximum_response_bytes: config.symbolicator.maximum_response_bytes,
+                    },
+                    signer,
+                )
+                .map_err(|_| ServerError::Symbolicator)?;
+                std::sync::Arc::new(
+                    SymbolicationService::new(
+                        std::sync::Arc::new(backend),
+                        SymbolicationConfig::default(),
+                    )
+                    .map_err(|_| ServerError::Symbolicator)?,
+                )
+            } else {
+                std::sync::Arc::new(BaselineSymbolicationService)
+            };
         let processor = std::sync::Arc::new(Processor::new(
             event_store.clone(),
             event_store.clone(),
             std::sync::Arc::new(Normalizer::new(NormalizerLimits::default())?),
-            std::sync::Arc::new(BaselineSymbolicationService),
+            symbolicator,
             std::sync::Arc::new(GrouperStage),
             std::sync::Arc::new(IssuePreparerStage),
             finalizer_batcher.clone(),
@@ -386,6 +462,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_api_service: Some(native_api_service),
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
+            debug_file_service: Some(debug_file_service),
+            private_source_signer,
+            debug_file_cleanup_task: Some(debug_file_cleanup_task),
         }
     } else {
         RuntimeModules {
@@ -400,6 +479,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_api_service: None,
             project_deletion_task: None,
             blob_cleanup_task: None,
+            debug_file_service: None,
+            private_source_signer: None,
+            debug_file_cleanup_task: None,
         }
     };
     let ingest = std::sync::Arc::new(
@@ -430,7 +512,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         writer_task.is_some() && dispatcher_task.is_some() && scheduler_task.is_some();
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router(
-            identity_service,
+            identity_service.clone(),
             native_api_service,
             config.auth.secure_cookie,
             required_ready,
@@ -443,6 +525,14 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 delete_batch_documents: config.project_deletion.delete_batch_documents,
                 slug_reservation_seconds: config.project_deletion.slug_reservation.get().as_secs(),
             }),
+            required_ready.then_some(native_http::DebugFileCapability {
+                external_symbolicator: config.symbolicator.endpoint.is_some(),
+            }),
+        ))
+        .merge(debug_http::router(
+            identity_service.clone(),
+            debug_file_service,
+            runtime_private_source_signer,
         ))
         .merge(web_http::router());
     let app = http::router_with_readiness(
@@ -482,6 +572,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = blob_cleanup_task {
+        task.wait().await;
+    }
+    if let Some(task) = debug_file_cleanup_task {
         task.wait().await;
     }
     if let Some(task) = writer_task {
