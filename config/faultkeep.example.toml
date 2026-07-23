@@ -1,7 +1,7 @@
 role = "all"
 
 [server]
-http_address = "127.0.0.1:3000"
+http_address = "127.0.0.1:4001"
 shutdown_grace = "10s"
 
 [mongodb]
