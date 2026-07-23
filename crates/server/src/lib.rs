@@ -164,7 +164,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 },
             },
         )?);
-        if let Some(token) = identity_service.ensure_bootstrap_token().await? {
+        if let Some(token) =
+            startup_bootstrap_token(identity_service.ensure_bootstrap_token().await)?
+        {
             eprintln!(
                 "FAULTKEEP_BOOTSTRAP_TOKEN={} (shown once; store it securely)",
                 token.encode_hex()
@@ -403,6 +405,15 @@ impl RandomSource for SystemRandom {
     }
 }
 
+fn startup_bootstrap_token(
+    result: Result<Option<faultkeep_domain::auth::PlainSecret>, AuthError>,
+) -> Result<Option<faultkeep_domain::auth::PlainSecret>, AuthError> {
+    match result {
+        Err(AuthError::BootstrapClosed) => Ok(None),
+        result => result,
+    }
+}
+
 fn init_tracing() -> Result<(), ServerError> {
     tracing_subscriber::fmt()
         .json()
@@ -454,6 +465,18 @@ async fn wait_for_os_shutdown() {
 #[cfg(test)]
 mod production_fence_tests {
     use super::*;
+
+    #[test]
+    fn completed_bootstrap_is_a_valid_startup_state() {
+        assert_eq!(
+            startup_bootstrap_token(Err(AuthError::BootstrapClosed)),
+            Ok(None)
+        );
+        assert_eq!(
+            startup_bootstrap_token(Err(AuthError::Unavailable)),
+            Err(AuthError::Unavailable)
+        );
+    }
 
     #[tokio::test]
     async fn production_composition_has_no_fake_project_or_durable_success() {
