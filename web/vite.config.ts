@@ -7,9 +7,9 @@ export default defineConfig({
     port: 4173,
     strictPort: true,
     proxy: {
-      '/api': 'http://127.0.0.1:3000',
-      '/live': 'http://127.0.0.1:3000',
-      '/ready': 'http://127.0.0.1:3000',
+      '/api': 'http://127.0.0.1:4001',
+      '/live': 'http://127.0.0.1:4001',
+      '/ready': 'http://127.0.0.1:4001',
     },
   },
   build: {

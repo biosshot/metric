@@ -37,7 +37,7 @@ cargo test -p faultkeep-server --test sdk_compatibility_e2e real_node_sdk_sends_
 
 The Phase 13 Vue 3 client lives in `web/` and consumes only `/api/v1`. Run
 `npm install` once, then `npm run dev` in that directory while Faultkeep listens
-on `127.0.0.1:3000`.
+on `127.0.0.1:4001`.
 
 `npm run build` creates `web/dist`, which the Rust server serves on the supported
 Web routes. `FAULTKEEP_WEB_DIR` can point to an alternative production asset
