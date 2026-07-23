@@ -1,0 +1,17 @@
+schema_version = 1
+
+[[sdk]]
+family = "javascript"
+name = "@sentry/node"
+version = "10.66.0"
+runtime = "node"
+runtime_version = "26.5.0"
+transport = "envelope"
+authentication = "dsn"
+error_event = "pass"
+test_kind = "real_process"
+fixture = "node/send-error.mjs"
+attachments = "disabled"
+transactions = "disabled"
+profiles = "disabled"
+replays = "disabled"

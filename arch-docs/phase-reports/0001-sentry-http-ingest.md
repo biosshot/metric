@@ -48,6 +48,13 @@ not contain auth, DSNs, bodies, URLs or event fields. The compatibility matrix
 records the Python SDK 2.32.0 fixture as passing; unrecorded SDK/version rows are not
 claimed.
 
+The later real-process compatibility gate also records `@sentry/node` 10.66.0 on
+Node.js 26.5.0 as passing. That gate exposed the official SDK's optional-length,
+newline-delimited JSON Item framing. The bounded parser now accepts that framing
+while retaining exact declared-length validation and rejecting an unterminated
+lengthless Item above the Event byte limit. The retained sender and matrix are under
+`sdk-tests/`.
+
 ## Performance baseline
 
 Recorded host: AMD Ryzen 5 5600H, 6 cores/12 threads, 16 GiB RAM, Windows, with k6

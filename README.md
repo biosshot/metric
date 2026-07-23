@@ -23,6 +23,16 @@ developer MongoDB on its standard port.
 The retained k6 workloads, JSON baselines, and regression comparators are documented
 in `performance/README.md`.
 
+Real official SDK compatibility harnesses and the versioned result matrix live in
+`sdk-tests/`. Each SDK has an isolated dependency graph. The initial Node gate is:
+
+```text
+cd sdk-tests/node
+npm ci
+cd ../..
+cargo test -p faultkeep-server --test sdk_compatibility_e2e real_node_sdk_sends_an_error_event -- --ignored --nocapture
+```
+
 ## Web development
 
 The Phase 13 Vue 3 client lives in `web/` and consumes only `/api/v1`. Run
