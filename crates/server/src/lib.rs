@@ -11,6 +11,10 @@ use std::{io, process::ExitCode};
 use config::{Cli, ConfigError};
 use faultkeep_application::{
     auth::{AuthConfig, AuthError, IdentityService, LoginRateLimitConfig, PasswordConfig},
+    blob_cleanup::{
+        BlobCleanupConfig, BlobCleanupError, BlobCleanupService, BlobCleanupTask,
+        start_blob_cleanup_worker,
+    },
     deletion::{
         ProjectDeletionConfig, ProjectDeletionError, ProjectDeletionService, ProjectDeletionTask,
         ProjectFencedEventSink, ProjectWorkRegistry, start_project_deletion_worker,
@@ -33,11 +37,12 @@ use faultkeep_application::{
     symbolication::BaselineSymbolicationService,
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
 };
+use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
 use faultkeep_domain::Timestamp;
 use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use faultkeep_ports::{
-    Clock, EventBacklog, EventSink, EventSinkError, OutcomeSink, PortFuture, ProjectResolveError,
-    ProjectResolver, RandomError, RandomSource,
+    BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
+    OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -75,6 +80,10 @@ pub enum ServerError {
     Auth(#[from] AuthError),
     #[error(transparent)]
     ProjectDeletion(#[from] ProjectDeletionError),
+    #[error(transparent)]
+    Blob(#[from] BlobStoreError),
+    #[error(transparent)]
+    BlobCleanup(#[from] BlobCleanupError),
 }
 
 struct RuntimeModules {
@@ -88,6 +97,7 @@ struct RuntimeModules {
     identity_service: Option<std::sync::Arc<IdentityService>>,
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
     project_deletion_task: Option<ProjectDeletionTask>,
+    blob_cleanup_task: Option<BlobCleanupTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -109,6 +119,17 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let shutdown = ShutdownRoot::new();
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
     let random: std::sync::Arc<dyn RandomSource> = std::sync::Arc::new(SystemRandom);
+    let blob_store: std::sync::Arc<dyn BlobStore> = std::sync::Arc::new(
+        LocalBlobStore::new(
+            &config.blob.root,
+            LocalBlobConfig {
+                capacity_bytes: config.blob.capacity_bytes,
+                reserve_bytes: config.blob.reserve_bytes,
+                max_object_bytes: config.blob.max_object_bytes,
+            },
+        )
+        .await?,
+    );
     let RuntimeModules {
         project_resolver,
         event_sink,
@@ -120,6 +141,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         identity_service,
         native_api_service,
         project_deletion_task,
+        blob_cleanup_task,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -235,9 +257,25 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 search,
                 std::sync::Arc::clone(&clock),
             )
-            .with_project_deletion(deletion_service),
+            .with_project_deletion(deletion_service)
+            .with_blob_store(std::sync::Arc::clone(&blob_store)),
         );
         let event_store = std::sync::Arc::new(store.event_store(event_codec));
+        let blob_references: std::sync::Arc<dyn BlobReferenceStore> = event_store.clone();
+        let blob_cleanup_task = start_blob_cleanup_worker(
+            std::sync::Arc::new(BlobCleanupService::new(
+                std::sync::Arc::clone(&blob_store),
+                blob_references,
+                std::sync::Arc::clone(&clock),
+                BlobCleanupConfig {
+                    orphan_grace: config.ingest.attachments.orphan_grace.get(),
+                    interval: config.ingest.attachments.cleanup_interval.get(),
+                    batch_size: config.ingest.attachments.cleanup_batch_size,
+                    max_pages_per_run: config.ingest.attachments.cleanup_max_pages,
+                },
+            )?),
+            shutdown.signal(),
+        );
         let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
         let finalizer = std::sync::Arc::new(Finalizer::new(
             std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
@@ -347,6 +385,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             identity_service: Some(identity_service),
             native_api_service: Some(native_api_service),
             project_deletion_task: Some(project_deletion_task),
+            blob_cleanup_task: Some(blob_cleanup_task),
         }
     } else {
         RuntimeModules {
@@ -360,17 +399,33 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             identity_service: None,
             native_api_service: None,
             project_deletion_task: None,
+            blob_cleanup_task: None,
         }
     };
-    let ingest = std::sync::Arc::new(faultkeep_application::ingest::IngestService::new(
-        project_resolver,
-        event_sink,
-        std::sync::Arc::new(NoopOutcomeSink),
-        clock,
-        random,
-        config.ingest.max_waiting_for_storage,
-        shutdown.signal(),
-    ));
+    let ingest = std::sync::Arc::new(
+        faultkeep_application::ingest::IngestService::new(
+            project_resolver,
+            event_sink,
+            std::sync::Arc::new(NoopOutcomeSink),
+            clock,
+            random,
+            config.ingest.max_waiting_for_storage,
+            shutdown.signal(),
+        )
+        .with_blob_store(
+            blob_store,
+            faultkeep_application::ingest::AttachmentIngestConfig {
+                enabled: config.ingest.attachments.enabled,
+                chunk_bytes: config.ingest.attachments.chunk_bytes,
+            },
+        )
+        .with_minidumps(faultkeep_application::ingest::MinidumpIngestConfig {
+            enabled: config.native_crash.minidump.enabled,
+            max_bytes: config.native_crash.minidump.max_bytes,
+            chunk_bytes: config.native_crash.minidump.chunk_bytes,
+            retained_header_bytes: 64 * 1024,
+        }),
+    );
     let required_ready =
         writer_task.is_some() && dispatcher_task.is_some() && scheduler_task.is_some();
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
@@ -424,6 +479,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = project_deletion_task {
+        task.wait().await;
+    }
+    if let Some(task) = blob_cleanup_task {
         task.wait().await;
     }
     if let Some(task) = writer_task {

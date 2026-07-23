@@ -1,5 +1,6 @@
 use std::{
     io,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -18,16 +19,18 @@ use axum::{
 use faultkeep_application::{
     ingest::{
         DisabledCategory, DiscardedItem, IngestError, IngestErrorKind, IngestRequest, IngestResult,
-        IngestService, PrimaryEvent,
+        IngestService, MinidumpRequest, PendingAttachment, PrimaryEvent,
     },
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
 };
-use faultkeep_domain::{DsnKey, ProjectId};
-use faultkeep_ports::{IngestOutcome, IngestOutcomeKind};
+use faultkeep_domain::{DsnKey, EventId, ProjectId};
+use faultkeep_ports::{
+    BlobChunkSource, BlobStoreError, IngestOutcome, IngestOutcomeKind, PortFuture,
+};
 use faultkeep_sentry_protocol::{
-    EnvelopeLimits, ParsedEnvelope, ProtocolError, ProtocolErrorKind, parse_envelope,
-    parse_query_auth, parse_store_event, parse_x_sentry_auth,
+    AttachmentLimits, EnvelopeLimits, ParsedEnvelope, ProtocolError, ProtocolErrorKind,
+    parse_envelope_with_attachments, parse_query_auth, parse_store_event, parse_x_sentry_auth,
 };
 use futures_util::{TryStreamExt, future};
 use serde::Serialize;
@@ -87,7 +90,132 @@ pub fn router(
     Router::new()
         .route("/api/{project_id}/envelope/", post(envelope_handler))
         .route("/api/{project_id}/store/", post(store_handler))
+        .route("/api/{project_id}/minidump/", post(minidump_handler))
         .with_state(state)
+}
+
+async fn minidump_handler(
+    State(state): State<IngestHttpState>,
+    Path(project_id): Path<i32>,
+    Extension(request_id): Extension<RequestId>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let result = timeout(
+        state.config.request_timeout.get(),
+        process_minidump(&state, project_id, uri.query(), &headers, body),
+    )
+    .await;
+    match result {
+        Ok(Ok(result)) => {
+            minidump_success_response(result, state.config.unsupported_backoff_seconds)
+        }
+        Ok(Err(error)) => {
+            state.service.record_outcome(error.outcome());
+            map_http_error(request_id, error)
+        }
+        Err(_) => error_response(
+            request_id,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "timeout",
+            "request deadline exceeded",
+            Some(1),
+        ),
+    }
+}
+
+async fn process_minidump(
+    state: &IngestHttpState,
+    project_id: i32,
+    query: Option<&str>,
+    headers: &HeaderMap,
+    body: Body,
+) -> Result<IngestResult, HttpIngestError> {
+    let _active = state
+        .active
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| HttpIngestError::RateLimited)?;
+    let path_project_id =
+        ProjectId::new(project_id).map_err(|_| HttpIngestError::Protocol("invalid_project_id"))?;
+    let mut auth_keys = Vec::with_capacity(2);
+    if let Some(value) = headers.get("x-sentry-auth") {
+        auth_keys.push(parse_x_sentry_auth(
+            value
+                .to_str()
+                .map_err(|_| HttpIngestError::Protocol("invalid_auth_header"))?,
+        )?);
+    }
+    if let Some(key) = parse_query_auth(query.unwrap_or_default())? {
+        auth_keys.push(key);
+    }
+    let supplied_event_id = parse_minidump_event_id(query, headers)?;
+    let source = decoded_body_source(body, headers, &state.config)?;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let source: Box<dyn BlobChunkSource> = if content_type.split(';').next().is_some_and(|value| {
+        value
+            .trim()
+            .eq_ignore_ascii_case("application/octet-stream")
+    }) {
+        source
+    } else if content_type
+        .split(';')
+        .next()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("multipart/form-data"))
+    {
+        let boundary = multipart_boundary(content_type)?;
+        Box::new(MultipartMinidumpSource::new(source, boundary))
+    } else {
+        return Err(HttpIngestError::Protocol("invalid_minidump_content_type"));
+    };
+    state
+        .service
+        .ingest_minidump(
+            MinidumpRequest {
+                path_project_id,
+                auth_keys,
+                dsn_project_id: None,
+                supplied_event_id,
+            },
+            source,
+        )
+        .await
+        .map_err(Into::into)
+}
+
+fn parse_minidump_event_id(
+    query: Option<&str>,
+    headers: &HeaderMap,
+) -> Result<Option<EventId>, HttpIngestError> {
+    let header_id = headers
+        .get("sentry-event-id")
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| HttpIngestError::Protocol("invalid_event_id"))
+                .and_then(|value| {
+                    EventId::parse(value).map_err(|_| HttpIngestError::Protocol("invalid_event_id"))
+                })
+        })
+        .transpose()?;
+    let mut query_id = None;
+    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        if matches!(name.as_ref(), "sentry_event_id" | "sentry[event_id]") {
+            let parsed = EventId::parse(&value)
+                .map_err(|_| HttpIngestError::Protocol("invalid_event_id"))?;
+            if query_id.replace(parsed).is_some() {
+                return Err(HttpIngestError::Protocol("conflicting_event_id"));
+            }
+        }
+    }
+    if header_id.is_some() && query_id.is_some() && header_id != query_id {
+        return Err(HttpIngestError::Protocol("conflicting_event_id"));
+    }
+    Ok(header_id.or(query_id))
 }
 
 async fn envelope_handler(
@@ -234,11 +362,20 @@ async fn process_request(
         auth_keys.push(key);
     }
     let parsed = if is_envelope {
-        parse_envelope(
+        parse_envelope_with_attachments(
             &decoded,
             EnvelopeLimits {
                 max_items: state.config.max_envelope_items,
                 max_event_bytes: state.config.max_event_bytes,
+            },
+            AttachmentLimits {
+                max_count: if state.config.attachments.enabled {
+                    state.config.attachments.max_count
+                } else {
+                    0
+                },
+                max_item_bytes: state.config.attachments.max_item_bytes,
+                max_total_bytes: state.config.attachments.max_total_bytes,
             },
         )?
     } else {
@@ -246,6 +383,7 @@ async fn process_request(
             event_id: None,
             dsn: None,
             primary: Some(parse_store_event(&decoded, state.config.max_event_bytes)?),
+            attachments: Vec::new(),
             discarded: Vec::new(),
             client_report_quantity: 0,
         }
@@ -272,6 +410,17 @@ fn map_request(
             header_event_id: event.header_event_id,
             raw_json: event.bytes,
         }),
+        attachments: parsed
+            .attachments
+            .into_iter()
+            .map(|attachment| PendingAttachment {
+                position: attachment.position,
+                filename: attachment.filename,
+                content_type: attachment.content_type,
+                attachment_type: attachment.attachment_type,
+                bytes: attachment.bytes,
+            })
+            .collect(),
         discarded: parsed
             .discarded
             .into_iter()
@@ -297,6 +446,217 @@ const fn map_category(category: faultkeep_sentry_protocol::DisabledCategory) -> 
         Wire::Attachment => DisabledCategory::Attachment,
         Wire::OtherKnown => DisabledCategory::OtherKnown,
     }
+}
+
+struct HttpBodySource {
+    reader: Pin<Box<dyn AsyncRead + Send>>,
+    compressed_exceeded: Arc<AtomicBool>,
+    decompressed_bytes: usize,
+    max_decompressed_bytes: usize,
+}
+
+impl BlobChunkSource for HttpBodySource {
+    fn next_chunk(
+        &mut self,
+        maximum: usize,
+    ) -> PortFuture<'_, Result<Option<Box<[u8]>>, BlobStoreError>> {
+        Box::pin(async move {
+            if maximum == 0 || maximum > 1024 * 1024 {
+                return Err(BlobStoreError::Invalid);
+            }
+            let mut chunk = vec![0_u8; maximum];
+            let count = self.reader.as_mut().read(&mut chunk).await.map_err(|_| {
+                if self.compressed_exceeded.load(Ordering::Relaxed) {
+                    BlobStoreError::TooLarge
+                } else {
+                    BlobStoreError::Invalid
+                }
+            })?;
+            if count == 0 {
+                return Ok(None);
+            }
+            self.decompressed_bytes = self
+                .decompressed_bytes
+                .checked_add(count)
+                .ok_or(BlobStoreError::TooLarge)?;
+            if self.decompressed_bytes > self.max_decompressed_bytes {
+                return Err(BlobStoreError::TooLarge);
+            }
+            chunk.truncate(count);
+            Ok(Some(chunk.into_boxed_slice()))
+        })
+    }
+}
+
+fn decoded_body_source(
+    body: Body,
+    headers: &HeaderMap,
+    config: &IngestConfig,
+) -> Result<Box<dyn BlobChunkSource>, HttpIngestError> {
+    if headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|length| length > config.max_compressed_request_bytes)
+    {
+        return Err(HttpIngestError::TooLarge("compressed_request_too_large"));
+    }
+    let seen = Arc::new(AtomicUsize::new(0));
+    let exceeded = Arc::new(AtomicBool::new(false));
+    let seen_stream = Arc::clone(&seen);
+    let exceeded_stream = Arc::clone(&exceeded);
+    let max_compressed = config.max_compressed_request_bytes;
+    let stream = body
+        .into_data_stream()
+        .map_err(io::Error::other)
+        .and_then(move |chunk| {
+            let total = seen_stream.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
+            let result = if total > max_compressed {
+                exceeded_stream.store(true, Ordering::Relaxed);
+                Err(io::Error::other("compressed limit exceeded"))
+            } else {
+                Ok(chunk)
+            };
+            future::ready(result)
+        });
+    let reader = BufReader::new(StreamReader::new(stream));
+    let encoding = headers
+        .get(header::CONTENT_ENCODING)
+        .map(|value| value.to_str().unwrap_or("invalid"))
+        .unwrap_or("identity");
+    let reader: Pin<Box<dyn AsyncRead + Send>> = match encoding {
+        "" | "identity" => Box::pin(reader),
+        "gzip" => Box::pin(GzipDecoder::new(reader)),
+        "deflate" => Box::pin(ZlibDecoder::new(reader)),
+        _ => return Err(HttpIngestError::UnsupportedEncoding),
+    };
+    Ok(Box::new(HttpBodySource {
+        reader,
+        compressed_exceeded: exceeded,
+        decompressed_bytes: 0,
+        max_decompressed_bytes: config.max_decompressed_request_bytes,
+    }))
+}
+
+struct MultipartMinidumpSource {
+    inner: Box<dyn BlobChunkSource>,
+    boundary: Box<[u8]>,
+    buffer: Vec<u8>,
+    initialized: bool,
+    ended: bool,
+}
+
+impl MultipartMinidumpSource {
+    fn new(inner: Box<dyn BlobChunkSource>, boundary: Box<str>) -> Self {
+        Self {
+            inner,
+            boundary: format!("\r\n--{boundary}").into_bytes().into_boxed_slice(),
+            buffer: Vec::new(),
+            initialized: false,
+            ended: false,
+        }
+    }
+}
+
+impl BlobChunkSource for MultipartMinidumpSource {
+    fn next_chunk(
+        &mut self,
+        maximum: usize,
+    ) -> PortFuture<'_, Result<Option<Box<[u8]>>, BlobStoreError>> {
+        Box::pin(async move {
+            if maximum == 0 || maximum > 1024 * 1024 {
+                return Err(BlobStoreError::Invalid);
+            }
+            if self.ended {
+                return Ok(None);
+            }
+            if !self.initialized {
+                loop {
+                    if let Some(end) = find_bytes(&self.buffer, b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&self.buffer[..end])
+                            .map_err(|_| BlobStoreError::Invalid)?;
+                        let lowercase = headers.to_ascii_lowercase();
+                        if !self.buffer[..end].starts_with(&self.boundary[2..])
+                            || !lowercase.contains("content-disposition:")
+                            || !lowercase.contains("name=\"upload_file_minidump\"")
+                        {
+                            return Err(BlobStoreError::Invalid);
+                        }
+                        self.buffer.drain(..end + 4);
+                        self.initialized = true;
+                        break;
+                    }
+                    if self.buffer.len() > 16 * 1024 {
+                        return Err(BlobStoreError::TooLarge);
+                    }
+                    let Some(chunk) = self.inner.next_chunk(16 * 1024).await? else {
+                        return Err(BlobStoreError::Invalid);
+                    };
+                    self.buffer.extend_from_slice(&chunk);
+                }
+            }
+            loop {
+                if let Some(boundary) = find_bytes(&self.buffer, &self.boundary) {
+                    if boundary == 0 {
+                        self.ended = true;
+                        return Ok(None);
+                    }
+                    let count = boundary.min(maximum);
+                    return Ok(Some(
+                        self.buffer
+                            .drain(..count)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ));
+                }
+                let preserved = self.boundary.len().saturating_sub(1);
+                if self.buffer.len() > preserved {
+                    let count = (self.buffer.len() - preserved).min(maximum);
+                    return Ok(Some(
+                        self.buffer
+                            .drain(..count)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ));
+                }
+                let Some(chunk) = self.inner.next_chunk(maximum.max(4096)).await? else {
+                    return Err(BlobStoreError::Invalid);
+                };
+                self.buffer.extend_from_slice(&chunk);
+            }
+        })
+    }
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    (!needle.is_empty() && haystack.len() >= needle.len())
+        .then(|| {
+            haystack
+                .windows(needle.len())
+                .position(|window| window == needle)
+        })
+        .flatten()
+}
+
+fn multipart_boundary(content_type: &str) -> Result<Box<str>, HttpIngestError> {
+    let boundary = content_type
+        .split(';')
+        .skip(1)
+        .find_map(|parameter| {
+            parameter
+                .trim()
+                .strip_prefix("boundary=")
+                .map(|value| value.trim_matches('"'))
+        })
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"'()+_,-./:=?".contains(&byte))
+        })
+        .ok_or(HttpIngestError::Protocol("invalid_multipart_boundary"))?;
+    Ok(boundary.into())
 }
 
 async fn decode_body(
@@ -457,6 +817,31 @@ fn success_response(result: IngestResult, backoff_seconds: u64) -> Response {
         }),
     )
         .into_response();
+    if !result.disabled_categories.is_empty() {
+        let value = format!(
+            "{}:{}:project:feature_disabled",
+            backoff_seconds,
+            result.disabled_categories.join(";")
+        );
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            response.headers_mut().insert("x-sentry-rate-limits", value);
+        }
+    }
+    response
+}
+
+fn minidump_success_response(result: IngestResult, backoff_seconds: u64) -> Response {
+    let mut response = (
+        StatusCode::OK,
+        result
+            .event_id
+            .map_or_else(String::new, |event_id| event_id.to_string()),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     if !result.disabled_categories.is_empty() {
         let value = format!(
             "{}:{}:project:feature_disabled",

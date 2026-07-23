@@ -38,4 +38,5 @@ cargo test -p faultkeep-server --test sdk_compatibility_e2e \
 The test starts the real Faultkeep HTTP router on an ephemeral port, invokes the
 official `@sentry/node` process with a real DSN, waits for `captureException` and
 `flush`, and verifies the accepted Event ID, exception, release, environment and
-exact SDK metadata.
+exact SDK metadata. The same real Envelope includes a safe JSON attachment; the gate
+also verifies blob-first metadata and the exact bytes read back from BlobStore.

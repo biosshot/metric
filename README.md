@@ -95,3 +95,12 @@ Phase 15 advances the initial MongoDB schema generation to 3 by adding
 framework: an existing generation-2 development database is rejected rather
 than modified implicitly. Select a fresh database name or explicitly recreate
 development data.
+
+Phase 16 adds the configured local `[blob]` store. Safe JSON and text Event
+attachments are enabled through `[ingest.attachments]`; their bytes are published
+before the MongoDB Event and can be listed/downloaded only through the authorized
+Event API. Standalone `POST /api/{project_id}/minidump/` accepts raw octet-stream or
+the Sentry multipart `upload_file_minidump` field. It remains disabled by default
+because dump memory cannot be reliably scrubbed; enable it explicitly with
+`[native_crash.minidump].enabled = true`. Phase 16 does not change the MongoDB schema
+generation and does not add S3 or Symbolicator processing.

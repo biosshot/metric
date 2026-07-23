@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, net::SocketAddr, num::NonZeroU32, sync::Arc};
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{
         ConnectInfo, DefaultBodyLimit, Extension, Path, RawQuery, Request, State,
         rejection::JsonRejection,
@@ -31,6 +32,7 @@ use faultkeep_domain::{
         Actor, AuthContext, CredentialId, EmailAddress, OrganizationRole, Permission,
         PermissionSet, PlainSecret, RequestCorrelationId, SecretDigest, TokenName, UserDisplayName,
     },
+    blob::BlobObjectId,
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
     grouping::IssueId,
     issue::{ActorKind, ActorRef, IssueCommandAction, IssueSnapshot, IssueStatus},
@@ -237,6 +239,14 @@ pub fn router(
             get(search_events),
         )
         .route(
+            "/api/v1/projects/{project_id}/events/{event_id}/attachments",
+            get(event_attachments),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/events/{event_id}/attachments/{attachment_id}",
+            get(download_attachment),
+        )
+        .route(
             "/api/v1/projects/{project_id}/events/{event_id}",
             get(get_event),
         )
@@ -251,6 +261,82 @@ pub fn router(
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(native_error_context))
         .with_state(state)
+}
+
+async fn event_attachments(
+    State(state): State<NativeHttpState>,
+    Path((project_id, event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let attachments = api(&state)?
+        .event_attachments(
+            &context,
+            project_id_from(&project_id)?,
+            EventId::parse(&event_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": attachments.into_iter().map(|attachment| json!({
+            "attachment_id": attachment.attachment_id.to_string(),
+            "filename": attachment.filename,
+            "content_type": attachment.content_type,
+            "attachment_type": attachment.attachment_type,
+            "size": attachment.size,
+            "checksum": attachment.checksum,
+        })).collect::<Vec<_>>()
+    })))
+}
+
+async fn download_attachment(
+    State(state): State<NativeHttpState>,
+    Path((project_id, event_id, attachment_id)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let (attachment, reader) = api(&state)?
+        .open_event_attachment(
+            &context,
+            project_id_from(&project_id)?,
+            EventId::parse(&event_id).map_err(|_| HttpApiError::InvalidRequest)?,
+            BlobObjectId::parse(&attachment_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    let stream = futures_util::stream::try_unfold(reader, |mut reader| async move {
+        reader
+            .read_chunk(64 * 1024)
+            .await
+            .map(|chunk| chunk.map(|bytes| (bytes::Bytes::from(bytes.into_vec()), reader)))
+            .map_err(std::io::Error::other)
+    });
+    let filename = if attachment
+        .filename
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"._- ".contains(&byte))
+    {
+        attachment.filename.as_ref()
+    } else {
+        "attachment.bin"
+    };
+    let content_type =
+        HeaderValue::from_str(&attachment.content_type).map_err(|_| HttpApiError::Unavailable)?;
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+        .map_err(|_| HttpApiError::Unavailable)?;
+    let length = HeaderValue::from_str(&attachment.size.to_string())
+        .map_err(|_| HttpApiError::Unavailable)?;
+    let mut response = Body::from_stream(stream).into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
+    response
+        .headers_mut()
+        .insert(header::CONTENT_LENGTH, length);
+    Ok(response)
 }
 
 async fn native_error_context(request: Request, next: Next) -> Response {
@@ -1067,7 +1153,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "delete_batch_documents": policy.delete_batch_documents,
             "slug_reservation_seconds": policy.slug_reservation_seconds,
             "final_reconciliation": true,
-            "filesystem_namespaces": 0,
+            "filesystem_namespaces": 1,
         })
     });
     Json(json!({
@@ -1086,6 +1172,9 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "web": true,
             "retention": retention.is_some(),
             "project_deletion": project_deletion.is_some(),
+            "local_blob_store": true,
+            "event_attachments": true,
+            "minidump_endpoint": true,
             "mcp": false,
             "migrations": false,
             "nats": false,
@@ -1111,6 +1200,8 @@ async fn component_status(
             "processor": if state.required_ready { "running" } else { "stopped" },
             "scheduler": if state.required_ready { "running" } else { "stopped" },
             "project_deletion": if state.project_deletion.is_some() { "running" } else { "stopped" },
+            "blob_store": "available",
+            "blob_cleanup": if state.required_ready { "running" } else { "stopped" },
             "symbolication": "baseline",
         }
     })))
@@ -1759,6 +1850,14 @@ mod tests {
                 RouteAccess::Permission(Permission::EventRead),
             ),
             (
+                "GET /projects/:id/events/:event/attachments",
+                RouteAccess::Permission(Permission::EventRead),
+            ),
+            (
+                "GET /projects/:id/events/:event/attachments/:attachment",
+                RouteAccess::Permission(Permission::EventRead),
+            ),
+            (
                 "GET /projects/:id/events/search",
                 RouteAccess::Permission(Permission::EventRead),
             ),
@@ -1773,7 +1872,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 31);
+        assert_eq!(matrix.len(), 33);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

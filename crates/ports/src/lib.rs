@@ -15,6 +15,7 @@ use faultkeep_domain::{
         OrganizationMembership, PasswordHash, SecretDigest, SetupToken, UserAccount, UserId,
         WebSession,
     },
+    blob::{BlobKey, BlobKind, BlobObject, BlobObjectId},
     deletion::{
         ProjectDeletionChange, ProjectDeletionOperationId, ProjectDeletionRequest,
         ProjectDeletionStatus,
@@ -31,6 +32,103 @@ use faultkeep_domain::{
 use thiserror::Error;
 
 pub type PortFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum BlobStoreError {
+    #[error("blob source or object exceeds its configured limit")]
+    TooLarge,
+    #[error("blob storage capacity reserve is exhausted")]
+    Capacity,
+    #[error("blob object does not exist")]
+    NotFound,
+    #[error("blob object is corrupt")]
+    Corrupt,
+    #[error("blob storage request is invalid")]
+    Invalid,
+    #[error("blob storage is temporarily unavailable")]
+    Unavailable,
+}
+
+pub trait BlobWriteSession: Send + 'static {
+    fn write_chunk(&mut self, chunk: Box<[u8]>) -> PortFuture<'_, Result<(), BlobStoreError>>;
+
+    fn commit(
+        self: Box<Self>,
+        key: BlobKey,
+    ) -> PortFuture<'static, Result<BlobObject, BlobStoreError>>;
+
+    fn abort(self: Box<Self>) -> PortFuture<'static, Result<(), BlobStoreError>>;
+}
+
+pub trait BlobReadSession: Send + 'static {
+    fn read_chunk(
+        &mut self,
+        maximum: usize,
+    ) -> PortFuture<'_, Result<Option<Box<[u8]>>, BlobStoreError>>;
+}
+
+#[derive(Debug, Clone)]
+pub struct BlobScanRequest {
+    pub older_than: Timestamp,
+    pub cursor: Option<Box<str>>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobScanPage {
+    pub objects: Vec<BlobObject>,
+    pub next_cursor: Option<Box<str>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlobCapacity {
+    pub used_bytes: u64,
+    pub writable_bytes: u64,
+    pub reserve_bytes: u64,
+}
+
+pub trait BlobStore: Send + Sync + 'static {
+    fn begin(
+        &self,
+        kind: BlobKind,
+        created_at: Timestamp,
+    ) -> PortFuture<'_, Result<Box<dyn BlobWriteSession>, BlobStoreError>>;
+
+    fn open(
+        &self,
+        key: &BlobKey,
+    ) -> PortFuture<'_, Result<Box<dyn BlobReadSession>, BlobStoreError>>;
+
+    fn delete(&self, key: &BlobKey) -> PortFuture<'_, Result<(), BlobStoreError>>;
+
+    fn scan(
+        &self,
+        request: BlobScanRequest,
+    ) -> PortFuture<'_, Result<BlobScanPage, BlobStoreError>>;
+
+    fn capacity(&self) -> BlobCapacity;
+}
+
+pub trait BlobChunkSource: Send + 'static {
+    fn next_chunk(
+        &mut self,
+        maximum: usize,
+    ) -> PortFuture<'_, Result<Option<Box<[u8]>>, BlobStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BlobReference {
+    pub project_id: ProjectId,
+    pub event_id: faultkeep_domain::EventId,
+    pub object_id: BlobObjectId,
+}
+
+pub trait BlobReferenceStore: Send + Sync + 'static {
+    fn is_referenced(
+        &self,
+        reference: BlobReference,
+    ) -> PortFuture<'_, Result<bool, BlobStoreError>>;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProjectResolveError {

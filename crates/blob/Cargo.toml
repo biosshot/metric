@@ -9,6 +9,12 @@ repository.workspace = true
 [dependencies]
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
+blake3.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+faultkeep-domain = { path = "../domain" }
 
 [lints]
 workspace = true

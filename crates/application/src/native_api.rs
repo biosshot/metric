@@ -9,6 +9,7 @@ use faultkeep_domain::{
         IssueStatBucket, ProjectKeyView, ProjectPolicyUpdate, ProjectView, ReleaseAnchor,
     },
     auth::{Actor, AuditAction, AuthContext, Permission, RequestCorrelationId},
+    blob::{BlobKey, BlobObjectId},
     deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
     grouping::IssueId,
     issue::{
@@ -16,7 +17,9 @@ use faultkeep_domain::{
         IssueStatus,
     },
 };
-use faultkeep_ports::{Clock, InvestigationStore, InvestigationStoreError};
+use faultkeep_ports::{
+    BlobReadSession, BlobStore, BlobStoreError, Clock, InvestigationStore, InvestigationStoreError,
+};
 use thiserror::Error;
 
 use crate::{
@@ -97,6 +100,18 @@ pub struct NativeApiService {
     search: Arc<SearchService>,
     clock: Arc<dyn Clock>,
     deletion: Option<Arc<ProjectDeletionService>>,
+    blob_store: Option<Arc<dyn BlobStore>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentView {
+    pub attachment_id: BlobObjectId,
+    pub blob_key: BlobKey,
+    pub filename: Box<str>,
+    pub content_type: Box<str>,
+    pub attachment_type: Box<str>,
+    pub size: u64,
+    pub checksum: Box<str>,
 }
 
 impl NativeApiService {
@@ -117,7 +132,14 @@ impl NativeApiService {
             search,
             clock,
             deletion: None,
+            blob_store: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_blob_store(mut self, blob_store: Arc<dyn BlobStore>) -> Self {
+        self.blob_store = Some(blob_store);
+        self
     }
 
     #[must_use]
@@ -469,6 +491,53 @@ impl NativeApiService {
             .map_err(map_store_error)
     }
 
+    pub async fn event_attachments(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        event_id: EventId,
+    ) -> Result<Vec<AttachmentView>, NativeApiError> {
+        let event = self.event(context, project_id, event_id).await?;
+        let attachments = decode_attachments(event.payload.as_bytes())?;
+        for attachment in &attachments {
+            let (related_project, related_event, related_object) = attachment
+                .blob_key
+                .event_relation()
+                .map_err(|_| NativeApiError::Unavailable)?;
+            if related_project != project_id
+                || related_event != event_id
+                || related_object != attachment.attachment_id
+            {
+                return Err(NativeApiError::Unavailable);
+            }
+        }
+        Ok(attachments)
+    }
+
+    pub async fn open_event_attachment(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        event_id: EventId,
+        attachment_id: BlobObjectId,
+    ) -> Result<(AttachmentView, Box<dyn BlobReadSession>), NativeApiError> {
+        let attachment = self
+            .event_attachments(context, project_id, event_id)
+            .await?
+            .into_iter()
+            .find(|attachment| attachment.attachment_id == attachment_id)
+            .ok_or(NativeApiError::NotFound)?;
+        let store = self
+            .blob_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?;
+        let reader = store
+            .open(&attachment.blob_key)
+            .await
+            .map_err(map_blob_error)?;
+        Ok((attachment, reader))
+    }
+
     pub async fn search(
         &self,
         context: &AuthContext,
@@ -674,6 +743,82 @@ impl NativeApiService {
     }
 }
 
+fn decode_attachments(payload: &[u8]) -> Result<Vec<AttachmentView>, NativeApiError> {
+    let event: serde_json::Value =
+        serde_json::from_slice(payload).map_err(|_| NativeApiError::Unavailable)?;
+    let values = event
+        .get("attachments")
+        .map(|values| values.as_array().ok_or(NativeApiError::Unavailable))
+        .transpose()?
+        .cloned()
+        .unwrap_or_default();
+    if values.len() > 100 {
+        return Err(NativeApiError::Unavailable);
+    }
+    let mut attachments = values
+        .iter()
+        .map(|value| -> Result<AttachmentView, NativeApiError> {
+            let object = value.as_object().ok_or(NativeApiError::Unavailable)?;
+            let text = |name| {
+                object
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or(NativeApiError::Unavailable)
+            };
+            let size = object
+                .get("size")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or(NativeApiError::Unavailable)?;
+            Ok(AttachmentView {
+                attachment_id: BlobObjectId::parse(text("attachment_id")?)
+                    .map_err(|_| NativeApiError::Unavailable)?,
+                blob_key: BlobKey::new(text("blob_key")?.to_owned())
+                    .map_err(|_| NativeApiError::Unavailable)?,
+                filename: text("filename")?.into(),
+                content_type: text("content_type")?.into(),
+                attachment_type: text("attachment_type")?.into(),
+                size,
+                checksum: text("checksum")?.into(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(native) = event.get("native_crash") {
+        let object = native.as_object().ok_or(NativeApiError::Unavailable)?;
+        let text = |name| {
+            object
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .ok_or(NativeApiError::Unavailable)
+        };
+        attachments.push(AttachmentView {
+            attachment_id: BlobObjectId::parse(text("object_id")?)
+                .map_err(|_| NativeApiError::Unavailable)?,
+            blob_key: BlobKey::new(text("blob_key")?.to_owned())
+                .map_err(|_| NativeApiError::Unavailable)?,
+            filename: "minidump.dmp".into(),
+            content_type: "application/octet-stream".into(),
+            attachment_type: "event.minidump".into(),
+            size: object
+                .get("size")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or(NativeApiError::Unavailable)?,
+            checksum: text("checksum")?.into(),
+        });
+    }
+    Ok(attachments)
+}
+
+fn map_blob_error(error: BlobStoreError) -> NativeApiError {
+    match error {
+        BlobStoreError::NotFound => NativeApiError::Unavailable,
+        BlobStoreError::TooLarge
+        | BlobStoreError::Capacity
+        | BlobStoreError::Corrupt
+        | BlobStoreError::Invalid
+        | BlobStoreError::Unavailable => NativeApiError::Unavailable,
+    }
+}
+
 fn require(context: &AuthContext, permission: Permission) -> Result<(), NativeApiError> {
     if context.permissions.contains(permission) {
         Ok(())
@@ -849,5 +994,35 @@ fn map_auth_error(error: AuthError) -> NativeApiError {
             NativeApiError::InvalidRequest
         }
         _ => NativeApiError::Unavailable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachment_and_minidump_metadata_decode_without_blob_bytes() {
+        let payload = br#"{
+            "attachments":[{
+                "attachment_id":"02020202020202020202020202020202",
+                "blob_key":"projects/7/events/01010101010101010101010101010101/02020202020202020202020202020202",
+                "filename":"context.json",
+                "content_type":"application/json",
+                "attachment_type":"event.attachment",
+                "size":12,
+                "checksum":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }],
+            "native_crash":{
+                "object_id":"03030303030303030303030303030303",
+                "blob_key":"projects/7/events/01010101010101010101010101010101/03030303030303030303030303030303",
+                "size":44,
+                "checksum":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+        }"#;
+        let decoded = decode_attachments(payload).unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].filename.as_ref(), "context.json");
+        assert_eq!(decoded[1].attachment_type.as_ref(), "event.minidump");
     }
 }

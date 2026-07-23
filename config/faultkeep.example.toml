@@ -18,6 +18,18 @@ max_keys_per_project = 32
 allow_literal_secrets = false
 allow_insecure_cookies = false
 
+[blob]
+root = "./faultkeep-data/blobs"
+capacity = "1 GiB"
+reserve = "128 MiB"
+max_object_bytes = "100 MiB"
+
+[native_crash.minidump]
+# Minidumps may contain unsrubbable process memory. Enable only after accepting that risk.
+enabled = false
+max_bytes = "100 MiB"
+chunk_bytes = "64 KiB"
+
 [ingest]
 max_compressed_request_bytes = "20 MiB"
 max_decompressed_request_bytes = "100 MiB"
@@ -28,6 +40,17 @@ max_parsing_tasks = 0
 max_waiting_for_storage = 512
 request_timeout = "10s"
 unsupported_backoff_seconds = 3600
+
+[ingest.attachments]
+enabled = true
+max_count = 10
+max_item_bytes = "1 MiB"
+max_total_bytes = "5 MiB"
+chunk_bytes = "64 KiB"
+orphan_grace = "24h"
+cleanup_interval = "15m"
+cleanup_batch_size = 256
+cleanup_max_pages = 16
 
 [ingest.project_cache]
 capacity = 100000

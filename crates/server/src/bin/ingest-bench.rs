@@ -142,5 +142,6 @@ fn benchmark_config() -> IngestConfig {
         batch: Default::default(),
         event_codec: Default::default(),
         backlog: Default::default(),
+        attachments: Default::default(),
     }
 }

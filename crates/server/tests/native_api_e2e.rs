@@ -16,7 +16,7 @@ use faultkeep_application::{
     auth::{AuthConfig, BootstrapRequest, IdentityService, PasswordConfig, PasswordInput},
     dispatcher::{Dispatcher, DispatcherConfig},
     finalizer::{Finalizer, FinalizerConfig},
-    ingest::IngestService,
+    ingest::{AttachmentIngestConfig, IngestService},
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerLimits},
     processor::{
@@ -29,6 +29,7 @@ use faultkeep_application::{
     symbolication::BaselineSymbolicationService,
     writer::{MongoWriter, MongoWriterConfig},
 };
+use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
 use faultkeep_domain::{
     AcceptedEvent, DisplayName, EventId, EventKey, IpScrubPolicy, ItemCapabilities, OrganizationId,
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
@@ -273,6 +274,17 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     let now = Timestamp::from_unix_millis(2_000)?;
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(now));
     let random: Arc<dyn RandomSource> = Arc::new(CounterRandom(AtomicU64::new(0)));
+    let blob_directory =
+        std::env::temp_dir().join(format!("faultkeep-native-e2e-{}", uuid_like_suffix()));
+    let blob = LocalBlobStore::new(
+        &blob_directory,
+        LocalBlobConfig {
+            capacity_bytes: 1024 * 1024 + 128,
+            reserve_bytes: 128,
+            max_object_bytes: 1024 * 1024,
+        },
+    )
+    .await?;
     let identity = Arc::new(IdentityService::new(
         Arc::new(control.auth_store()),
         Arc::clone(&clock),
@@ -324,14 +336,17 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         Arc::clone(&clock),
         SearchConfig::default(),
     )?);
-    let native = Arc::new(NativeApiService::new(
-        Arc::clone(&identity),
-        Arc::clone(&projects),
-        issue_service,
-        investigation,
-        search,
-        Arc::clone(&clock),
-    ));
+    let native = Arc::new(
+        NativeApiService::new(
+            Arc::clone(&identity),
+            Arc::clone(&projects),
+            issue_service,
+            investigation,
+            search,
+            Arc::clone(&clock),
+        )
+        .with_blob_store(Arc::new(blob.clone())),
+    );
     let created = native
         .create_project(
             &owner,
@@ -415,15 +430,18 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         root.signal(),
     )?;
     let resolver: Arc<dyn ProjectResolver> = projects;
-    let ingest = Arc::new(IngestService::new(
-        resolver,
-        writer,
-        Arc::new(FakeOutcomeSink::default()),
-        Arc::clone(&clock),
-        random,
-        32,
-        root.signal(),
-    ));
+    let ingest = Arc::new(
+        IngestService::new(
+            resolver,
+            writer,
+            Arc::new(FakeOutcomeSink::default()),
+            Arc::clone(&clock),
+            random,
+            32,
+            root.signal(),
+        )
+        .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default()),
+    );
     let app = http::router(
         root.signal(),
         faultkeep_application::observability::Metrics,
@@ -454,6 +472,30 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         .list_issues(&owner, created.project_id, None, None, Some(10))
         .await?;
     assert_eq!(issues.items.len(), 1);
+    let sdk_event_id = EventId::parse("aa40a14691564910ae6eb2affdba35f9")?;
+    let attachments = native
+        .event_attachments(&owner, created.project_id, sdk_event_id)
+        .await?;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].filename.as_ref(), "sdk-context.json");
+    let (metadata, mut reader) = native
+        .open_event_attachment(
+            &owner,
+            created.project_id,
+            sdk_event_id,
+            attachments[0].attachment_id,
+        )
+        .await?;
+    assert_eq!(metadata.content_type.as_ref(), "application/json");
+    let bytes = reader
+        .read_chunk(1024)
+        .await?
+        .expect("SDK attachment has bytes");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes)?,
+        serde_json::json!({"source": "native-e2e"})
+    );
+    drop(reader);
     let issue_id = issues.items[0].issue_id;
     let resolved = native
         .issue_command(
@@ -472,6 +514,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     dispatcher_task.wait().await;
     batcher.close();
     batch_task.wait().await;
+    std::fs::remove_dir_all(blob_directory)?;
     Ok(())
 }
 
@@ -705,10 +748,13 @@ impl RandomSource for CounterRandom {
 }
 
 fn sdk_request(project_id: ProjectId, key: faultkeep_domain::DsnKey) -> Request<Body> {
+    let attachment = r#"{"source":"native-e2e"}"#;
     let envelope = format!(
-        "{{}}\n{{\"type\":\"event\",\"length\":{}}}\n{}",
+        "{{}}\n{{\"type\":\"event\",\"length\":{}}}\n{}\n{{\"type\":\"attachment\",\"length\":{},\"filename\":\"sdk-context.json\",\"content_type\":\"application/json\"}}\n{}",
         SDK_EVENT.len(),
-        SDK_EVENT
+        SDK_EVENT,
+        attachment.len(),
+        attachment
     );
     Request::builder()
         .method("POST")
@@ -736,6 +782,7 @@ fn ingest_config() -> IngestConfig {
         batch: Default::default(),
         event_codec: Default::default(),
         backlog: Default::default(),
+        attachments: Default::default(),
     }
 }
 

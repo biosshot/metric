@@ -24,7 +24,15 @@ const hardDeadline = setTimeout(() => {
 
     const error = new Error('Faultkeep real Node SDK compatibility event');
     error.name = 'FaultkeepSdkCompatibilityError';
-    const eventId = Sentry.captureException(error);
+    const eventId = Sentry.captureException(error, {
+      attachments: [
+        {
+          filename: 'faultkeep-context.json',
+          data: JSON.stringify({ source: 'node-sdk', safe: true }),
+          contentType: 'application/json',
+        },
+      ],
+    });
     const flushed = await Sentry.flush(8_000);
     await Sentry.close(2_000);
     if (!flushed) {

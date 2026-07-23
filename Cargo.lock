@@ -731,6 +731,7 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "blake3",
+ "faultkeep-blob",
  "faultkeep-domain",
  "faultkeep-ports",
  "futures-util",
@@ -743,15 +744,20 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
 name = "faultkeep-blob"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "faultkeep-domain",
  "faultkeep-ports",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

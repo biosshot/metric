@@ -812,6 +812,7 @@ fn app(service: Arc<IngestService>, root: &ShutdownRoot) -> Router {
         batch: Default::default(),
         event_codec: Default::default(),
         backlog: Default::default(),
+        attachments: Default::default(),
     };
     http::router(
         root.signal(),

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "phase": 16,
+  "recorded_at": "2026-07-23",
+  "machine": {
+    "cpu": "AMD Ryzen 5 5600H",
+    "os": "Windows",
+    "profile": "local development machine; not server-tuned"
+  },
+  "workload": {
+    "adapter": "local filesystem",
+    "objects": 256,
+    "object_bytes": 262144,
+    "total_mib": 64,
+    "concurrency": 8,
+    "chunk_bytes": 65536,
+    "slow_producer_delay_ms_per_chunk": 2,
+    "slow_producer_objects": 16,
+    "capacity_bytes": 83886080,
+    "reserve_bytes": 8388608
+  },
+  "result": {
+    "object_rps": 263.76,
+    "mib_per_second": 65.94,
+    "slow_io_object_rps": 160.43,
+    "elapsed_ms": 970,
+    "disk_full_gate": "pass",
+    "reserve_preserved": true,
+    "leftover_scoped_processes": 0
+  },
+  "command": "cargo test --release -p faultkeep-blob performance_local_blob_rps_mib_concurrency_disk_full_and_slow_io -- --ignored --nocapture"
+}

@@ -1,12 +1,16 @@
 use std::{error::Error, path::PathBuf, process::Command, sync::Arc, time::Duration};
 
 use faultkeep_application::{
-    ingest::IngestService, observability::Metrics, shutdown::ShutdownRoot,
+    ingest::{AttachmentIngestConfig, IngestService},
+    observability::Metrics,
+    shutdown::ShutdownRoot,
 };
+use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
 use faultkeep_domain::{
     DsnKey, EventId, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
 };
+use faultkeep_ports::BlobStore;
 use faultkeep_server::{config::IngestConfig, http, ingest_http};
 use faultkeep_testkit::{
     FakeEventSink, FakeOutcomeSink, FakeProjectResolver, FixedClock, FixedRandom,
@@ -40,7 +44,7 @@ async fn exercise_real_node_sdk() -> Result<(), Box<dyn Error>> {
 
     let root = ShutdownRoot::new();
     let sink = FakeEventSink::accepting();
-    let app = test_app(sink.clone(), &root);
+    let (app, blob, blob_directory) = test_app(sink.clone(), &root).await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(http::run(
@@ -119,10 +123,42 @@ async fn exercise_real_node_sdk() -> Result<(), Box<dyn Error>> {
     {
         return Err("accepted Event lost the Node SDK compatibility fixture fields".into());
     }
+    let attachment = payload
+        .get("attachments")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .ok_or("real Node SDK attachment metadata is missing")?;
+    if attachment.get("filename").and_then(Value::as_str) != Some("faultkeep-context.json")
+        || attachment.get("content_type").and_then(Value::as_str) != Some("application/json")
+    {
+        return Err("real Node SDK attachment metadata is incompatible".into());
+    }
+    let key = faultkeep_domain::blob::BlobKey::new(
+        attachment
+            .get("blob_key")
+            .and_then(Value::as_str)
+            .ok_or("attachment blob key is missing")?
+            .to_owned(),
+    )?;
+    let mut reader = blob.open(&key).await?;
+    let bytes = reader
+        .read_chunk(1024)
+        .await?
+        .ok_or("attachment blob is empty")?;
+    if serde_json::from_slice::<Value>(&bytes)?
+        != serde_json::json!({"safe": true, "source": "node-sdk"})
+    {
+        return Err("real Node SDK attachment bytes changed unexpectedly".into());
+    }
+    drop(reader);
+    std::fs::remove_dir_all(blob_directory)?;
     Ok(())
 }
 
-fn test_app(sink: FakeEventSink, root: &ShutdownRoot) -> axum::Router {
+async fn test_app(
+    sink: FakeEventSink,
+    root: &ShutdownRoot,
+) -> (axum::Router, LocalBlobStore, PathBuf) {
     let config = IngestConfig {
         max_compressed_request_bytes: 20 * 1024 * 1024,
         max_decompressed_request_bytes: 100 * 1024 * 1024,
@@ -137,37 +173,57 @@ fn test_app(sink: FakeEventSink, root: &ShutdownRoot) -> axum::Router {
         batch: Default::default(),
         event_codec: Default::default(),
         backlog: Default::default(),
+        attachments: Default::default(),
     };
-    let service = Arc::new(IngestService::new(
-        Arc::new(FakeProjectResolver::new(
-            DsnKey::parse(KEY_TEXT).unwrap(),
-            ProjectSnapshot {
-                project_id: ProjectId::new(42).unwrap(),
-                state: ProjectAcceptanceState::Active,
-                key_state: ProjectKeyState::Active,
-                scrub_policy: ScrubPolicy {
-                    revision: 1,
-                    ip_policy: IpScrubPolicy::Remove,
-                    hmac_key: SecretBytes::new([9; 32]),
+    let directory =
+        std::env::temp_dir().join(format!("faultkeep-sdk-blob-{}", uuid::Uuid::new_v4()));
+    let blob = LocalBlobStore::new(
+        &directory,
+        LocalBlobConfig {
+            capacity_bytes: 1024 * 1024 + 128,
+            reserve_bytes: 128,
+            max_object_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .unwrap();
+    let service = Arc::new(
+        IngestService::new(
+            Arc::new(FakeProjectResolver::new(
+                DsnKey::parse(KEY_TEXT).unwrap(),
+                ProjectSnapshot {
+                    project_id: ProjectId::new(42).unwrap(),
+                    state: ProjectAcceptanceState::Active,
+                    key_state: ProjectKeyState::Active,
+                    scrub_policy: ScrubPolicy {
+                        revision: 1,
+                        ip_policy: IpScrubPolicy::Remove,
+                        hmac_key: SecretBytes::new([9; 32]),
+                    },
+                    items: ItemCapabilities {
+                        error: true,
+                        client_report: true,
+                    },
+                    limits: ProjectIngestLimits::default(),
+                    grouping_revision: 1,
                 },
-                items: ItemCapabilities {
-                    error: true,
-                    client_report: true,
-                },
-                limits: ProjectIngestLimits::default(),
-                grouping_revision: 1,
-            },
-        )),
-        Arc::new(sink),
-        Arc::new(FakeOutcomeSink::default()),
-        Arc::new(FixedClock(Timestamp::from_unix_millis(0).unwrap())),
-        Arc::new(FixedRandom(7)),
-        config.max_waiting_for_storage,
-        root.signal(),
-    ));
-    http::router(
-        root.signal(),
-        Metrics,
-        ingest_http::router(service, config, root.signal()),
+            )),
+            Arc::new(sink),
+            Arc::new(FakeOutcomeSink::default()),
+            Arc::new(FixedClock(Timestamp::from_unix_millis(0).unwrap())),
+            Arc::new(FixedRandom(7)),
+            config.max_waiting_for_storage,
+            root.signal(),
+        )
+        .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default()),
+    );
+    (
+        http::router(
+            root.signal(),
+            Metrics,
+            ingest_http::router(service, config, root.signal()),
+        ),
+        blob,
+        directory,
     )
 }

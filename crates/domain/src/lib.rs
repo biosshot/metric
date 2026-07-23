@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod blob;
 pub mod deletion;
 pub mod event;
 pub mod finalization;

@@ -3,10 +3,15 @@ use std::{collections::BTreeSet, sync::Arc};
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventId, IpScrubPolicy, ProjectAcceptanceState, ProjectId,
     ProjectKeyState, ProjectSnapshot, ScrubbedEventPayload,
+    blob::{
+        AttachmentFilename, BlobChecksum, BlobContentType, BlobKey, BlobKind, BlobObjectId,
+        EventAttachment,
+    },
 };
 use faultkeep_ports::{
-    Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, IngestOutcomeKind,
-    OutcomeSink, ProjectResolveError, ProjectResolver, RandomSource,
+    BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
+    IngestOutcome, IngestOutcomeKind, OutcomeSink, ProjectResolveError, ProjectResolver,
+    RandomSource,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Map, Value};
@@ -62,6 +67,15 @@ pub struct PrimaryEvent {
     pub raw_json: Box<[u8]>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingAttachment {
+    pub position: u32,
+    pub filename: Box<str>,
+    pub content_type: Box<str>,
+    pub attachment_type: Box<str>,
+    pub bytes: Box<[u8]>,
+}
+
 impl std::fmt::Debug for PrimaryEvent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -79,8 +93,51 @@ pub struct IngestRequest {
     pub dsn_project_id: Option<ProjectId>,
     pub envelope_event_id: Option<EventId>,
     pub primary: Option<PrimaryEvent>,
+    pub attachments: Vec<PendingAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AttachmentIngestConfig {
+    pub enabled: bool,
+    pub chunk_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MinidumpIngestConfig {
+    pub enabled: bool,
+    pub max_bytes: u64,
+    pub chunk_bytes: usize,
+    pub retained_header_bytes: usize,
+}
+
+impl Default for MinidumpIngestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_bytes: 100 * 1024 * 1024,
+            chunk_bytes: 64 * 1024,
+            retained_header_bytes: 64 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MinidumpRequest {
+    pub path_project_id: ProjectId,
+    pub auth_keys: Vec<DsnKey>,
+    pub dsn_project_id: Option<ProjectId>,
+    pub supplied_event_id: Option<EventId>,
+}
+
+impl Default for AttachmentIngestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            chunk_bytes: 64 * 1024,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +207,9 @@ pub struct IngestService {
     _random: Arc<dyn RandomSource>,
     storage_permits: Arc<Semaphore>,
     shutdown: ShutdownSignal,
+    blob_store: Option<Arc<dyn BlobStore>>,
+    attachment_config: AttachmentIngestConfig,
+    minidump_config: MinidumpIngestConfig,
 }
 
 impl IngestService {
@@ -171,7 +231,27 @@ impl IngestService {
             _random: random,
             storage_permits: Arc::new(Semaphore::new(max_waiting_for_storage)),
             shutdown,
+            blob_store: None,
+            attachment_config: AttachmentIngestConfig::default(),
+            minidump_config: MinidumpIngestConfig::default(),
         }
+    }
+
+    #[must_use]
+    pub const fn with_minidumps(mut self, config: MinidumpIngestConfig) -> Self {
+        self.minidump_config = config;
+        self
+    }
+
+    #[must_use]
+    pub fn with_blob_store(
+        mut self,
+        blob_store: Arc<dyn BlobStore>,
+        config: AttachmentIngestConfig,
+    ) -> Self {
+        self.blob_store = Some(blob_store);
+        self.attachment_config = config;
+        self
     }
 
     pub async fn ingest(&self, request: IngestRequest) -> Result<IngestResult, IngestError> {
@@ -206,7 +286,7 @@ impl IngestService {
                 quantity: request.client_report_quantity,
             });
         }
-        let disabled_categories = request
+        let mut disabled_categories = request
             .discarded
             .iter()
             .filter_map(|item| item.category)
@@ -216,6 +296,13 @@ impl IngestService {
             .collect::<Vec<_>>();
 
         let Some(primary) = request.primary else {
+            if !request.attachments.is_empty() {
+                self.outcome_sink.record(IngestOutcome {
+                    kind: IngestOutcomeKind::Unsupported,
+                    reason: "attachment_without_event",
+                    quantity: request.attachments.len() as u64,
+                });
+            }
             return Ok(IngestResult {
                 event_id: None,
                 durable: None,
@@ -241,8 +328,29 @@ impl IngestService {
             });
         }
 
-        let (event_id, payload) =
+        let (event_id, mut payload) =
             validate_and_scrub_event(primary, request.envelope_event_id, &snapshot)?;
+        let attachments = self
+            .persist_attachments(
+                snapshot.project_id,
+                event_id,
+                &snapshot,
+                request.attachments,
+            )
+            .await?;
+        if attachments.dropped > 0 {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "attachment_policy_unsupported",
+                quantity: attachments.dropped,
+            });
+            disabled_categories.push(DisabledCategory::Attachment.sentry_name());
+            disabled_categories.sort_unstable();
+            disabled_categories.dedup();
+        }
+        if !attachments.accepted.is_empty() {
+            append_attachment_metadata(&mut payload, &attachments.accepted)?;
+        }
         let accepted = AcceptedEvent {
             project_id: snapshot.project_id,
             event_id,
@@ -281,6 +389,354 @@ impl IngestService {
     pub fn record_outcome(&self, outcome: IngestOutcome) {
         self.outcome_sink.record(outcome);
     }
+
+    pub async fn ingest_minidump(
+        &self,
+        request: MinidumpRequest,
+        mut source: Box<dyn BlobChunkSource>,
+    ) -> Result<IngestResult, IngestError> {
+        if self.shutdown.is_cancelled() {
+            return Err(IngestError {
+                kind: IngestErrorKind::ShuttingDown,
+                code: "shutting_down",
+            });
+        }
+        let key = one_auth_key(&request.auth_keys)?;
+        let snapshot = self
+            .resolver
+            .resolve(key)
+            .await
+            .map_err(map_resolve_error)?;
+        if snapshot.project_id != request.path_project_id
+            || snapshot.state != ProjectAcceptanceState::Active
+            || snapshot.key_state != ProjectKeyState::Active
+            || request
+                .dsn_project_id
+                .is_some_and(|project| project != snapshot.project_id)
+        {
+            return Err(IngestError {
+                kind: IngestErrorKind::Unauthorized,
+                code: "unauthorized",
+            });
+        }
+        if !self.minidump_config.enabled {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "minidump_disabled",
+                quantity: 1,
+            });
+            return Ok(IngestResult {
+                event_id: request.supplied_event_id,
+                durable: None,
+                disabled_categories: vec!["error"],
+            });
+        }
+        if !snapshot.items.error {
+            return Ok(IngestResult {
+                event_id: request.supplied_event_id,
+                durable: None,
+                disabled_categories: vec!["error"],
+            });
+        }
+        let store = self
+            .blob_store
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("blob_storage_unavailable"))?;
+        let received_at = self.clock.now();
+        let mut writer = store
+            .begin(BlobKind::Minidump, received_at)
+            .await
+            .map_err(map_blob_error)?;
+        let mut header = Vec::with_capacity(self.minidump_config.retained_header_bytes);
+        let mut hasher = blake3::Hasher::new();
+        let mut size = 0_u64;
+        loop {
+            let Some(chunk) = source
+                .next_chunk(self.minidump_config.chunk_bytes)
+                .await
+                .map_err(map_blob_error)?
+            else {
+                break;
+            };
+            let length = u64::try_from(chunk.len()).map_err(|_| IngestError {
+                kind: IngestErrorKind::TooLarge,
+                code: "minidump_too_large",
+            })?;
+            size = size.checked_add(length).ok_or(IngestError {
+                kind: IngestErrorKind::TooLarge,
+                code: "minidump_too_large",
+            })?;
+            if size > self.minidump_config.max_bytes {
+                writer.abort().await.map_err(map_blob_error)?;
+                return Err(IngestError {
+                    kind: IngestErrorKind::TooLarge,
+                    code: "minidump_too_large",
+                });
+            }
+            let retained = self
+                .minidump_config
+                .retained_header_bytes
+                .saturating_sub(header.len())
+                .min(chunk.len());
+            header.extend_from_slice(&chunk[..retained]);
+            hasher.update(&chunk);
+            writer.write_chunk(chunk).await.map_err(map_blob_error)?;
+        }
+        validate_minidump_header(&header, size)?;
+        let checksum = BlobChecksum::from_bytes(*hasher.finalize().as_bytes());
+        let event_id = request
+            .supplied_event_id
+            .unwrap_or_else(|| minidump_event_id(snapshot.project_id, checksum));
+        let object_id = minidump_object_id(snapshot.project_id, event_id, checksum);
+        let key = BlobKey::event_owned(snapshot.project_id, event_id, object_id);
+        let blob = writer.commit(key).await.map_err(map_blob_error)?;
+        if blob.checksum != checksum {
+            return Err(IngestError::unavailable("blob_checksum_mismatch"));
+        }
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "event_id": event_id.to_string(),
+            "platform": "native",
+            "level": "fatal",
+            "timestamp": received_at.unix_millis() as f64 / 1000.0,
+            "mechanism": { "type": "minidump" },
+            "native_crash": {
+                "kind": "minidump",
+                "blob_key": blob.key.as_str(),
+                "object_id": object_id.to_string(),
+                "size": blob.size,
+                "checksum": blob.checksum.to_string(),
+            }
+        }))
+        .map_err(|_| IngestError::invalid("invalid_minidump_event"))?;
+        let accepted = AcceptedEvent {
+            project_id: snapshot.project_id,
+            event_id,
+            received_at,
+            policy_revision: snapshot.scrub_policy.revision,
+            payload: ScrubbedEventPayload::new(payload),
+        };
+        let _permit = self
+            .storage_permits
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| IngestError::unavailable("storage_wait_capacity"))?;
+        let durable = self
+            .event_sink
+            .persist(accepted)
+            .await
+            .map_err(map_sink_error)?;
+        self.outcome_sink.record(IngestOutcome {
+            kind: match durable {
+                DurableOutcome::Accepted => IngestOutcomeKind::Accepted,
+                DurableOutcome::Duplicate => IngestOutcomeKind::Duplicate,
+            },
+            reason: "minidump",
+            quantity: 1,
+        });
+        Ok(IngestResult {
+            event_id: Some(event_id),
+            durable: Some(durable),
+            disabled_categories: Vec::new(),
+        })
+    }
+
+    async fn persist_attachments(
+        &self,
+        project_id: ProjectId,
+        event_id: EventId,
+        snapshot: &ProjectSnapshot,
+        attachments: Vec<PendingAttachment>,
+    ) -> Result<PersistedAttachments, IngestError> {
+        if attachments.is_empty() {
+            return Ok(PersistedAttachments::default());
+        }
+        if !self.attachment_config.enabled {
+            return Ok(PersistedAttachments {
+                accepted: Vec::new(),
+                dropped: attachments.len() as u64,
+            });
+        }
+        let store = self
+            .blob_store
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("blob_storage_unavailable"))?;
+        let mut result = PersistedAttachments::default();
+        for attachment in attachments {
+            let Some(bytes) = scrub_safe_attachment(&attachment, snapshot)? else {
+                result.dropped = result.dropped.saturating_add(1);
+                continue;
+            };
+            let checksum = BlobChecksum::from_bytes(*blake3::hash(&bytes).as_bytes());
+            let object_id =
+                attachment_object_id(project_id, event_id, attachment.position, checksum);
+            let key = BlobKey::event_owned(project_id, event_id, object_id);
+            let created_at = self.clock.now();
+            let mut writer = store
+                .begin(BlobKind::EventAttachment, created_at)
+                .await
+                .map_err(map_blob_error)?;
+            for chunk in bytes.chunks(self.attachment_config.chunk_bytes.max(1)) {
+                writer
+                    .write_chunk(chunk.into())
+                    .await
+                    .map_err(map_blob_error)?;
+            }
+            let blob = writer.commit(key).await.map_err(map_blob_error)?;
+            if blob.checksum != checksum {
+                return Err(IngestError::unavailable("blob_checksum_mismatch"));
+            }
+            let filename = AttachmentFilename::sanitized(&attachment.filename)
+                .map_err(|_| IngestError::invalid("invalid_attachment_filename"))?;
+            let content_type = BlobContentType::new(&attachment.content_type)
+                .map_err(|_| IngestError::invalid("invalid_attachment_content_type"))?;
+            if attachment.attachment_type.is_empty()
+                || attachment.attachment_type.len() > 128
+                || attachment.attachment_type.chars().any(char::is_control)
+            {
+                return Err(IngestError::invalid("invalid_attachment_type"));
+            }
+            result.accepted.push(EventAttachment {
+                attachment_id: object_id,
+                blob,
+                filename,
+                content_type,
+                attachment_type: attachment.attachment_type,
+            });
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Default)]
+struct PersistedAttachments {
+    accepted: Vec<EventAttachment>,
+    dropped: u64,
+}
+
+fn scrub_safe_attachment(
+    attachment: &PendingAttachment,
+    snapshot: &ProjectSnapshot,
+) -> Result<Option<Vec<u8>>, IngestError> {
+    match attachment.content_type.as_ref() {
+        "application/json" => {
+            let mut value: Value = serde_json::from_slice(&attachment.bytes)
+                .map_err(|_| IngestError::invalid("invalid_attachment_json"))?;
+            scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
+            serde_json::to_vec(&value)
+                .map(Some)
+                .map_err(|_| IngestError::invalid("invalid_attachment_json"))
+        }
+        "text/plain" => {
+            let text = std::str::from_utf8(&attachment.bytes)
+                .map_err(|_| IngestError::invalid("invalid_attachment_utf8"))?;
+            let lowercase = text.to_ascii_lowercase();
+            if lowercase.contains("authorization:")
+                || lowercase.contains("bearer ")
+                || lowercase.contains("password")
+                || lowercase.contains("private key")
+            {
+                Ok(None)
+            } else {
+                Ok(Some(attachment.bytes.to_vec()))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn attachment_object_id(
+    project_id: ProjectId,
+    event_id: EventId,
+    position: u32,
+    checksum: BlobChecksum,
+) -> BlobObjectId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"faultkeep:event-attachment:v1");
+    hasher.update(&project_id.get().to_be_bytes());
+    hasher.update(&event_id.as_bytes());
+    hasher.update(&position.to_be_bytes());
+    hasher.update(&checksum.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.as_bytes()[..16]);
+    BlobObjectId::from_bytes(bytes)
+}
+
+fn validate_minidump_header(header: &[u8], total_size: u64) -> Result<(), IngestError> {
+    if header.len() < 32 || &header[..4] != b"MDMP" {
+        return Err(IngestError::invalid("invalid_minidump"));
+    }
+    let streams = u32::from_le_bytes(header[8..12].try_into().expect("bounded header")) as u64;
+    let directory = u32::from_le_bytes(header[12..16].try_into().expect("bounded header")) as u64;
+    if streams == 0 || streams > 4096 {
+        return Err(IngestError::invalid("invalid_minidump_directory"));
+    }
+    let directory_end = directory
+        .checked_add(streams.saturating_mul(12))
+        .ok_or_else(|| IngestError::invalid("invalid_minidump_directory"))?;
+    if directory < 32 || directory_end > total_size {
+        return Err(IngestError::invalid("invalid_minidump_directory"));
+    }
+    Ok(())
+}
+
+fn minidump_event_id(project_id: ProjectId, checksum: BlobChecksum) -> EventId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"faultkeep:minidump-event:v1");
+    hasher.update(&project_id.get().to_be_bytes());
+    hasher.update(&checksum.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.as_bytes()[..16]);
+    EventId::from_bytes(bytes)
+}
+
+fn minidump_object_id(
+    project_id: ProjectId,
+    event_id: EventId,
+    checksum: BlobChecksum,
+) -> BlobObjectId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"faultkeep:minidump-object:v1");
+    hasher.update(&project_id.get().to_be_bytes());
+    hasher.update(&event_id.as_bytes());
+    hasher.update(&checksum.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.as_bytes()[..16]);
+    BlobObjectId::from_bytes(bytes)
+}
+
+fn append_attachment_metadata(
+    payload: &mut Vec<u8>,
+    attachments: &[EventAttachment],
+) -> Result<(), IngestError> {
+    let mut event: Value =
+        serde_json::from_slice(payload).map_err(|_| IngestError::invalid("invalid_event_json"))?;
+    let object = event
+        .as_object_mut()
+        .ok_or_else(|| IngestError::invalid("event_not_object"))?;
+    let metadata = attachments
+        .iter()
+        .map(|attachment| {
+            serde_json::json!({
+                "attachment_id": attachment.attachment_id.to_string(),
+                "blob_key": attachment.blob.key.as_str(),
+                "filename": attachment.filename.as_str(),
+                "content_type": attachment.content_type.as_str(),
+                "attachment_type": attachment.attachment_type,
+                "size": attachment.blob.size,
+                "checksum": attachment.blob.checksum.to_string(),
+                "created_at": attachment.blob.created_at.unix_millis(),
+            })
+        })
+        .collect();
+    object.insert("attachments".to_owned(), Value::Array(metadata));
+    *payload = serde_json::to_vec(&event).map_err(|_| IngestError {
+        kind: IngestErrorKind::ScrubFailed,
+        code: "scrub_failed",
+    })?;
+    Ok(())
 }
 
 fn one_auth_key(keys: &[DsnKey]) -> Result<DsnKey, IngestError> {
@@ -515,6 +971,20 @@ fn map_sink_error(error: EventSinkError) -> IngestError {
     match error {
         EventSinkError::Unavailable => IngestError::unavailable("storage_unavailable"),
         EventSinkError::Ambiguous => IngestError::unavailable("ambiguous_durable_ack"),
+    }
+}
+
+fn map_blob_error(error: BlobStoreError) -> IngestError {
+    match error {
+        BlobStoreError::Invalid => IngestError::invalid("invalid_blob_request"),
+        BlobStoreError::TooLarge => IngestError {
+            kind: IngestErrorKind::TooLarge,
+            code: "minidump_too_large",
+        },
+        BlobStoreError::Capacity => IngestError::unavailable("blob_capacity_exhausted"),
+        BlobStoreError::NotFound | BlobStoreError::Corrupt | BlobStoreError::Unavailable => {
+            IngestError::unavailable("blob_storage_unavailable")
+        }
     }
 }
 

@@ -3,15 +3,17 @@ use std::{collections::BTreeSet, time::Duration};
 use faultkeep_domain::{
     AcceptedEvent, EventId, EventKey, ProjectAcceptanceState, ProjectId, ScrubbedEventPayload,
     Timestamp,
+    blob::BlobKey,
     processing::{
         PendingEvent, ProcessingFailure, ProcessingFailureDisposition, ProcessingProject,
         ProcessingStateChange,
     },
 };
 use faultkeep_ports::{
-    BacklogObservation, EventBacklog, EventBacklogError, EventPrepareError, EventStore,
-    EventStoreError, EventWriteStatus, PortFuture, PreparedEvent, ProcessingProjectError,
-    ProcessingProjectStore, ProcessingStateError, ProcessingStateStore,
+    BacklogObservation, BlobReference, BlobReferenceStore, BlobStoreError, EventBacklog,
+    EventBacklogError, EventPrepareError, EventStore, EventStoreError, EventWriteStatus,
+    PortFuture, PreparedEvent, ProcessingProjectError, ProcessingProjectStore,
+    ProcessingStateError, ProcessingStateStore,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -207,6 +209,57 @@ impl EventStore for MongoEventStore {
             )
             .record(started.elapsed().as_secs_f64());
             classified
+        })
+    }
+}
+
+impl BlobReferenceStore for MongoEventStore {
+    fn is_referenced(
+        &self,
+        reference: BlobReference,
+    ) -> PortFuture<'_, Result<bool, BlobStoreError>> {
+        Box::pin(async move {
+            let key = EventKey::new(reference.project_id, reference.event_id);
+            let Some(document) = self
+                .database
+                .collection::<Document>("events")
+                .find_one(doc! {
+                    "_id": binary(key.as_bytes()),
+                    "p": reference.project_id.get(),
+                })
+                .projection(doc! { "b": 1 })
+                .await
+                .map_err(|_| BlobStoreError::Unavailable)?
+            else {
+                return Ok(false);
+            };
+            let body = document
+                .get_binary_generic("b")
+                .map_err(|_| BlobStoreError::Corrupt)?;
+            let decoded = decode_body(body, self.codec.max_decoded_body_bytes)
+                .map_err(|_| BlobStoreError::Corrupt)?;
+            let event: Value =
+                serde_json::from_slice(&decoded).map_err(|_| BlobStoreError::Corrupt)?;
+            let expected = BlobKey::event_owned(
+                reference.project_id,
+                reference.event_id,
+                reference.object_id,
+            );
+            let attachment_reference = event
+                .get("attachments")
+                .and_then(Value::as_array)
+                .is_some_and(|attachments| {
+                    attachments.iter().any(|attachment| {
+                        attachment.get("blob_key").and_then(Value::as_str)
+                            == Some(expected.as_str())
+                    })
+                });
+            let native_reference = event
+                .get("native_crash")
+                .and_then(|value| value.get("blob_key"))
+                .and_then(Value::as_str)
+                == Some(expected.as_str());
+            Ok(attachment_reference || native_reference)
         })
     }
 }

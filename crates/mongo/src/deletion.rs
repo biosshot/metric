@@ -129,9 +129,12 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 17] = [
     },
 ];
 
-/// Phase 15 has no project-owned filesystem producer. Adding one requires a
-/// classified entry and a bounded capacity/purge implementation in the same change.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 0] = [];
+/// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 1] = [DatasetRegistration {
+    code: 90,
+    name: "blob:projects/{project_id}/events",
+    ownership: DatasetOwnership::ProjectOwned,
+}];
 
 const PURGE_CODES: [u16; 7] = [10, 20, 30, 40, 50, 60, 70];
 

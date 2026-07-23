@@ -18,6 +18,13 @@ pub struct EnvelopeLimits {
     pub max_event_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct AttachmentLimits {
+    pub max_count: usize,
+    pub max_item_bytes: usize,
+    pub max_total_bytes: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DsnAuth {
     pub key: DsnKey,
@@ -29,8 +36,31 @@ pub struct ParsedEnvelope {
     pub event_id: Option<EventId>,
     pub dsn: Option<DsnAuth>,
     pub primary: Option<RawEvent>,
+    pub attachments: Vec<RawAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawAttachment {
+    pub position: u32,
+    pub filename: Box<str>,
+    pub content_type: Box<str>,
+    pub attachment_type: Box<str>,
+    pub bytes: Box<[u8]>,
+}
+
+impl std::fmt::Debug for RawAttachment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawAttachment")
+            .field("position", &self.position)
+            .field("filename", &self.filename)
+            .field("content_type", &self.content_type)
+            .field("attachment_type", &self.attachment_type)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -136,6 +166,9 @@ struct WireItemHeader {
     kind: Option<String>,
     length: Option<u64>,
     event_id: Option<String>,
+    filename: Option<String>,
+    content_type: Option<String>,
+    attachment_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,12 +187,30 @@ pub fn parse_envelope(
     body: &[u8],
     limits: EnvelopeLimits,
 ) -> Result<ParsedEnvelope, ProtocolError> {
+    parse_envelope_with_attachments(
+        body,
+        limits,
+        AttachmentLimits {
+            max_count: 0,
+            max_item_bytes: 0,
+            max_total_bytes: 0,
+        },
+    )
+}
+
+pub fn parse_envelope_with_attachments(
+    body: &[u8],
+    limits: EnvelopeLimits,
+    attachment_limits: AttachmentLimits,
+) -> Result<ParsedEnvelope, ProtocolError> {
     let (header_bytes, mut cursor) = line_at(body, 0)?;
     let header: WireEnvelopeHeader = serde_json::from_slice(header_bytes)
         .map_err(|_| ProtocolError::invalid("invalid_envelope_header"))?;
     let event_id = parse_optional_event_id(header.event_id.as_deref())?;
     let dsn = header.dsn.as_deref().map(parse_dsn).transpose()?;
     let mut primary = None;
+    let mut attachments = Vec::new();
+    let mut attachment_bytes = 0_usize;
     let mut discarded = Vec::new();
     let mut client_report_quantity = 0_u64;
     let mut item_count = 0_usize;
@@ -212,13 +263,54 @@ pub fn parse_envelope(
                 client_report_quantity =
                     client_report_quantity.saturating_add(parse_client_report(payload)?);
             }
+            ItemClass::Attachment => {
+                if attachment_limits.max_count == 0 {
+                    discarded.push(DiscardedItem {
+                        category: Some(DisabledCategory::Attachment),
+                        reason: "attachment_policy_disabled",
+                    });
+                } else {
+                    if attachments.len() >= attachment_limits.max_count {
+                        return Err(ProtocolError::too_large("too_many_attachments"));
+                    }
+                    if length > attachment_limits.max_item_bytes {
+                        return Err(ProtocolError::too_large("attachment_too_large"));
+                    }
+                    attachment_bytes = attachment_bytes
+                        .checked_add(length)
+                        .ok_or_else(|| ProtocolError::too_large("attachments_too_large"))?;
+                    if attachment_bytes > attachment_limits.max_total_bytes {
+                        return Err(ProtocolError::too_large("attachments_too_large"));
+                    }
+                    let position = u32::try_from(item_count)
+                        .map_err(|_| ProtocolError::too_large("too_many_items"))?;
+                    attachments.push(RawAttachment {
+                        position,
+                        filename: bounded_metadata(
+                            item_header.filename.as_deref().unwrap_or("attachment"),
+                            "attachment_filename_too_large",
+                        )?,
+                        content_type: bounded_metadata(
+                            item_header
+                                .content_type
+                                .as_deref()
+                                .unwrap_or("application/octet-stream"),
+                            "attachment_content_type_too_large",
+                        )?,
+                        attachment_type: bounded_metadata(
+                            item_header
+                                .attachment_type
+                                .as_deref()
+                                .unwrap_or("event.attachment"),
+                            "attachment_type_too_large",
+                        )?,
+                        bytes: payload.into(),
+                    });
+                }
+            }
             ItemClass::Disabled(category) => discarded.push(DiscardedItem {
                 category: Some(category),
-                reason: if category == DisabledCategory::Attachment {
-                    "attachment_policy_disabled"
-                } else {
-                    "feature_disabled"
-                },
+                reason: "feature_disabled",
             }),
             ItemClass::Unknown => discarded.push(DiscardedItem {
                 category: None,
@@ -235,9 +327,17 @@ pub fn parse_envelope(
         event_id,
         dsn,
         primary,
+        attachments,
         discarded,
         client_report_quantity,
     })
+}
+
+fn bounded_metadata(value: &str, code: &'static str) -> Result<Box<str>, ProtocolError> {
+    if value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(ProtocolError::too_large(code));
+    }
+    Ok(value.into())
 }
 
 pub fn parse_store_event(body: &[u8], max_event_bytes: usize) -> Result<RawEvent, ProtocolError> {
@@ -376,6 +476,7 @@ fn parse_client_report(payload: &[u8]) -> Result<u64, ProtocolError> {
 enum ItemClass {
     Event,
     ClientReport,
+    Attachment,
     Disabled(DisabledCategory),
     Unknown,
 }
@@ -391,7 +492,8 @@ fn classify_item(kind: &str) -> ItemClass {
         "check_in" => ItemClass::Disabled(DisabledCategory::CheckIn),
         "span" => ItemClass::Disabled(DisabledCategory::Span),
         "statsd" | "metric_buckets" => ItemClass::Disabled(DisabledCategory::Statsd),
-        "attachment" | "view_hierarchy" => ItemClass::Disabled(DisabledCategory::Attachment),
+        "attachment" => ItemClass::Attachment,
+        "view_hierarchy" => ItemClass::Disabled(DisabledCategory::Attachment),
         "form_data" | "user_report" | "security" => {
             ItemClass::Disabled(DisabledCategory::OtherKnown)
         }
@@ -424,6 +526,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn attachment_parser_preserves_bounded_metadata_and_enforces_aggregate_limit() {
+        let attachment = r#"{"safe":true}"#;
+        let body = format!(
+            "{{}}\n{{\"type\":\"event\",\"length\":{}}}\n{}\n{{\"type\":\"attachment\",\"length\":{},\"filename\":\"context.json\",\"content_type\":\"application/json\"}}\n{}",
+            EVENT.len(),
+            EVENT,
+            attachment.len(),
+            attachment
+        );
+        let parsed = parse_envelope_with_attachments(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 10,
+                max_event_bytes: 1024,
+            },
+            AttachmentLimits {
+                max_count: 1,
+                max_item_bytes: 1024,
+                max_total_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].filename.as_ref(), "context.json");
+
+        let error = parse_envelope_with_attachments(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 10,
+                max_event_bytes: 1024,
+            },
+            AttachmentLimits {
+                max_count: 1,
+                max_item_bytes: 4,
+                max_total_bytes: 4,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ProtocolErrorKind::TooLarge);
+        assert_eq!(error.code(), "attachment_too_large");
     }
 
     #[test]
