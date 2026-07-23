@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "phase": 15,
+  "benchmark": "project_deletion_bounded_purge",
+  "recorded_at": "2026-07-23",
+  "machine": {
+    "os": "Windows",
+    "cpu": "AMD Ryzen 5 5600H",
+    "deployment_profile": "local developer workstation"
+  },
+  "command": "cargo test --release -p faultkeep-mongo --test project_deletion performance_project_deletion_bounded_purge_rps -- --ignored --exact --nocapture",
+  "workload": {
+    "deleted_project_documents": 20000,
+    "purge_batch_documents": 1000,
+    "concurrent_active_project_documents": 2000,
+    "performance_tests_in_pass": 1
+  },
+  "result": {
+    "rps": 16445.32,
+    "elapsed_ms": 1216,
+    "batch_p95_ms": 64,
+    "deleted_project_remaining": 0,
+    "active_project_documents": 2000
+  },
+  "comparison_policy": {
+    "primary": "rps",
+    "secondary": "batch_p95_ms",
+    "lower_rps_is_regression": true,
+    "higher_batch_p95_is_regression": true
+  }
+}

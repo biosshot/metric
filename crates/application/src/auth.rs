@@ -827,7 +827,9 @@ impl IdentityService {
                 | AuditAction::ProjectKeyCreated
                 | AuditAction::ProjectKeyDisabled
                 | AuditAction::ProjectPolicyChanged
-        ) || !matches!(target_kind, "project" | "project_key")
+                | AuditAction::ProjectDeletionRequested
+                | AuditAction::ProjectDeletionCancelled
+        ) || !matches!(target_kind, "project" | "project_key" | "project_deletion")
         {
             return Err(AuthError::Forbidden);
         }

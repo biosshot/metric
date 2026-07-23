@@ -343,6 +343,14 @@ impl ProjectService {
         Ok(())
     }
 
+    pub fn invalidate_keys(&self, keys: &[DsnKey]) {
+        self.cache_generation.fetch_add(1, Ordering::AcqRel);
+        let mut cache = self.cache.lock().expect("project cache lock poisoned");
+        for key in keys {
+            cache.invalidate(*key);
+        }
+    }
+
     #[must_use]
     pub fn cached_entries(&self) -> usize {
         self.cache

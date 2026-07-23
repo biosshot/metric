@@ -13,6 +13,7 @@ const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const newKeyLabel = ref('');
 const notice = ref('');
+const deleteConfirmation = ref('');
 
 const project = useQuery({
   queryKey: computed(() => ['project', projectId.value]),
@@ -25,6 +26,15 @@ const keys = useQuery({
 const capabilities = useQuery({
   queryKey: ['capabilities'],
   queryFn: api.capabilities,
+});
+const deletion = useQuery({
+  queryKey: computed(() => ['project-deletion', projectId.value]),
+  queryFn: () => api.projectDeletionStatus(projectId.value),
+  enabled: computed(() => ['pending_delete', 'purging'].includes(project.data.value?.state ?? '')),
+  refetchInterval: (query) =>
+    query.state.data?.phase === 'pending_grace' || query.state.data?.phase === 'purging'
+      ? 2_000
+      : false,
 });
 
 const policy = reactive<ProjectPolicy>({
@@ -67,6 +77,32 @@ const disableKey = useMutation({
   onSuccess: async () => {
     notice.value = 'The DSN key was disabled. SDKs using it can no longer ingest events.';
     await queryClient.invalidateQueries({ queryKey: ['project-keys', projectId.value] });
+  },
+});
+const requestDeletion = useMutation({
+  mutationFn: () =>
+    api.requestProjectDeletion(
+      projectId.value,
+      deleteConfirmation.value,
+      crypto.randomUUID().replaceAll('-', ''),
+    ),
+  onSuccess: async (value) => {
+    queryClient.setQueryData(['project-deletion', projectId.value], value);
+    notice.value = 'Deletion is scheduled. Ingestion is fenced immediately.';
+    await Promise.all([project.refetch(), keys.refetch(), session.refreshProjects()]);
+  },
+});
+const cancelDeletion = useMutation({
+  mutationFn: () => {
+    const operationId = deletion.data.value?.operation_id;
+    if (!operationId) throw new Error('Deletion operation is not loaded.');
+    return api.cancelProjectDeletion(projectId.value, operationId);
+  },
+  onSuccess: async (value) => {
+    queryClient.setQueryData(['project-deletion', projectId.value], value);
+    deleteConfirmation.value = '';
+    notice.value = 'Deletion was cancelled. Previously active DSN keys are active again.';
+    await Promise.all([project.refetch(), keys.refetch(), session.refreshProjects()]);
   },
 });
 </script>
@@ -256,6 +292,75 @@ const disableKey = useMutation({
         <p v-else>Automated retention is disabled in this build.</p>
       </div>
       <StatusBadge :status="capabilities.data.value?.retention ? 'active' : 'unavailable'" />
+    </section>
+
+    <section v-if="session.has('project:admin')" class="panel danger-zone">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Danger zone</p>
+          <h2>Delete project</h2>
+        </div>
+        <StatusBadge :status="project.data.value?.state ?? 'unavailable'" />
+      </div>
+      <template
+        v-if="project.data.value?.state === 'active' || project.data.value?.state === 'disabled'"
+      >
+        <p>
+          Deletion immediately blocks every active DSN. Purge starts after the grace period and then
+          cannot be cancelled. Audit records are retained.
+        </p>
+        <label>
+          Type <code>{{ project.data.value.slug }}</code> to confirm
+          <input
+            v-model.trim="deleteConfirmation"
+            autocomplete="off"
+            :placeholder="project.data.value.slug"
+          />
+        </label>
+        <button
+          class="button button--danger"
+          type="button"
+          :disabled="
+            requestDeletion.isPending.value || deleteConfirmation !== project.data.value.slug
+          "
+          @click="requestDeletion.mutate()"
+        >
+          {{ requestDeletion.isPending.value ? 'Scheduling…' : 'Schedule project deletion' }}
+        </button>
+      </template>
+      <template v-else-if="project.data.value?.state === 'pending_delete'">
+        <LoadingPanel v-if="deletion.isPending.value" label="Loading deletion status…" />
+        <ApiErrorPanel
+          v-else-if="deletion.error.value"
+          :error="deletion.error.value"
+          title="Deletion status could not be loaded"
+          @retry="deletion.refetch()"
+        />
+        <div v-else-if="deletion.data.value">
+          <p>
+            Purge is scheduled for
+            <strong>{{ new Date(deletion.data.value.purge_after).toLocaleString() }}</strong
+            >. Operation <code>{{ deletion.data.value.operation_id }}</code
+            >.
+          </p>
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="cancelDeletion.isPending.value"
+            @click="cancelDeletion.mutate()"
+          >
+            {{ cancelDeletion.isPending.value ? 'Cancelling…' : 'Cancel deletion' }}
+          </button>
+        </div>
+      </template>
+      <p v-else-if="project.data.value?.state === 'purging'">
+        Purge is running in bounded batches and can no longer be cancelled.
+      </p>
+      <ApiErrorPanel
+        v-if="requestDeletion.error.value || cancelDeletion.error.value"
+        :error="requestDeletion.error.value || cancelDeletion.error.value"
+        title="Project deletion operation failed"
+      />
     </section>
   </section>
 </template>

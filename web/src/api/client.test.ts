@@ -88,6 +88,41 @@ describe('native API client', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('sends an explicit confirmation and idempotency key for project deletion', async () => {
+    const response = {
+      operation_id: 'b'.repeat(32),
+      project_id: '42',
+      organization_id: '7',
+      phase: 'pending_grace',
+      dataset_code: 10,
+      reconciliation_pass: false,
+      requested_at: '2030-01-01T00:00:00Z',
+      purge_after: '2030-01-02T00:00:00Z',
+      completed_at: null,
+      next_attempt_at: '2030-01-02T00:00:00Z',
+      attempts: 0,
+      last_error: null,
+      status_url: '/api/v1/projects/42/deletion',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.requestProjectDeletion('42', 'backend', 'b'.repeat(32));
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Headers;
+    expect(path).toBe('/api/v1/projects/42');
+    expect(init.method).toBe('DELETE');
+    expect(headers.get('idempotency-key')).toBe('b'.repeat(32));
+    expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
+    expect(JSON.parse(String(init.body))).toEqual({ confirm_slug: 'backend' });
+  });
+
   it('keeps status, stable code and request ID visible', async () => {
     vi.stubGlobal(
       'fetch',

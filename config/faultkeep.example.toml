@@ -72,6 +72,17 @@ batch_size = 500
 events_days = 30
 issue_stats_hourly_days = 400
 
+[project_deletion]
+grace_period = "24h"
+delete_batch_documents = 5000
+completed_job_retention = "30d"
+slug_reservation = "30d"
+poll_interval = "1s"
+operation_timeout = "10s"
+drain_timeout = "10s"
+retry_base = "1s"
+retry_max = "1m"
+
 [processor]
 max_concurrency = 32
 max_attempts = 5

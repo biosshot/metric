@@ -69,6 +69,22 @@ export interface ProjectKey {
   created_at: string;
 }
 
+export interface ProjectDeletionStatus {
+  operation_id: string;
+  project_id: string;
+  organization_id: string;
+  phase: 'pending_grace' | 'purging' | 'deleted' | 'cancelled';
+  dataset_code: number;
+  reconciliation_pass: boolean;
+  requested_at: string;
+  purge_after: string;
+  completed_at: string | null;
+  next_attempt_at: string;
+  attempts: number;
+  last_error: string | null;
+  status_url: string;
+}
+
 export interface Issue {
   id: string;
   project_id: string;
@@ -128,6 +144,13 @@ export interface CapabilityDocument {
     issue_stats_hourly_days: number;
     clock: 'received_at';
     gradual_policy_reduction: boolean;
+  } | null;
+  project_deletion: {
+    grace_period_seconds: number;
+    delete_batch_documents: number;
+    slug_reservation_seconds: number;
+    final_reconciliation: boolean;
+    filesystem_namespaces: number;
   } | null;
 }
 

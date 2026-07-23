@@ -81,3 +81,17 @@ immediately. Existing processed Events and hourly statistics are adjusted gradua
 in bounded keyset pages; pending Events never receive retention expiry. The
 all-in-one server starts Scheduler before becoming ready and stops it through the
 ordinary graceful-shutdown fence.
+
+Phase 15 project deletion uses the typed `[project_deletion]` section. A
+`DELETE /api/v1/projects/{id}` request requires `project:admin`, CSRF, a
+32-hex-character `Idempotency-Key` header, and an exact project-slug
+confirmation. It durably schedules deletion, fences active DSNs immediately,
+and returns HTTP 202 with a status URL. Cancellation is available only during
+the grace period. Purge uses bounded batches and a final reconciliation pass;
+audit records remain retained.
+
+Phase 15 advances the initial MongoDB schema generation to 3 by adding
+`project_deletions` and the tombstone shape. Faultkeep still has no migration
+framework: an existing generation-2 development database is rejected rather
+than modified implicitly. Select a fresh database name or explicitly recreate
+development data.

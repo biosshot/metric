@@ -13,6 +13,7 @@ import type {
   Page,
   Project,
   ProjectKey,
+  ProjectDeletionStatus,
   ProjectPolicy,
 } from './types';
 
@@ -165,6 +166,19 @@ export const api = {
     }),
   disableKey: (projectId: string, key: string) =>
     request<void>(`/api/v1/projects/${projectId}/keys/${key}`, { method: 'DELETE' }),
+  requestProjectDeletion: (projectId: string, confirmSlug: string, operationId: string) =>
+    request<ProjectDeletionStatus>(`/api/v1/projects/${projectId}`, {
+      method: 'DELETE',
+      headers: { 'idempotency-key': operationId },
+      body: JSON.stringify({ confirm_slug: confirmSlug }),
+    }),
+  projectDeletionStatus: (projectId: string) =>
+    request<ProjectDeletionStatus>(`/api/v1/projects/${projectId}/deletion`),
+  cancelProjectDeletion: (projectId: string, operationId: string) =>
+    request<ProjectDeletionStatus>(`/api/v1/projects/${projectId}/deletion/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ operation_id: operationId }),
+    }),
   updatePolicy: (projectId: string, policy: ProjectPolicy) =>
     request<ProjectPolicy>(`/api/v1/projects/${projectId}/policy`, {
       method: 'PATCH',

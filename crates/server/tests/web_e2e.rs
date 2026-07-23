@@ -119,6 +119,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                 events_days: 30,
                 issue_stats_hourly_days: 400,
             }),
+            None,
         )
         .merge(web_http::router_with_root(&web_root)),
     );

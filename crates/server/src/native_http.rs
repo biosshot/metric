@@ -31,6 +31,7 @@ use faultkeep_domain::{
         Actor, AuthContext, CredentialId, EmailAddress, OrganizationRole, Permission,
         PermissionSet, PlainSecret, RequestCorrelationId, SecretDigest, TokenName, UserDisplayName,
     },
+    deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
     grouping::IssueId,
     issue::{ActorKind, ActorRef, IssueCommandAction, IssueSnapshot, IssueStatus},
 };
@@ -42,6 +43,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const SESSION_COOKIE: &str = "faultkeep_session";
 const ORGANIZATION_HEADER: &str = "x-faultkeep-organization-id";
 const CSRF_HEADER: &str = "x-csrf-token";
+const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
@@ -51,12 +53,20 @@ struct NativeHttpState {
     secure_cookie: bool,
     required_ready: bool,
     retention: Option<RetentionCapability>,
+    project_deletion: Option<ProjectDeletionCapability>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct RetentionCapability {
     pub events_days: u32,
     pub issue_stats_hourly_days: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectDeletionCapability {
+    pub grace_period_seconds: u64,
+    pub delete_batch_documents: usize,
+    pub slug_reservation_seconds: u64,
 }
 
 #[derive(Debug)]
@@ -159,6 +169,7 @@ pub fn router(
     secure_cookie: bool,
     required_ready: bool,
     retention: Option<RetentionCapability>,
+    project_deletion: Option<ProjectDeletionCapability>,
 ) -> Router {
     let state = NativeHttpState {
         identity,
@@ -166,6 +177,7 @@ pub fn router(
         secure_cookie,
         required_ready,
         retention,
+        project_deletion,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -175,7 +187,18 @@ pub fn router(
         .route("/api/v1/auth/tokens", get(list_tokens).post(create_token))
         .route("/api/v1/auth/tokens/{token_id}", delete(revoke_token))
         .route("/api/v1/projects", get(list_projects).post(create_project))
-        .route("/api/v1/projects/{project_id}", get(get_project))
+        .route(
+            "/api/v1/projects/{project_id}",
+            get(get_project).delete(request_project_deletion),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/deletion",
+            get(project_deletion_status),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/deletion/cancel",
+            post(cancel_project_deletion),
+        )
         .route(
             "/api/v1/projects/{project_id}/keys",
             get(list_project_keys).post(create_project_key),
@@ -559,6 +582,75 @@ async fn get_project(
         .await
         .map_err(HttpApiError::Api)?;
     Ok(Json(project_value(&project)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteProjectBody {
+    confirm_slug: String,
+}
+
+async fn request_project_deletion(
+    State(state): State<NativeHttpState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<DeleteProjectBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let operation_id = deletion_operation_header(&headers)?;
+    let body = json_body(body)?;
+    let status = api(&state)?
+        .request_project_deletion(
+            &context,
+            project_id_from(&project_id)?,
+            operation_id,
+            &body.confirm_slug,
+            correlation_id(request_id)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok((StatusCode::ACCEPTED, Json(deletion_status_value(&status)?)))
+}
+
+async fn project_deletion_status(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let status = api(&state)?
+        .project_deletion_status(&context, project_id_from(&project_id)?)
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(deletion_status_value(&status)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelDeletionBody {
+    operation_id: String,
+}
+
+async fn cancel_project_deletion(
+    State(state): State<NativeHttpState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<CancelDeletionBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let status = api(&state)?
+        .cancel_project_deletion(
+            &context,
+            project_id_from(&project_id)?,
+            ProjectDeletionOperationId::from_bytes(hex_16(&body.operation_id)?),
+            correlation_id(request_id)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(deletion_status_value(&status)?))
 }
 
 async fn list_project_keys(
@@ -969,6 +1061,15 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "gradual_policy_reduction": true,
         })
     });
+    let project_deletion = state.project_deletion.map(|policy| {
+        json!({
+            "grace_period_seconds": policy.grace_period_seconds,
+            "delete_batch_documents": policy.delete_batch_documents,
+            "slug_reservation_seconds": policy.slug_reservation_seconds,
+            "final_reconciliation": true,
+            "filesystem_namespaces": 0,
+        })
+    });
     Json(json!({
         "api_version": "v1",
         "search": {
@@ -984,6 +1085,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "native_api": true,
             "web": true,
             "retention": retention.is_some(),
+            "project_deletion": project_deletion.is_some(),
             "mcp": false,
             "migrations": false,
             "nats": false,
@@ -991,6 +1093,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "disk_spool": false,
         },
         "retention": retention,
+        "project_deletion": project_deletion,
     }))
 }
 
@@ -1007,6 +1110,7 @@ async fn component_status(
             "dispatcher": if state.required_ready { "running" } else { "stopped" },
             "processor": if state.required_ready { "running" } else { "stopped" },
             "scheduler": if state.required_ready { "running" } else { "stopped" },
+            "project_deletion": if state.project_deletion.is_some() { "running" } else { "stopped" },
             "symbolication": "baseline",
         }
     })))
@@ -1100,6 +1204,16 @@ fn hex_16(value: &str) -> Result<[u8; 16], HttpApiError> {
     let mut bytes = [0_u8; 16];
     hex::decode_to_slice(value, &mut bytes).map_err(|_| HttpApiError::InvalidRequest)?;
     Ok(bytes)
+}
+
+fn deletion_operation_header(
+    headers: &HeaderMap,
+) -> Result<ProjectDeletionOperationId, HttpApiError> {
+    let value = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(HttpApiError::InvalidRequest)?;
+    Ok(ProjectDeletionOperationId::from_bytes(hex_16(value)?))
 }
 
 fn session_secret(headers: &HeaderMap) -> Option<PlainSecret> {
@@ -1327,6 +1441,29 @@ fn project_value(project: &ProjectView) -> Result<Value, HttpApiError> {
         "policy": policy_value(project),
         "grouping_revision": project.grouping_revision,
         "created_at": timestamp_string(project.created_at)?,
+    }))
+}
+
+fn deletion_status_value(status: &ProjectDeletionStatus) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "operation_id": hex::encode(status.operation_id.as_bytes()),
+        "project_id": status.project_id.get().to_string(),
+        "organization_id": status.organization_id.get().to_string(),
+        "phase": match status.phase {
+            ProjectDeletionPhase::PendingGrace => "pending_grace",
+            ProjectDeletionPhase::Purging => "purging",
+            ProjectDeletionPhase::Deleted => "deleted",
+            ProjectDeletionPhase::Cancelled => "cancelled",
+        },
+        "dataset_code": status.dataset_code,
+        "reconciliation_pass": status.reconciliation_pass,
+        "requested_at": timestamp_string(status.requested_at)?,
+        "purge_after": timestamp_string(status.purge_after)?,
+        "completed_at": status.completed_at.map(timestamp_string).transpose()?,
+        "next_attempt_at": timestamp_string(status.next_attempt_at)?,
+        "attempts": status.attempts,
+        "last_error": status.last_error,
+        "status_url": format!("/api/v1/projects/{}/deletion", status.project_id.get()),
     }))
 }
 
@@ -1558,6 +1695,18 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
+                "DELETE /projects/:id",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "GET /projects/:id/deletion",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "POST /projects/:id/deletion/cancel",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
                 "GET /projects/:id/keys",
                 RouteAccess::Permission(Permission::ProjectAdmin),
             ),
@@ -1624,7 +1773,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 28);
+        assert_eq!(matrix.len(), 31);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

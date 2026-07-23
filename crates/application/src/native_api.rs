@@ -9,6 +9,7 @@ use faultkeep_domain::{
         IssueStatBucket, ProjectKeyView, ProjectPolicyUpdate, ProjectView, ReleaseAnchor,
     },
     auth::{Actor, AuditAction, AuthContext, Permission, RequestCorrelationId},
+    deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
     grouping::IssueId,
     issue::{
         ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueSnapshot,
@@ -20,6 +21,7 @@ use thiserror::Error;
 
 use crate::{
     auth::{AuthError, IdentityService},
+    deletion::{ProjectDeletionError, ProjectDeletionService},
     issues::{IssueService, IssueServiceError},
     projects::{CreateProject, CreatedProject, ProjectService, ProjectServiceError},
     search::{
@@ -94,6 +96,7 @@ pub struct NativeApiService {
     investigation: Arc<dyn InvestigationStore>,
     search: Arc<SearchService>,
     clock: Arc<dyn Clock>,
+    deletion: Option<Arc<ProjectDeletionService>>,
 }
 
 impl NativeApiService {
@@ -113,7 +116,14 @@ impl NativeApiService {
             investigation,
             search,
             clock,
+            deletion: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_project_deletion(mut self, deletion: Arc<ProjectDeletionService>) -> Self {
+        self.deletion = Some(deletion);
+        self
     }
 
     pub async fn list_projects(
@@ -186,7 +196,7 @@ impl NativeApiService {
         label: ProjectKeyLabel,
         request_id: RequestCorrelationId,
     ) -> Result<DsnKey, NativeApiError> {
-        self.authorize(context, project_id, Permission::ProjectAdmin)
+        self.authorize_mutation(context, project_id, Permission::ProjectAdmin)
             .await?;
         let key = self
             .projects
@@ -213,7 +223,7 @@ impl NativeApiService {
         key: DsnKey,
         request_id: RequestCorrelationId,
     ) -> Result<(), NativeApiError> {
-        self.authorize(context, project_id, Permission::ProjectAdmin)
+        self.authorize_mutation(context, project_id, Permission::ProjectAdmin)
             .await?;
         self.projects
             .set_project_key_state(project_id, key, ProjectKeyState::Disabled)
@@ -238,7 +248,7 @@ impl NativeApiService {
         update: ProjectPolicyUpdate,
         request_id: RequestCorrelationId,
     ) -> Result<ProjectView, NativeApiError> {
-        self.authorize(context, project_id, Permission::ProjectAdmin)
+        self.authorize_mutation(context, project_id, Permission::ProjectAdmin)
             .await?;
         let project = self
             .projects
@@ -321,7 +331,7 @@ impl NativeApiService {
         idempotency_key: [u8; 16],
         action: IssueCommandAction,
     ) -> Result<IssueCommandResult, NativeApiError> {
-        self.authorize(context, project_id, Permission::IssueWrite)
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
             .await?;
         if let IssueCommandAction::Assign(Some(assignee)) = action {
             self.identity
@@ -552,6 +562,86 @@ impl NativeApiService {
             .map_err(map_auth_error)
     }
 
+    pub async fn request_project_deletion(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        operation_id: ProjectDeletionOperationId,
+        confirmation: &str,
+        request_id: RequestCorrelationId,
+    ) -> Result<ProjectDeletionStatus, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectAdmin)
+            .await?;
+        let status = self
+            .deletion
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .request(
+                project_id,
+                context.organization_id,
+                context.user_id,
+                operation_id,
+                confirmation,
+            )
+            .await
+            .map_err(map_deletion_error)?;
+        self.identity
+            .record_project_audit(
+                context,
+                request_id,
+                AuditAction::ProjectDeletionRequested,
+                "project_deletion",
+                hex::encode(operation_id.as_bytes()),
+            )
+            .await
+            .map_err(map_auth_error)?;
+        Ok(status)
+    }
+
+    pub async fn cancel_project_deletion(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        operation_id: ProjectDeletionOperationId,
+        request_id: RequestCorrelationId,
+    ) -> Result<ProjectDeletionStatus, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectAdmin)
+            .await?;
+        let status = self
+            .deletion
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .cancel(project_id, operation_id)
+            .await
+            .map_err(map_deletion_error)?;
+        self.identity
+            .record_project_audit(
+                context,
+                request_id,
+                AuditAction::ProjectDeletionCancelled,
+                "project_deletion",
+                hex::encode(operation_id.as_bytes()),
+            )
+            .await
+            .map_err(map_auth_error)?;
+        Ok(status)
+    }
+
+    pub async fn project_deletion_status(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+    ) -> Result<ProjectDeletionStatus, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectAdmin)
+            .await?;
+        self.deletion
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .status(project_id)
+            .await
+            .map_err(map_deletion_error)
+    }
+
     async fn authorize(
         &self,
         context: &AuthContext,
@@ -562,6 +652,25 @@ impl NativeApiService {
             .authorize_project(context, project_id, permission)
             .await
             .map_err(map_auth_error)
+    }
+
+    async fn authorize_mutation(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        permission: Permission,
+    ) -> Result<(), NativeApiError> {
+        self.authorize(context, project_id, permission).await?;
+        let project = self
+            .projects
+            .load_project_view(project_id)
+            .await
+            .map_err(map_project_error)?;
+        if project.state == faultkeep_domain::ProjectAcceptanceState::Active {
+            Ok(())
+        } else {
+            Err(NativeApiError::Conflict)
+        }
     }
 }
 
@@ -698,6 +807,19 @@ fn map_project_error(error: ProjectServiceError) -> NativeApiError {
         | ProjectServiceError::RandomUnavailable
         | ProjectServiceError::Unavailable => NativeApiError::Unavailable,
         ProjectServiceError::InvalidStateTransition => NativeApiError::InvalidRequest,
+    }
+}
+
+fn map_deletion_error(error: ProjectDeletionError) -> NativeApiError {
+    match error {
+        ProjectDeletionError::ConfirmationMismatch | ProjectDeletionError::InvalidConfiguration => {
+            NativeApiError::InvalidRequest
+        }
+        ProjectDeletionError::Conflict | ProjectDeletionError::NotCancellable => {
+            NativeApiError::Conflict
+        }
+        ProjectDeletionError::NotFound => NativeApiError::NotFound,
+        ProjectDeletionError::Unavailable => NativeApiError::Unavailable,
     }
 }
 

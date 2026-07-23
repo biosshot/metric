@@ -15,6 +15,10 @@ use faultkeep_domain::{
         OrganizationMembership, PasswordHash, SecretDigest, SetupToken, UserAccount, UserId,
         WebSession,
     },
+    deletion::{
+        ProjectDeletionChange, ProjectDeletionOperationId, ProjectDeletionRequest,
+        ProjectDeletionStatus,
+    },
     finalization::{FinalizationPolicy, FinalizeBatch, FinalizeResult},
     grouping::IssueId,
     issue::{
@@ -134,6 +138,57 @@ pub trait ProjectStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<(ProjectView, Vec<DsnKey>), ProjectStoreError>> {
         Box::pin(async { Err(ProjectStoreError::Unavailable) })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProjectDeletionStoreError {
+    #[error("project deletion conflicts with an existing operation")]
+    Conflict,
+    #[error("project deletion target does not exist")]
+    NotFound,
+    #[error("project deletion can no longer be cancelled")]
+    NotCancellable,
+    #[error("stored project deletion data is invalid")]
+    InvalidData,
+    #[error("project deletion storage is temporarily unavailable")]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectPurgeRequest {
+    pub now: Timestamp,
+    pub batch_size: usize,
+    pub retry_base: Duration,
+    pub retry_max: Duration,
+    pub completed_retention: Duration,
+    pub slug_reservation: Duration,
+}
+
+/// Durable control-plane boundary for project deletion and bounded purge work.
+pub trait ProjectDeletionStore: Send + Sync + 'static {
+    fn request_deletion(
+        &self,
+        request: ProjectDeletionRequest,
+    ) -> PortFuture<'_, Result<ProjectDeletionChange, ProjectDeletionStoreError>>;
+
+    fn cancel_deletion(
+        &self,
+        project_id: ProjectId,
+        operation_id: ProjectDeletionOperationId,
+        now: Timestamp,
+        completed_retention: Duration,
+    ) -> PortFuture<'_, Result<ProjectDeletionChange, ProjectDeletionStoreError>>;
+
+    fn deletion_status(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<ProjectDeletionStatus, ProjectDeletionStoreError>>;
+
+    /// Executes at most one bounded dataset batch for one due operation.
+    fn purge_next(
+        &self,
+        request: ProjectPurgeRequest,
+    ) -> PortFuture<'_, Result<Option<ProjectDeletionStatus>, ProjectDeletionStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

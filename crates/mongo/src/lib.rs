@@ -4,6 +4,7 @@
 
 mod api;
 mod auth;
+mod deletion;
 mod event;
 mod finalizer;
 mod issue;
@@ -11,6 +12,10 @@ mod maintenance;
 
 pub use api::MongoInvestigationStore;
 pub use auth::MongoAuthStore;
+pub use deletion::{
+    DATASET_REGISTRY, DELETION_PLAN_VERSION, DatasetOwnership, DatasetRegistration,
+    FILESYSTEM_NAMESPACE_REGISTRY,
+};
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
 };
@@ -36,16 +41,17 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 2;
+pub const SCHEMA_GENERATION: i32 = 3;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 5] = [
+const SCHEMA_MODULES: [&str; 6] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
     "finalization_storage_v1",
     "identity_authorization_v1",
+    "project_deletion_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 16] = [
+const REQUIRED_COLLECTIONS: [&str; 17] = [
     "api_tokens",
     "audit_log",
     "environments",
@@ -56,6 +62,7 @@ const REQUIRED_COLLECTIONS: [&str; 16] = [
     "organization_memberships",
     "organizations",
     "password_setup_tokens",
+    "project_deletions",
     "project_keys",
     "projects",
     "releases",
@@ -201,6 +208,8 @@ impl MongoProjectStore {
             .await?;
         self.create_validated_collection("project_keys", project_key_validator())
             .await?;
+        self.create_validated_collection("project_deletions", deletion::deletion_validator())
+            .await?;
         self.create_validated_collection("events", event::event_validator())
             .await?;
         self.create_validated_collection("issues", issue::issue_validator())
@@ -239,11 +248,20 @@ impl MongoProjectStore {
             .await?;
         self.database
             .collection::<Document>("projects")
-            .create_index(index(
-                doc! { "organization_id": 1, "slug": 1 },
-                "project_organization_slug_unique",
-                true,
-            ))
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "organization_id": 1, "slug": 1 })
+                    .options(
+                        IndexOptions::builder()
+                            .name("project_organization_slug_unique".to_owned())
+                            .unique(true)
+                            .partial_filter_expression(doc! {
+                                "state": { "$in": ["active", "disabled", "pending_delete", "purging"] }
+                            })
+                            .build(),
+                    )
+                    .build(),
+            )
             .await?;
         self.database
             .collection::<Document>("project_keys")
@@ -253,6 +271,12 @@ impl MongoProjectStore {
                 false,
             ))
             .await?;
+        for model in deletion::deletion_indexes() {
+            self.database
+                .collection::<Document>("project_deletions")
+                .create_index(model)
+                .await?;
+        }
         event::create_event_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
@@ -300,7 +324,35 @@ impl MongoProjectStore {
         if !auth::validate_auth_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
+        if !deletion::validate_deletion_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
+        if !self.validate_project_slug_index().await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
         self.validate_collection_options().await
+    }
+
+    async fn validate_project_slug_index(&self) -> Result<bool, MongoBootstrapError> {
+        let mut indexes = self
+            .database
+            .collection::<Document>("projects")
+            .list_indexes()
+            .await?;
+        while let Some(model) = indexes.try_next().await? {
+            let Some(options) = model.options else {
+                continue;
+            };
+            if options.name.as_deref() == Some("project_organization_slug_unique") {
+                return Ok(model.keys == doc! { "organization_id": 1, "slug": 1 }
+                    && options.unique == Some(true)
+                    && options.partial_filter_expression
+                        == Some(doc! {
+                            "state": { "$in": ["active", "disabled", "pending_delete", "purging"] }
+                        }));
+            }
+        }
+        Ok(false)
     }
 
     async fn validate_index_names(&self) -> Result<(), MongoBootstrapError> {
@@ -317,6 +369,7 @@ impl MongoProjectStore {
                 "project_keys",
                 BTreeSet::from(["_id_", "project_key_administration"]),
             ),
+            ("project_deletions", deletion::deletion_index_names()),
             ("events", event::event_index_names()),
             ("issues", issue::issue_index_names()),
             ("issue_activities", issue::issue_activity_index_names()),
@@ -360,6 +413,7 @@ impl MongoProjectStore {
             ("organizations", organization_validator()),
             ("projects", project_validator()),
             ("project_keys", project_key_validator()),
+            ("project_deletions", deletion::deletion_validator()),
             ("events", event::event_validator()),
             ("issues", issue::issue_validator()),
             ("issue_activities", issue::issue_activity_validator()),
@@ -681,6 +735,7 @@ impl MongoProjectStore {
             .find(doc! {
                 "organization_id": i64::try_from(organization_id.get())
                     .map_err(|_| ProjectStoreError::InvalidData)?,
+                "state": { "$ne": "deleted" },
             })
             .sort(doc! { "slug": 1, "_id": 1 })
             .limit(i64::try_from(limit).unwrap_or(100))
@@ -704,7 +759,7 @@ impl MongoProjectStore {
         let document = self
             .database
             .collection::<Document>("projects")
-            .find_one(doc! { "_id": project_id.get() })
+            .find_one(doc! { "_id": project_id.get(), "state": { "$ne": "deleted" } })
             .await
             .map_err(|_| ProjectStoreError::Unavailable)?
             .ok_or(ProjectStoreError::NotFound)?;
@@ -1252,7 +1307,7 @@ fn organization_validator() -> Document {
 fn project_validator() -> Document {
     doc! { "$jsonSchema": {
         "bsonType": "object",
-        "required": ["_id", "organization_id", "slug", "display_name", "state", "policy", "items", "limits", "grouping_revision", "created_at"],
+        "required": ["_id", "organization_id", "state", "created_at"],
         "additionalProperties": false,
         "properties": {
             "_id": { "bsonType": "int", "minimum": 1 },
@@ -1299,7 +1354,24 @@ fn project_validator() -> Document {
                 },
             },
             "created_at": { "bsonType": "date" },
-        }
+            "deleted_at": { "bsonType": "date" },
+            "deletion_operation_id": { "bsonType": "binData" },
+            "slug_reserved_until": { "bsonType": "date" },
+        },
+        "oneOf": [
+            {
+                "required": ["slug", "display_name", "policy", "items", "limits", "grouping_revision"],
+                "properties": {
+                    "state": { "enum": ["active", "disabled", "pending_delete", "purging"] }
+                }
+            },
+            {
+                "required": ["deleted_at", "deletion_operation_id", "slug_reserved_until"],
+                "properties": {
+                    "state": { "enum": ["deleted"] }
+                }
+            }
+        ]
     }}
 }
 

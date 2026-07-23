@@ -261,6 +261,10 @@ summary:focus-visible {
   background: #fff;
   border-color: #e4a8b4;
 }
+
+.danger-zone {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
 .button--wide {
   width: 100%;
 }

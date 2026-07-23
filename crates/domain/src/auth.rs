@@ -437,6 +437,8 @@ pub enum AuditAction {
     ProjectKeyCreated,
     ProjectKeyDisabled,
     ProjectPolicyChanged,
+    ProjectDeletionRequested,
+    ProjectDeletionCancelled,
 }
 
 impl AuditAction {
@@ -458,6 +460,8 @@ impl AuditAction {
             Self::ProjectKeyCreated => "project_key.created",
             Self::ProjectKeyDisabled => "project_key.disabled",
             Self::ProjectPolicyChanged => "project.policy_changed",
+            Self::ProjectDeletionRequested => "project.deletion_requested",
+            Self::ProjectDeletionCancelled => "project.deletion_cancelled",
         }
     }
 }

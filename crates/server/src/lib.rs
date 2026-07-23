@@ -11,6 +11,10 @@ use std::{io, process::ExitCode};
 use config::{Cli, ConfigError};
 use faultkeep_application::{
     auth::{AuthConfig, AuthError, IdentityService, LoginRateLimitConfig, PasswordConfig},
+    deletion::{
+        ProjectDeletionConfig, ProjectDeletionError, ProjectDeletionService, ProjectDeletionTask,
+        ProjectFencedEventSink, ProjectWorkRegistry, start_project_deletion_worker,
+    },
     dispatcher::{
         BacklogGuardedEventSink, Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask,
     },
@@ -69,6 +73,8 @@ pub enum ServerError {
     Processor(#[from] ProcessorConfigError),
     #[error(transparent)]
     Auth(#[from] AuthError),
+    #[error(transparent)]
+    ProjectDeletion(#[from] ProjectDeletionError),
 }
 
 struct RuntimeModules {
@@ -81,6 +87,7 @@ struct RuntimeModules {
     finalizer_batch_task: Option<FinalizerBatchTask>,
     identity_service: Option<std::sync::Arc<IdentityService>>,
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
+    project_deletion_task: Option<ProjectDeletionTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -112,6 +119,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         finalizer_batch_task,
         identity_service,
         native_api_service,
+        project_deletion_task,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -144,6 +152,27 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             },
         )?);
         let project_resolver: std::sync::Arc<dyn ProjectResolver> = project_service.clone();
+        let project_work = std::sync::Arc::new(ProjectWorkRegistry::default());
+        let deletion_config = ProjectDeletionConfig {
+            grace_period: config.project_deletion.grace_period.get(),
+            delete_batch_documents: config.project_deletion.delete_batch_documents,
+            completed_job_retention: config.project_deletion.completed_job_retention.get(),
+            slug_reservation: config.project_deletion.slug_reservation.get(),
+            poll_interval: config.project_deletion.poll_interval.get(),
+            operation_timeout: config.project_deletion.operation_timeout.get(),
+            drain_timeout: config.project_deletion.drain_timeout.get(),
+            retry_base: config.project_deletion.retry_base.get(),
+            retry_max: config.project_deletion.retry_max.get(),
+        };
+        let deletion_store: std::sync::Arc<dyn faultkeep_ports::ProjectDeletionStore> =
+            std::sync::Arc::new(store.clone());
+        let deletion_service = ProjectDeletionService::new(
+            std::sync::Arc::clone(&deletion_store),
+            std::sync::Arc::clone(&project_service),
+            std::sync::Arc::clone(&clock),
+            std::sync::Arc::clone(&project_work),
+            deletion_config,
+        )?;
         let identity_service = std::sync::Arc::new(IdentityService::new(
             std::sync::Arc::new(store.auth_store()),
             std::sync::Arc::clone(&clock),
@@ -197,14 +226,17 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             )
             .map_err(|_| ServerError::Auth(AuthError::InvalidConfiguration))?,
         );
-        let native_api_service = std::sync::Arc::new(NativeApiService::new(
-            std::sync::Arc::clone(&identity_service),
-            project_service,
-            issue_service,
-            investigation,
-            search,
-            std::sync::Arc::clone(&clock),
-        ));
+        let native_api_service = std::sync::Arc::new(
+            NativeApiService::new(
+                std::sync::Arc::clone(&identity_service),
+                project_service,
+                issue_service,
+                investigation,
+                search,
+                std::sync::Arc::clone(&clock),
+            )
+            .with_project_deletion(deletion_service),
+        );
         let event_store = std::sync::Arc::new(store.event_store(event_codec));
         let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
         let finalizer = std::sync::Arc::new(Finalizer::new(
@@ -278,6 +310,14 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let writer: std::sync::Arc<dyn EventSink> = writer;
         let event_sink: std::sync::Arc<dyn EventSink> =
             std::sync::Arc::new(BacklogGuardedEventSink::new(writer, backlog_guard));
+        let event_sink: std::sync::Arc<dyn EventSink> =
+            std::sync::Arc::new(ProjectFencedEventSink::new(event_sink, project_work));
+        let project_deletion_task = start_project_deletion_worker(
+            deletion_store,
+            std::sync::Arc::clone(&clock),
+            deletion_config,
+            shutdown.signal(),
+        )?;
         let (_scheduler, scheduler_task) = Scheduler::start(
             std::sync::Arc::new(store.maintenance_store()),
             std::sync::Arc::clone(&clock),
@@ -306,6 +346,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batch_task: Some(finalizer_batch_task),
             identity_service: Some(identity_service),
             native_api_service: Some(native_api_service),
+            project_deletion_task: Some(project_deletion_task),
         }
     } else {
         RuntimeModules {
@@ -318,6 +359,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batch_task: None,
             identity_service: None,
             native_api_service: None,
+            project_deletion_task: None,
         }
     };
     let ingest = std::sync::Arc::new(faultkeep_application::ingest::IngestService::new(
@@ -340,6 +382,11 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             required_ready.then_some(native_http::RetentionCapability {
                 events_days: config.retention.events_days,
                 issue_stats_hourly_days: config.retention.issue_stats_hourly_days,
+            }),
+            required_ready.then_some(native_http::ProjectDeletionCapability {
+                grace_period_seconds: config.project_deletion.grace_period.get().as_secs(),
+                delete_batch_documents: config.project_deletion.delete_batch_documents,
+                slug_reservation_seconds: config.project_deletion.slug_reservation.get().as_secs(),
             }),
         ))
         .merge(web_http::router());
@@ -374,6 +421,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     }
     shutdown.begin();
     if let Some(task) = scheduler_task {
+        task.wait().await;
+    }
+    if let Some(task) = project_deletion_task {
         task.wait().await;
     }
     if let Some(task) = writer_task {

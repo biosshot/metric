@@ -25,6 +25,7 @@ pub type SchedulerInterval = BoundedDuration<86_400_000>;
 pub type ProcessorDuration = BoundedDuration<600_000>;
 pub type BacklogAge = BoundedDuration<604_800_000>;
 pub type AuthDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
+pub type ProjectDeletionDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
@@ -72,6 +73,7 @@ pub struct AppConfig {
     pub dispatcher: DispatcherSettings,
     pub scheduler: SchedulerSettings,
     pub retention: RetentionSettings,
+    pub project_deletion: ProjectDeletionSettings,
     pub processor: ProcessorSettings,
     pub auth: AuthSettings,
 }
@@ -193,6 +195,19 @@ pub struct SchedulerSettings {
 pub struct RetentionSettings {
     pub events_days: u32,
     pub issue_stats_hourly_days: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectDeletionSettings {
+    pub grace_period: ProjectDeletionDuration,
+    pub delete_batch_documents: usize,
+    pub completed_job_retention: ProjectDeletionDuration,
+    pub slug_reservation: ProjectDeletionDuration,
+    pub poll_interval: ProjectDeletionDuration,
+    pub operation_timeout: ProjectDeletionDuration,
+    pub drain_timeout: ProjectDeletionDuration,
+    pub retry_base: ProjectDeletionDuration,
+    pub retry_max: ProjectDeletionDuration,
 }
 
 impl RetentionSettings {
@@ -419,6 +434,7 @@ struct RawConfig {
     dispatcher: RawDispatcherSettings,
     scheduler: RawSchedulerSettings,
     retention: RawRetentionSettings,
+    project_deletion: RawProjectDeletionSettings,
     processor: RawProcessorSettings,
     auth: RawAuthSettings,
 }
@@ -435,6 +451,7 @@ impl Default for RawConfig {
             dispatcher: RawDispatcherSettings::default(),
             scheduler: RawSchedulerSettings::default(),
             retention: RawRetentionSettings::default(),
+            project_deletion: RawProjectDeletionSettings::default(),
             processor: RawProcessorSettings::default(),
             auth: RawAuthSettings::default(),
         }
@@ -695,6 +712,20 @@ struct RawRetentionSettings {
     issue_stats_hourly_days: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawProjectDeletionSettings {
+    grace_period: String,
+    delete_batch_documents: usize,
+    completed_job_retention: String,
+    slug_reservation: String,
+    poll_interval: String,
+    operation_timeout: String,
+    drain_timeout: String,
+    retry_base: String,
+    retry_max: String,
+}
+
 impl Default for RawDispatcherSettings {
     fn default() -> Self {
         let defaults = DispatcherSettings::default();
@@ -731,6 +762,22 @@ impl Default for RawRetentionSettings {
         Self {
             events_days: 30,
             issue_stats_hourly_days: 400,
+        }
+    }
+}
+
+impl Default for RawProjectDeletionSettings {
+    fn default() -> Self {
+        Self {
+            grace_period: "24h".to_owned(),
+            delete_batch_documents: 5_000,
+            completed_job_retention: "30d".to_owned(),
+            slug_reservation: "30d".to_owned(),
+            poll_interval: "1s".to_owned(),
+            operation_timeout: "10s".to_owned(),
+            drain_timeout: "10s".to_owned(),
+            retry_base: "1s".to_owned(),
+            retry_max: "1m".to_owned(),
         }
     }
 }
@@ -819,6 +866,8 @@ pub enum ConfigError {
     InvalidSchedulerConfig,
     #[error("retention configuration is invalid or outside supported bounds")]
     InvalidRetentionConfig,
+    #[error("project deletion configuration is invalid or outside supported bounds")]
+    InvalidProjectDeletionConfig,
     #[error("processor configuration is invalid or outside supported bounds")]
     InvalidProcessorConfig,
     #[error("auth configuration is invalid or outside supported bounds")]
@@ -922,6 +971,7 @@ impl TryFrom<RawConfig> for AppConfig {
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
         let scheduler = SchedulerSettings::try_from(raw.scheduler)?;
         let retention = RetentionSettings::try_from(raw.retention)?;
+        let project_deletion = ProjectDeletionSettings::try_from(raw.project_deletion)?;
         let processor = ProcessorSettings::try_from(raw.processor)?;
         let auth = AuthSettings::try_from(raw.auth)?;
         if !auth.secure_cookie && !raw.development.allow_insecure_cookies {
@@ -951,6 +1001,7 @@ impl TryFrom<RawConfig> for AppConfig {
             dispatcher,
             scheduler,
             retention,
+            project_deletion,
             processor,
             auth,
         })
@@ -1001,7 +1052,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -1054,6 +1105,15 @@ impl AppConfig {
             self.scheduler.batch_size,
             self.retention.events_days,
             self.retention.issue_stats_hourly_days,
+            humantime::format_duration(self.project_deletion.grace_period.get()),
+            self.project_deletion.delete_batch_documents,
+            humantime::format_duration(self.project_deletion.completed_job_retention.get()),
+            humantime::format_duration(self.project_deletion.slug_reservation.get()),
+            humantime::format_duration(self.project_deletion.poll_interval.get()),
+            humantime::format_duration(self.project_deletion.operation_timeout.get()),
+            humantime::format_duration(self.project_deletion.drain_timeout.get()),
+            humantime::format_duration(self.project_deletion.retry_base.get()),
+            humantime::format_duration(self.project_deletion.retry_max.get()),
             self.processor.max_concurrency,
             self.processor.max_attempts,
             humantime::format_duration(self.processor.retry_base.get()),
@@ -1265,6 +1325,45 @@ impl TryFrom<RawRetentionSettings> for RetentionSettings {
     }
 }
 
+impl TryFrom<RawProjectDeletionSettings> for ProjectDeletionSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawProjectDeletionSettings) -> Result<Self, Self::Error> {
+        let parse = |value: &str| {
+            ProjectDeletionDuration::from_str(value)
+                .map_err(|_| ConfigError::InvalidProjectDeletionConfig)
+        };
+        let settings = Self {
+            grace_period: parse(&raw.grace_period)?,
+            delete_batch_documents: raw.delete_batch_documents,
+            completed_job_retention: parse(&raw.completed_job_retention)?,
+            slug_reservation: parse(&raw.slug_reservation)?,
+            poll_interval: parse(&raw.poll_interval)?,
+            operation_timeout: parse(&raw.operation_timeout)?,
+            drain_timeout: parse(&raw.drain_timeout)?,
+            retry_base: parse(&raw.retry_base)?,
+            retry_max: parse(&raw.retry_max)?,
+        };
+        let valid = [
+            settings.grace_period,
+            settings.completed_job_retention,
+            settings.slug_reservation,
+            settings.poll_interval,
+            settings.operation_timeout,
+            settings.drain_timeout,
+            settings.retry_base,
+            settings.retry_max,
+        ]
+        .into_iter()
+        .all(|duration| !duration.get().is_zero())
+            && settings.retry_base.get() <= settings.retry_max.get()
+            && (1..=10_000).contains(&settings.delete_batch_documents);
+        valid
+            .then_some(settings)
+            .ok_or(ConfigError::InvalidProjectDeletionConfig)
+    }
+}
+
 impl TryFrom<RawProcessorSettings> for ProcessorSettings {
     type Error = ConfigError;
 
@@ -1460,6 +1559,17 @@ mod tests {
         assert!(matches!(
             AppConfig::try_from(retention),
             Err(ConfigError::InvalidRetentionConfig)
+        ));
+        let deletion = RawConfig {
+            project_deletion: RawProjectDeletionSettings {
+                delete_batch_documents: 0,
+                ..RawProjectDeletionSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(deletion),
+            Err(ConfigError::InvalidProjectDeletionConfig)
         ));
     }
 
