@@ -5,6 +5,7 @@ use std::{sync::Arc, time::SystemTime};
 use faultkeep_application::{
     ingest::IngestService,
     observability::Metrics,
+    scheduler::{Scheduler, SchedulerConfig},
     shutdown::ShutdownRoot,
     writer::{MongoWriter, MongoWriterConfig},
 };
@@ -92,8 +93,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = ShutdownRoot::new();
     let config = benchmark_config();
     let event_store = Arc::new(control.event_store(EventCodecConfig::default()));
+    let clock: Arc<dyn Clock> = Arc::new(BenchClock);
     let (writer, writer_task) = MongoWriter::start(
-        event_store,
+        Arc::clone(&event_store),
         Arc::new(DiscardHandoff),
         MongoWriterConfig {
             channel_capacity: config.max_waiting_for_storage,
@@ -125,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(BenchResolver(snapshot)),
         writer,
         Arc::new(NoopOutcomeSink),
-        Arc::new(BenchClock),
+        Arc::clone(&clock),
         Arc::new(BenchRandom),
         config.max_waiting_for_storage,
         root.signal(),
@@ -137,7 +139,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         true,
     );
     let listener = TcpListener::bind(&address).await?;
-    println!("durable benchmark ingest listening on {address}");
+    let scheduler_task = if std::env::var("FAULTKEEP_BENCH_MAINTENANCE").as_deref() == Ok("1") {
+        let (_, task) = Scheduler::start(
+            Arc::new(control.maintenance_store()),
+            clock,
+            SchedulerConfig {
+                poll_interval: std::time::Duration::from_millis(20),
+                maintenance_interval: std::time::Duration::from_millis(100),
+                reconciliation_interval: std::time::Duration::from_secs(1),
+                backlog_interval: std::time::Duration::from_millis(100),
+                task_timeout: std::time::Duration::from_secs(5),
+                retry_base: std::time::Duration::from_millis(100),
+                retry_max: std::time::Duration::from_secs(5),
+                batch_size: 500,
+                ..SchedulerConfig::default()
+            },
+            root.signal(),
+        )
+        .await?;
+        Some(task)
+    } else {
+        None
+    };
+    println!(
+        "durable benchmark ingest listening on {address}; maintenance={}",
+        scheduler_task.is_some()
+    );
     let server = http::run(
         listener,
         root.signal(),
@@ -154,6 +181,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     root.begin();
+    if let Some(task) = scheduler_task {
+        task.wait().await;
+    }
     writer_task.wait().await;
     let count = database
         .collection::<mongodb::bson::Document>("events")

@@ -14,6 +14,10 @@ const targetRps = Number(__ENV.FAULTKEEP_RPS || "1158");
 const duration = __ENV.FAULTKEEP_DURATION || "30s";
 const runId = (__ENV.FAULTKEEP_RUN_ID || "00000001").padStart(8, "0").slice(-8);
 const resultPath = __ENV.FAULTKEEP_RESULT || "performance/results/ingest-mongodb.json";
+const fixtureRevision =
+  __ENV.FAULTKEEP_FIXTURE_REVISION || "error-event-v1-mongodb";
+const durability =
+  __ENV.FAULTKEEP_DURABILITY || "MongoWriter unordered insert_many to MongoDB";
 
 export const options = {
   scenarios: {
@@ -66,7 +70,7 @@ export default function () {
       "X-Sentry-Auth":
         "Sentry sentry_version=7,sentry_client=faultkeep-k6/1,sentry_key=0123456789abcdef0123456789abcdef",
     },
-    tags: { fixture: "error-event-v1-mongodb" },
+    tags: { fixture: fixtureRevision },
   });
   if (response.status === 0) {
     tcpErrors.add(1);
@@ -87,7 +91,7 @@ export function handleSummary(data) {
     schema_version: 1,
     metadata: {
       commit: __ENV.FAULTKEEP_COMMIT || "working-tree",
-      fixture_revision: "error-event-v1-mongodb",
+      fixture_revision: fixtureRevision,
       target_rps: targetRps,
       duration,
       run_id: runId,
@@ -95,7 +99,7 @@ export function handleSummary(data) {
       k6_version: __ENV.FAULTKEEP_K6 || "unknown",
       hardware: __ENV.FAULTKEEP_HARDWARE || "unrecorded",
       mongo: __ENV.FAULTKEEP_MONGO || "MongoDB 8.0.12 standalone",
-      durability: "MongoWriter unordered insert_many to MongoDB",
+      durability,
     },
     metrics: {
       iterations: iterationMetric.count || 0,

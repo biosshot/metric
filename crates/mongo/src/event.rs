@@ -18,7 +18,7 @@ use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
     error::ErrorKind,
-    options::IndexOptions,
+    options::{Hint, IndexOptions},
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -298,11 +298,19 @@ impl EventBacklog for MongoEventStore {
         })
     }
 
-    fn observe(&self) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>> {
+    fn observe(
+        &self,
+        count_limit: u64,
+    ) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>> {
         Box::pin(async move {
+            if count_limit == 0 {
+                return Err(EventBacklogError::InvalidData);
+            }
             let events = self.database.collection::<Document>("events");
             let pending_count = events
                 .count_documents(doc! { "q.s": 0_i32 })
+                .limit(count_limit)
+                .hint(Hint::Name("event_pending_due".to_owned()))
                 .await
                 .map_err(|_| EventBacklogError::Unavailable)?;
             let oldest = events

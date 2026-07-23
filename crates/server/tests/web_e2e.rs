@@ -110,8 +110,17 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let app = http::router(
         root.signal(),
         faultkeep_application::observability::Metrics,
-        native_http::router(Some(identity), Some(Arc::clone(&native)), false, true)
-            .merge(web_http::router_with_root(&web_root)),
+        native_http::router(
+            Some(identity),
+            Some(Arc::clone(&native)),
+            false,
+            true,
+            Some(native_http::RetentionCapability {
+                events_days: 30,
+                issue_stats_hourly_days: 400,
+            }),
+        )
+        .merge(web_http::router_with_root(&web_root)),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;

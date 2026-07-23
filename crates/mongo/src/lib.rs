@@ -7,6 +7,7 @@ mod auth;
 mod event;
 mod finalizer;
 mod issue;
+mod maintenance;
 
 pub use api::MongoInvestigationStore;
 pub use auth::MongoAuthStore;
@@ -15,6 +16,7 @@ pub use event::{
 };
 pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finalized_event};
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
+pub use maintenance::MongoMaintenanceStore;
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
@@ -148,6 +150,11 @@ impl MongoProjectStore {
         issue_codec: IssueCodecConfig,
     ) -> MongoInvestigationStore {
         MongoInvestigationStore::from_database(self.database.clone(), event_codec, issue_codec)
+    }
+
+    #[must_use]
+    pub fn maintenance_store(&self) -> MongoMaintenanceStore {
+        MongoMaintenanceStore::from_database(self.database.clone())
     }
 
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {

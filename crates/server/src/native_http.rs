@@ -50,6 +50,13 @@ struct NativeHttpState {
     api: Option<Arc<NativeApiService>>,
     secure_cookie: bool,
     required_ready: bool,
+    retention: Option<RetentionCapability>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RetentionCapability {
+    pub events_days: u32,
+    pub issue_stats_hourly_days: u32,
 }
 
 #[derive(Debug)]
@@ -151,12 +158,14 @@ pub fn router(
     api: Option<Arc<NativeApiService>>,
     secure_cookie: bool,
     required_ready: bool,
+    retention: Option<RetentionCapability>,
 ) -> Router {
     let state = NativeHttpState {
         identity,
         api,
         secure_cookie,
         required_ready,
+        retention,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -951,7 +960,15 @@ async fn list_environments(
     })))
 }
 
-async fn capabilities() -> Json<Value> {
+async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
+    let retention = state.retention.map(|policy| {
+        json!({
+            "events_days": policy.events_days,
+            "issue_stats_hourly_days": policy.issue_stats_hourly_days,
+            "clock": "received_at",
+            "gradual_policy_reduction": true,
+        })
+    });
     Json(json!({
         "api_version": "v1",
         "search": {
@@ -966,13 +983,14 @@ async fn capabilities() -> Json<Value> {
         "features": {
             "native_api": true,
             "web": true,
-            "retention": false,
+            "retention": retention.is_some(),
             "mcp": false,
             "migrations": false,
             "nats": false,
             "sharding": false,
             "disk_spool": false,
-        }
+        },
+        "retention": retention,
     }))
 }
 
@@ -988,6 +1006,7 @@ async fn component_status(
             "writer": if state.required_ready { "running" } else { "stopped" },
             "dispatcher": if state.required_ready { "running" } else { "stopped" },
             "processor": if state.required_ready { "running" } else { "stopped" },
+            "scheduler": if state.required_ready { "running" } else { "stopped" },
             "symbolication": "baseline",
         }
     })))

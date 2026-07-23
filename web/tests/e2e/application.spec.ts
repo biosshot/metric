@@ -221,7 +221,13 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
         custom_tags: false,
         max_page_size: 100,
       },
-      features: { native_api: true, web: true, retention: false, mcp: false },
+      features: { native_api: true, web: true, retention: true, mcp: false },
+      retention: {
+        events_days: 30,
+        issue_stats_hourly_days: 400,
+        clock: 'received_at',
+        gradual_policy_reduction: true,
+      },
     });
   }
   if (path === '/api/v1/status') {
@@ -267,6 +273,8 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await expect(page.locator('.stack-frame')).toHaveCount(120);
 
   await page.getByRole('link', { name: /Project settings/ }).click();
+  await expect(page.getByText(/Raw Events are retained for/)).toContainText('30 days');
+  await expect(page.getByText(/Hourly Issue statistics/)).toContainText('400 days');
   await page.getByLabel('IP address handling').selectOption('remove');
   await page.getByRole('button', { name: 'Save policy' }).click();
   await expect(page.getByRole('status')).toContainText('Project policy saved');

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "commit": "phase14-working-tree",
+    "fixture_revision": "error-event-v1-mongodb-maintenance",
+    "target_rps": 1158,
+    "duration": "15s",
+    "run_id": "14001158",
+    "rust_toolchain": "rustc 1.88.0",
+    "k6_version": "k6 2.1.0",
+    "hardware": "AMD Ryzen 5 5600H; 15.9 GiB; Windows; native MongoDB",
+    "mongo": "native MongoDB standalone on 127.0.0.1:27017",
+    "durability": "MongoWriter plus concurrent Phase 14 Scheduler",
+    "database_count_verified": true
+  },
+  "metrics": {
+    "iterations": 17370,
+    "achieved_rps": 1156.725735506756,
+    "error_rate": 0,
+    "latency_ms": {
+      "average": 15.356273074265959,
+      "p50": 15.36355,
+      "p95": 26.000535,
+      "p99": 30.3132,
+      "maximum": 57.0704
+    },
+    "dropped_iterations": 0,
+    "durable_documents": 17370,
+    "acknowledged_loss": 0,
+    "failures": {
+      "tcp_errors": 0,
+      "http_responses": 17370,
+      "status_200": 17370,
+      "status_429": 0,
+      "status_503": 0,
+      "status_other": 0
+    }
+  }
+}

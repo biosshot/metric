@@ -37,6 +37,7 @@ try {
   await page.getByText('Available DSNs').waitFor();
 
   await page.getByRole('link', { name: /Project settings/ }).click();
+  await page.getByText(/Raw Events are retained for/).waitFor();
   await page.getByLabel('IP address handling').selectOption('remove');
   await page.getByRole('button', { name: 'Save policy' }).click();
   await Promise.race([

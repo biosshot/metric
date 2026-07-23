@@ -123,6 +123,12 @@ export interface CapabilityDocument {
     max_page_size: number;
   };
   features: Record<string, boolean>;
+  retention: {
+    events_days: number;
+    issue_stats_hourly_days: number;
+    clock: 'received_at';
+    gradual_policy_reduction: boolean;
+  } | null;
 }
 
 export interface ComponentStatus {

@@ -74,3 +74,10 @@ On the first MongoDB-backed startup, the server prints one
 store the plaintext securely. The Web first-setup form consumes it once.
 Insecure session cookies require both `auth.secure_cookie = false` and
 the explicit local-only `development.allow_insecure_cookies = true`.
+
+Phase 14 maintenance uses the typed `[retention]` and `[scheduler]` sections in
+`config/faultkeep.example.toml`. New processed Events use those durations
+immediately. Existing processed Events and hourly statistics are adjusted gradually
+in bounded keyset pages; pending Events never receive retention expiry. The
+all-in-one server starts Scheduler before becoming ready and stops it through the
+ordinary graceful-shutdown fence.

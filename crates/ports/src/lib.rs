@@ -1,6 +1,6 @@
 //! Capability-specific ports used by the Phase 1 Ingest application service.
 
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, time::Duration};
 
 use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
@@ -227,7 +227,11 @@ pub trait EventBacklog: Send + Sync + 'static {
         excluded: &'a [EventKey],
     ) -> PortFuture<'a, Result<Vec<PendingEvent>, EventBacklogError>>;
 
-    fn observe(&self) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>>;
+    /// Returns a saturating pending count no larger than `count_limit`.
+    fn observe(
+        &self,
+        count_limit: u64,
+    ) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>>;
 }
 
 /// Processing seam. Completion means durable Event eligibility was already changed.
@@ -366,6 +370,89 @@ pub trait OutcomeSink: Send + Sync + 'static {
 
 pub trait Clock: Send + Sync + 'static {
     fn now(&self) -> Timestamp;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaintenanceTask {
+    RetryBacklog,
+    EventRetention,
+    HourlyRetention,
+    CounterReconciliation,
+    UploadExpiry,
+    BlobOrphanRegistration,
+}
+
+impl MaintenanceTask {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::RetryBacklog => "retry_backlog",
+            Self::EventRetention => "event_retention",
+            Self::HourlyRetention => "hourly_retention",
+            Self::CounterReconciliation => "counter_reconciliation",
+            Self::UploadExpiry => "upload_expiry",
+            Self::BlobOrphanRegistration => "blob_orphan_registration",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaintenanceCursor(Box<[u8]>);
+
+impl MaintenanceCursor {
+    pub const MAX_BYTES: usize = 32;
+
+    #[must_use]
+    pub fn new(bytes: impl Into<Box<[u8]>>) -> Option<Self> {
+        let bytes = bytes.into();
+        (!bytes.is_empty() && bytes.len() <= Self::MAX_BYTES).then_some(Self(bytes))
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MaintenanceRequest {
+    pub task: MaintenanceTask,
+    pub now: Timestamp,
+    pub cursor: Option<MaintenanceCursor>,
+    pub batch_size: usize,
+    pub event_retention: Duration,
+    pub hourly_retention: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceDisposition {
+    Completed,
+    Disabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaintenanceResult {
+    pub scanned: usize,
+    pub changed: usize,
+    pub next_cursor: Option<MaintenanceCursor>,
+    pub disposition: MaintenanceDisposition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum MaintenanceStoreError {
+    #[error("maintenance request or stored data is invalid")]
+    InvalidData,
+    #[error("maintenance storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Capability-specific, bounded maintenance operations. Implementations cannot
+/// expose a raw backend query surface to Scheduler.
+pub trait MaintenanceStore: Send + Sync + 'static {
+    fn run(
+        &self,
+        request: MaintenanceRequest,
+    ) -> PortFuture<'_, Result<MaintenanceResult, MaintenanceStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

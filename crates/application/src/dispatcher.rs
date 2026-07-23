@@ -447,7 +447,8 @@ async fn observe_backlog(
     source_timeout: Duration,
     guard: &BacklogGuard,
 ) {
-    let Ok(Ok(observation)) = timeout(source_timeout, source.observe()).await else {
+    let count_limit = guard.max_pending_events.unwrap_or(1_000_000).max(1);
+    let Ok(Ok(observation)) = timeout(source_timeout, source.observe(count_limit)).await else {
         metrics::counter!("faultkeep_dispatcher_observation_total", "outcome" => "unavailable")
             .increment(1);
         return;
@@ -601,11 +602,17 @@ mod tests {
             })
         }
 
-        fn observe(&self) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>> {
+        fn observe(
+            &self,
+            count_limit: u64,
+        ) -> PortFuture<'_, Result<BacklogObservation, EventBacklogError>> {
             Box::pin(async move {
+                if count_limit == 0 {
+                    return Err(EventBacklogError::InvalidData);
+                }
                 let events = lock(&self.events);
                 Ok(BacklogObservation {
-                    pending_count: events.len() as u64,
+                    pending_count: (events.len() as u64).min(count_limit),
                     oldest_pending_at: events.values().map(|(_, event)| event.received_at).min(),
                 })
             })

@@ -58,6 +58,20 @@ poll_interval = "100ms"
 metrics_interval = "5s"
 source_timeout = "5s"
 
+[scheduler]
+poll_interval = "1s"
+maintenance_interval = "1m"
+reconciliation_interval = "5m"
+backlog_interval = "5s"
+task_timeout = "10s"
+retry_base = "1s"
+retry_max = "1m"
+batch_size = 500
+
+[retention]
+events_days = 30
+issue_stats_hourly_days = 400
+
 [processor]
 max_concurrency = 32
 max_attempts = 5

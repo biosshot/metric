@@ -131,7 +131,7 @@ async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Er
     );
     assert_eq!(collection.count_documents(doc! {}).await?, 3);
 
-    let observation = store.observe().await?;
+    let observation = store.observe(1_000).await?;
     assert_eq!(observation.pending_count, 3);
     assert_eq!(observation.oldest_pending_at.unwrap().unix_millis(), 1_000);
     let excluded = EventKey::new(ProjectId::new(42)?, EventId::from_bytes([1; 16]));

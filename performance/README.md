@@ -277,3 +277,34 @@ below 250 ms. It is not a server-tuned production capacity claim. The existing k
 ingest suites remain the HTTP overload/TCP/`200`/`429`/`503` baselines; this pass
 deliberately runs only the one Phase 12 database-query performance test. After the
 run, verify and terminate any lingering Cargo, Rust test, server or k6 processes.
+
+## Phase 14 foreground ingest with maintenance
+
+Phase 14 reuses the real-MongoDB durable HTTP workload while enabling Scheduler
+against the same database. Event retention scans foreground writes in bounded `_id`
+pages while due-backlog observation, counter reconciliation, and disabled
+future-module hooks continue on their configured intervals. This is an interference
+and regression sentinel; it does not claim that local Windows is a tuned server.
+
+Run exactly one fixed-arrival test per local pass:
+
+```text
+cargo build --locked --release --bin durable-ingest-bench
+$env:FAULTKEEP_BENCH_MAINTENANCE = "1"
+$env:FAULTKEEP_BENCH_MONGODB_URI = "mongodb://127.0.0.1:27017/?retryWrites=false"
+$env:FAULTKEEP_BENCH_DATABASE = "faultkeep_phase14_bench_<fresh-id>"
+target\release\durable-ingest-bench.exe
+
+k6 run -e FAULTKEEP_RPS=1158 -e FAULTKEEP_DURATION=15s `
+  -e FAULTKEEP_FIXTURE_REVISION=error-event-v1-mongodb-maintenance `
+  -e FAULTKEEP_DURABILITY="MongoWriter plus concurrent Phase 14 Scheduler" `
+  -e FAULTKEEP_RESULT=performance/results/phase14-maintenance-ingest.json `
+  performance/k6/ingest-mongodb.js
+```
+
+The artifact records achieved RPS, p95/p99, dropped iterations, TCP errors, all HTTP
+responses, and explicit `200`, `429`, `503`, and other statuses. Verify the MongoDB
+Event count against `status_200`, stop the benchmark server even after a k6 failure,
+drop the fresh database, and confirm that no benchmark, k6, Cargo, or Rust compiler
+process remains. Compare later candidates with `performance/compare-k6.mjs` and the
+reviewed Phase 14 baseline using the same fixture, RPS, hardware, and MongoDB topology.

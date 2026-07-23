@@ -23,6 +23,7 @@ use faultkeep_application::{
         IssuePreparerStage, Processor, ProcessorConfig, ProcessorConfigError,
     },
     projects::{ProjectCacheConfig, ProjectService, ProjectServiceError},
+    scheduler::{Scheduler, SchedulerConfig, SchedulerStartError, SchedulerTask},
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
     symbolication::BaselineSymbolicationService,
@@ -59,6 +60,8 @@ pub enum ServerError {
     #[error(transparent)]
     Dispatcher(#[from] DispatcherStartError),
     #[error(transparent)]
+    Scheduler(#[from] SchedulerStartError),
+    #[error(transparent)]
     Normalizer(#[from] NormalizerConfigError),
     #[error(transparent)]
     Finalizer(#[from] FinalizerError),
@@ -73,6 +76,7 @@ struct RuntimeModules {
     event_sink: std::sync::Arc<dyn EventSink>,
     writer_task: Option<MongoWriterTask>,
     dispatcher_task: Option<DispatcherTask>,
+    scheduler_task: Option<SchedulerTask>,
     finalizer_batcher: Option<std::sync::Arc<FinalizerBatcher>>,
     finalizer_batch_task: Option<FinalizerBatchTask>,
     identity_service: Option<std::sync::Arc<IdentityService>>,
@@ -103,6 +107,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         event_sink,
         writer_task,
         dispatcher_task,
+        scheduler_task,
         finalizer_batcher,
         finalizer_batch_task,
         identity_service,
@@ -204,7 +209,11 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
         let finalizer = std::sync::Arc::new(Finalizer::new(
             std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
-            FinalizerConfig::default(),
+            FinalizerConfig {
+                event_retention: config.retention.event_duration(),
+                hourly_retention: config.retention.hourly_duration(),
+                ..FinalizerConfig::default()
+            },
         )?);
         let (finalizer_batcher, finalizer_batch_task) = FinalizerBatcher::start(
             finalizer,
@@ -269,11 +278,30 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let writer: std::sync::Arc<dyn EventSink> = writer;
         let event_sink: std::sync::Arc<dyn EventSink> =
             std::sync::Arc::new(BacklogGuardedEventSink::new(writer, backlog_guard));
+        let (_scheduler, scheduler_task) = Scheduler::start(
+            std::sync::Arc::new(store.maintenance_store()),
+            std::sync::Arc::clone(&clock),
+            SchedulerConfig {
+                poll_interval: config.scheduler.poll_interval.get(),
+                maintenance_interval: config.scheduler.maintenance_interval.get(),
+                reconciliation_interval: config.scheduler.reconciliation_interval.get(),
+                backlog_interval: config.scheduler.backlog_interval.get(),
+                task_timeout: config.scheduler.task_timeout.get(),
+                retry_base: config.scheduler.retry_base.get(),
+                retry_max: config.scheduler.retry_max.get(),
+                batch_size: config.scheduler.batch_size,
+                event_retention: config.retention.event_duration(),
+                hourly_retention: config.retention.hourly_duration(),
+            },
+            shutdown.signal(),
+        )
+        .await?;
         RuntimeModules {
             project_resolver,
             event_sink,
             writer_task: Some(writer_task),
             dispatcher_task: Some(dispatcher_task),
+            scheduler_task: Some(scheduler_task),
             finalizer_batcher: Some(finalizer_batcher),
             finalizer_batch_task: Some(finalizer_batch_task),
             identity_service: Some(identity_service),
@@ -285,6 +313,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             writer_task: None,
             dispatcher_task: None,
+            scheduler_task: None,
             finalizer_batcher: None,
             finalizer_batch_task: None,
             identity_service: None,
@@ -300,13 +329,18 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         config.ingest.max_waiting_for_storage,
         shutdown.signal(),
     ));
-    let required_ready = writer_task.is_some() && dispatcher_task.is_some();
+    let required_ready =
+        writer_task.is_some() && dispatcher_task.is_some() && scheduler_task.is_some();
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router(
             identity_service,
             native_api_service,
             config.auth.secure_cookie,
             required_ready,
+            required_ready.then_some(native_http::RetentionCapability {
+                events_days: config.retention.events_days,
+                issue_stats_hourly_days: config.retention.issue_stats_hourly_days,
+            }),
         ))
         .merge(web_http::router());
     let app = http::router_with_readiness(
@@ -339,6 +373,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         }
     }
     shutdown.begin();
+    if let Some(task) = scheduler_task {
+        task.wait().await;
+    }
     if let Some(task) = writer_task {
         task.wait().await;
     }

@@ -22,6 +22,10 @@ const keys = useQuery({
   queryKey: computed(() => ['project-keys', projectId.value]),
   queryFn: () => api.keys(projectId.value),
 });
+const capabilities = useQuery({
+  queryKey: ['capabilities'],
+  queryFn: api.capabilities,
+});
 
 const policy = reactive<ProjectPolicy>({
   revision: 0,
@@ -226,13 +230,32 @@ const disableKey = useMutation({
     <section class="panel unavailable-setting">
       <div>
         <p class="eyebrow">Retention</p>
-        <h2>Not available in this build</h2>
-        <p>
-          Automated retention is deferred to Phase 14. Faultkeep will not pretend that a retention
-          value has been saved before the owning scheduler module exists.
-        </p>
+        <h2>Automated retention</h2>
+        <LoadingPanel
+          v-if="capabilities.isPending.value"
+          label="Loading effective retention policy…"
+        />
+        <ApiErrorPanel
+          v-else-if="capabilities.error.value"
+          :error="capabilities.error.value"
+          title="Retention policy could not be loaded"
+          @retry="capabilities.refetch()"
+        />
+        <div v-else-if="capabilities.data.value?.retention">
+          <p>
+            Raw Events are retained for
+            <strong>{{ capabilities.data.value.retention.events_days }} days</strong>. Hourly Issue
+            statistics are retained for
+            <strong>{{ capabilities.data.value.retention.issue_stats_hourly_days }} days</strong>.
+          </p>
+          <p>
+            Event age uses server receipt time. Policy reductions are applied gradually in bounded
+            maintenance batches, and pending Events are protected from retention deletion.
+          </p>
+        </div>
+        <p v-else>Automated retention is disabled in this build.</p>
       </div>
-      <StatusBadge status="unavailable" />
+      <StatusBadge :status="capabilities.data.value?.retention ? 'active' : 'unavailable'" />
     </section>
   </section>
 </template>

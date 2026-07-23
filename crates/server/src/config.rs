@@ -21,6 +21,7 @@ pub type ProjectCacheTtl = BoundedDuration<MAX_PROJECT_CACHE_TTL_MILLIS>;
 pub type MongoBootstrapTimeout = BoundedDuration<60_000>;
 pub type BatchWait = BoundedDuration<1_000>;
 pub type DispatcherInterval = BoundedDuration<60_000>;
+pub type SchedulerInterval = BoundedDuration<86_400_000>;
 pub type ProcessorDuration = BoundedDuration<600_000>;
 pub type BacklogAge = BoundedDuration<604_800_000>;
 pub type AuthDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
@@ -69,6 +70,8 @@ pub struct AppConfig {
     pub development: DevelopmentConfig,
     pub ingest: IngestConfig,
     pub dispatcher: DispatcherSettings,
+    pub scheduler: SchedulerSettings,
+    pub retention: RetentionSettings,
     pub processor: ProcessorSettings,
     pub auth: AuthSettings,
 }
@@ -175,6 +178,36 @@ pub struct DispatcherSettings {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct SchedulerSettings {
+    pub poll_interval: SchedulerInterval,
+    pub maintenance_interval: SchedulerInterval,
+    pub reconciliation_interval: SchedulerInterval,
+    pub backlog_interval: SchedulerInterval,
+    pub task_timeout: SchedulerInterval,
+    pub retry_base: SchedulerInterval,
+    pub retry_max: SchedulerInterval,
+    pub batch_size: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RetentionSettings {
+    pub events_days: u32,
+    pub issue_stats_hourly_days: u32,
+}
+
+impl RetentionSettings {
+    #[must_use]
+    pub const fn event_duration(self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.events_days as u64 * 24 * 60 * 60)
+    }
+
+    #[must_use]
+    pub const fn hourly_duration(self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.issue_stats_hourly_days as u64 * 24 * 60 * 60)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ProcessorSettings {
     pub max_concurrency: usize,
     pub max_attempts: u32,
@@ -215,6 +248,32 @@ impl Default for DispatcherSettings {
             poll_interval: "100ms".parse().expect("default poll interval is valid"),
             metrics_interval: "5s".parse().expect("default metrics interval is valid"),
             source_timeout: "5s".parse().expect("default source timeout is valid"),
+        }
+    }
+}
+
+impl Default for SchedulerSettings {
+    fn default() -> Self {
+        Self {
+            poll_interval: "1s".parse().expect("default Scheduler poll is valid"),
+            maintenance_interval: "1m".parse().expect("default maintenance interval is valid"),
+            reconciliation_interval: "5m"
+                .parse()
+                .expect("default reconciliation interval is valid"),
+            backlog_interval: "5s".parse().expect("default backlog interval is valid"),
+            task_timeout: "10s".parse().expect("default task timeout is valid"),
+            retry_base: "1s".parse().expect("default retry base is valid"),
+            retry_max: "1m".parse().expect("default retry maximum is valid"),
+            batch_size: 500,
+        }
+    }
+}
+
+impl Default for RetentionSettings {
+    fn default() -> Self {
+        Self {
+            events_days: 30,
+            issue_stats_hourly_days: 400,
         }
     }
 }
@@ -358,6 +417,8 @@ struct RawConfig {
     development: RawDevelopmentConfig,
     ingest: RawIngestConfig,
     dispatcher: RawDispatcherSettings,
+    scheduler: RawSchedulerSettings,
+    retention: RawRetentionSettings,
     processor: RawProcessorSettings,
     auth: RawAuthSettings,
 }
@@ -372,6 +433,8 @@ impl Default for RawConfig {
             development: RawDevelopmentConfig::default(),
             ingest: RawIngestConfig::default(),
             dispatcher: RawDispatcherSettings::default(),
+            scheduler: RawSchedulerSettings::default(),
+            retention: RawRetentionSettings::default(),
             processor: RawProcessorSettings::default(),
             auth: RawAuthSettings::default(),
         }
@@ -612,6 +675,26 @@ struct RawDispatcherSettings {
     source_timeout: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawSchedulerSettings {
+    poll_interval: String,
+    maintenance_interval: String,
+    reconciliation_interval: String,
+    backlog_interval: String,
+    task_timeout: String,
+    retry_base: String,
+    retry_max: String,
+    batch_size: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawRetentionSettings {
+    events_days: u32,
+    issue_stats_hourly_days: u32,
+}
+
 impl Default for RawDispatcherSettings {
     fn default() -> Self {
         let defaults = DispatcherSettings::default();
@@ -624,6 +707,30 @@ impl Default for RawDispatcherSettings {
             poll_interval: "100ms".to_owned(),
             metrics_interval: "5s".to_owned(),
             source_timeout: "5s".to_owned(),
+        }
+    }
+}
+
+impl Default for RawSchedulerSettings {
+    fn default() -> Self {
+        Self {
+            poll_interval: "1s".to_owned(),
+            maintenance_interval: "1m".to_owned(),
+            reconciliation_interval: "5m".to_owned(),
+            backlog_interval: "5s".to_owned(),
+            task_timeout: "10s".to_owned(),
+            retry_base: "1s".to_owned(),
+            retry_max: "1m".to_owned(),
+            batch_size: 500,
+        }
+    }
+}
+
+impl Default for RawRetentionSettings {
+    fn default() -> Self {
+        Self {
+            events_days: 30,
+            issue_stats_hourly_days: 400,
         }
     }
 }
@@ -708,6 +815,10 @@ pub enum ConfigError {
     InvalidProjectConfig,
     #[error("dispatcher configuration is invalid or outside supported bounds")]
     InvalidDispatcherConfig,
+    #[error("scheduler configuration is invalid or outside supported bounds")]
+    InvalidSchedulerConfig,
+    #[error("retention configuration is invalid or outside supported bounds")]
+    InvalidRetentionConfig,
     #[error("processor configuration is invalid or outside supported bounds")]
     InvalidProcessorConfig,
     #[error("auth configuration is invalid or outside supported bounds")]
@@ -809,6 +920,8 @@ impl TryFrom<RawConfig> for AppConfig {
         }
         let ingest = IngestConfig::try_from(raw.ingest)?;
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
+        let scheduler = SchedulerSettings::try_from(raw.scheduler)?;
+        let retention = RetentionSettings::try_from(raw.retention)?;
         let processor = ProcessorSettings::try_from(raw.processor)?;
         let auth = AuthSettings::try_from(raw.auth)?;
         if !auth.secure_cookie && !raw.development.allow_insecure_cookies {
@@ -836,6 +949,8 @@ impl TryFrom<RawConfig> for AppConfig {
             },
             ingest,
             dispatcher,
+            scheduler,
+            retention,
             processor,
             auth,
         })
@@ -886,7 +1001,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -929,6 +1044,16 @@ impl AppConfig {
             humantime::format_duration(self.dispatcher.poll_interval.get()),
             humantime::format_duration(self.dispatcher.metrics_interval.get()),
             humantime::format_duration(self.dispatcher.source_timeout.get()),
+            humantime::format_duration(self.scheduler.poll_interval.get()),
+            humantime::format_duration(self.scheduler.maintenance_interval.get()),
+            humantime::format_duration(self.scheduler.reconciliation_interval.get()),
+            humantime::format_duration(self.scheduler.backlog_interval.get()),
+            humantime::format_duration(self.scheduler.task_timeout.get()),
+            humantime::format_duration(self.scheduler.retry_base.get()),
+            humantime::format_duration(self.scheduler.retry_max.get()),
+            self.scheduler.batch_size,
+            self.retention.events_days,
+            self.retention.issue_stats_hourly_days,
             self.processor.max_concurrency,
             self.processor.max_attempts,
             humantime::format_duration(self.processor.retry_base.get()),
@@ -1082,6 +1207,64 @@ impl TryFrom<RawDispatcherSettings> for DispatcherSettings {
     }
 }
 
+impl TryFrom<RawSchedulerSettings> for SchedulerSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawSchedulerSettings) -> Result<Self, Self::Error> {
+        let parse = |value: &str| {
+            SchedulerInterval::from_str(value).map_err(|_| ConfigError::InvalidSchedulerConfig)
+        };
+        let poll_interval = parse(&raw.poll_interval)?;
+        let maintenance_interval = parse(&raw.maintenance_interval)?;
+        let reconciliation_interval = parse(&raw.reconciliation_interval)?;
+        let backlog_interval = parse(&raw.backlog_interval)?;
+        let task_timeout = parse(&raw.task_timeout)?;
+        let retry_base = parse(&raw.retry_base)?;
+        let retry_max = parse(&raw.retry_max)?;
+        let valid = [
+            poll_interval,
+            maintenance_interval,
+            reconciliation_interval,
+            backlog_interval,
+            task_timeout,
+            retry_base,
+            retry_max,
+        ]
+        .into_iter()
+        .all(|duration| !duration.get().is_zero())
+            && retry_base.get() <= retry_max.get()
+            && (1..=10_000).contains(&raw.batch_size);
+        if !valid {
+            return Err(ConfigError::InvalidSchedulerConfig);
+        }
+        Ok(Self {
+            poll_interval,
+            maintenance_interval,
+            reconciliation_interval,
+            backlog_interval,
+            task_timeout,
+            retry_base,
+            retry_max,
+            batch_size: raw.batch_size,
+        })
+    }
+}
+
+impl TryFrom<RawRetentionSettings> for RetentionSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawRetentionSettings) -> Result<Self, Self::Error> {
+        let valid = (1..=3_650).contains(&raw.events_days)
+            && (1..=3_650).contains(&raw.issue_stats_hourly_days);
+        valid
+            .then_some(Self {
+                events_days: raw.events_days,
+                issue_stats_hourly_days: raw.issue_stats_hourly_days,
+            })
+            .ok_or(ConfigError::InvalidRetentionConfig)
+    }
+}
+
 impl TryFrom<RawProcessorSettings> for ProcessorSettings {
     type Error = ConfigError;
 
@@ -1197,6 +1380,9 @@ mod tests {
         assert!(config.dispatcher.low_watermark < config.dispatcher.refill_target);
         assert!(config.dispatcher.refill_target <= config.dispatcher.queue_capacity);
         assert_eq!(config.processor.max_attempts, 5);
+        assert_eq!(config.scheduler.batch_size, 500);
+        assert_eq!(config.retention.events_days, 30);
+        assert_eq!(config.retention.issue_stats_hourly_days, 400);
         assert_eq!(config.auth.password_memory_kib, 19 * 1024);
         assert!(config.auth.secure_cookie);
         assert_eq!(
@@ -1247,6 +1433,33 @@ mod tests {
         assert!(matches!(
             AppConfig::try_from(raw),
             Err(ConfigError::InvalidIngestConfig)
+        ));
+    }
+
+    #[test]
+    fn scheduler_and_retention_bounds_fail_closed() {
+        let scheduler = RawConfig {
+            scheduler: RawSchedulerSettings {
+                retry_base: "2m".to_owned(),
+                retry_max: "1m".to_owned(),
+                ..RawSchedulerSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(scheduler),
+            Err(ConfigError::InvalidSchedulerConfig)
+        ));
+        let retention = RawConfig {
+            retention: RawRetentionSettings {
+                events_days: 0,
+                ..RawRetentionSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(retention),
+            Err(ConfigError::InvalidRetentionConfig)
         ));
     }
 

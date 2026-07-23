@@ -10,6 +10,7 @@ pub mod normalizer;
 pub mod observability;
 pub mod processor;
 pub mod projects;
+pub mod scheduler;
 pub mod search;
 pub mod shutdown;
 pub mod symbolication;
