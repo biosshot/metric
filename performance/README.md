@@ -256,3 +256,24 @@ node performance/compare-auth-rate-limit.mjs performance/baselines/auth-rate-lim
 The comparator requires identical hardware, toolchain, fixture and limiter
 configuration, enforces 100,000 RPS and rejects regressions beyond the supplied
 budget. After the run, terminate any lingering Cargo, Rust test or k6 processes.
+
+## Phase 12 native API query
+
+The retained real-MongoDB benchmark uses 2,000 finalized Events and executes 1,000
+newest-first project Event-list queries at page size 50. It records explicit query
+RPS plus p95/p99 latency. Search grammar, exact token post-verification, concurrent
+insert pagination and accepted query-plan indexes are covered by the separate Phase
+12 integration test; this benchmark isolates the stable timeline query shape.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-native-api-query.mjs
+node performance/compare-native-api-query.mjs performance/baselines/native-api-query/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+The local Windows regression sentinel requires 100 RPS, p95 below 100 ms and p99
+below 250 ms. It is not a server-tuned production capacity claim. The existing k6
+ingest suites remain the HTTP overload/TCP/`200`/`429`/`503` baselines; this pass
+deliberately runs only the one Phase 12 database-query performance test. After the
+run, verify and terminate any lingering Cargo, Rust test, server or k6 processes.
