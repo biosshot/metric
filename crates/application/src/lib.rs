@@ -12,6 +12,7 @@ pub mod ingest;
 pub mod issues;
 pub mod native_api;
 pub mod normalizer;
+pub mod notifications;
 pub mod observability;
 pub mod processor;
 pub mod projects;

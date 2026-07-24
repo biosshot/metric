@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 21] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 24] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -51,6 +51,11 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 21] = [
         code: 0,
         name: "audit_log",
         ownership: DatasetOwnership::RetainedAudit,
+    },
+    DatasetRegistration {
+        code: 64,
+        name: "alert_rules",
+        ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
         code: 50,
@@ -95,6 +100,16 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 21] = [
     DatasetRegistration {
         code: 30,
         name: "issue_stats_hourly",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 66,
+        name: "notification_deliveries",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 62,
+        name: "notification_destinations",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -173,7 +188,7 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 4] = [
     },
 ];
 
-const PURGE_CODES: [u16; 11] = [10, 20, 30, 40, 50, 52, 54, 56, 58, 60, 70];
+const PURGE_CODES: [u16; 14] = [10, 20, 30, 40, 50, 52, 54, 56, 58, 60, 62, 64, 66, 70];
 
 impl MongoProjectStore {
     async fn request_deletion_inner(
@@ -507,6 +522,30 @@ impl MongoProjectStore {
             60 => {
                 self.detach_release_batch(project_id, cursor, batch_size)
                     .await
+            }
+            62 => {
+                self.delete_owned_batch(
+                    "notification_destinations",
+                    "p",
+                    project_id,
+                    cursor,
+                    batch_size,
+                )
+                .await
+            }
+            64 => {
+                self.delete_owned_batch("alert_rules", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            66 => {
+                self.delete_owned_batch(
+                    "notification_deliveries",
+                    "p",
+                    project_id,
+                    cursor,
+                    batch_size,
+                )
+                .await
             }
             70 => {
                 self.delete_owned_batch(

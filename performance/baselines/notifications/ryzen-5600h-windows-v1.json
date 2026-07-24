@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "notification-transition-expansion-phase-20",
+    "source_commit": "9e34a777750562185d357436dc932d57240c6bf9",
+    "generated_at": "2026-07-24T08:31:30.769Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "mongodb_version": "8.3.7",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "300 distinct Issue-owned new_issue transitions; one enabled rule and one destination; batches of 100",
+    "storage": "local MongoDB direct connection; journaled Issue intents and idempotent delivery upserts; release profile"
+  },
+  "metrics": {
+    "transitions": 300,
+    "expansion_rps": 429.74,
+    "elapsed_ms": 698,
+    "minimum_expansion_rps": 50
+  }
+}

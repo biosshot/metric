@@ -157,3 +157,29 @@ max_concurrency = 2
 max_attempts = 5
 window = "1m"
 capacity = 10000
+
+[notifications]
+transition_batch_size = 100
+due_scan_limit = 100
+poll_interval = "250ms"
+
+[notifications.queue]
+capacity = 1000
+worker_concurrency = 8
+
+[notifications.retry]
+max_attempts = 8
+initial_delay = "5s"
+max_delay = "1h"
+timeout = "10s"
+attempt_lease = "30s"
+
+[notifications.retention]
+delivered_days = 30
+dead_days = 90
+
+[notifications.webhook]
+maximum_response_bytes = "64 KiB"
+maximum_retry_after = "1h"
+allow_http = false
+allow_private_networks = false

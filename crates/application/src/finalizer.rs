@@ -90,6 +90,7 @@ pub enum FinalizerError {
 pub struct Finalizer {
     store: Arc<dyn FinalizationStore>,
     config: FinalizerConfig,
+    notification_signal: Option<Arc<dyn crate::notifications::NotificationSignal>>,
 }
 
 impl Finalizer {
@@ -100,7 +101,17 @@ impl Finalizer {
         Ok(Self {
             store,
             config: config.validate()?,
+            notification_signal: None,
         })
+    }
+
+    #[must_use]
+    pub fn with_notification_signal(
+        mut self,
+        signal: Arc<dyn crate::notifications::NotificationSignal>,
+    ) -> Self {
+        self.notification_signal = Some(signal);
+        self
     }
 
     pub fn prepare(
@@ -149,10 +160,17 @@ impl Finalizer {
             }
             validate_event(event, self.config.max_processed_body_bytes)?;
         }
-        self.store
+        let result = self
+            .store
             .finalize(FinalizeBatch { events }, self.config.policy())
             .await
-            .map_err(map_store_error)
+            .map_err(map_store_error)?;
+        if result.finalized > 0 {
+            if let Some(signal) = &self.notification_signal {
+                signal.notify_transition();
+            }
+        }
+        Ok(result)
     }
 }
 

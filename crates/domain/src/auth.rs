@@ -444,6 +444,8 @@ pub enum AuditAction {
     ProjectDeletionRequested,
     ProjectDeletionCancelled,
     IncidentCapsuleExported,
+    NotificationDestinationUpserted,
+    AlertRuleUpserted,
 }
 
 impl AuditAction {
@@ -468,6 +470,8 @@ impl AuditAction {
             Self::ProjectDeletionRequested => "project.deletion_requested",
             Self::ProjectDeletionCancelled => "project.deletion_cancelled",
             Self::IncidentCapsuleExported => "incident_capsule.exported",
+            Self::NotificationDestinationUpserted => "notification_destination.upserted",
+            Self::AlertRuleUpserted => "alert_rule.upserted",
         }
     }
 }

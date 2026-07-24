@@ -366,3 +366,25 @@ second. The runner has a hard timeout and force-kills its Cargo child on expiry.
 After the run, verify that no Cargo, Rust test, Faultkeep server or k6 process
 remains. k6 is not used because this benchmark has no persistent HTTP server and
 the Web UI is not in the Phase 19 export timing path.
+
+## Phase 20 notification expansion
+
+The retained Phase 20 baseline measures the durable real-MongoDB handoff from 300
+Issue-owned `new_issue` intents to deterministic delivery documents. One enabled
+rule expands to one destination, in batches of 100. Setup is outside the timing
+window; the measured path includes rule lookup, idempotent delivery upsert and
+atomic removal of the embedded transition.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-notifications.mjs
+node performance/compare-notifications.mjs performance/baselines/notifications/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 20
+```
+
+The result reports explicit transition expansion RPS and requires at least 50 RPS.
+Webhook receiver latency is intentionally excluded because it is external and
+unbounded; delivery correctness, signing, retry and timeout behavior use a controlled
+receiver test. k6 is not used because there is no public notification HTTP ingress.
+The runner has a hard timeout. After every run, verify that no Cargo, Rust test,
+Faultkeep server or k6 process remains.

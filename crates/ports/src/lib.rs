@@ -33,6 +33,10 @@ use faultkeep_domain::{
         IssueCommand, IssueCommandResult, IssueMutationResult, IssueOccurrence, IssueSearchQuery,
         IssueSearchResult, IssueSnapshot,
     },
+    notifications::{
+        AlertRule, ClaimedNotificationDelivery, IssueNotificationTransition, NotificationDelivery,
+        NotificationDeliveryId, NotificationDestination,
+    },
     processing::{PendingEvent, ProcessingFailure, ProcessingProject, ProcessingStateChange},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
@@ -680,6 +684,102 @@ pub trait IssueStore: Send + Sync + 'static {
         project_id: ProjectId,
         query: IssueSearchQuery,
     ) -> PortFuture<'_, Result<Vec<IssueSearchResult>, IssueStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum NotificationStoreError {
+    #[error("notification storage contains invalid data")]
+    InvalidData,
+    #[error("notification storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Durable Issue-transition expansion and delivery-attempt boundary.
+///
+/// Implementations must upsert every deterministic delivery before removing the
+/// embedded Issue transition. Claiming increments `attempts` and moves
+/// `next_attempt_at` beyond the attempt lease in one atomic update.
+pub trait NotificationStore: Send + Sync + 'static {
+    fn pending_transitions(
+        &self,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<IssueNotificationTransition>, NotificationStoreError>>;
+
+    fn matching_rules(
+        &self,
+        project_id: ProjectId,
+        kind: faultkeep_domain::issue::IssueNotificationKind,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<AlertRule>, NotificationStoreError>>;
+
+    fn expand_transition(
+        &self,
+        transition: IssueNotificationTransition,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn claim_due(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+        scan_limit: usize,
+    ) -> PortFuture<'_, Result<Option<ClaimedNotificationDelivery>, NotificationStoreError>>;
+
+    fn mark_delivered(
+        &self,
+        delivery_id: NotificationDeliveryId,
+        delivered_at: Timestamp,
+        delete_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn schedule_retry(
+        &self,
+        delivery_id: NotificationDeliveryId,
+        next_attempt_at: Timestamp,
+        error_code: &'static str,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn mark_dead(
+        &self,
+        delivery_id: NotificationDeliveryId,
+        dead_at: Timestamp,
+        delete_at: Timestamp,
+        error_code: &'static str,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn upsert_destination(
+        &self,
+        destination: NotificationDestination,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn upsert_rule(&self, rule: AlertRule) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WebhookDeliveryError {
+    #[error("webhook destination is permanently invalid or forbidden")]
+    Rejected,
+    #[error("webhook delivery failed temporarily")]
+    Retryable,
+    #[error("webhook delivery timed out")]
+    Timeout,
+    #[error("webhook response exceeds its configured bound")]
+    ResponseTooLarge,
+    #[error("webhook destination secret is invalid")]
+    InvalidSecret,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebhookDeliveryReceipt {
+    pub status: u16,
+    pub retry_after: Option<Duration>,
+}
+
+pub trait WebhookDeliveryAdapter: Send + Sync + 'static {
+    fn deliver(
+        &self,
+        claim: ClaimedNotificationDelivery,
+    ) -> PortFuture<'_, Result<WebhookDeliveryReceipt, WebhookDeliveryError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

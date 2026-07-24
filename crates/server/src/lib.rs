@@ -6,6 +6,7 @@ pub mod http;
 pub mod ingest_http;
 pub mod native_http;
 pub mod web_http;
+pub mod webhook;
 
 use std::{io, process::ExitCode};
 
@@ -36,6 +37,9 @@ use faultkeep_application::{
     },
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
+    notifications::{
+        NotificationConfig, NotificationDispatcher, NotificationError, NotificationTask,
+    },
     observability::{Metric, Metrics, Outcome},
     processor::{
         FinalizerBatchConfig, FinalizerBatchTask, FinalizerBatcher, GrouperStage,
@@ -85,6 +89,8 @@ pub enum ServerError {
     #[error(transparent)]
     IncidentCapsule(#[from] IncidentCapsuleError),
     #[error(transparent)]
+    Notifications(#[from] NotificationError),
+    #[error(transparent)]
     Normalizer(#[from] NormalizerConfigError),
     #[error(transparent)]
     Finalizer(#[from] FinalizerError),
@@ -117,6 +123,7 @@ struct RuntimeModules {
     identity_service: Option<std::sync::Arc<IdentityService>>,
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
     incident_capsule_service: Option<std::sync::Arc<IncidentCapsuleService>>,
+    notification_task: Option<NotificationTask>,
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
@@ -178,6 +185,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         identity_service,
         native_api_service,
         incident_capsule_service,
+        notification_task,
         project_deletion_task,
         blob_cleanup_task,
         debug_file_service,
@@ -190,6 +198,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .scrub_hmac_key
             .take()
             .expect("validated MongoDB configuration has a scrub HMAC key");
+        let webhook_secret_box = webhook::WebhookSecretBox::new(&hmac_key);
         let setup = async {
             let store = MongoProjectStore::connect(
                 uri.expose(),
@@ -216,6 +225,45 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 negative_ttl: config.ingest.project_cache.negative_ttl.get(),
             },
         )?);
+        let notification_store: std::sync::Arc<dyn faultkeep_ports::NotificationStore> =
+            std::sync::Arc::new(store.notification_store());
+        let notification_adapter: std::sync::Arc<dyn faultkeep_ports::WebhookDeliveryAdapter> =
+            std::sync::Arc::new(
+                webhook::ReqwestWebhookAdapter::new(
+                    webhook_secret_box,
+                    webhook::WebhookAdapterConfig {
+                        timeout: config.notifications.timeout.get(),
+                        max_response_bytes: config.notifications.maximum_response_bytes,
+                        max_retry_after: config.notifications.maximum_retry_after.get(),
+                        allow_http: config.notifications.allow_http,
+                        allow_private_networks: config.notifications.allow_private_networks,
+                    },
+                )
+                .map_err(|_| NotificationError::InvalidConfiguration)?,
+            );
+        let notification_dispatcher = std::sync::Arc::new(NotificationDispatcher::new(
+            notification_store,
+            notification_adapter,
+            std::sync::Arc::clone(&clock),
+            NotificationConfig {
+                queue_capacity: config.notifications.queue_capacity,
+                worker_concurrency: config.notifications.worker_concurrency,
+                transition_batch_size: config.notifications.transition_batch_size,
+                due_scan_limit: config.notifications.due_scan_limit,
+                poll_interval: config.notifications.poll_interval.get(),
+                attempt_timeout: config.notifications.timeout.get(),
+                attempt_lease: config.notifications.attempt_lease.get(),
+                max_attempts: config.notifications.max_attempts,
+                initial_delay: config.notifications.initial_delay.get(),
+                max_delay: config.notifications.max_delay.get(),
+                delivered_retention: config.notifications.delivered_retention.get(),
+                dead_retention: config.notifications.dead_retention.get(),
+            },
+        )?);
+        let notification_signal: std::sync::Arc<
+            dyn faultkeep_application::notifications::NotificationSignal,
+        > = notification_dispatcher.clone();
+        let notification_task = notification_dispatcher.start(shutdown.signal())?;
         let project_resolver: std::sync::Arc<dyn ProjectResolver> = project_service.clone();
         let project_work = std::sync::Arc::new(ProjectWorkRegistry::default());
         let deletion_config = ProjectDeletionConfig {
@@ -395,14 +443,17 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         );
         let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
-        let finalizer = std::sync::Arc::new(Finalizer::new(
-            std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
-            FinalizerConfig {
-                event_retention: config.retention.event_duration(),
-                hourly_retention: config.retention.hourly_duration(),
-                ..FinalizerConfig::default()
-            },
-        )?);
+        let finalizer = std::sync::Arc::new(
+            Finalizer::new(
+                std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
+                FinalizerConfig {
+                    event_retention: config.retention.event_duration(),
+                    hourly_retention: config.retention.hourly_duration(),
+                    ..FinalizerConfig::default()
+                },
+            )?
+            .with_notification_signal(notification_signal),
+        );
         let (finalizer_batcher, finalizer_batch_task) = FinalizerBatcher::start(
             finalizer,
             FinalizerBatchConfig {
@@ -531,6 +582,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             identity_service: Some(identity_service),
             native_api_service: Some(native_api_service),
             incident_capsule_service: Some(incident_capsule_service),
+            notification_task: Some(notification_task),
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
             debug_file_service: Some(debug_file_service),
@@ -551,6 +603,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             identity_service: None,
             native_api_service: None,
             incident_capsule_service: None,
+            notification_task: None,
             project_deletion_task: None,
             blob_cleanup_task: None,
             debug_file_service: None,
@@ -584,8 +637,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             retained_header_bytes: 64 * 1024,
         }),
     );
-    let required_ready =
-        writer_task.is_some() && dispatcher_task.is_some() && scheduler_task.is_some();
+    let required_ready = writer_task.is_some()
+        && dispatcher_task.is_some()
+        && scheduler_task.is_some()
+        && notification_task.is_some();
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router(
             identity_service.clone(),
@@ -613,6 +668,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     artifact_bundles: true,
                 }),
                 incident_capsule: incident_capsule_service,
+                notifications: notification_task.is_some(),
             },
         ))
         .merge(debug_http::router(
@@ -653,6 +709,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     }
     shutdown.begin();
     if let Some(task) = scheduler_task {
+        task.wait().await;
+    }
+    if let Some(task) = notification_task {
         task.wait().await;
     }
     if let Some(task) = project_deletion_task {

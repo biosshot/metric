@@ -1,4 +1,4 @@
-use std::{env, fmt, fs, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{env, fmt, fs, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, ValueEnum};
 use faultkeep_domain::{BoundedDuration, ByteSize};
@@ -77,6 +77,7 @@ pub struct AppConfig {
     pub symbolicator: SymbolicatorSettings,
     pub artifacts: ArtifactSettings,
     pub incident_capsule: IncidentCapsuleSettings,
+    pub notifications: NotificationSettings,
     pub dispatcher: DispatcherSettings,
     pub scheduler: SchedulerSettings,
     pub retention: RetentionSettings,
@@ -114,6 +115,26 @@ pub struct IncidentCapsuleSettings {
     pub max_concurrency: usize,
     pub stream_chunk_bytes: usize,
     pub stream_buffer_chunks: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NotificationSettings {
+    pub queue_capacity: usize,
+    pub worker_concurrency: usize,
+    pub transition_batch_size: usize,
+    pub due_scan_limit: usize,
+    pub poll_interval: DispatcherInterval,
+    pub max_attempts: u32,
+    pub initial_delay: SchedulerInterval,
+    pub max_delay: SchedulerInterval,
+    pub timeout: RequestTimeout,
+    pub attempt_lease: RequestTimeout,
+    pub delivered_retention: AuthDuration,
+    pub dead_retention: AuthDuration,
+    pub maximum_response_bytes: usize,
+    pub maximum_retry_after: SchedulerInterval,
+    pub allow_http: bool,
+    pub allow_private_networks: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -535,6 +556,7 @@ struct RawConfig {
     symbolicator: RawSymbolicatorSettings,
     artifacts: RawArtifactSettings,
     incident_capsule: RawIncidentCapsuleSettings,
+    notifications: RawNotificationSettings,
     dispatcher: RawDispatcherSettings,
     scheduler: RawSchedulerSettings,
     retention: RawRetentionSettings,
@@ -557,12 +579,113 @@ impl Default for RawConfig {
             symbolicator: RawSymbolicatorSettings::default(),
             artifacts: RawArtifactSettings::default(),
             incident_capsule: RawIncidentCapsuleSettings::default(),
+            notifications: RawNotificationSettings::default(),
             dispatcher: RawDispatcherSettings::default(),
             scheduler: RawSchedulerSettings::default(),
             retention: RawRetentionSettings::default(),
             project_deletion: RawProjectDeletionSettings::default(),
             processor: RawProcessorSettings::default(),
             auth: RawAuthSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNotificationSettings {
+    queue: RawNotificationQueueSettings,
+    retry: RawNotificationRetrySettings,
+    retention: RawNotificationRetentionSettings,
+    webhook: RawNotificationWebhookSettings,
+    transition_batch_size: usize,
+    due_scan_limit: usize,
+    poll_interval: String,
+}
+
+impl Default for RawNotificationSettings {
+    fn default() -> Self {
+        Self {
+            queue: RawNotificationQueueSettings::default(),
+            retry: RawNotificationRetrySettings::default(),
+            retention: RawNotificationRetentionSettings::default(),
+            webhook: RawNotificationWebhookSettings::default(),
+            transition_batch_size: 100,
+            due_scan_limit: 100,
+            poll_interval: "250ms".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNotificationQueueSettings {
+    capacity: usize,
+    worker_concurrency: usize,
+}
+
+impl Default for RawNotificationQueueSettings {
+    fn default() -> Self {
+        Self {
+            capacity: 1_000,
+            worker_concurrency: 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNotificationRetrySettings {
+    max_attempts: u32,
+    initial_delay: String,
+    max_delay: String,
+    timeout: String,
+    attempt_lease: String,
+}
+
+impl Default for RawNotificationRetrySettings {
+    fn default() -> Self {
+        Self {
+            max_attempts: 8,
+            initial_delay: "5s".to_owned(),
+            max_delay: "1h".to_owned(),
+            timeout: "10s".to_owned(),
+            attempt_lease: "30s".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNotificationRetentionSettings {
+    delivered_days: u32,
+    dead_days: u32,
+}
+
+impl Default for RawNotificationRetentionSettings {
+    fn default() -> Self {
+        Self {
+            delivered_days: 30,
+            dead_days: 90,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNotificationWebhookSettings {
+    maximum_response_bytes: String,
+    maximum_retry_after: String,
+    allow_http: bool,
+    allow_private_networks: bool,
+}
+
+impl Default for RawNotificationWebhookSettings {
+    fn default() -> Self {
+        Self {
+            maximum_response_bytes: "64 KiB".to_owned(),
+            maximum_retry_after: "1h".to_owned(),
+            allow_http: false,
+            allow_private_networks: false,
         }
     }
 }
@@ -1147,6 +1270,8 @@ pub enum ConfigError {
     InvalidArtifactConfig,
     #[error("Incident Capsule configuration is invalid or outside supported bounds")]
     InvalidIncidentCapsuleConfig,
+    #[error("notification configuration is invalid or outside supported bounds")]
+    InvalidNotificationConfig,
     #[error("MongoDB configuration is invalid or outside supported bounds")]
     InvalidMongoConfig,
     #[error("project identity configuration is invalid or outside supported bounds")]
@@ -1320,6 +1445,7 @@ impl TryFrom<RawConfig> for AppConfig {
             .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
         let capsule_chunk = ConfiguredBytes::from_str(&raw.incident_capsule.stream_chunk_bytes)
             .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
+        let notifications = NotificationSettings::try_from(raw.notifications)?;
         if raw.blob.root.as_os_str().is_empty()
             || capacity.get() == 0
             || reserve.get() >= capacity.get()
@@ -1462,6 +1588,7 @@ impl TryFrom<RawConfig> for AppConfig {
                     .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?,
                 stream_buffer_chunks: raw.incident_capsule.stream_buffer_chunks,
             },
+            notifications,
             dispatcher,
             scheduler,
             retention,
@@ -1622,7 +1749,7 @@ impl AppConfig {
             .endpoint
             .as_ref()
             .map_or("<disabled>", url::Url::as_str);
-        format!(
+        let rendered_extensions = format!(
             "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n\n[artifacts]\nmaximum_bundle_bytes = {}\nmaximum_logical_bytes = {}\nmaximum_entries = {}\nmaximum_entry_bytes = {}\nmaximum_concurrent_assemblies = {}\nparse_timeout = \"{}\"\norphan_grace = \"{}\"\nclaim_lease = \"{}\"\nblob_operation_timeout = \"{}\"\ntombstone_retention = \"{}\"\ngc_interval = \"{}\"\ngc_batch_size = {}\ngc_max_concurrency = {}\nmaximum_bytes_per_organization = {}\nmaximum_bundles_per_organization = {}\n\n[incident_capsule]\nmax_events = {}\nmax_activities = {}\nmax_total_uncompressed_bytes = {}\nmax_entry_bytes = {}\ngeneration_timeout = \"{}\"\nmax_concurrency = {}\nstream_chunk_bytes = {}\nstream_buffer_chunks = {}\n",
             self.symbolicator.callback_base_url,
             humantime::format_duration(self.symbolicator.request_timeout.get()),
@@ -1653,6 +1780,25 @@ impl AppConfig {
             self.incident_capsule.max_concurrency,
             self.incident_capsule.stream_chunk_bytes,
             self.incident_capsule.stream_buffer_chunks,
+        );
+        format!(
+            "{rendered_extensions}\n[notifications]\ntransition_batch_size = {}\ndue_scan_limit = {}\npoll_interval = \"{}\"\n\n[notifications.queue]\ncapacity = {}\nworker_concurrency = {}\n\n[notifications.retry]\nmax_attempts = {}\ninitial_delay = \"{}\"\nmax_delay = \"{}\"\ntimeout = \"{}\"\nattempt_lease = \"{}\"\n\n[notifications.retention]\ndelivered_days = {}\ndead_days = {}\n\n[notifications.webhook]\nmaximum_response_bytes = {}\nmaximum_retry_after = \"{}\"\nallow_http = {}\nallow_private_networks = {}\n",
+            self.notifications.transition_batch_size,
+            self.notifications.due_scan_limit,
+            humantime::format_duration(self.notifications.poll_interval.get()),
+            self.notifications.queue_capacity,
+            self.notifications.worker_concurrency,
+            self.notifications.max_attempts,
+            humantime::format_duration(self.notifications.initial_delay.get()),
+            humantime::format_duration(self.notifications.max_delay.get()),
+            humantime::format_duration(self.notifications.timeout.get()),
+            humantime::format_duration(self.notifications.attempt_lease.get()),
+            self.notifications.delivered_retention.get().as_secs() / (24 * 60 * 60),
+            self.notifications.dead_retention.get().as_secs() / (24 * 60 * 60),
+            self.notifications.maximum_response_bytes,
+            humantime::format_duration(self.notifications.maximum_retry_after.get()),
+            self.notifications.allow_http,
+            self.notifications.allow_private_networks,
         )
     }
 
@@ -1663,6 +1809,69 @@ impl AppConfig {
                 self.projects.scrub_hmac_key,
                 Some(SecretReference::Literal(_))
             )
+    }
+}
+
+impl TryFrom<RawNotificationSettings> for NotificationSettings {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawNotificationSettings) -> Result<Self, Self::Error> {
+        let poll_interval = DispatcherInterval::from_str(&raw.poll_interval)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let initial_delay = SchedulerInterval::from_str(&raw.retry.initial_delay)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let max_delay = SchedulerInterval::from_str(&raw.retry.max_delay)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let timeout = RequestTimeout::from_str(&raw.retry.timeout)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let attempt_lease = RequestTimeout::from_str(&raw.retry.attempt_lease)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let maximum_response = ConfiguredBytes::from_str(&raw.webhook.maximum_response_bytes)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let maximum_retry_after = SchedulerInterval::from_str(&raw.webhook.maximum_retry_after)
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let days = |value: u32| Duration::from_secs(u64::from(value).saturating_mul(24 * 60 * 60));
+        let delivered_retention = AuthDuration::new(days(raw.retention.delivered_days))
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let dead_retention = AuthDuration::new(days(raw.retention.dead_days))
+            .map_err(|_| ConfigError::InvalidNotificationConfig)?;
+        let valid = (1..=100_000).contains(&raw.queue.capacity)
+            && (1..=1_024).contains(&raw.queue.worker_concurrency)
+            && raw.queue.worker_concurrency <= raw.queue.capacity
+            && (1..=10_000).contains(&raw.transition_batch_size)
+            && (1..=1_000).contains(&raw.due_scan_limit)
+            && !poll_interval.get().is_zero()
+            && (1..=100).contains(&raw.retry.max_attempts)
+            && !initial_delay.get().is_zero()
+            && initial_delay <= max_delay
+            && !timeout.get().is_zero()
+            && attempt_lease > timeout
+            && !delivered_retention.get().is_zero()
+            && dead_retention >= delivered_retention
+            && (1..=1024 * 1024).contains(&maximum_response.get())
+            && !maximum_retry_after.get().is_zero();
+        if !valid {
+            return Err(ConfigError::InvalidNotificationConfig);
+        }
+        Ok(Self {
+            queue_capacity: raw.queue.capacity,
+            worker_concurrency: raw.queue.worker_concurrency,
+            transition_batch_size: raw.transition_batch_size,
+            due_scan_limit: raw.due_scan_limit,
+            poll_interval,
+            max_attempts: raw.retry.max_attempts,
+            initial_delay,
+            max_delay,
+            timeout,
+            attempt_lease,
+            delivered_retention,
+            dead_retention,
+            maximum_response_bytes: usize::try_from(maximum_response.get())
+                .map_err(|_| ConfigError::InvalidNotificationConfig)?,
+            maximum_retry_after,
+            allow_http: raw.webhook.allow_http,
+            allow_private_networks: raw.webhook.allow_private_networks,
+        })
     }
 }
 
@@ -2044,6 +2253,9 @@ mod tests {
         assert_eq!(config.artifacts.maximum_bundle_bytes, 64 * 1024 * 1024);
         assert_eq!(config.artifacts.gc_max_concurrency, 4);
         assert_eq!(config.incident_capsule.max_events, 10);
+        assert_eq!(config.notifications.queue_capacity, 1_000);
+        assert_eq!(config.notifications.max_attempts, 8);
+        assert!(!config.notifications.allow_private_networks);
         assert_eq!(
             config.incident_capsule.max_total_uncompressed_bytes,
             100 * 1024 * 1024
@@ -2107,6 +2319,42 @@ mod tests {
                     ..RawConfig::default()
                 }),
                 Err(ConfigError::InvalidIncidentCapsuleConfig)
+            ));
+        }
+    }
+
+    #[test]
+    fn notification_limits_fail_closed() {
+        for notifications in [
+            RawNotificationSettings {
+                queue: RawNotificationQueueSettings {
+                    capacity: 4,
+                    worker_concurrency: 5,
+                },
+                ..RawNotificationSettings::default()
+            },
+            RawNotificationSettings {
+                retry: RawNotificationRetrySettings {
+                    timeout: "30s".to_owned(),
+                    attempt_lease: "10s".to_owned(),
+                    ..RawNotificationRetrySettings::default()
+                },
+                ..RawNotificationSettings::default()
+            },
+            RawNotificationSettings {
+                retention: RawNotificationRetentionSettings {
+                    delivered_days: 90,
+                    dead_days: 30,
+                },
+                ..RawNotificationSettings::default()
+            },
+        ] {
+            assert!(matches!(
+                AppConfig::try_from(RawConfig {
+                    notifications,
+                    ..RawConfig::default()
+                }),
+                Err(ConfigError::InvalidNotificationConfig)
             ));
         }
     }

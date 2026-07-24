@@ -11,6 +11,7 @@ mod event;
 mod finalizer;
 mod issue;
 mod maintenance;
+mod notifications;
 
 pub use api::MongoInvestigationStore;
 pub use artifacts::{ArtifactQuota, MongoArtifactStore};
@@ -26,6 +27,7 @@ pub use event::{
 pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finalized_event};
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 pub use maintenance::MongoMaintenanceStore;
+pub use notifications::MongoNotificationStore;
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
@@ -45,9 +47,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 5;
+pub const SCHEMA_GENERATION: i32 = 6;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 8] = [
+const SCHEMA_MODULES: [&str; 9] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -56,9 +58,11 @@ const SCHEMA_MODULES: [&str; 8] = [
     "project_deletion_v1",
     "native_debug_files_v1",
     "javascript_artifact_bundles_v1",
+    "notification_outbox_webhooks_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 21] = [
+const REQUIRED_COLLECTIONS: [&str; 24] = [
     "api_tokens",
+    "alert_rules",
     "audit_log",
     "artifact_bundles",
     "artifact_uploads",
@@ -69,6 +73,8 @@ const REQUIRED_COLLECTIONS: [&str; 21] = [
     "issue_activities",
     "issues",
     "issue_stats_hourly",
+    "notification_deliveries",
+    "notification_destinations",
     "organization_memberships",
     "organizations",
     "password_setup_tokens",
@@ -175,6 +181,11 @@ impl MongoProjectStore {
     }
 
     #[must_use]
+    pub fn notification_store(&self) -> MongoNotificationStore {
+        MongoNotificationStore::from_database(self.database.clone())
+    }
+
+    #[must_use]
     pub fn debug_file_store(&self, quota: DebugFileQuota) -> MongoDebugFileStore {
         MongoDebugFileStore::from_database(self.database.clone(), quota)
     }
@@ -252,6 +263,18 @@ impl MongoProjectStore {
             .await?;
         self.create_validated_collection("issue_stats_hourly", finalizer::hourly_validator())
             .await?;
+        self.create_validated_collection(
+            "notification_destinations",
+            notifications::destination_validator(),
+        )
+        .await?;
+        self.create_validated_collection("alert_rules", notifications::rule_validator())
+            .await?;
+        self.create_validated_collection(
+            "notification_deliveries",
+            notifications::delivery_validator(),
+        )
+        .await?;
         self.create_validated_collection("releases", finalizer::release_validator())
             .await?;
         self.create_validated_collection("environments", finalizer::environment_validator())
@@ -317,6 +340,18 @@ impl MongoProjectStore {
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
         auth::create_auth_indexes(&self.database).await?;
+        for collection in [
+            "notification_destinations",
+            "alert_rules",
+            "notification_deliveries",
+        ] {
+            for model in notifications::notification_indexes(collection) {
+                self.database
+                    .collection::<Document>(collection)
+                    .create_index(model)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -436,6 +471,18 @@ impl MongoProjectStore {
                 auth::auth_index_names("password_setup_tokens"),
             ),
             ("audit_log", auth::auth_index_names("audit_log")),
+            (
+                "notification_destinations",
+                notifications::notification_index_names("notification_destinations"),
+            ),
+            (
+                "alert_rules",
+                notifications::notification_index_names("alert_rules"),
+            ),
+            (
+                "notification_deliveries",
+                notifications::notification_index_names("notification_deliveries"),
+            ),
         ] {
             let names = self
                 .database
@@ -472,6 +519,15 @@ impl MongoProjectStore {
             ("api_tokens", auth::api_token_validator()),
             ("password_setup_tokens", auth::setup_token_validator()),
             ("audit_log", auth::audit_validator()),
+            (
+                "notification_destinations",
+                notifications::destination_validator(),
+            ),
+            ("alert_rules", notifications::rule_validator()),
+            (
+                "notification_deliveries",
+                notifications::delivery_validator(),
+            ),
         ] {
             let response = self
                 .database

@@ -62,6 +62,7 @@ struct NativeHttpState {
     project_deletion: Option<ProjectDeletionCapability>,
     debug_files: Option<DebugFileCapability>,
     incident_capsule: Option<Arc<IncidentCapsuleService>>,
+    notifications: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +90,7 @@ pub struct NativeHttpModules {
     pub project_deletion: Option<ProjectDeletionCapability>,
     pub debug_files: Option<DebugFileCapability>,
     pub incident_capsule: Option<Arc<IncidentCapsuleService>>,
+    pub notifications: bool,
 }
 
 #[derive(Debug)]
@@ -227,6 +229,7 @@ pub fn router(
         project_deletion: modules.project_deletion,
         debug_files: modules.debug_files,
         incident_capsule: modules.incident_capsule,
+        notifications: modules.notifications,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -1311,6 +1314,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
                 .debug_files
                 .is_some_and(|capability| capability.artifact_bundles),
             "incident_capsule": state.incident_capsule.is_some(),
+            "notifications": state.notifications,
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -1336,6 +1340,12 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "attachment_bytes": false,
             "debug_source_artifacts": false,
         })),
+        "notifications": state.notifications.then(|| json!({
+            "triggers": ["new_issue", "regression"],
+            "backends": ["webhook"],
+            "delivery": "at_least_once",
+            "signed": true,
+        })),
     }))
 }
 
@@ -1352,6 +1362,7 @@ async fn component_status(
             "dispatcher": if state.required_ready { "running" } else { "stopped" },
             "processor": if state.required_ready { "running" } else { "stopped" },
             "scheduler": if state.required_ready { "running" } else { "stopped" },
+            "notifications": if state.notifications { "running" } else { "stopped" },
             "project_deletion": if state.project_deletion.is_some() { "running" } else { "stopped" },
             "blob_store": "available",
             "blob_cleanup": if state.required_ready { "running" } else { "stopped" },

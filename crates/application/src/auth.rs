@@ -887,6 +887,39 @@ impl IdentityService {
         .await
     }
 
+    pub async fn record_notification_audit(
+        &self,
+        context: &AuthContext,
+        request_id: RequestCorrelationId,
+        project_id: ProjectId,
+        action: AuditAction,
+        target_id: String,
+    ) -> Result<(), AuthError> {
+        let target_kind = match action {
+            AuditAction::NotificationDestinationUpserted => "notification_destination",
+            AuditAction::AlertRuleUpserted => "alert_rule",
+            _ => return Err(AuthError::Forbidden),
+        };
+        if !context.permissions.contains(Permission::ProjectAdmin) {
+            return Err(AuthError::Forbidden);
+        }
+        let metadata = AuditMetadata::new([(
+            AuditMetadataKey::ProjectId,
+            AuditMetadataValue::new(project_id.get().to_string())
+                .map_err(|_| AuthError::Forbidden)?,
+        )])
+        .map_err(|_| AuthError::Forbidden)?;
+        self.audit(
+            context,
+            request_id,
+            action,
+            target_kind,
+            target_id,
+            metadata,
+        )
+        .await
+    }
+
     pub async fn validate_issue_assignee(
         &self,
         context: &AuthContext,
