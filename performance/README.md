@@ -322,3 +322,25 @@ Event count against `status_200`, stop the benchmark server even after a k6 fail
 drop the fresh database, and confirm that no benchmark, k6, Cargo, or Rust compiler
 process remains. Compare later candidates with `performance/compare-k6.mjs` and the
 reviewed Phase 14 baseline using the same fixture, RPS, hardware, and MongoDB topology.
+
+## Phase 18 JavaScript Artifact Bundles
+
+The retained Phase 18 benchmark uses the same ignored integration gate as the real
+`sentry-cli` compatibility test. It uploads Source Bundles with pinned CLI 3.6.2 and
+2.58.6, then measures 300 sequential real-MongoDB lookups for modern Debug-ID hit,
+legacy release/dist hit, and miss. It also measures the already-open external
+Symbolicator circuit in explicit requests per second. Upload, parsing, GC, and HTTP
+remain functional assertions outside the lookup timing window.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-artifact-bundles.mjs
+node performance/compare-artifact-bundles.mjs performance/baselines/artifact-bundles/ryzen-5600h-windows-mongodb-v1.json performance/results/<candidate>.json 20
+```
+
+The runner has a hard timeout and each real CLI child has its own kill timeout. After
+the run, verify that no scoped `sentry-cli`, Cargo test, Faultkeep server, or k6
+process remains. The local Windows result is a regression sentinel, not a
+server-tuned capacity claim; k6 is not used because this profile isolates MongoDB
+lookup plans rather than browser or ingest HTTP stability.

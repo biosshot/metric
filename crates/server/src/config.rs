@@ -27,6 +27,8 @@ pub type BacklogAge = BoundedDuration<604_800_000>;
 pub type AuthDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 pub type ProjectDeletionDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
+type ArtifactLogicalBytes = ByteSize<{ 4_u64 * 1024 * 1024 * 1024 }>;
+type ArtifactQuotaBytes = ByteSize<{ 1024_u64 * 1024 * 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "faultkeep", version, about = "Faultkeep all-in-one server")]
@@ -73,12 +75,32 @@ pub struct AppConfig {
     pub blob: BlobConfig,
     pub native_crash: NativeCrashConfig,
     pub symbolicator: SymbolicatorSettings,
+    pub artifacts: ArtifactSettings,
     pub dispatcher: DispatcherSettings,
     pub scheduler: SchedulerSettings,
     pub retention: RetentionSettings,
     pub project_deletion: ProjectDeletionSettings,
     pub processor: ProcessorSettings,
     pub auth: AuthSettings,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactSettings {
+    pub maximum_bundle_bytes: u64,
+    pub maximum_logical_bytes: u64,
+    pub maximum_entries: usize,
+    pub maximum_entry_bytes: u64,
+    pub maximum_concurrent_assemblies: usize,
+    pub parse_timeout: RequestTimeout,
+    pub orphan_grace: ProjectDeletionDuration,
+    pub claim_lease: ProjectDeletionDuration,
+    pub blob_operation_timeout: RequestTimeout,
+    pub tombstone_retention: ProjectDeletionDuration,
+    pub gc_interval: SchedulerInterval,
+    pub gc_batch_size: usize,
+    pub gc_max_concurrency: usize,
+    pub maximum_bytes_per_organization: u64,
+    pub maximum_bundles_per_organization: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -498,6 +520,7 @@ struct RawConfig {
     blob: RawBlobConfig,
     native_crash: RawNativeCrashConfig,
     symbolicator: RawSymbolicatorSettings,
+    artifacts: RawArtifactSettings,
     dispatcher: RawDispatcherSettings,
     scheduler: RawSchedulerSettings,
     retention: RawRetentionSettings,
@@ -518,12 +541,55 @@ impl Default for RawConfig {
             blob: RawBlobConfig::default(),
             native_crash: RawNativeCrashConfig::default(),
             symbolicator: RawSymbolicatorSettings::default(),
+            artifacts: RawArtifactSettings::default(),
             dispatcher: RawDispatcherSettings::default(),
             scheduler: RawSchedulerSettings::default(),
             retention: RawRetentionSettings::default(),
             project_deletion: RawProjectDeletionSettings::default(),
             processor: RawProcessorSettings::default(),
             auth: RawAuthSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawArtifactSettings {
+    maximum_bundle_bytes: String,
+    maximum_logical_bytes: String,
+    maximum_entries: usize,
+    maximum_entry_bytes: String,
+    maximum_concurrent_assemblies: usize,
+    parse_timeout: String,
+    orphan_grace: String,
+    claim_lease: String,
+    blob_operation_timeout: String,
+    tombstone_retention: String,
+    gc_interval: String,
+    gc_batch_size: usize,
+    gc_max_concurrency: usize,
+    maximum_bytes_per_organization: String,
+    maximum_bundles_per_organization: u64,
+}
+
+impl Default for RawArtifactSettings {
+    fn default() -> Self {
+        Self {
+            maximum_bundle_bytes: "64 MiB".to_owned(),
+            maximum_logical_bytes: "512 MiB".to_owned(),
+            maximum_entries: 10_000,
+            maximum_entry_bytes: "16 MiB".to_owned(),
+            maximum_concurrent_assemblies: 2,
+            parse_timeout: "30s".to_owned(),
+            orphan_grace: "24h".to_owned(),
+            claim_lease: "5m".to_owned(),
+            blob_operation_timeout: "30s".to_owned(),
+            tombstone_retention: "24h".to_owned(),
+            gc_interval: "15m".to_owned(),
+            gc_batch_size: 100,
+            gc_max_concurrency: 4,
+            maximum_bytes_per_organization: "0 B".to_owned(),
+            maximum_bundles_per_organization: 0,
         }
     }
 }
@@ -1034,6 +1100,8 @@ pub enum ConfigError {
     InvalidNativeCrashConfig,
     #[error("Symbolicator configuration is invalid or outside supported bounds")]
     InvalidSymbolicatorConfig,
+    #[error("artifact bundle configuration is invalid or outside supported bounds")]
+    InvalidArtifactConfig,
     #[error("MongoDB configuration is invalid or outside supported bounds")]
     InvalidMongoConfig,
     #[error("project identity configuration is invalid or outside supported bounds")]
@@ -1173,6 +1241,31 @@ impl TryFrom<RawConfig> for AppConfig {
         let symbolicator_response =
             ConfiguredBytes::from_str(&raw.symbolicator.maximum_response_bytes)
                 .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?;
+        let artifact_bundle_bytes =
+            ArtifactLogicalBytes::from_str(&raw.artifacts.maximum_bundle_bytes)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_logical_bytes =
+            ArtifactLogicalBytes::from_str(&raw.artifacts.maximum_logical_bytes)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_entry_bytes =
+            ArtifactLogicalBytes::from_str(&raw.artifacts.maximum_entry_bytes)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_quota_bytes =
+            ArtifactQuotaBytes::from_str(&raw.artifacts.maximum_bytes_per_organization)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_parse_timeout = RequestTimeout::from_str(&raw.artifacts.parse_timeout)
+            .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_orphan_grace = ProjectDeletionDuration::from_str(&raw.artifacts.orphan_grace)
+            .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_claim_lease = ProjectDeletionDuration::from_str(&raw.artifacts.claim_lease)
+            .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_blob_timeout = RequestTimeout::from_str(&raw.artifacts.blob_operation_timeout)
+            .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_tombstone =
+            ProjectDeletionDuration::from_str(&raw.artifacts.tombstone_retention)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_gc_interval = SchedulerInterval::from_str(&raw.artifacts.gc_interval)
+            .map_err(|_| ConfigError::InvalidArtifactConfig)?;
         if raw.blob.root.as_os_str().is_empty()
             || capacity.get() == 0
             || reserve.get() >= capacity.get()
@@ -1199,6 +1292,24 @@ impl TryFrom<RawConfig> for AppConfig {
             || !(1024..=16 * 1024 * 1024).contains(&symbolicator_response.get())
         {
             return Err(ConfigError::InvalidSymbolicatorConfig);
+        }
+        if artifact_bundle_bytes.get() == 0
+            || artifact_bundle_bytes.get() > 512 * 1024 * 1024
+            || artifact_logical_bytes.get() < artifact_bundle_bytes.get()
+            || artifact_entry_bytes.get() == 0
+            || artifact_entry_bytes.get() > artifact_logical_bytes.get()
+            || !(1..=100_000).contains(&raw.artifacts.maximum_entries)
+            || !(1..=64).contains(&raw.artifacts.maximum_concurrent_assemblies)
+            || artifact_parse_timeout.get().is_zero()
+            || artifact_orphan_grace.get().is_zero()
+            || artifact_claim_lease.get() <= artifact_blob_timeout.get()
+            || artifact_tombstone.get() <= artifact_claim_lease.get()
+            || artifact_gc_interval.get().is_zero()
+            || !(1..=100).contains(&raw.artifacts.gc_batch_size)
+            || !(1..=4).contains(&raw.artifacts.gc_max_concurrency)
+            || raw.artifacts.maximum_bundles_per_organization > 1_000_000_000
+        {
+            return Err(ConfigError::InvalidArtifactConfig);
         }
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
         let scheduler = SchedulerSettings::try_from(raw.scheduler)?;
@@ -1253,6 +1364,23 @@ impl TryFrom<RawConfig> for AppConfig {
                 circuit_cooldown: symbolicator_cooldown,
                 maximum_response_bytes: usize::try_from(symbolicator_response.get())
                     .map_err(|_| ConfigError::InvalidSymbolicatorConfig)?,
+            },
+            artifacts: ArtifactSettings {
+                maximum_bundle_bytes: artifact_bundle_bytes.get(),
+                maximum_logical_bytes: artifact_logical_bytes.get(),
+                maximum_entries: raw.artifacts.maximum_entries,
+                maximum_entry_bytes: artifact_entry_bytes.get(),
+                maximum_concurrent_assemblies: raw.artifacts.maximum_concurrent_assemblies,
+                parse_timeout: artifact_parse_timeout,
+                orphan_grace: artifact_orphan_grace,
+                claim_lease: artifact_claim_lease,
+                blob_operation_timeout: artifact_blob_timeout,
+                tombstone_retention: artifact_tombstone,
+                gc_interval: artifact_gc_interval,
+                gc_batch_size: raw.artifacts.gc_batch_size,
+                gc_max_concurrency: raw.artifacts.gc_max_concurrency,
+                maximum_bytes_per_organization: artifact_quota_bytes.get(),
+                maximum_bundles_per_organization: raw.artifacts.maximum_bundles_per_organization,
             },
             dispatcher,
             scheduler,
@@ -1415,13 +1543,28 @@ impl AppConfig {
             .as_ref()
             .map_or("<disabled>", url::Url::as_str);
         format!(
-            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n",
+            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n\n[artifacts]\nmaximum_bundle_bytes = {}\nmaximum_logical_bytes = {}\nmaximum_entries = {}\nmaximum_entry_bytes = {}\nmaximum_concurrent_assemblies = {}\nparse_timeout = \"{}\"\norphan_grace = \"{}\"\nclaim_lease = \"{}\"\nblob_operation_timeout = \"{}\"\ntombstone_retention = \"{}\"\ngc_interval = \"{}\"\ngc_batch_size = {}\ngc_max_concurrency = {}\nmaximum_bytes_per_organization = {}\nmaximum_bundles_per_organization = {}\n",
             self.symbolicator.callback_base_url,
             humantime::format_duration(self.symbolicator.request_timeout.get()),
             self.symbolicator.maximum_concurrency,
             self.symbolicator.circuit_failure_threshold,
             humantime::format_duration(self.symbolicator.circuit_cooldown.get()),
             self.symbolicator.maximum_response_bytes,
+            self.artifacts.maximum_bundle_bytes,
+            self.artifacts.maximum_logical_bytes,
+            self.artifacts.maximum_entries,
+            self.artifacts.maximum_entry_bytes,
+            self.artifacts.maximum_concurrent_assemblies,
+            humantime::format_duration(self.artifacts.parse_timeout.get()),
+            humantime::format_duration(self.artifacts.orphan_grace.get()),
+            humantime::format_duration(self.artifacts.claim_lease.get()),
+            humantime::format_duration(self.artifacts.blob_operation_timeout.get()),
+            humantime::format_duration(self.artifacts.tombstone_retention.get()),
+            humantime::format_duration(self.artifacts.gc_interval.get()),
+            self.artifacts.gc_batch_size,
+            self.artifacts.gc_max_concurrency,
+            self.artifacts.maximum_bytes_per_organization,
+            self.artifacts.maximum_bundles_per_organization,
         )
     }
 
@@ -1810,10 +1953,39 @@ mod tests {
         assert_eq!(config.auth.password_memory_kib, 19 * 1024);
         assert!(config.auth.secure_cookie);
         assert!(config.symbolicator.endpoint.is_none());
+        assert_eq!(config.artifacts.maximum_bundle_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.artifacts.gc_max_concurrency, 4);
         assert_eq!(
             config.ingest.backlog.max_oldest_pending_age.get(),
             std::time::Duration::from_secs(60 * 60)
         );
+    }
+
+    #[test]
+    fn artifact_archive_quota_and_gc_bounds_fail_closed() {
+        for artifacts in [
+            RawArtifactSettings {
+                maximum_logical_bytes: "1 MiB".to_owned(),
+                ..RawArtifactSettings::default()
+            },
+            RawArtifactSettings {
+                claim_lease: "10s".to_owned(),
+                blob_operation_timeout: "30s".to_owned(),
+                ..RawArtifactSettings::default()
+            },
+            RawArtifactSettings {
+                gc_max_concurrency: 5,
+                ..RawArtifactSettings::default()
+            },
+        ] {
+            assert!(matches!(
+                AppConfig::try_from(RawConfig {
+                    artifacts,
+                    ..RawConfig::default()
+                }),
+                Err(ConfigError::InvalidArtifactConfig)
+            ));
+        }
     }
 
     #[test]

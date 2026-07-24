@@ -3,6 +3,7 @@
 //! MongoDB project-identity adapter and initial empty-schema bootstrap.
 
 mod api;
+mod artifacts;
 mod auth;
 mod debug_files;
 mod deletion;
@@ -12,6 +13,7 @@ mod issue;
 mod maintenance;
 
 pub use api::MongoInvestigationStore;
+pub use artifacts::{ArtifactQuota, MongoArtifactStore};
 pub use auth::MongoAuthStore;
 pub use debug_files::{DebugFileQuota, MongoDebugFileStore};
 pub use deletion::{
@@ -43,9 +45,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 4;
+pub const SCHEMA_GENERATION: i32 = 5;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 7] = [
+const SCHEMA_MODULES: [&str; 8] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -53,10 +55,13 @@ const SCHEMA_MODULES: [&str; 7] = [
     "identity_authorization_v1",
     "project_deletion_v1",
     "native_debug_files_v1",
+    "javascript_artifact_bundles_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 19] = [
+const REQUIRED_COLLECTIONS: [&str; 21] = [
     "api_tokens",
     "audit_log",
+    "artifact_bundles",
+    "artifact_uploads",
     "environments",
     "events",
     "debug_files",
@@ -174,6 +179,11 @@ impl MongoProjectStore {
         MongoDebugFileStore::from_database(self.database.clone(), quota)
     }
 
+    #[must_use]
+    pub fn artifact_store(&self, quota: ArtifactQuota) -> MongoArtifactStore {
+        MongoArtifactStore::from_database(self.database.clone(), quota)
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -224,6 +234,16 @@ impl MongoProjectStore {
             .await?;
         self.create_validated_collection("debug_files", debug_files::debug_file_validator())
             .await?;
+        self.create_validated_collection(
+            "artifact_uploads",
+            artifacts::artifact_upload_validator(),
+        )
+        .await?;
+        self.create_validated_collection(
+            "artifact_bundles",
+            artifacts::artifact_bundle_validator(),
+        )
+        .await?;
         self.create_validated_collection("events", event::event_validator())
             .await?;
         self.create_validated_collection("issues", issue::issue_validator())
@@ -292,6 +312,7 @@ impl MongoProjectStore {
                 .await?;
         }
         debug_files::create_debug_file_indexes(&self.database).await?;
+        artifacts::create_artifact_indexes(&self.database).await?;
         event::create_event_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
@@ -343,6 +364,9 @@ impl MongoProjectStore {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !debug_files::validate_debug_file_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
+        if !artifacts::validate_artifact_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !self.validate_project_slug_index().await? {
@@ -432,6 +456,10 @@ impl MongoProjectStore {
             ("projects", project_validator()),
             ("project_keys", project_key_validator()),
             ("project_deletions", deletion::deletion_validator()),
+            ("debug_uploads", debug_files::debug_upload_validator()),
+            ("debug_files", debug_files::debug_file_validator()),
+            ("artifact_uploads", artifacts::artifact_upload_validator()),
+            ("artifact_bundles", artifacts::artifact_bundle_validator()),
             ("events", event::event_validator()),
             ("issues", issue::issue_validator()),
             ("issue_activities", issue::issue_activity_validator()),
@@ -1309,6 +1337,8 @@ fn organization_validator() -> Document {
             "slug": { "bsonType": "string", "minLength": 1, "maxLength": 63 },
             "display_name": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
             "created_at": { "bsonType": "date" },
+            "ab": { "bsonType": "long", "minimum": 0 },
+            "ac": { "bsonType": "long", "minimum": 0 },
             "auth_lock": {
                 "bsonType": "object",
                 "required": ["operation_id", "expires_at"],
@@ -1363,6 +1393,7 @@ fn project_validator() -> Document {
             },
             "grouping_revision": { "bsonType": "long", "minimum": 1 },
             "dr": { "bsonType": "long", "minimum": 1 },
+            "ar": { "bsonType": "long", "minimum": 1 },
             "db": { "bsonType": "long", "minimum": 0 },
             "dc": { "bsonType": "long", "minimum": 0 },
             "catalog_usage": {

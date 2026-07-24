@@ -136,6 +136,7 @@ pub trait SymbolicationStage: Send + Sync + 'static {
         &'a self,
         event: &'a NormalizedEvent,
         debug_file_revision: u64,
+        artifact_revision: u64,
         cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>>;
 }
@@ -181,6 +182,7 @@ impl SymbolicationStage for BaselineSymbolicationService {
         &'a self,
         event: &'a NormalizedEvent,
         _debug_file_revision: u64,
+        _artifact_revision: u64,
         _cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
         Box::pin(async move { Ok(Self::symbolicate(event)) })
@@ -192,11 +194,17 @@ impl<B: SymbolicationBackend> SymbolicationStage for SymbolicationService<B> {
         &'a self,
         event: &'a NormalizedEvent,
         debug_file_revision: u64,
+        artifact_revision: u64,
         cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
         Box::pin(async move {
             let result = self
-                .symbolicate_with_revision(event, debug_file_revision, cancellation)
+                .symbolicate_with_revisions(
+                    event,
+                    debug_file_revision,
+                    artifact_revision,
+                    cancellation,
+                )
                 .await;
             if result.disposition == SymbolicationDisposition::Retryable {
                 Err(StageFailure::temporary(
@@ -606,6 +614,7 @@ impl Processor {
             self.symbolicator.symbolicate(
                 &normalized,
                 project.debug_file_revision,
+                project.artifact_revision,
                 &self.cancellation,
             ),
         )
@@ -1016,6 +1025,7 @@ mod tests {
             &'a self,
             event: &'a NormalizedEvent,
             _debug_file_revision: u64,
+            _artifact_revision: u64,
             _cancellation: &'a CancellationToken,
         ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
             Box::pin(async move {
@@ -1091,6 +1101,7 @@ mod tests {
             error_events_enabled: true,
             grouping_revision: 1,
             debug_file_revision: 0,
+            artifact_revision: 0,
         }
     }
 

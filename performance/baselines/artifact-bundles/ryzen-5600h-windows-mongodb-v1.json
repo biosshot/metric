@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "javascript-artifact-bundles-phase-18",
+    "source_commit": "c00fd1bc63313cc46c02f4283ff8134613f3c254",
+    "generated_at": "2026-07-24T07:01:06.497Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "real sentry-cli 3.6.2 and 2.58.6; one ready Debug-ID bundle; release/dist binding; 300 sequential lookups per outcome",
+    "storage": "local MongoDB standalone and local filesystem BlobStore; Windows development machine; debug profile"
+  },
+  "metrics": {
+    "samples_per_lookup_outcome": 300,
+    "modern_hit_rps": 687,
+    "legacy_hit_rps": 675,
+    "miss_rps": 744,
+    "open_circuit_rps": 2559705,
+    "minimum_lookup_rps": 50,
+    "minimum_open_circuit_rps": 100000
+  }
+}

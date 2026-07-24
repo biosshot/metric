@@ -55,6 +55,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "jso
 url = "2.5.4"
 uuid = { version = "1.16.0", features = ["v4"] }
 wait-timeout = "0.2.1"
+zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2"] }
 zstd = "0.13.3"
 
 [workspace.lints.rust]

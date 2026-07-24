@@ -215,6 +215,7 @@ mod tests {
         let request = SymbolicationRequest {
             project_id: ProjectId::new(42).unwrap(),
             debug_file_revision: 0,
+            artifact_revision: 0,
             kind: SymbolicationKind::Native,
             traces: Vec::new(),
             modules: Vec::new(),

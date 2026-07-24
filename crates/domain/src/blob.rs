@@ -4,7 +4,10 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::{EventId, OrganizationId, ProjectId, Timestamp, debug_files::DebugFileId};
+use crate::{
+    EventId, OrganizationId, ProjectId, Timestamp, artifacts::ArtifactBundleId,
+    debug_files::DebugFileId,
+};
 
 pub const MAX_BLOB_KEY_BYTES: usize = 512;
 pub const MAX_ATTACHMENT_FILENAME_BYTES: usize = 128;
@@ -64,6 +67,28 @@ impl BlobKey {
     #[must_use]
     pub fn debug_file(project_id: ProjectId, file_id: DebugFileId) -> Self {
         Self(format!("d/{}/{}", base36(project_id.get()), file_id).into())
+    }
+
+    #[must_use]
+    pub fn artifact_bundle(
+        organization_id: OrganizationId,
+        bundle_id: ArtifactBundleId,
+        generation: u32,
+    ) -> Self {
+        let suffix = if generation == 0 {
+            String::new()
+        } else {
+            format!("/{}", base36_u32(generation))
+        };
+        Self(
+            format!(
+                "a/{}/{}{}",
+                base36_u64(organization_id.get()),
+                bundle_id,
+                suffix
+            )
+            .into(),
+        )
     }
 
     #[must_use]
@@ -180,6 +205,7 @@ pub enum BlobKind {
     Minidump,
     DebugChunk,
     DebugFile,
+    ArtifactBundle,
 }
 
 impl BlobKind {
@@ -190,6 +216,7 @@ impl BlobKind {
             Self::Minidump => "minidump",
             Self::DebugChunk => "debug_chunk",
             Self::DebugFile => "debug_file",
+            Self::ArtifactBundle => "artifact_bundle",
         }
     }
 }
@@ -199,6 +226,7 @@ pub enum BlobNamespace {
     EventOwned,
     DebugChunks,
     DebugFiles,
+    ArtifactBundles,
 }
 
 impl BlobNamespace {
@@ -208,6 +236,7 @@ impl BlobNamespace {
             Self::EventOwned => "projects/",
             Self::DebugChunks => "debug-chunks/",
             Self::DebugFiles => "d/",
+            Self::ArtifactBundles => "a/",
         }
     }
 
@@ -219,6 +248,7 @@ impl BlobNamespace {
             Self::EventOwned => BlobKind::EventAttachment,
             Self::DebugChunks => BlobKind::DebugChunk,
             Self::DebugFiles => BlobKind::DebugFile,
+            Self::ArtifactBundles => BlobKind::ArtifactBundle,
         })
     }
 }
@@ -305,6 +335,21 @@ fn base36(value: i32) -> String {
     }
     output.reverse();
     String::from_utf8(output).expect("base36 is ASCII")
+}
+
+fn base36_u64(mut value: u64) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut output = Vec::new();
+    while value > 0 {
+        output.push(DIGITS[(value % 36) as usize]);
+        value /= 36;
+    }
+    output.reverse();
+    String::from_utf8(output).expect("base36 is ASCII")
+}
+
+fn base36_u32(value: u32) -> String {
+    base36_u64(u64::from(value))
 }
 
 #[cfg(test)]

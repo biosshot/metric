@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 19] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 21] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -71,6 +71,16 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 19] = [
         code: 54,
         name: "debug_uploads",
         ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 56,
+        name: "artifact_uploads",
+        ownership: DatasetOwnership::OrganizationShared,
+    },
+    DatasetRegistration {
+        code: 58,
+        name: "artifact_bundles",
+        ownership: DatasetOwnership::OrganizationShared,
     },
     DatasetRegistration {
         code: 20,
@@ -140,7 +150,7 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 19] = [
 ];
 
 /// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 3] = [
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 4] = [
     DatasetRegistration {
         code: 90,
         name: "blob:projects/{project_id}/events",
@@ -156,9 +166,14 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 3] = [
         name: "blob:debug-chunks/{organization_id}",
         ownership: DatasetOwnership::OrganizationShared,
     },
+    DatasetRegistration {
+        code: 0,
+        name: "blob:a/{organization_id_base36}",
+        ownership: DatasetOwnership::OrganizationShared,
+    },
 ];
 
-const PURGE_CODES: [u16; 9] = [10, 20, 30, 40, 50, 52, 54, 60, 70];
+const PURGE_CODES: [u16; 11] = [10, 20, 30, 40, 50, 52, 54, 56, 58, 60, 70];
 
 impl MongoProjectStore {
     async fn request_deletion_inner(
@@ -467,6 +482,28 @@ impl MongoProjectStore {
                 self.delete_owned_batch("debug_uploads", "p", project_id, cursor, batch_size)
                     .await
             }
+            56 => {
+                self.detach_artifact_binding_batch(
+                    "artifact_uploads",
+                    job,
+                    project_id,
+                    cursor,
+                    batch_size,
+                    false,
+                )
+                .await
+            }
+            58 => {
+                self.detach_artifact_binding_batch(
+                    "artifact_bundles",
+                    job,
+                    project_id,
+                    cursor,
+                    batch_size,
+                    true,
+                )
+                .await
+            }
             60 => {
                 self.detach_release_batch(project_id, cursor, batch_size)
                     .await
@@ -579,6 +616,95 @@ impl MongoProjectStore {
             .await
     }
 
+    async fn detach_artifact_binding_batch(
+        &self,
+        collection_name: &str,
+        job: &Document,
+        project_id: ProjectId,
+        cursor: Option<Bson>,
+        batch_size: usize,
+        orphan_when_empty: bool,
+    ) -> Result<(), ProjectDeletionStoreError> {
+        let collection = self.database.collection::<Document>(collection_name);
+        let mut filter = doc! { "b": { "$elemMatch": { "p": project_id.get() } } };
+        if let Some(cursor) = cursor {
+            filter.insert("_id", doc! { "$gt": cursor });
+        }
+        let mut stream = collection
+            .find(filter)
+            .projection(doc! { "_id": 1, "b": 1 })
+            .sort(doc! { "_id": 1 })
+            .limit(i64::try_from(batch_size).map_err(|_| ProjectDeletionStoreError::InvalidData)?)
+            .await
+            .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
+        let mut documents = Vec::with_capacity(batch_size);
+        while let Some(document) = stream
+            .try_next()
+            .await
+            .map_err(|_| ProjectDeletionStoreError::Unavailable)?
+        {
+            documents.push(document);
+        }
+        for document in &documents {
+            let id = document
+                .get("_id")
+                .cloned()
+                .ok_or(ProjectDeletionStoreError::InvalidData)?;
+            let old = document
+                .get_array("b")
+                .map_err(|_| ProjectDeletionStoreError::InvalidData)?;
+            let remaining = old
+                .iter()
+                .filter(|binding| {
+                    binding
+                        .as_document()
+                        .and_then(|binding| binding.get_i32("p").ok())
+                        != Some(project_id.get())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if remaining.is_empty() {
+                if orphan_when_empty {
+                    let operation = job
+                        .get_binary_generic("_id")
+                        .map_err(|_| ProjectDeletionStoreError::InvalidData)?;
+                    collection
+                        .update_one(
+                            doc! { "_id": id, "b": old },
+                            doc! {
+                                "$unset": { "b": "" },
+                                "$set": { "e": DateTime::now(), "j": generic_binary(operation) },
+                            },
+                        )
+                        .await
+                        .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
+                } else {
+                    collection
+                        .delete_one(doc! { "_id": id, "b": old })
+                        .await
+                        .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
+                }
+            } else {
+                collection
+                    .update_one(
+                        doc! { "_id": id, "b": old },
+                        doc! { "$set": { "b": remaining } },
+                    )
+                    .await
+                    .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
+            }
+        }
+        self.persist_batch_cursor(
+            project_id,
+            documents
+                .last()
+                .and_then(|document| document.get("_id").cloned()),
+            documents.len(),
+            batch_size,
+        )
+        .await
+    }
+
     async fn persist_batch_cursor(
         &self,
         project_id: ProjectId,
@@ -651,6 +777,25 @@ impl MongoProjectStore {
             .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
             return Ok(());
         }
+        let operation = job
+            .get_binary_generic("_id")
+            .map_err(|_| ProjectDeletionStoreError::InvalidData)?;
+        if self
+            .database
+            .collection::<Document>("artifact_bundles")
+            .find_one(doc! { "j": generic_binary(operation) })
+            .await
+            .map_err(|_| ProjectDeletionStoreError::Unavailable)?
+            .is_some()
+        {
+            jobs.update_one(
+                doc! { "_id": current.get("_id").cloned().ok_or(ProjectDeletionStoreError::InvalidData)? },
+                doc! { "$set": { "next_attempt_at": date(now), "attempts": 0_i64 } },
+            )
+            .await
+            .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
+            return Ok(());
+        }
         let reconciliation = current.get_bool("reconciliation_pass").unwrap_or(false);
         if !reconciliation {
             jobs.update_one(
@@ -665,9 +810,6 @@ impl MongoProjectStore {
             .map_err(|_| ProjectDeletionStoreError::Unavailable)?;
             return Ok(());
         }
-        let operation = job
-            .get_binary_generic("_id")
-            .map_err(|_| ProjectDeletionStoreError::InvalidData)?;
         let slug_until = add_duration(now, slug_reservation)?;
         self.database
             .collection::<Document>("projects")

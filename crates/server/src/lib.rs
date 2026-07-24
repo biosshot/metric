@@ -11,6 +11,9 @@ use std::{io, process::ExitCode};
 
 use config::{Cli, ConfigError};
 use faultkeep_application::{
+    artifacts::{
+        ArtifactCleanupTask, ArtifactConfig, ArtifactError, ArtifactService, start_artifact_cleanup,
+    },
     auth::{AuthConfig, AuthError, IdentityService, LoginRateLimitConfig, PasswordConfig},
     blob_cleanup::{
         BlobCleanupConfig, BlobCleanupError, BlobCleanupService, BlobCleanupTask,
@@ -92,6 +95,8 @@ pub enum ServerError {
     BlobCleanup(#[from] BlobCleanupError),
     #[error(transparent)]
     DebugFiles(#[from] DebugFileError),
+    #[error(transparent)]
+    Artifacts(#[from] ArtifactError),
     #[error("external Symbolicator configuration is invalid")]
     Symbolicator,
 }
@@ -109,8 +114,10 @@ struct RuntimeModules {
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
+    artifact_service: Option<std::sync::Arc<ArtifactService>>,
     private_source_signer: Option<faultkeep_symbolication::PrivateSourceSigner>,
     debug_file_cleanup_task: Option<DebugFileCleanupTask>,
+    artifact_cleanup_task: Option<ArtifactCleanupTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -167,8 +174,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         project_deletion_task,
         blob_cleanup_task,
         debug_file_service,
+        artifact_service,
         private_source_signer: runtime_private_source_signer,
         debug_file_cleanup_task,
+        artifact_cleanup_task,
     } = if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
@@ -306,6 +315,42 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let debug_file_cleanup_task = start_debug_file_cleanup(
             std::sync::Arc::clone(&debug_file_service),
             config.ingest.attachments.cleanup_interval.get(),
+            shutdown.signal(),
+        )?;
+        let artifact_metadata: std::sync::Arc<dyn faultkeep_ports::ArtifactStore> =
+            std::sync::Arc::new(store.artifact_store(faultkeep_mongo::ArtifactQuota {
+                maximum_bytes_per_organization: config.artifacts.maximum_bytes_per_organization,
+                maximum_bundles_per_organization: config.artifacts.maximum_bundles_per_organization,
+            }));
+        let artifact_service = std::sync::Arc::new(ArtifactService::new(
+            artifact_metadata,
+            std::sync::Arc::clone(&blob_store),
+            std::sync::Arc::clone(&clock),
+            std::sync::Arc::clone(&random),
+            ArtifactConfig {
+                maximum_bundle_bytes: config
+                    .blob
+                    .max_object_bytes
+                    .min(config.artifacts.maximum_bundle_bytes),
+                maximum_logical_bytes: config.artifacts.maximum_logical_bytes,
+                maximum_entries: config.artifacts.maximum_entries,
+                maximum_entry_bytes: config.artifacts.maximum_entry_bytes,
+                maximum_concurrent_assemblies: config.artifacts.maximum_concurrent_assemblies,
+                parse_timeout: config.artifacts.parse_timeout.get(),
+                orphan_grace: config.artifacts.orphan_grace.get(),
+                claim_lease: config.artifacts.claim_lease.get(),
+                blob_operation_timeout: config.artifacts.blob_operation_timeout.get(),
+                tombstone_retention: config.artifacts.tombstone_retention.get(),
+                gc_batch_size: config.artifacts.gc_batch_size,
+                gc_max_concurrency: config.artifacts.gc_max_concurrency,
+                ..ArtifactConfig::default()
+            },
+        )?);
+        artifact_service.recover(100).await?;
+        let _ = artifact_service.gc_once().await;
+        let artifact_cleanup_task = start_artifact_cleanup(
+            std::sync::Arc::clone(&artifact_service),
+            config.artifacts.gc_interval.get(),
             shutdown.signal(),
         )?;
         let event_store = std::sync::Arc::new(store.event_store(event_codec));
@@ -463,8 +508,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
             debug_file_service: Some(debug_file_service),
+            artifact_service: Some(artifact_service),
             private_source_signer,
             debug_file_cleanup_task: Some(debug_file_cleanup_task),
+            artifact_cleanup_task: Some(artifact_cleanup_task),
         }
     } else {
         RuntimeModules {
@@ -480,8 +527,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             project_deletion_task: None,
             blob_cleanup_task: None,
             debug_file_service: None,
+            artifact_service: None,
             private_source_signer: None,
             debug_file_cleanup_task: None,
+            artifact_cleanup_task: None,
         }
     };
     let ingest = std::sync::Arc::new(
@@ -527,11 +576,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             }),
             required_ready.then_some(native_http::DebugFileCapability {
                 external_symbolicator: config.symbolicator.endpoint.is_some(),
+                artifact_bundles: true,
             }),
         ))
         .merge(debug_http::router(
             identity_service.clone(),
             debug_file_service,
+            artifact_service,
             runtime_private_source_signer,
         ))
         .merge(web_http::router());
@@ -575,6 +626,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = debug_file_cleanup_task {
+        task.wait().await;
+    }
+    if let Some(task) = artifact_cleanup_task {
         task.wait().await;
     }
     if let Some(task) = writer_task {

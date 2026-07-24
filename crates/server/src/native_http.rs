@@ -75,6 +75,7 @@ pub struct ProjectDeletionCapability {
 #[derive(Debug, Clone, Copy)]
 pub struct DebugFileCapability {
     pub external_symbolicator: bool,
+    pub artifact_bundles: bool,
 }
 
 #[derive(Debug)]
@@ -1184,6 +1185,9 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "event_attachments": true,
             "minidump_endpoint": true,
             "debug_files": state.debug_files.is_some(),
+            "artifact_bundles": state
+                .debug_files
+                .is_some_and(|capability| capability.artifact_bundles),
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -1199,6 +1203,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "sentry_cli_chunk_upload": true,
             "private_symbolicator_source": true,
             "external_symbolicator": capability.external_symbolicator,
+            "artifact_bundles": capability.artifact_bundles,
         })),
     }))
 }

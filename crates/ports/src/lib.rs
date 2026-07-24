@@ -10,6 +10,10 @@ use faultkeep_domain::{
         IssuePage, IssueStatBucket, ProjectKeyView, ProjectPolicyUpdate, ProjectView, ReleasePage,
         SearchStorageQuery,
     },
+    artifacts::{
+        ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactCandidate, ArtifactGcClaim,
+        ArtifactLookup, ArtifactUpload, ArtifactUploadRecord, ArtifactUploadState,
+    },
     auth::{
         ApiToken, AuditRecord, BootstrapIdentity, CredentialId, EmailAddress, MembershipMutation,
         OrganizationMembership, PasswordHash, SecretDigest, SetupToken, UserAccount, UserId,
@@ -209,6 +213,124 @@ pub trait DebugFileStore: Send + Sync + 'static {
         &self,
         limit: usize,
     ) -> PortFuture<'_, Result<Vec<DebugUploadRecord>, DebugFileStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ArtifactStoreError {
+    #[error("artifact target does not exist")]
+    NotFound,
+    #[error("artifact identity conflicts with existing content")]
+    Conflict,
+    #[error("artifact quota is exhausted")]
+    Quota,
+    #[error("artifact is busy with another state transition")]
+    Busy,
+    #[error("stored artifact data is invalid")]
+    InvalidData,
+    #[error("artifact storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Organization-deduplicated Artifact Bundle metadata and GC state boundary.
+pub trait ArtifactStore: Send + Sync + 'static {
+    fn resolve_projects(
+        &self,
+        organization_slug: Box<str>,
+        project_slugs: Vec<Box<str>>,
+    ) -> PortFuture<
+        '_,
+        Result<(faultkeep_domain::OrganizationId, Vec<ProjectView>), ArtifactStoreError>,
+    >;
+
+    fn project_organization(
+        &self,
+        project_id: ProjectId,
+    ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, ArtifactStoreError>>;
+
+    fn load_by_sha1(
+        &self,
+        organization_id: faultkeep_domain::OrganizationId,
+        sha1: [u8; 20],
+    ) -> PortFuture<'_, Result<Option<ArtifactBundle>, ArtifactStoreError>>;
+
+    fn upsert_upload(
+        &self,
+        upload: ArtifactUpload,
+    ) -> PortFuture<'_, Result<ArtifactUploadRecord, ArtifactStoreError>>;
+
+    fn set_upload_state(
+        &self,
+        upload_id: [u8; 16],
+        state: ArtifactUploadState,
+        now: Timestamp,
+        final_id: Option<ArtifactBundleId>,
+        error_code: Option<u16>,
+    ) -> PortFuture<'_, Result<(), ArtifactStoreError>>;
+
+    /// Returns generation zero for new content or reserves one post-tombstone generation.
+    fn publication_generation(
+        &self,
+        organization_id: faultkeep_domain::OrganizationId,
+        sha1: [u8; 20],
+        upload_id: [u8; 16],
+        reservation_until: Timestamp,
+    ) -> PortFuture<'_, Result<u32, ArtifactStoreError>>;
+
+    /// Publishes or rescues content and returns affected project revisions.
+    fn publish_bundle(
+        &self,
+        upload_id: [u8; 16],
+        bundle: ArtifactBundle,
+    ) -> PortFuture<'_, Result<Vec<(ProjectId, u64)>, ArtifactStoreError>>;
+
+    fn lookup(
+        &self,
+        request: ArtifactLookup,
+    ) -> PortFuture<'_, Result<Vec<ArtifactCandidate>, ArtifactStoreError>>;
+
+    fn load_for_project(
+        &self,
+        project_id: ProjectId,
+        bundle_id: ArtifactBundleId,
+    ) -> PortFuture<'_, Result<ArtifactBundle, ArtifactStoreError>>;
+
+    /// Removes one exact binding and returns the new project revision.
+    fn remove_binding(
+        &self,
+        organization_id: faultkeep_domain::OrganizationId,
+        bundle_id: ArtifactBundleId,
+        binding: ArtifactBinding,
+        orphan_at: Timestamp,
+    ) -> PortFuture<'_, Result<Option<u64>, ArtifactStoreError>>;
+
+    fn recoverable_uploads(
+        &self,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ArtifactUploadRecord>, ArtifactStoreError>>;
+
+    fn claim_gc(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+        claim: [u8; 16],
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ArtifactGcClaim>, ArtifactStoreError>>;
+
+    fn validate_gc_claim(
+        &self,
+        bundle_id: ArtifactBundleId,
+        generation: u32,
+        claim: [u8; 16],
+        minimum_lease_until: faultkeep_domain::Timestamp,
+    ) -> PortFuture<'_, Result<bool, ArtifactStoreError>>;
+
+    fn finish_gc(
+        &self,
+        bundle_id: ArtifactBundleId,
+        generation: u32,
+        claim: [u8; 16],
+        tombstone_until: Timestamp,
+    ) -> PortFuture<'_, Result<bool, ArtifactStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

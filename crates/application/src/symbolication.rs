@@ -116,13 +116,25 @@ impl<B: SymbolicationBackend> SymbolicationService<B> {
         event: &NormalizedEvent,
         cancellation: &CancellationToken,
     ) -> SymbolicationResult {
-        self.symbolicate_with_revision(event, 0, cancellation).await
+        self.symbolicate_with_revisions(event, 0, 0, cancellation)
+            .await
     }
 
     pub async fn symbolicate_with_revision(
         &self,
         event: &NormalizedEvent,
         debug_file_revision: u64,
+        cancellation: &CancellationToken,
+    ) -> SymbolicationResult {
+        self.symbolicate_with_revisions(event, debug_file_revision, 0, cancellation)
+            .await
+    }
+
+    pub async fn symbolicate_with_revisions(
+        &self,
+        event: &NormalizedEvent,
+        debug_file_revision: u64,
+        artifact_revision: u64,
         cancellation: &CancellationToken,
     ) -> SymbolicationResult {
         let raw = collect_raw_traces(&event.body);
@@ -158,6 +170,7 @@ impl<B: SymbolicationBackend> SymbolicationService<B> {
         let request = SymbolicationRequest {
             project_id: event.project_id,
             debug_file_revision,
+            artifact_revision,
             kind,
             traces: raw.clone(),
             modules,

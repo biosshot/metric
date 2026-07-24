@@ -5,17 +5,19 @@ use std::{collections::BTreeMap, io::Read, sync::Arc};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{Path, Query, Request, State},
+    extract::{Path, Query, RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use faultkeep_application::{
+    artifacts::{ArtifactError, ArtifactService, AssembleArtifact, AssembleArtifactState},
     auth::IdentityService,
     debug_files::{AssembleDebugFile, AssembleState, DebugFileError, DebugFileService},
 };
 use faultkeep_domain::{
     ProjectId,
+    artifacts::ArtifactBundleId,
     auth::{AuthContext, Permission, PlainSecret},
     debug_files::{CodeId, DebugFileId, DebugId},
 };
@@ -33,6 +35,7 @@ const MAX_CHUNK_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 struct DebugHttpState {
     identity: Arc<IdentityService>,
     debug_files: Arc<DebugFileService>,
+    artifacts: Option<Arc<ArtifactService>>,
     signer: PrivateSourceSigner,
 }
 
@@ -89,12 +92,13 @@ impl IntoResponse for DebugHttpError {
 pub fn router(
     identity: Option<Arc<IdentityService>>,
     debug_files: Option<Arc<DebugFileService>>,
+    artifacts: Option<Arc<ArtifactService>>,
     signer: Option<PrivateSourceSigner>,
 ) -> Router {
     let (Some(identity), Some(debug_files), Some(signer)) = (identity, debug_files, signer) else {
         return Router::new();
     };
-    Router::new()
+    let mut router = Router::new()
         .route(
             "/api/0/organizations/{organization_slug}/chunk-upload/",
             get(chunk_options).post(chunk_upload),
@@ -110,12 +114,24 @@ pub fn router(
         .route(
             "/internal/symbolicator/projects/{project_id}/debug-files/",
             get(private_source),
-        )
-        .with_state(DebugHttpState {
-            identity,
-            debug_files,
-            signer,
-        })
+        );
+    if artifacts.is_some() {
+        router = router
+            .route(
+                "/api/0/organizations/{organization_slug}/artifactbundle/assemble/",
+                post(assemble_artifact),
+            )
+            .route(
+                "/internal/symbolicator/projects/{project_id}/artifact-lookup/",
+                get(private_artifact),
+            );
+    }
+    router.with_state(DebugHttpState {
+        identity,
+        debug_files,
+        artifacts,
+        signer,
+    })
 }
 
 async fn chunk_options(
@@ -123,7 +139,7 @@ async fn chunk_options(
     Path(organization_slug): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, DebugHttpError> {
-    let _ = authenticate_token(&state, &headers, Permission::DebugFileWrite).await?;
+    let _ = authenticate_upload_token(&state, &headers).await?;
     let host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
@@ -146,7 +162,18 @@ async fn chunk_options(
         "concurrency": 4,
         "hashAlgorithm": "sha1",
         "compression": ["gzip"],
-        "accept": ["debug_files", "pdbs", "portablepdbs"],
+        "accept": if state.artifacts.is_some() {
+            vec![
+                "debug_files",
+                "release_files",
+                "pdbs",
+                "portablepdbs",
+                "artifact_bundles",
+                "artifact_bundles_v2",
+            ]
+        } else {
+            vec!["debug_files", "pdbs", "portablepdbs"]
+        },
         "maxWait": 300,
     })))
 }
@@ -156,7 +183,7 @@ async fn chunk_upload(
     Path(_organization_slug): Path<String>,
     request: Request,
 ) -> Result<Json<Value>, DebugHttpError> {
-    let context = authenticate_token(&state, request.headers(), Permission::DebugFileWrite).await?;
+    let context = authenticate_upload_token(&state, request.headers()).await?;
     let boundary = multipart_boundary(request.headers())?;
     let body = to_bytes(request.into_body(), MAX_CHUNK_REQUEST_BYTES)
         .await
@@ -189,6 +216,154 @@ async fn chunk_upload(
             .map_err(map_debug)?;
     }
     Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct ArtifactAssembleRequest {
+    checksum: String,
+    chunks: Vec<String>,
+    projects: Vec<String>,
+    version: Option<String>,
+    dist: Option<String>,
+}
+
+async fn assemble_artifact(
+    State(state): State<DebugHttpState>,
+    Path(organization_slug): Path<String>,
+    request: Request,
+) -> Result<Json<Value>, DebugHttpError> {
+    let context = authenticate_token(&state, request.headers(), Permission::ArtifactWrite).await?;
+    let body = to_bytes(request.into_body(), MAX_ASSEMBLE_BODY_BYTES)
+        .await
+        .map_err(|_| InvalidRequest)?;
+    let request: ArtifactAssembleRequest =
+        serde_json::from_slice(&body).map_err(|_| InvalidRequest)?;
+    let artifacts = state
+        .artifacts
+        .as_ref()
+        .ok_or(DebugHttpError::Unavailable)?;
+    let result = artifacts
+        .assemble(
+            &context,
+            &organization_slug,
+            AssembleArtifact {
+                sha1: sha1_bytes(&request.checksum)?,
+                chunks: request
+                    .chunks
+                    .iter()
+                    .map(|chunk| sha1_bytes(chunk))
+                    .collect::<Result<_, _>>()?,
+                project_slugs: request
+                    .projects
+                    .into_iter()
+                    .map(String::into_boxed_str)
+                    .collect(),
+                release: request.version.map(String::into_boxed_str),
+                dist: request.dist.map(String::into_boxed_str),
+            },
+        )
+        .await
+        .map_err(map_artifact)?;
+    let response = match result {
+        AssembleArtifactState::Missing { chunks } => json!({
+            "state": "not_found",
+            "missingChunks": chunks.into_iter().map(hex::encode).collect::<Vec<_>>(),
+            "detail": null,
+        }),
+        AssembleArtifactState::Ok { .. } => json!({
+            "state": "ok",
+            "missingChunks": [],
+            "detail": null,
+        }),
+        AssembleArtifactState::Error { code } => json!({
+            "state": "error",
+            "missingChunks": [],
+            "detail": format!("artifact_error_{code}"),
+        }),
+    };
+    Ok(Json(response))
+}
+
+async fn private_artifact(
+    State(state): State<DebugHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
+) -> Result<Response, DebugHttpError> {
+    let project_id = parse_project_id(&project_id)?;
+    let token = bearer(&headers).ok_or(Unauthorized)?;
+    if !state.signer.verify_artifact(project_id, token) {
+        return Err(Unauthorized);
+    }
+    let raw_query = raw_query.unwrap_or_default();
+    if raw_query.len() > 16 * 1024 {
+        return Err(InvalidRequest);
+    }
+    let mut revision = 0_u64;
+    let mut debug_ids = Vec::new();
+    let mut release = None;
+    let mut dist = None;
+    let mut id = None;
+    for (key, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
+        match key.as_ref() {
+            "revision" => revision = value.parse().map_err(|_| InvalidRequest)?,
+            "debug_id" => debug_ids.push(DebugId::parse(&value).map_err(|_| InvalidRequest)?),
+            "release" => release = Some(value.into_owned()),
+            "dist" => dist = Some(value.into_owned()),
+            "id" => id = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    let _revision = revision;
+    let artifacts = state
+        .artifacts
+        .as_ref()
+        .ok_or(DebugHttpError::Unavailable)?;
+    if let Some(id) = id {
+        let id = ArtifactBundleId::parse(&id).map_err(|_| InvalidRequest)?;
+        let (bundle, reader) = artifacts.open(project_id, id).await.map_err(map_artifact)?;
+        let stream = futures_util::stream::try_unfold(reader, |mut reader| async move {
+            reader
+                .read_chunk(64 * 1024)
+                .await
+                .map(|chunk| chunk.map(|bytes| (bytes::Bytes::from(bytes.into_vec()), reader)))
+                .map_err(std::io::Error::other)
+        });
+        let mut response = Body::from_stream(stream).into_response();
+        response.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&format!("\"{}\"", hex::encode(bundle.checksum)))
+                .map_err(|_| DebugHttpError::Unavailable)?,
+        );
+        response.headers_mut().insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&bundle.size.to_string())
+                .map_err(|_| DebugHttpError::Unavailable)?,
+        );
+        return Ok(response);
+    }
+    if debug_ids.is_empty() && release.is_none() {
+        return Err(InvalidRequest);
+    }
+    let candidates = artifacts
+        .lookup(
+            project_id,
+            debug_ids,
+            release.as_deref(),
+            dist.map(String::into_boxed_str),
+        )
+        .await
+        .map_err(map_artifact)?;
+    Ok(Json(json!(
+        candidates
+            .into_iter()
+            .map(|candidate| json!({
+                "id": candidate.bundle.id.to_string(),
+                "symbolType": "sourcebundle",
+            }))
+            .collect::<Vec<_>>()
+    ))
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -403,6 +578,22 @@ async fn authenticate_token(
         .ok_or(DebugHttpError::Forbidden)
 }
 
+async fn authenticate_upload_token(
+    state: &DebugHttpState,
+    headers: &HeaderMap,
+) -> Result<AuthContext, DebugHttpError> {
+    let token = bearer(headers).ok_or(Unauthorized)?;
+    let context = state
+        .identity
+        .authenticate_api_token(&plain_secret(token)?)
+        .await
+        .map_err(|_| Unauthorized)?;
+    (context.permissions.contains(Permission::DebugFileWrite)
+        || context.permissions.contains(Permission::ArtifactWrite))
+    .then_some(context)
+    .ok_or(DebugHttpError::Forbidden)
+}
+
 fn verify_private_token(
     state: &DebugHttpState,
     headers: &HeaderMap,
@@ -531,5 +722,19 @@ fn map_debug(error: DebugFileError) -> DebugHttpError {
         DebugFileError::Quota => DebugHttpError::Quota,
         DebugFileError::Conflict => DebugHttpError::Conflict,
         DebugFileError::Unavailable => DebugHttpError::Unavailable,
+    }
+}
+
+fn map_artifact(error: ArtifactError) -> DebugHttpError {
+    match error {
+        ArtifactError::InvalidRequest
+        | ArtifactError::MalformedBundle
+        | ArtifactError::ArchiveLimit
+        | ArtifactError::UnsupportedCompression => DebugHttpError::InvalidRequest,
+        ArtifactError::Forbidden => DebugHttpError::Forbidden,
+        ArtifactError::NotFound => DebugHttpError::NotFound,
+        ArtifactError::Quota => DebugHttpError::Quota,
+        ArtifactError::Conflict | ArtifactError::Busy => DebugHttpError::Conflict,
+        ArtifactError::Unavailable => DebugHttpError::Unavailable,
     }
 }

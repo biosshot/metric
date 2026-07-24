@@ -1,6 +1,7 @@
 //! Transport- and adapter-independent bounded primitives.
 
 pub mod api;
+pub mod artifacts;
 pub mod auth;
 pub mod blob;
 pub mod debug_files;
