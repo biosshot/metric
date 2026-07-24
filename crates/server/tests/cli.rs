@@ -28,6 +28,26 @@ fn check_config_succeeds_with_clean_defaults() {
 }
 
 #[test]
+fn container_config_passes_the_production_config_gate() {
+    let config =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/faultkeep.container.toml");
+    let output = Command::new(binary())
+        .args(["--config", config.to_str().unwrap(), "--check-config"])
+        .env("MONGODB_URI", "mongodb://mongo:27017/?retryWrites=false")
+        .env(
+            "SCRUB_HMAC_KEY",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn effective_config_redacts_literal_secret() {
     let path = temporary_config(
         "redaction",

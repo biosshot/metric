@@ -15,9 +15,9 @@ scrub_hmac_key = { env = "SCRUB_HMAC_KEY" }
 [blob]
 backend = "local"
 root = "/var/lib/faultkeep/blobs"
-capacity = "100 GiB"
-reserve = "10 GiB"
-max_object_bytes = "512 MiB"
+capacity = "1 GiB"
+reserve = "128 MiB"
+max_object_bytes = "100 MiB"
 
 [symbolicator]
 # Optional: set APP__SYMBOLICATOR__ENDPOINT in the environment.
