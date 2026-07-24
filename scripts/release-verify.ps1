@@ -68,6 +68,33 @@ function Invoke-Compatibility {
             real_browser_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
+    Push-Location sdk-tests/go
+    try {
+        Invoke-Checked 'Go SDK format' {
+            $diff = gofmt -d .
+            if ($diff) {
+                Write-Output $diff
+                throw 'Go SDK format failed'
+            }
+        }
+        Invoke-Checked 'Go SDK modules' { go mod verify }
+        Invoke-Checked 'Go SDK build' { go test ./... }
+    } finally {
+        Pop-Location
+    }
+    Invoke-Checked 'real Go SDK Error Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_go_sdk_sends_an_error_event -- --ignored --exact --nocapture
+    }
+
+    Invoke-Checked 'Rust SDK build' {
+        cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
+    }
+    Invoke-Checked 'real Rust SDK Error Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_rust_sdk_sends_an_error_event -- --ignored --exact --nocapture
+    }
+
     Push-Location sdk-tests/sentry-cli
     try {
         Invoke-Checked 'Sentry CLI install' { npm ci }

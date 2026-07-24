@@ -29,6 +29,8 @@ use tokio::{net::TcpListener, task::JoinHandle};
 const KEY_TEXT: &str = "0123456789abcdef0123456789abcdef";
 const NODE_SDK_VERSION: &str = "10.66.0";
 const BROWSER_SDK_VERSION: &str = "10.66.0";
+const GO_SDK_VERSION: &str = "0.48.0";
+const RUST_SDK_VERSION: &str = "0.48.5";
 
 #[derive(Deserialize)]
 struct SenderResult {
@@ -39,6 +41,7 @@ struct SenderResult {
 struct RunningHarness {
     root: ShutdownRoot,
     sink: FakeEventSink,
+    outcomes: FakeOutcomeSink,
     blob: LocalBlobStore,
     blob_directory: PathBuf,
     address: std::net::SocketAddr,
@@ -67,10 +70,28 @@ async fn real_browser_sdk_sends_an_error_event() {
     exercise_real_browser_sdk().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Go 1.25 and downloaded sdk-tests/go modules"]
+async fn real_go_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Go).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Rust 1.88 and a locked sdk-tests/rust build"]
+async fn real_rust_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Rust).await.unwrap();
+}
+
 #[derive(Clone, Copy)]
 enum NodeFixture {
     ErrorOnly,
     Attachment,
+}
+
+#[derive(Clone, Copy)]
+enum ExternalFixture {
+    Go,
+    Rust,
 }
 
 async fn exercise_real_node_sdk(
@@ -94,7 +115,13 @@ async fn exercise_real_node_sdk(
     let verification: Result<(), Box<dyn Error>> = async {
         let output = output??;
         let sender_result = verify_process_output(&output, "Node")?;
-        let event = one_event(&harness.sink, &sender_result, "Node", &output.stderr)?;
+        let event = one_event(
+            &harness.sink,
+            &sender_result,
+            "Node",
+            &output.stderr,
+            &harness.outcomes,
+        )?;
         let payload: Value = serde_json::from_slice(event.payload.as_bytes())?;
         verify_sdk(
             &payload,
@@ -187,7 +214,13 @@ async fn exercise_real_browser_sdk() -> Result<(), Box<dyn Error>> {
     let verification = (|| -> Result<(), Box<dyn Error>> {
         let output = output??;
         let sender_result = verify_process_output(&output, "Browser")?;
-        let event = one_event(&harness.sink, &sender_result, "Browser", &output.stderr)?;
+        let event = one_event(
+            &harness.sink,
+            &sender_result,
+            "Browser",
+            &output.stderr,
+            &harness.outcomes,
+        )?;
         let payload: Value = serde_json::from_slice(event.payload.as_bytes())?;
         verify_sdk(
             &payload,
@@ -210,6 +243,76 @@ async fn exercise_real_browser_sdk() -> Result<(), Box<dyn Error>> {
     verification
 }
 
+async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn Error>> {
+    let harness = start_harness(Router::new()).await?;
+    let workspace = workspace();
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let output = tokio::task::spawn_blocking(move || match fixture {
+        ExternalFixture::Go => Command::new("go")
+            .current_dir(workspace.join("sdk-tests/go"))
+            .args(["run", ".", &dsn])
+            .output(),
+        ExternalFixture::Rust => Command::new("cargo")
+            .current_dir(&workspace)
+            .args([
+                "run",
+                "--quiet",
+                "--locked",
+                "--manifest-path",
+                "sdk-tests/rust/Cargo.toml",
+                "--",
+                &dsn,
+            ])
+            .output(),
+    })
+    .await;
+    wait_for_sink(&harness.sink, output.as_ref().is_ok_and(Result::is_ok)).await;
+
+    let verification = (|| -> Result<(), Box<dyn Error>> {
+        let output = output??;
+        let runtime = match fixture {
+            ExternalFixture::Go => "Go",
+            ExternalFixture::Rust => "Rust",
+        };
+        let sender_result = verify_process_output(&output, runtime)?;
+        let event = one_event(
+            &harness.sink,
+            &sender_result,
+            runtime,
+            &output.stderr,
+            &harness.outcomes,
+        )?;
+        let payload: Value = serde_json::from_slice(event.payload.as_bytes())?;
+        match fixture {
+            ExternalFixture::Go => {
+                verify_sdk(
+                    &payload,
+                    "sentry.go",
+                    GO_SDK_VERSION,
+                    "faultkeep-go-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Faultkeep real Go SDK compatibility event")?;
+            }
+            ExternalFixture::Rust => {
+                verify_sdk(
+                    &payload,
+                    "sentry.rust",
+                    RUST_SDK_VERSION,
+                    "faultkeep-rust-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Faultkeep real Rust SDK compatibility event")?;
+            }
+        }
+        if payload.get("attachments").is_some() || harness.blob.capacity().used_bytes != 0 {
+            return Err(format!("base {runtime} Error Event unexpectedly created a blob").into());
+        }
+        Ok(())
+    })();
+
+    stop_harness(harness).await?;
+    verification
+}
+
 fn workspace() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -217,7 +320,8 @@ fn workspace() -> PathBuf {
 async fn start_harness(extra_routes: Router) -> Result<RunningHarness, Box<dyn Error>> {
     let root = ShutdownRoot::new();
     let sink = FakeEventSink::accepting();
-    let (app, blob, blob_directory) = test_app(sink.clone(), &root).await;
+    let outcomes = FakeOutcomeSink::default();
+    let (app, blob, blob_directory) = test_app(sink.clone(), outcomes.clone(), &root).await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(http::run(
@@ -229,6 +333,7 @@ async fn start_harness(extra_routes: Router) -> Result<RunningHarness, Box<dyn E
     Ok(RunningHarness {
         root,
         sink,
+        outcomes,
         blob,
         blob_directory,
         address,
@@ -287,13 +392,15 @@ fn one_event(
     sender_result: &SenderResult,
     runtime: &str,
     stderr: &[u8],
+    outcomes: &FakeOutcomeSink,
 ) -> Result<faultkeep_domain::AcceptedEvent, Box<dyn Error>> {
     let events = sink.events();
     if events.len() != 1 {
         return Err(format!(
-            "expected one accepted {runtime} Error Event, got {}; SDK stderr: {}",
+            "expected one accepted {runtime} Error Event, got {}; SDK stderr: {}; outcomes: {:?}",
             events.len(),
-            String::from_utf8_lossy(stderr)
+            String::from_utf8_lossy(stderr),
+            outcomes.outcomes()
         )
         .into());
     }
@@ -301,10 +408,18 @@ fn one_event(
         .into_iter()
         .next()
         .ok_or("accepted Event disappeared after count validation")?;
-    if event.event_id != EventId::parse(&sender_result.event_id)? {
+    if event.event_id != parse_sender_event_id(&sender_result.event_id)? {
         return Err(format!("{runtime} SDK Event ID differs from the accepted Event ID").into());
     }
     Ok(event)
+}
+
+fn parse_sender_event_id(value: &str) -> Result<EventId, Box<dyn Error>> {
+    if let Ok(event_id) = EventId::parse(value) {
+        return Ok(event_id);
+    }
+    let compact = value.replace('-', "");
+    Ok(EventId::parse(&compact)?)
 }
 
 fn verify_sdk(
@@ -342,6 +457,20 @@ fn verify_exception(
     Ok(())
 }
 
+fn verify_exception_value(payload: &Value, exception_value: &str) -> Result<(), Box<dyn Error>> {
+    let actual = payload
+        .pointer("/exception/values/0/value")
+        .or_else(|| payload.pointer("/exception/0/value"))
+        .and_then(Value::as_str);
+    if actual != Some(exception_value) {
+        return Err(format!(
+            "accepted Event exception value differs: expected {exception_value:?}, got {actual:?}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 async fn verify_attachment(payload: &Value, blob: &LocalBlobStore) -> Result<(), Box<dyn Error>> {
     let attachment = payload
         .get("attachments")
@@ -373,7 +502,11 @@ async fn verify_attachment(payload: &Value, blob: &LocalBlobStore) -> Result<(),
     Ok(())
 }
 
-async fn test_app(sink: FakeEventSink, root: &ShutdownRoot) -> (Router, LocalBlobStore, PathBuf) {
+async fn test_app(
+    sink: FakeEventSink,
+    outcomes: FakeOutcomeSink,
+    root: &ShutdownRoot,
+) -> (Router, LocalBlobStore, PathBuf) {
     let config = IngestConfig {
         max_compressed_request_bytes: 20 * 1024 * 1024,
         max_decompressed_request_bytes: 100 * 1024 * 1024,
@@ -424,7 +557,7 @@ async fn test_app(sink: FakeEventSink, root: &ShutdownRoot) -> (Router, LocalBlo
                 },
             )),
             Arc::new(sink),
-            Arc::new(FakeOutcomeSink::default()),
+            Arc::new(outcomes),
             Arc::new(FixedClock(Timestamp::from_unix_millis(0).unwrap())),
             Arc::new(FixedRandom(7)),
             config.max_waiting_for_storage,

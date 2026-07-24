@@ -61,6 +61,38 @@ Faultkeep router, launches the pinned Playwright Chromium, sends through a real 
 waits for `flush`, and verifies the accepted Error Event and absence of attachment
 blobs. The browser and server are closed before the test returns.
 
+## Go SDK
+
+The isolated `go/` module pins `sentry-go` 0.48.0. Verify the lock data and run the
+real process gate from the repository root:
+
+```text
+cd sdk-tests/go
+go mod verify
+go test ./...
+cd ../..
+cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+  real_go_sdk_sends_an_error_event -- --ignored --exact --nocapture
+```
+
+The sender has a 15-second process deadline and an 8-second SDK flush deadline.
+
+## Rust SDK
+
+The isolated `rust/` workspace pins `sentry` 0.48.5 in its own `Cargo.lock`. Build
+and run the real-process gate from the repository root:
+
+```text
+cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
+cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+  real_rust_sdk_sends_an_error_event -- --ignored --exact --nocapture
+```
+
+The official SDK uses a hyphenated UUID in the envelope header. Faultkeep accepts
+that wire representation at the protocol adapter and retains its compact 32-hex
+domain identifier. Both Go and Rust gates verify metadata, exception content, Event
+identity and the absence of blob objects for a base Error Event.
+
 ## Sentry CLI debug files
 
 `sentry-cli/` pins current 3.x (`3.6.2`) and retained 2.x (`2.58.6`) contracts.

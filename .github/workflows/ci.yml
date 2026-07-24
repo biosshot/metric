@@ -17,6 +17,10 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.1
+          cache-dependency-path: sdk-tests/go/go.sum
       - run: cargo fmt --all -- --check
       - run: cargo dep-graph --locked
       - run: python scripts/validate-compatibility.py
@@ -53,7 +57,15 @@ jobs:
           npm run lint
           npm run build
           npx playwright install --with-deps chromium
-      - name: Run real JavaScript SDK gates
+      - name: Verify real Go SDK
+        working-directory: sdk-tests/go
+        run: |
+          gofmt -d .
+          go mod verify
+          go test ./...
+      - name: Verify real Rust SDK
+        run: cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
+      - name: Run real SDK gates
         run: cargo test -p faultkeep-server --test sdk_compatibility_e2e -- --ignored --nocapture
       - name: Verify pinned Sentry CLI versions
         working-directory: sdk-tests/sentry-cli
