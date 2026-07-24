@@ -19,6 +19,37 @@ describe('native API client', () => {
     expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
   });
 
+  it('creates a scoped personal token through the authenticated CSRF contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: '11',
+          token: 'f'.repeat(64),
+          expires_at: '2030-02-01T23:59:59Z',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.createToken(
+      'sentry-cli debug files',
+      ['debug_file:read', 'debug_file:write'],
+      '2030-02-01T23:59:59Z',
+    );
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Headers;
+    expect(path).toBe('/api/v1/auth/tokens');
+    expect(init.method).toBe('POST');
+    expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: 'sentry-cli debug files',
+      scopes: ['debug_file:read', 'debug_file:write'],
+      expires_at: '2030-02-01T23:59:59Z',
+    });
+  });
+
   it('sends large organization IDs without JavaScript precision loss', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

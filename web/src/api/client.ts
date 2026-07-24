@@ -1,7 +1,9 @@
 import type {
   ApiErrorBody,
+  ApiToken,
   CapabilityDocument,
   ComponentStatus,
+  CreatedApiToken,
   CreateProjectInput,
   CreateProjectResponse,
   Event,
@@ -150,6 +152,14 @@ export const api = {
   },
   me: () => request<Identity>('/api/v1/auth/me'),
   logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
+  tokens: () => request<{ items: ApiToken[] }>('/api/v1/auth/tokens'),
+  createToken: (name: string, scopes: string[], expiresAt: string) =>
+    request<CreatedApiToken>('/api/v1/auth/tokens', {
+      method: 'POST',
+      body: JSON.stringify({ name, scopes, expires_at: expiresAt }),
+    }),
+  revokeToken: (tokenId: string) =>
+    request<void>(`/api/v1/auth/tokens/${tokenId}`, { method: 'DELETE' }),
   projects: () => request<{ items: Project[] }>('/api/v1/projects'),
   createProject: (project: CreateProjectInput) =>
     request<CreateProjectResponse>('/api/v1/projects', {

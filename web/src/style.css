@@ -580,6 +580,47 @@ label small,
   justify-self: start;
 }
 
+.token-secret-panel {
+  border-color: var(--semantic-warning);
+}
+
+.token-secret-panel .code-block {
+  margin-bottom: 0;
+}
+
+.token-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.token-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.token-list article > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.32rem;
+}
+
+.token-list small,
+.token-scopes {
+  color: var(--text-muted);
+}
+
+.token-scopes {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
 .check-grid {
   display: grid;
   gap: 0.75rem;

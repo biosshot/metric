@@ -23,6 +23,21 @@ export interface LoginResponse {
   expires_at: string;
 }
 
+export interface ApiToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+}
+
+export interface CreatedApiToken {
+  id: string;
+  token: string;
+  expires_at: string;
+}
+
 export interface ProjectPolicy {
   revision: number;
   ip_policy: 'hmac' | 'keep' | 'remove' | 'truncate';

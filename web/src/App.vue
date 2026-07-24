@@ -116,6 +116,10 @@ async function logout(): Promise<void> {
           <AppIcon name="activity" :size="18" />
           System status
         </RouterLink>
+        <RouterLink to="/account/tokens" @click="navigationOpen = false">
+          <AppIcon name="key" :size="18" />
+          API tokens
+        </RouterLink>
       </nav>
 
       <div class="sidebar__account">
@@ -134,11 +138,13 @@ async function logout(): Promise<void> {
       <ApiErrorPanel v-if="logoutError" :error="logoutError" title="Sign out failed" />
       <FirstProjectOnboarding
         v-if="
-          !session.selectedProject && $route.name !== 'system' && session.has('organization:admin')
+          !session.selectedProject &&
+          !['system', 'tokens'].includes(String($route.name)) &&
+          session.has('organization:admin')
         "
       />
       <EmptyState
-        v-else-if="!session.selectedProject && $route.name !== 'system'"
+        v-else-if="!session.selectedProject && !['system', 'tokens'].includes(String($route.name))"
         icon="blocked"
         title="No accessible projects"
         description="Your account is valid, but an organization administrator must grant access to a project."
