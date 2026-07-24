@@ -1,0 +1,42 @@
+{
+  "format": "incident-capsule",
+  "version": 1,
+  "media_type": "application/vnd.incident-capsule+zip; version=1",
+  "extension": ".incident.zip",
+  "physical_entry_order": [
+    "issue.json",
+    "statistics/hourly.json",
+    "activity.json",
+    "events/{event_id}.json",
+    "diagnostics/capabilities.json",
+    "README.txt",
+    "manifest.json"
+  ],
+  "manifest_entry_fields": [
+    "path",
+    "media_type",
+    "uncompressed_size",
+    "blake3"
+  ],
+  "required_permissions": [
+    "issue:read",
+    "event:read",
+    "incident:export"
+  ],
+  "public_error_codes": [
+    "invalid_request",
+    "forbidden",
+    "not_found",
+    "limit_exceeded",
+    "cancelled",
+    "generation_timeout",
+    "temporarily_unavailable"
+  ],
+  "excluded_bytes": [
+    "attachments",
+    "minidumps",
+    "debug_files",
+    "artifact_bundles",
+    "source_archives"
+  ]
+}

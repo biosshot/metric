@@ -76,6 +76,7 @@ pub struct AppConfig {
     pub native_crash: NativeCrashConfig,
     pub symbolicator: SymbolicatorSettings,
     pub artifacts: ArtifactSettings,
+    pub incident_capsule: IncidentCapsuleSettings,
     pub dispatcher: DispatcherSettings,
     pub scheduler: SchedulerSettings,
     pub retention: RetentionSettings,
@@ -101,6 +102,18 @@ pub struct ArtifactSettings {
     pub gc_max_concurrency: usize,
     pub maximum_bytes_per_organization: u64,
     pub maximum_bundles_per_organization: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IncidentCapsuleSettings {
+    pub max_events: usize,
+    pub max_activities: usize,
+    pub max_total_uncompressed_bytes: u64,
+    pub max_entry_bytes: u64,
+    pub generation_timeout: RequestTimeout,
+    pub max_concurrency: usize,
+    pub stream_chunk_bytes: usize,
+    pub stream_buffer_chunks: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -521,6 +534,7 @@ struct RawConfig {
     native_crash: RawNativeCrashConfig,
     symbolicator: RawSymbolicatorSettings,
     artifacts: RawArtifactSettings,
+    incident_capsule: RawIncidentCapsuleSettings,
     dispatcher: RawDispatcherSettings,
     scheduler: RawSchedulerSettings,
     retention: RawRetentionSettings,
@@ -542,12 +556,41 @@ impl Default for RawConfig {
             native_crash: RawNativeCrashConfig::default(),
             symbolicator: RawSymbolicatorSettings::default(),
             artifacts: RawArtifactSettings::default(),
+            incident_capsule: RawIncidentCapsuleSettings::default(),
             dispatcher: RawDispatcherSettings::default(),
             scheduler: RawSchedulerSettings::default(),
             retention: RawRetentionSettings::default(),
             project_deletion: RawProjectDeletionSettings::default(),
             processor: RawProcessorSettings::default(),
             auth: RawAuthSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawIncidentCapsuleSettings {
+    max_events: usize,
+    max_activities: usize,
+    max_total_uncompressed_bytes: String,
+    max_entry_bytes: String,
+    generation_timeout: String,
+    max_concurrency: usize,
+    stream_chunk_bytes: String,
+    stream_buffer_chunks: usize,
+}
+
+impl Default for RawIncidentCapsuleSettings {
+    fn default() -> Self {
+        Self {
+            max_events: 10,
+            max_activities: 100,
+            max_total_uncompressed_bytes: "100 MiB".to_owned(),
+            max_entry_bytes: "16 MiB".to_owned(),
+            generation_timeout: "30s".to_owned(),
+            max_concurrency: 4,
+            stream_chunk_bytes: "64 KiB".to_owned(),
+            stream_buffer_chunks: 4,
         }
     }
 }
@@ -1102,6 +1145,8 @@ pub enum ConfigError {
     InvalidSymbolicatorConfig,
     #[error("artifact bundle configuration is invalid or outside supported bounds")]
     InvalidArtifactConfig,
+    #[error("Incident Capsule configuration is invalid or outside supported bounds")]
+    InvalidIncidentCapsuleConfig,
     #[error("MongoDB configuration is invalid or outside supported bounds")]
     InvalidMongoConfig,
     #[error("project identity configuration is invalid or outside supported bounds")]
@@ -1266,6 +1311,15 @@ impl TryFrom<RawConfig> for AppConfig {
                 .map_err(|_| ConfigError::InvalidArtifactConfig)?;
         let artifact_gc_interval = SchedulerInterval::from_str(&raw.artifacts.gc_interval)
             .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let capsule_total =
+            ConfiguredBytes::from_str(&raw.incident_capsule.max_total_uncompressed_bytes)
+                .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
+        let capsule_entry = ConfiguredBytes::from_str(&raw.incident_capsule.max_entry_bytes)
+            .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
+        let capsule_timeout = RequestTimeout::from_str(&raw.incident_capsule.generation_timeout)
+            .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
+        let capsule_chunk = ConfiguredBytes::from_str(&raw.incident_capsule.stream_chunk_bytes)
+            .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
         if raw.blob.root.as_os_str().is_empty()
             || capacity.get() == 0
             || reserve.get() >= capacity.get()
@@ -1310,6 +1364,21 @@ impl TryFrom<RawConfig> for AppConfig {
             || raw.artifacts.maximum_bundles_per_organization > 1_000_000_000
         {
             return Err(ConfigError::InvalidArtifactConfig);
+        }
+        if !(1..=10).contains(&raw.incident_capsule.max_events)
+            || !(1..=100).contains(&raw.incident_capsule.max_activities)
+            || capsule_total.get() == 0
+            || capsule_total.get() > 100 * 1024 * 1024
+            || capsule_entry.get() == 0
+            || capsule_entry.get() > 16 * 1024 * 1024
+            || capsule_entry.get() > capsule_total.get()
+            || capsule_timeout.get().is_zero()
+            || capsule_timeout.get() > std::time::Duration::from_secs(30)
+            || !(1..=4).contains(&raw.incident_capsule.max_concurrency)
+            || !(4 * 1024..=1024 * 1024).contains(&capsule_chunk.get())
+            || !(1..=16).contains(&raw.incident_capsule.stream_buffer_chunks)
+        {
+            return Err(ConfigError::InvalidIncidentCapsuleConfig);
         }
         let dispatcher = DispatcherSettings::try_from(raw.dispatcher)?;
         let scheduler = SchedulerSettings::try_from(raw.scheduler)?;
@@ -1381,6 +1450,17 @@ impl TryFrom<RawConfig> for AppConfig {
                 gc_max_concurrency: raw.artifacts.gc_max_concurrency,
                 maximum_bytes_per_organization: artifact_quota_bytes.get(),
                 maximum_bundles_per_organization: raw.artifacts.maximum_bundles_per_organization,
+            },
+            incident_capsule: IncidentCapsuleSettings {
+                max_events: raw.incident_capsule.max_events,
+                max_activities: raw.incident_capsule.max_activities,
+                max_total_uncompressed_bytes: capsule_total.get(),
+                max_entry_bytes: capsule_entry.get(),
+                generation_timeout: capsule_timeout,
+                max_concurrency: raw.incident_capsule.max_concurrency,
+                stream_chunk_bytes: usize::try_from(capsule_chunk.get())
+                    .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?,
+                stream_buffer_chunks: raw.incident_capsule.stream_buffer_chunks,
             },
             dispatcher,
             scheduler,
@@ -1543,7 +1623,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<disabled>", url::Url::as_str);
         format!(
-            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n\n[artifacts]\nmaximum_bundle_bytes = {}\nmaximum_logical_bytes = {}\nmaximum_entries = {}\nmaximum_entry_bytes = {}\nmaximum_concurrent_assemblies = {}\nparse_timeout = \"{}\"\norphan_grace = \"{}\"\nclaim_lease = \"{}\"\nblob_operation_timeout = \"{}\"\ntombstone_retention = \"{}\"\ngc_interval = \"{}\"\ngc_batch_size = {}\ngc_max_concurrency = {}\nmaximum_bytes_per_organization = {}\nmaximum_bundles_per_organization = {}\n",
+            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n\n[artifacts]\nmaximum_bundle_bytes = {}\nmaximum_logical_bytes = {}\nmaximum_entries = {}\nmaximum_entry_bytes = {}\nmaximum_concurrent_assemblies = {}\nparse_timeout = \"{}\"\norphan_grace = \"{}\"\nclaim_lease = \"{}\"\nblob_operation_timeout = \"{}\"\ntombstone_retention = \"{}\"\ngc_interval = \"{}\"\ngc_batch_size = {}\ngc_max_concurrency = {}\nmaximum_bytes_per_organization = {}\nmaximum_bundles_per_organization = {}\n\n[incident_capsule]\nmax_events = {}\nmax_activities = {}\nmax_total_uncompressed_bytes = {}\nmax_entry_bytes = {}\ngeneration_timeout = \"{}\"\nmax_concurrency = {}\nstream_chunk_bytes = {}\nstream_buffer_chunks = {}\n",
             self.symbolicator.callback_base_url,
             humantime::format_duration(self.symbolicator.request_timeout.get()),
             self.symbolicator.maximum_concurrency,
@@ -1565,6 +1645,14 @@ impl AppConfig {
             self.artifacts.gc_max_concurrency,
             self.artifacts.maximum_bytes_per_organization,
             self.artifacts.maximum_bundles_per_organization,
+            self.incident_capsule.max_events,
+            self.incident_capsule.max_activities,
+            self.incident_capsule.max_total_uncompressed_bytes,
+            self.incident_capsule.max_entry_bytes,
+            humantime::format_duration(self.incident_capsule.generation_timeout.get()),
+            self.incident_capsule.max_concurrency,
+            self.incident_capsule.stream_chunk_bytes,
+            self.incident_capsule.stream_buffer_chunks,
         )
     }
 
@@ -1955,6 +2043,11 @@ mod tests {
         assert!(config.symbolicator.endpoint.is_none());
         assert_eq!(config.artifacts.maximum_bundle_bytes, 64 * 1024 * 1024);
         assert_eq!(config.artifacts.gc_max_concurrency, 4);
+        assert_eq!(config.incident_capsule.max_events, 10);
+        assert_eq!(
+            config.incident_capsule.max_total_uncompressed_bytes,
+            100 * 1024 * 1024
+        );
         assert_eq!(
             config.ingest.backlog.max_oldest_pending_age.get(),
             std::time::Duration::from_secs(60 * 60)
@@ -1984,6 +2077,36 @@ mod tests {
                     ..RawConfig::default()
                 }),
                 Err(ConfigError::InvalidArtifactConfig)
+            ));
+        }
+    }
+
+    #[test]
+    fn incident_capsule_limits_fail_closed() {
+        for incident_capsule in [
+            RawIncidentCapsuleSettings {
+                max_events: 11,
+                ..RawIncidentCapsuleSettings::default()
+            },
+            RawIncidentCapsuleSettings {
+                max_entry_bytes: "17 MiB".to_owned(),
+                ..RawIncidentCapsuleSettings::default()
+            },
+            RawIncidentCapsuleSettings {
+                generation_timeout: "31s".to_owned(),
+                ..RawIncidentCapsuleSettings::default()
+            },
+            RawIncidentCapsuleSettings {
+                stream_buffer_chunks: 17,
+                ..RawIncidentCapsuleSettings::default()
+            },
+        ] {
+            assert!(matches!(
+                AppConfig::try_from(RawConfig {
+                    incident_capsule,
+                    ..RawConfig::default()
+                }),
+                Err(ConfigError::InvalidIncidentCapsuleConfig)
             ));
         }
     }

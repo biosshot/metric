@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "incident-capsule-phase-19",
+    "source_commit": "9a104e7bbf94bedafc12c7059bf40f1fefc463bd",
+    "generated_at": "2026-07-24T07:45:11.256Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "7 Event DTOs with 8 KiB payload each; Issue, statistics, activity, capabilities, README and final manifest; bounded 64 KiB chunks",
+    "storage": "in-memory DTO fixture and streaming ZIP64 writer; no MongoDB or BlobStore in timing window; release profile"
+  },
+  "metrics": {
+    "samples": 300,
+    "capsule_rps": 642,
+    "mib_per_second": 2.05,
+    "minimum_capsule_rps": 20
+  }
+}

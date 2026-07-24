@@ -16,6 +16,10 @@ use axum::{
 };
 use faultkeep_application::{
     auth::{BootstrapRequest, CreateApiTokenRequest, IdentityService, LoginRequest, PasswordInput},
+    incident_capsule::{
+        IncidentCapsuleError, IncidentCapsuleRequest, IncidentCapsuleService,
+        IncidentEventSelection,
+    },
     native_api::{EventListRequest, NativeApiError, NativeApiService},
     observability::RequestId,
     projects::CreateProject,
@@ -57,6 +61,7 @@ struct NativeHttpState {
     retention: Option<RetentionCapability>,
     project_deletion: Option<ProjectDeletionCapability>,
     debug_files: Option<DebugFileCapability>,
+    incident_capsule: Option<Arc<IncidentCapsuleService>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,9 +83,18 @@ pub struct DebugFileCapability {
     pub artifact_bundles: bool,
 }
 
+#[derive(Clone, Default)]
+pub struct NativeHttpModules {
+    pub retention: Option<RetentionCapability>,
+    pub project_deletion: Option<ProjectDeletionCapability>,
+    pub debug_files: Option<DebugFileCapability>,
+    pub incident_capsule: Option<Arc<IncidentCapsuleService>>,
+}
+
 #[derive(Debug)]
 enum HttpApiError {
     Api(NativeApiError),
+    Capsule(IncidentCapsuleError),
     InvalidRequest,
     InvalidCredentials,
     CsrfFailed,
@@ -135,6 +149,19 @@ impl IntoResponse for HttpApiError {
                 };
                 (status, error.code(), public_message(error))
             }
+            Self::Capsule(error) => {
+                let status = match error {
+                    IncidentCapsuleError::InvalidRequest => StatusCode::BAD_REQUEST,
+                    IncidentCapsuleError::Forbidden => StatusCode::FORBIDDEN,
+                    IncidentCapsuleError::NotFound => StatusCode::NOT_FOUND,
+                    IncidentCapsuleError::LimitExceeded => StatusCode::UNPROCESSABLE_ENTITY,
+                    IncidentCapsuleError::GenerationTimeout => StatusCode::GATEWAY_TIMEOUT,
+                    IncidentCapsuleError::Cancelled | IncidentCapsuleError::Unavailable => {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    }
+                };
+                (status, error.code(), capsule_public_message(error))
+            }
         };
         let mut response = (
             status,
@@ -158,6 +185,18 @@ impl IntoResponse for HttpApiError {
     }
 }
 
+fn capsule_public_message(error: &IncidentCapsuleError) -> &'static str {
+    match error {
+        IncidentCapsuleError::InvalidRequest => "capsule request is invalid",
+        IncidentCapsuleError::Forbidden => "capsule export is forbidden",
+        IncidentCapsuleError::NotFound => "capsule target was not found",
+        IncidentCapsuleError::LimitExceeded => "capsule export limit was exceeded",
+        IncidentCapsuleError::Cancelled => "capsule generation was cancelled",
+        IncidentCapsuleError::GenerationTimeout => "capsule generation timed out",
+        IncidentCapsuleError::Unavailable => "capsule service is temporarily unavailable",
+    }
+}
+
 fn public_message(error: &NativeApiError) -> &'static str {
     match error {
         NativeApiError::InvalidRequest => "request is invalid",
@@ -177,18 +216,17 @@ pub fn router(
     api: Option<Arc<NativeApiService>>,
     secure_cookie: bool,
     required_ready: bool,
-    retention: Option<RetentionCapability>,
-    project_deletion: Option<ProjectDeletionCapability>,
-    debug_files: Option<DebugFileCapability>,
+    modules: NativeHttpModules,
 ) -> Router {
     let state = NativeHttpState {
         identity,
         api,
         secure_cookie,
         required_ready,
-        retention,
-        project_deletion,
-        debug_files,
+        retention: modules.retention,
+        project_deletion: modules.project_deletion,
+        debug_files: modules.debug_files,
+        incident_capsule: modules.incident_capsule,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -244,6 +282,10 @@ pub fn router(
             get(issue_events),
         )
         .route(
+            "/api/v1/projects/{project_id}/issues/{issue_id}/capsule",
+            post(export_incident_capsule),
+        )
+        .route(
             "/api/v1/projects/{project_id}/events/search",
             get(search_events),
         )
@@ -296,6 +338,86 @@ async fn event_attachments(
             "checksum": attachment.checksum,
         })).collect::<Vec<_>>()
     })))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct IncidentCapsuleBody {
+    event_ids: Option<Vec<String>>,
+    statistics_from: Option<String>,
+    statistics_until: Option<String>,
+}
+
+async fn export_incident_capsule(
+    State(state): State<NativeHttpState>,
+    Path((project_id, issue_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
+    body: Result<Json<IncidentCapsuleBody>, JsonRejection>,
+) -> Result<Response, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = body.map_err(|_| HttpApiError::InvalidRequest)?.0;
+    let selection = match body.event_ids {
+        None => IncidentEventSelection::Default,
+        Some(values) => IncidentEventSelection::Explicit(
+            values
+                .iter()
+                .map(|value| EventId::parse(value).map_err(|_| HttpApiError::InvalidRequest))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    };
+    let request = IncidentCapsuleRequest {
+        project_id: project_id_from(&project_id)?,
+        issue_id: issue_id_from(&issue_id)?,
+        selection,
+        statistics_from: body
+            .statistics_from
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?,
+        statistics_until: body
+            .statistics_until
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?,
+        request_id: correlation_id(request_id)?,
+    };
+    let download = state
+        .incident_capsule
+        .as_ref()
+        .ok_or(HttpApiError::Unavailable)?
+        .prepare(&context, request)
+        .await
+        .map_err(HttpApiError::Capsule)?;
+    let stream = futures_util::stream::unfold(download.receiver, |mut receiver| async move {
+        receiver.recv().await.map(|result| {
+            (
+                result
+                    .map(bytes::Bytes::from)
+                    .map_err(std::io::Error::other),
+                receiver,
+            )
+        })
+    });
+    let disposition =
+        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", download.filename))
+            .map_err(|_| HttpApiError::Unavailable)?;
+    let mut response = Body::from_stream(stream).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(download.media_type),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
 }
 
 async fn download_attachment(
@@ -1188,6 +1310,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "artifact_bundles": state
                 .debug_files
                 .is_some_and(|capability| capability.artifact_bundles),
+            "incident_capsule": state.incident_capsule.is_some(),
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -1204,6 +1327,14 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "private_symbolicator_source": true,
             "external_symbolicator": capability.external_symbolicator,
             "artifact_bundles": capability.artifact_bundles,
+        })),
+        "incident_capsule": state.incident_capsule.as_ref().map(|_| json!({
+            "format": "incident-capsule",
+            "version": 1,
+            "streaming": true,
+            "server_persistence": false,
+            "attachment_bytes": false,
+            "debug_source_artifacts": false,
         })),
     }))
 }
@@ -1872,6 +2003,10 @@ mod tests {
                 RouteAccess::Permission(Permission::EventRead),
             ),
             (
+                "POST /projects/:id/issues/:issue/capsule",
+                RouteAccess::Permission(Permission::IncidentExport),
+            ),
+            (
                 "GET /projects/:id/events",
                 RouteAccess::Permission(Permission::EventRead),
             ),
@@ -1902,7 +2037,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 33);
+        assert_eq!(matrix.len(), 34);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

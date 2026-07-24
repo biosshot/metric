@@ -844,6 +844,49 @@ impl IdentityService {
         .await
     }
 
+    pub async fn record_incident_capsule_audit(
+        &self,
+        context: &AuthContext,
+        request_id: RequestCorrelationId,
+        project_id: ProjectId,
+        issue_id: faultkeep_domain::grouping::IssueId,
+        selected_event_count: usize,
+        result_size_class: &'static str,
+    ) -> Result<(), AuthError> {
+        if !context.permissions.contains(Permission::IncidentExport)
+            || selected_event_count > 10
+            || !matches!(result_size_class, "small" | "medium" | "large")
+        {
+            return Err(AuthError::Forbidden);
+        }
+        let metadata = AuditMetadata::new([
+            (
+                AuditMetadataKey::ProjectId,
+                AuditMetadataValue::new(project_id.get().to_string())
+                    .map_err(|_| AuthError::Forbidden)?,
+            ),
+            (
+                AuditMetadataKey::SelectedEventCount,
+                AuditMetadataValue::new(selected_event_count.to_string())
+                    .map_err(|_| AuthError::Forbidden)?,
+            ),
+            (
+                AuditMetadataKey::ResultSizeClass,
+                AuditMetadataValue::new(result_size_class).map_err(|_| AuthError::Forbidden)?,
+            ),
+        ])
+        .map_err(|_| AuthError::Forbidden)?;
+        self.audit(
+            context,
+            request_id,
+            AuditAction::IncidentCapsuleExported,
+            "incident_capsule",
+            issue_id.to_string(),
+            metadata,
+        )
+        .await
+    }
+
     pub async fn validate_issue_assignee(
         &self,
         context: &AuthContext,

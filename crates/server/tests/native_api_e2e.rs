@@ -13,9 +13,13 @@ use axum::{
     http::{Request, StatusCode},
 };
 use faultkeep_application::{
-    auth::{AuthConfig, BootstrapRequest, IdentityService, PasswordConfig, PasswordInput},
+    auth::{
+        AuthConfig, BootstrapRequest, CreateApiTokenRequest, IdentityService, LoginRequest,
+        PasswordConfig, PasswordInput,
+    },
     dispatcher::{Dispatcher, DispatcherConfig},
     finalizer::{Finalizer, FinalizerConfig},
+    incident_capsule::{IncidentCapsuleAccess, IncidentCapsuleConfig, IncidentCapsuleService},
     ingest::{AttachmentIngestConfig, IngestService},
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerLimits},
@@ -35,7 +39,10 @@ use faultkeep_domain::{
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ScrubbedEventPayload, SecretBytes, Slug, Timestamp,
     api::IssueListQuery,
-    auth::{EmailAddress, RequestCorrelationId, UserDisplayName},
+    auth::{
+        EmailAddress, Permission, PermissionSet, RequestCorrelationId, SecretDigest, TokenName,
+        UserDisplayName,
+    },
     event::{EventLevel, EventPlatform},
     finalization::{FinalizeEvent, ProcessedEventPayload, SearchToken},
     grouping::{
@@ -52,7 +59,7 @@ use faultkeep_ports::{
     Clock, EventBacklog, EventStore, EventWriteStatus, InvestigationStore, IssueStore,
     ProjectResolver, ProjectStore, RandomError, RandomSource,
 };
-use faultkeep_server::{config::IngestConfig, http, ingest_http};
+use faultkeep_server::{config::IngestConfig, http, ingest_http, native_http};
 use faultkeep_testkit::FakeOutcomeSink;
 use mongodb::{
     Client, Database,
@@ -336,12 +343,22 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         Arc::clone(&clock),
         SearchConfig::default(),
     )?);
+    let capsule_shutdown = ShutdownRoot::new();
+    let capsule_access: Arc<dyn IncidentCapsuleAccess> = identity.clone();
+    let capsule = Arc::new(IncidentCapsuleService::new(
+        capsule_access,
+        Arc::clone(&issue_service),
+        Arc::clone(&investigation),
+        Arc::clone(&clock),
+        IncidentCapsuleConfig::default(),
+        capsule_shutdown.signal(),
+    )?);
     let native = Arc::new(
         NativeApiService::new(
             Arc::clone(&identity),
             Arc::clone(&projects),
-            issue_service,
-            investigation,
+            Arc::clone(&issue_service),
+            Arc::clone(&investigation),
             search,
             Arc::clone(&clock),
         )
@@ -508,6 +525,157 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         .await?;
     assert!(resolved.applied);
     assert_eq!(resolved.issue.status, IssueStatus::Resolved);
+    let session = identity
+        .login(LoginRequest {
+            email: "owner@example.com".into(),
+            password: "correct horse battery staple".into(),
+            organization_id: owner.organization_id,
+            client_network_digest: SecretDigest::new([19; 32]),
+            request_id: RequestCorrelationId::new("phase19-login")?,
+        })
+        .await?;
+    let web_owner = identity
+        .authenticate_session(
+            &session.session,
+            Some(&session.csrf),
+            true,
+            owner.organization_id,
+        )
+        .await?;
+    let token = identity
+        .create_api_token(
+            &web_owner,
+            CreateApiTokenRequest {
+                name: TokenName::new("capsule-e2e")?,
+                scopes: PermissionSet::from_permissions([
+                    Permission::IssueRead,
+                    Permission::EventRead,
+                    Permission::IncidentExport,
+                ]),
+                expires_at: Timestamp::from_unix_millis(now.unix_millis() + 60_000)?,
+                request_id: RequestCorrelationId::new("phase19-token")?,
+            },
+        )
+        .await?;
+    let limited_token = identity
+        .create_api_token(
+            &web_owner,
+            CreateApiTokenRequest {
+                name: TokenName::new("capsule-without-export")?,
+                scopes: PermissionSet::from_permissions([
+                    Permission::IssueRead,
+                    Permission::EventRead,
+                ]),
+                expires_at: Timestamp::from_unix_millis(now.unix_millis() + 60_000)?,
+                request_id: RequestCorrelationId::new("phase19-limited-token")?,
+            },
+        )
+        .await?;
+    let capsule_app = http::router(
+        capsule_shutdown.signal(),
+        faultkeep_application::observability::Metrics,
+        native_http::router(
+            Some(Arc::clone(&identity)),
+            Some(Arc::clone(&native)),
+            false,
+            true,
+            native_http::NativeHttpModules {
+                incident_capsule: Some(Arc::clone(&capsule)),
+                ..native_http::NativeHttpModules::default()
+            },
+        ),
+    );
+    let capsule_uri = format!(
+        "/api/v1/projects/{}/issues/{issue_id}/capsule",
+        created.project_id.get()
+    );
+    assert_eq!(
+        capsule_app
+            .clone()
+            .oneshot(
+                Request::post(&capsule_uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))?,
+            )
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        capsule_app
+            .clone()
+            .oneshot(
+                Request::post(&capsule_uri)
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", limited_token.secret.encode_hex()),
+                    )
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))?,
+            )
+            .await?
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        capsule_app
+            .clone()
+            .oneshot(
+                Request::post(format!(
+                    "/api/v1/projects/{}/issues/{}/capsule",
+                    created.project_id.get(),
+                    hex::encode([0xff; 16])
+                ))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", token.secret.encode_hex()),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))?,
+            )
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let response = capsule_app
+        .oneshot(
+            Request::post(capsule_uri)
+                .header(
+                    "authorization",
+                    format!("Bearer {}", token.secret.encode_hex()),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.incident-capsule+zip; version=1")
+    );
+    let capsule_bytes = axum::body::to_bytes(response.into_body(), 100 * 1024 * 1024)
+        .await?
+        .to_vec();
+    let validated = faultkeep_testkit::incident_capsule::validate(&capsule_bytes)?;
+    assert!(validated.entries.contains_key("issue.json"));
+    assert!(
+        validated
+            .entries
+            .contains_key(&format!("events/{sdk_event_id}.json"))
+    );
+    assert!(validated.entries.contains_key("activity.json"));
+    assert_eq!(validated.manifest["version"], 1);
+    assert_eq!(
+        database
+            .collection::<mongodb::bson::Document>("audit_log")
+            .count_documents(doc! { "action": "incident_capsule.exported" })
+            .await?,
+        1
+    );
+    capsule_shutdown.begin();
 
     root.begin();
     writer_task.wait().await;

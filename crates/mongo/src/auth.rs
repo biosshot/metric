@@ -1215,7 +1215,7 @@ pub(crate) fn audit_validator() -> Document {
             "actor": { "enum": ["web_session", "personal_api_token", "bootstrap"] },
             "actor_user_id": { "bsonType": "long", "minimum": 1 },
             "action": { "bsonType": "string", "minLength": 1, "maxLength": 64 },
-            "target_kind": { "enum": ["user", "api_token", "project", "project_key"] },
+            "target_kind": { "enum": ["user", "api_token", "project", "project_key", "project_deletion", "incident_capsule"] },
             "target_id": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
             "timestamp": { "bsonType": "date" },
             "metadata": {
@@ -1225,6 +1225,9 @@ pub(crate) fn audit_validator() -> Document {
                     "role": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
                     "credential_kind": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
                     "outcome": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
+                    "project_id": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
+                    "selected_event_count": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
+                    "result_size_class": { "enum": ["small", "medium", "large"] },
                 },
             },
         }

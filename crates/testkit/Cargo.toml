@@ -10,7 +10,12 @@ repository.workspace = true
 faultkeep-application = { path = "../application" }
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

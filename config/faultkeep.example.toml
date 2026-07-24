@@ -40,6 +40,16 @@ circuit_failure_threshold = 5
 circuit_cooldown = "30s"
 maximum_response_bytes = "4 MiB"
 
+[incident_capsule]
+max_events = 10
+max_activities = 100
+max_total_uncompressed_bytes = "100 MiB"
+max_entry_bytes = "16 MiB"
+generation_timeout = "30s"
+max_concurrency = 4
+stream_chunk_bytes = "64 KiB"
+stream_buffer_chunks = 4
+
 [ingest]
 max_compressed_request_bytes = "20 MiB"
 max_decompressed_request_bytes = "100 MiB"

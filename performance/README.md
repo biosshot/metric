@@ -344,3 +344,25 @@ the run, verify that no scoped `sentry-cli`, Cargo test, Faultkeep server, or k6
 process remains. The local Windows result is a regression sentinel, not a
 server-tuned capacity claim; k6 is not used because this profile isolates MongoDB
 lookup plans rather than browser or ingest HTTP stability.
+
+## Phase 19 Incident Capsule
+
+The retained Phase 19 benchmark isolates the bounded ZIP64 streaming writer after
+authorization and database reads. Each sample contains one Issue, statistics,
+activity, seven 8 KiB Event DTOs, capabilities, README and a final manifest. It
+measures complete Capsule responses per second and compressed MiB/s in release mode.
+Correctness, authorization, MongoDB reads and HTTP backpressure remain covered by
+the separate E2E and failure suites.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-incident-capsule.mjs
+node performance/compare-incident-capsule.mjs performance/baselines/incident-capsule/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 20
+```
+
+The local regression sentinel requires at least 20 complete Capsule responses per
+second. The runner has a hard timeout and force-kills its Cargo child on expiry.
+After the run, verify that no Cargo, Rust test, Faultkeep server or k6 process
+remains. k6 is not used because this benchmark has no persistent HTTP server and
+the Web UI is not in the Phase 19 export timing path.

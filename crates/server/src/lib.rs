@@ -31,6 +31,9 @@ use faultkeep_application::{
         BacklogGuardedEventSink, Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask,
     },
     finalizer::{Finalizer, FinalizerConfig, FinalizerError},
+    incident_capsule::{
+        IncidentCapsuleAccess, IncidentCapsuleConfig, IncidentCapsuleError, IncidentCapsuleService,
+    },
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
     observability::{Metric, Metrics, Outcome},
@@ -80,6 +83,8 @@ pub enum ServerError {
     #[error(transparent)]
     Scheduler(#[from] SchedulerStartError),
     #[error(transparent)]
+    IncidentCapsule(#[from] IncidentCapsuleError),
+    #[error(transparent)]
     Normalizer(#[from] NormalizerConfigError),
     #[error(transparent)]
     Finalizer(#[from] FinalizerError),
@@ -111,6 +116,7 @@ struct RuntimeModules {
     finalizer_batch_task: Option<FinalizerBatchTask>,
     identity_service: Option<std::sync::Arc<IdentityService>>,
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
+    incident_capsule_service: Option<std::sync::Arc<IncidentCapsuleService>>,
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
@@ -171,6 +177,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         finalizer_batch_task,
         identity_service,
         native_api_service,
+        incident_capsule_service,
         project_deletion_task,
         blob_cleanup_task,
         debug_file_service,
@@ -284,12 +291,30 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             )
             .map_err(|_| ServerError::Auth(AuthError::InvalidConfiguration))?,
         );
+        let capsule_access: std::sync::Arc<dyn IncidentCapsuleAccess> = identity_service.clone();
+        let incident_capsule_service = std::sync::Arc::new(IncidentCapsuleService::new(
+            capsule_access,
+            std::sync::Arc::clone(&issue_service),
+            std::sync::Arc::clone(&investigation),
+            std::sync::Arc::clone(&clock),
+            IncidentCapsuleConfig {
+                max_events: config.incident_capsule.max_events,
+                max_activities: config.incident_capsule.max_activities,
+                max_total_uncompressed_bytes: config.incident_capsule.max_total_uncompressed_bytes,
+                max_entry_bytes: config.incident_capsule.max_entry_bytes,
+                generation_timeout: config.incident_capsule.generation_timeout.get(),
+                max_concurrency: config.incident_capsule.max_concurrency,
+                stream_chunk_bytes: config.incident_capsule.stream_chunk_bytes,
+                stream_buffer_chunks: config.incident_capsule.stream_buffer_chunks,
+            },
+            shutdown.signal(),
+        )?);
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
                 project_service,
                 issue_service,
-                investigation,
+                std::sync::Arc::clone(&investigation),
                 search,
                 std::sync::Arc::clone(&clock),
             )
@@ -505,6 +530,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batch_task: Some(finalizer_batch_task),
             identity_service: Some(identity_service),
             native_api_service: Some(native_api_service),
+            incident_capsule_service: Some(incident_capsule_service),
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
             debug_file_service: Some(debug_file_service),
@@ -524,6 +550,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batch_task: None,
             identity_service: None,
             native_api_service: None,
+            incident_capsule_service: None,
             project_deletion_task: None,
             blob_cleanup_task: None,
             debug_file_service: None,
@@ -565,19 +592,28 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_api_service,
             config.auth.secure_cookie,
             required_ready,
-            required_ready.then_some(native_http::RetentionCapability {
-                events_days: config.retention.events_days,
-                issue_stats_hourly_days: config.retention.issue_stats_hourly_days,
-            }),
-            required_ready.then_some(native_http::ProjectDeletionCapability {
-                grace_period_seconds: config.project_deletion.grace_period.get().as_secs(),
-                delete_batch_documents: config.project_deletion.delete_batch_documents,
-                slug_reservation_seconds: config.project_deletion.slug_reservation.get().as_secs(),
-            }),
-            required_ready.then_some(native_http::DebugFileCapability {
-                external_symbolicator: config.symbolicator.endpoint.is_some(),
-                artifact_bundles: true,
-            }),
+            native_http::NativeHttpModules {
+                retention: required_ready.then_some(native_http::RetentionCapability {
+                    events_days: config.retention.events_days,
+                    issue_stats_hourly_days: config.retention.issue_stats_hourly_days,
+                }),
+                project_deletion: required_ready.then_some(
+                    native_http::ProjectDeletionCapability {
+                        grace_period_seconds: config.project_deletion.grace_period.get().as_secs(),
+                        delete_batch_documents: config.project_deletion.delete_batch_documents,
+                        slug_reservation_seconds: config
+                            .project_deletion
+                            .slug_reservation
+                            .get()
+                            .as_secs(),
+                    },
+                ),
+                debug_files: required_ready.then_some(native_http::DebugFileCapability {
+                    external_symbolicator: config.symbolicator.endpoint.is_some(),
+                    artifact_bundles: true,
+                }),
+                incident_capsule: incident_capsule_service,
+            },
         ))
         .merge(debug_http::router(
             identity_service.clone(),

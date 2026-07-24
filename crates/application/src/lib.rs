@@ -7,6 +7,7 @@ pub mod debug_files;
 pub mod deletion;
 pub mod dispatcher;
 pub mod finalizer;
+pub mod incident_capsule;
 pub mod ingest;
 pub mod issues;
 pub mod native_api;

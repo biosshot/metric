@@ -878,10 +878,15 @@ dependencies = [
 name = "faultkeep-testkit"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "faultkeep-application",
  "faultkeep-domain",
  "faultkeep-ports",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tokio",
+ "zip",
 ]
 
 [[package]]

@@ -197,6 +197,7 @@ impl OrganizationRole {
 pub enum Permission {
     EventRead,
     IssueRead,
+    IncidentExport,
     IssueWrite,
     ProjectRead,
     ProjectAdmin,
@@ -212,9 +213,10 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::EventRead,
         Self::IssueRead,
+        Self::IncidentExport,
         Self::IssueWrite,
         Self::ProjectRead,
         Self::ProjectAdmin,
@@ -234,6 +236,7 @@ impl Permission {
         match self {
             Self::EventRead => "event:read",
             Self::IssueRead => "issue:read",
+            Self::IncidentExport => "incident:export",
             Self::IssueWrite => "issue:write",
             Self::ProjectRead => "project:read",
             Self::ProjectAdmin => "project:admin",
@@ -272,6 +275,7 @@ impl PermissionSet {
         let viewer = [
             Permission::EventRead,
             Permission::IssueRead,
+            Permission::IncidentExport,
             Permission::ProjectRead,
             Permission::DebugFileRead,
             Permission::ArtifactRead,
@@ -439,6 +443,7 @@ pub enum AuditAction {
     ProjectPolicyChanged,
     ProjectDeletionRequested,
     ProjectDeletionCancelled,
+    IncidentCapsuleExported,
 }
 
 impl AuditAction {
@@ -462,6 +467,7 @@ impl AuditAction {
             Self::ProjectPolicyChanged => "project.policy_changed",
             Self::ProjectDeletionRequested => "project.deletion_requested",
             Self::ProjectDeletionCancelled => "project.deletion_cancelled",
+            Self::IncidentCapsuleExported => "incident_capsule.exported",
         }
     }
 }
@@ -471,6 +477,9 @@ pub enum AuditMetadataKey {
     Role,
     CredentialKind,
     Outcome,
+    ProjectId,
+    SelectedEventCount,
+    ResultSizeClass,
 }
 
 impl AuditMetadataKey {
@@ -480,6 +489,9 @@ impl AuditMetadataKey {
             Self::Role => "role",
             Self::CredentialKind => "credential_kind",
             Self::Outcome => "outcome",
+            Self::ProjectId => "project_id",
+            Self::SelectedEventCount => "selected_event_count",
+            Self::ResultSizeClass => "result_size_class",
         }
     }
 }

@@ -1,5 +1,7 @@
 //! Reusable fakes implement the same narrow ports used by production composition.
 
+pub mod incident_capsule;
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,

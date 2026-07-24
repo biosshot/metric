@@ -115,12 +115,13 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             Some(Arc::clone(&native)),
             false,
             true,
-            Some(native_http::RetentionCapability {
-                events_days: 30,
-                issue_stats_hourly_days: 400,
-            }),
-            None,
-            None,
+            native_http::NativeHttpModules {
+                retention: Some(native_http::RetentionCapability {
+                    events_days: 30,
+                    issue_stats_hourly_days: 400,
+                }),
+                ..native_http::NativeHttpModules::default()
+            },
         )
         .merge(web_http::router_with_root(&web_root)),
     );
