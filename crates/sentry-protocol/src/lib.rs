@@ -429,9 +429,27 @@ fn lengthless_payload(
 }
 
 fn parse_optional_event_id(value: Option<&str>) -> Result<Option<EventId>, ProtocolError> {
-    value
-        .map(|value| EventId::parse(value).map_err(|_| ProtocolError::invalid("invalid_event_id")))
-        .transpose()
+    value.map(parse_wire_event_id).transpose()
+}
+
+fn parse_wire_event_id(value: &str) -> Result<EventId, ProtocolError> {
+    if let Ok(event_id) = EventId::parse(value) {
+        return Ok(event_id);
+    }
+    if value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+    {
+        let compact = value
+            .bytes()
+            .filter(|byte| *byte != b'-')
+            .map(char::from)
+            .collect::<String>();
+        return EventId::parse(&compact).map_err(|_| ProtocolError::invalid("invalid_event_id"));
+    }
+    Err(ProtocolError::invalid("invalid_event_id"))
 }
 
 fn parse_dsn(value: &str) -> Result<DsnAuth, ProtocolError> {
@@ -526,6 +544,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn parses_hyphenated_event_id_from_official_rust_sdk_envelope() {
+        let event_id = "01234567-89ab-cdef-0123-456789abcdef";
+        let body = format!(
+            "{{\"event_id\":\"{event_id}\"}}\n{{\"type\":\"event\",\"length\":{}}}\n{EVENT}",
+            EVENT.len()
+        );
+        let parsed = parse_envelope(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 1,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.event_id.unwrap(),
+            EventId::parse("0123456789abcdef0123456789abcdef").unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_hyphenated_event_id() {
+        let body = format!(
+            "{{\"event_id\":\"0123456-789ab-cdef-0123-456789abcdef0\"}}\n\
+             {{\"type\":\"event\",\"length\":{}}}\n{EVENT}",
+            EVENT.len()
+        );
+        assert_eq!(
+            parse_envelope(
+                body.as_bytes(),
+                EnvelopeLimits {
+                    max_items: 1,
+                    max_event_bytes: 1024,
+                },
+            )
+            .unwrap_err()
+            .code(),
+            "invalid_event_id"
+        );
     }
 
     #[test]
