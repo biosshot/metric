@@ -1,5 +1,6 @@
 //! Application-wide cancellation and operability contracts.
 
+pub mod archive;
 pub mod artifacts;
 pub mod auth;
 pub mod blob_cleanup;

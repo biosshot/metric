@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "cold-event-archive-phase-21",
+    "source_commit": "224fa5096bdd7d3507534e251bb628c1daae8e73",
+    "generated_at": "2026-07-24T09:42:32.0267623Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics; 15.9 GiB RAM; win32",
+    "fixture": "24 project/day Parquet segments; 500 Events per segment; 2048-byte scrubbed JSON Event payload; concurrent BLAKE3 foreground worker",
+    "storage": "in-memory segment source and sink; Parquet/Zstd level 3; release profile; no MongoDB or S3 latency in timing window"
+  },
+  "metrics": {
+    "segments": 24,
+    "events": 12000,
+    "payload_bytes": 2048,
+    "peak_input_bytes": 1072000,
+    "stored_bytes": 164856,
+    "archive_events_rps": 55479.17,
+    "archive_input_mib_per_second": 113.44,
+    "archive_stored_mib_per_second": 0.73,
+    "foreground_ops_rps": 700729.64,
+    "elapsed_ms": 216,
+    "minimum_archive_events_rps": 25000,
+    "maximum_peak_input_bytes": 67108864
+  }
+}

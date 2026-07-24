@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 24] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 25] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -55,6 +55,11 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 24] = [
     DatasetRegistration {
         code: 64,
         name: "alert_rules",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 68,
+        name: "archive_manifests",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -165,7 +170,7 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 24] = [
 ];
 
 /// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 4] = [
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 5] = [
     DatasetRegistration {
         code: 90,
         name: "blob:projects/{project_id}/events",
@@ -174,6 +179,11 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 4] = [
     DatasetRegistration {
         code: 91,
         name: "blob:d/{project_id_base36}",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 92,
+        name: "blob:projects/{project_id}/archives/events",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -188,7 +198,7 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 4] = [
     },
 ];
 
-const PURGE_CODES: [u16; 14] = [10, 20, 30, 40, 50, 52, 54, 56, 58, 60, 62, 64, 66, 70];
+const PURGE_CODES: [u16; 15] = [10, 20, 30, 40, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70];
 
 impl MongoProjectStore {
     async fn request_deletion_inner(
@@ -541,6 +551,16 @@ impl MongoProjectStore {
                 self.delete_owned_batch(
                     "notification_deliveries",
                     "p",
+                    project_id,
+                    cursor,
+                    batch_size,
+                )
+                .await
+            }
+            68 => {
+                self.delete_owned_batch(
+                    "archive_manifests",
+                    "project_id",
                     project_id,
                     cursor,
                     batch_size,

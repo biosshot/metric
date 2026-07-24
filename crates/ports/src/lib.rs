@@ -10,6 +10,7 @@ use faultkeep_domain::{
         IssuePage, IssueStatBucket, ProjectKeyView, ProjectPolicyUpdate, ProjectView, ReleasePage,
         SearchStorageQuery,
     },
+    archive::{ArchiveBatch, ArchiveSegmentId},
     artifacts::{
         ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactCandidate, ArtifactGcClaim,
         ArtifactLookup, ArtifactUpload, ArtifactUploadRecord, ArtifactUploadState,
@@ -119,6 +120,58 @@ pub trait BlobStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<BlobScanPage, BlobStoreError>>;
 
     fn capacity(&self) -> BlobCapacity;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArchiveClaimRequest {
+    pub now: Timestamp,
+    pub maximum_events: usize,
+    pub target_uncompressed_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveCompleteRequest {
+    pub segment_id: ArchiveSegmentId,
+    pub object: BlobObject,
+    pub completed_at: Timestamp,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveSourceCommitRequest {
+    pub segment_id: ArchiveSegmentId,
+    pub event_keys: Vec<EventKey>,
+    pub expire_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ArchiveStoreError {
+    #[error("archive request or stored data is invalid")]
+    InvalidData,
+    #[error("archive manifest conflicts with committed metadata")]
+    Conflict,
+    #[error("archive storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Durable archive-manifest ownership. Blob bytes are published through `BlobStore`;
+/// this port owns only bounded Event selection and the MongoDB commit sequence.
+pub trait ArchiveStore: Send + Sync + 'static {
+    fn claim(
+        &self,
+        request: ArchiveClaimRequest,
+    ) -> PortFuture<'_, Result<Option<ArchiveBatch>, ArchiveStoreError>>;
+
+    fn complete(
+        &self,
+        request: ArchiveCompleteRequest,
+    ) -> PortFuture<'_, Result<(), ArchiveStoreError>>;
+
+    fn commit_sources(
+        &self,
+        request: ArchiveSourceCommitRequest,
+    ) -> PortFuture<'_, Result<usize, ArchiveStoreError>>;
+
+    fn object_referenced(&self, key: &BlobKey) -> PortFuture<'_, Result<bool, ArchiveStoreError>>;
 }
 
 pub trait BlobChunkSource: Send + 'static {
@@ -878,6 +931,7 @@ pub struct MaintenanceRequest {
     pub batch_size: usize,
     pub event_retention: Duration,
     pub hourly_retention: Duration,
+    pub archive_events: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

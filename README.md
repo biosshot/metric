@@ -103,4 +103,17 @@ Event API. Standalone `POST /api/{project_id}/minidump/` accepts raw octet-strea
 the Sentry multipart `upload_file_minidump` field. It remains disabled by default
 because dump memory cannot be reliably scrubbed; enable it explicitly with
 `[native_crash.minidump].enabled = true`. Phase 16 does not change the MongoDB schema
-generation and does not add S3 or Symbolicator processing.
+generation.
+
+Phase 21 allows `[blob].backend = "s3"` with the typed `[blob.s3]` section. S3 access
+key, secret key, and optional session token use the same `env`, `file`, or
+development-only `literal` secret references as MongoDB. The adapter publishes
+through a temporary key, verifies BLAKE3 and size, then exposes the immutable final
+key; multipart writes retry interrupted parts and abort unfinished uploads.
+
+Cold Event archival remains disabled by default. Enable `[archive].enabled = true`
+only with MongoDB configured. Eligible terminal Events are encoded as bounded
+Parquet/Zstd project/day segments. Faultkeep records and verifies a complete manifest
+before assigning hot expiry, so a failed archive attempt leaves the source Event
+queryable. This phase does not add archive search or restore. Enabling it advances
+the development schema generation to 7; no online migration is attempted.

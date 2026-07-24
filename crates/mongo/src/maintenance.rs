@@ -108,7 +108,7 @@ impl MongoMaintenanceStore {
         let mut cursor = events
             .find(filter)
             .sort(doc! { "_id": 1 })
-            .projection(doc! { "_id": 1, "r": 1, "q": 1, "x": 1 })
+            .projection(doc! { "_id": 1, "r": 1, "q": 1, "x": 1, "h": 1, "z": 1 })
             .hint(Hint::Name("_id_".to_owned()))
             .limit(limit(request.batch_size)?)
             .await
@@ -128,15 +128,33 @@ impl MongoMaintenanceStore {
             let desired = checked_add(received, request.event_retention)?;
             match document.get("q") {
                 None => {
-                    let current = timestamp(&document, "x")?;
-                    if current != desired {
+                    let awaiting_archive = request.archive_events && !document.contains_key("z");
+                    let field = if awaiting_archive { "h" } else { "x" };
+                    let current = optional_timestamp(&document, field)?;
+                    let opposite_present = if awaiting_archive {
+                        document.contains_key("x")
+                    } else {
+                        document.contains_key("h")
+                    };
+                    if current != Some(desired) || opposite_present {
+                        let update = if awaiting_archive {
+                            doc! {
+                                "$set": { "h": date(desired) },
+                                "$unset": { "x": "" },
+                            }
+                        } else {
+                            doc! {
+                                "$set": { "x": date(desired) },
+                                "$unset": { "h": "" },
+                            }
+                        };
                         let result = events
                             .update_one(
                                 doc! {
                                     "_id": Bson::Binary(binary(&id)),
                                     "q": { "$exists": false },
                                 },
-                                doc! { "$set": { "x": date(desired) } },
+                                update,
                             )
                             .await
                             .map_err(|_| MaintenanceStoreError::Unavailable)?;
@@ -145,12 +163,55 @@ impl MongoMaintenanceStore {
                     }
                 }
                 Some(Bson::Document(state)) if state.get_i32("s") == Ok(0) => {
-                    if document.contains_key("x") {
+                    if document.contains_key("x")
+                        || document.contains_key("h")
+                        || document.contains_key("z")
+                    {
                         return Err(MaintenanceStoreError::InvalidData);
                     }
                 }
                 Some(Bson::Document(state)) if state.get_i32("s") == Ok(1) => {
-                    if desired <= request.now {
+                    if request.archive_events && !document.contains_key("z") {
+                        if optional_timestamp(&document, "h")? != Some(desired)
+                            || document.contains_key("x")
+                        {
+                            let result = events
+                                .update_one(
+                                    doc! {
+                                        "_id": Bson::Binary(binary(&id)),
+                                        "q.s": 1_i32,
+                                        "z": { "$exists": false },
+                                    },
+                                    doc! {
+                                        "$set": { "h": date(desired) },
+                                        "$unset": { "x": "" },
+                                    },
+                                )
+                                .await
+                                .map_err(|_| MaintenanceStoreError::Unavailable)?;
+                            changed += usize::try_from(result.modified_count)
+                                .map_err(|_| MaintenanceStoreError::InvalidData)?;
+                        }
+                    } else if document.contains_key("z") {
+                        if optional_timestamp(&document, "x")? != Some(desired) {
+                            let result = events
+                                .update_one(
+                                    doc! {
+                                        "_id": Bson::Binary(binary(&id)),
+                                        "q.s": 1_i32,
+                                        "z": { "$exists": true },
+                                    },
+                                    doc! {
+                                        "$set": { "x": date(desired) },
+                                        "$unset": { "h": "" },
+                                    },
+                                )
+                                .await
+                                .map_err(|_| MaintenanceStoreError::Unavailable)?;
+                            changed += usize::try_from(result.modified_count)
+                                .map_err(|_| MaintenanceStoreError::InvalidData)?;
+                        }
+                    } else if desired <= request.now {
                         let result = events
                             .delete_one(doc! {
                                 "_id": Bson::Binary(binary(&id)),
@@ -521,6 +582,19 @@ fn timestamp(document: &Document, field: &str) -> Result<Timestamp, MaintenanceS
             .timestamp_millis(),
     )
     .map_err(|_| MaintenanceStoreError::InvalidData)
+}
+
+fn optional_timestamp(
+    document: &Document,
+    field: &str,
+) -> Result<Option<Timestamp>, MaintenanceStoreError> {
+    match document.get(field) {
+        None => Ok(None),
+        Some(Bson::DateTime(value)) => Timestamp::from_unix_millis(value.timestamp_millis())
+            .map(Some)
+            .map_err(|_| MaintenanceStoreError::InvalidData),
+        Some(_) => Err(MaintenanceStoreError::InvalidData),
+    }
 }
 
 fn checked_add(

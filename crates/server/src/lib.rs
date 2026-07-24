@@ -10,8 +10,9 @@ pub mod webhook;
 
 use std::{io, process::ExitCode};
 
-use config::{Cli, ConfigError};
+use config::{BlobBackend, Cli, ConfigError};
 use faultkeep_application::{
+    archive::{ArchiveConfig, ArchiveError, ArchiveService, ArchiveTask, start_archive_worker},
     artifacts::{
         ArtifactCleanupTask, ArtifactConfig, ArtifactError, ArtifactService, start_artifact_cleanup,
     },
@@ -52,7 +53,7 @@ use faultkeep_application::{
     symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
+use faultkeep_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
 use faultkeep_domain::Timestamp;
 use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use faultkeep_ports::{
@@ -108,6 +109,8 @@ pub enum ServerError {
     DebugFiles(#[from] DebugFileError),
     #[error(transparent)]
     Artifacts(#[from] ArtifactError),
+    #[error(transparent)]
+    Archive(#[from] ArchiveError),
     #[error("external Symbolicator configuration is invalid")]
     Symbolicator,
 }
@@ -118,6 +121,7 @@ struct RuntimeModules {
     writer_task: Option<MongoWriterTask>,
     dispatcher_task: Option<DispatcherTask>,
     scheduler_task: Option<SchedulerTask>,
+    archive_task: Option<ArchiveTask>,
     finalizer_batcher: Option<std::sync::Arc<FinalizerBatcher>>,
     finalizer_batch_task: Option<FinalizerBatchTask>,
     identity_service: Option<std::sync::Arc<IdentityService>>,
@@ -152,17 +156,48 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let shutdown = ShutdownRoot::new();
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
     let random: std::sync::Arc<dyn RandomSource> = std::sync::Arc::new(SystemRandom);
-    let blob_store: std::sync::Arc<dyn BlobStore> = std::sync::Arc::new(
-        LocalBlobStore::new(
-            &config.blob.root,
-            LocalBlobConfig {
-                capacity_bytes: config.blob.capacity_bytes,
-                reserve_bytes: config.blob.reserve_bytes,
-                max_object_bytes: config.blob.max_object_bytes,
-            },
-        )
-        .await?,
-    );
+    let blob_store: std::sync::Arc<dyn BlobStore> = match config.blob.backend {
+        BlobBackend::Local => std::sync::Arc::new(
+            LocalBlobStore::new(
+                &config.blob.root,
+                LocalBlobConfig {
+                    capacity_bytes: config.blob.capacity_bytes,
+                    reserve_bytes: config.blob.reserve_bytes,
+                    max_object_bytes: config.blob.max_object_bytes,
+                },
+            )
+            .await?,
+        ),
+        BlobBackend::S3 => std::sync::Arc::new(S3BlobStore::new(S3BlobConfig {
+            endpoint: config
+                .blob
+                .s3
+                .endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.as_str().into()),
+            region: config.blob.s3.region.clone().into(),
+            bucket: config.blob.s3.bucket.clone().into(),
+            access_key_id: secrets
+                .s3_access_key_id
+                .take()
+                .expect("validated S3 configuration has an access key")
+                .expose()
+                .into(),
+            secret_access_key: secrets
+                .s3_secret_access_key
+                .take()
+                .expect("validated S3 configuration has a secret key")
+                .expose()
+                .into(),
+            session_token: secrets
+                .s3_session_token
+                .take()
+                .map(|value| value.expose().into()),
+            force_path_style: config.blob.s3.force_path_style,
+            part_bytes: config.blob.s3.part_bytes,
+            max_object_bytes: config.blob.max_object_bytes,
+        })?),
+    };
     let private_source_signer = secrets
         .scrub_hmac_key
         .as_ref()
@@ -180,6 +215,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         writer_task,
         dispatcher_task,
         scheduler_task,
+        archive_task,
         finalizer_batcher,
         finalizer_batch_task,
         identity_service,
@@ -325,6 +361,25 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             max_decoded_body_bytes: config.ingest.max_event_bytes,
             max_encoded_document_bytes: config.ingest.max_event_bytes.saturating_add(64 * 1024),
         };
+        let archive_task = if config.archive.enabled {
+            let service = ArchiveService::new(
+                std::sync::Arc::new(store.archive_store(event_codec)),
+                std::sync::Arc::clone(&blob_store),
+                std::sync::Arc::clone(&clock),
+                ArchiveConfig {
+                    maximum_events: config.archive.maximum_events,
+                    target_uncompressed_bytes: config.archive.target_uncompressed_bytes,
+                    write_chunk_bytes: config.archive.write_chunk_bytes,
+                    poll_interval: config.archive.poll_interval.get(),
+                    hot_copy_delay: config.archive.hot_copy_delay.get(),
+                    orphan_grace: config.archive.orphan_grace.get(),
+                    cleanup_max_pages: config.archive.cleanup_max_pages,
+                },
+            )?;
+            Some(start_archive_worker(service, shutdown.signal()))
+        } else {
+            None
+        };
         let issue_codec = IssueCodecConfig::default();
         let issue_service = std::sync::Arc::new(faultkeep_application::issues::IssueService::new(
             std::sync::Arc::new(store.issue_store(issue_codec)),
@@ -449,6 +504,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 FinalizerConfig {
                     event_retention: config.retention.event_duration(),
                     hourly_retention: config.retention.hourly_duration(),
+                    archive_events: config.archive.enabled,
                     ..FinalizerConfig::default()
                 },
             )?
@@ -567,6 +623,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 batch_size: config.scheduler.batch_size,
                 event_retention: config.retention.event_duration(),
                 hourly_retention: config.retention.hourly_duration(),
+                archive_events: config.archive.enabled,
             },
             shutdown.signal(),
         )
@@ -577,6 +634,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             writer_task: Some(writer_task),
             dispatcher_task: Some(dispatcher_task),
             scheduler_task: Some(scheduler_task),
+            archive_task,
             finalizer_batcher: Some(finalizer_batcher),
             finalizer_batch_task: Some(finalizer_batch_task),
             identity_service: Some(identity_service),
@@ -598,6 +656,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             writer_task: None,
             dispatcher_task: None,
             scheduler_task: None,
+            archive_task: None,
             finalizer_batcher: None,
             finalizer_batch_task: None,
             identity_service: None,
@@ -640,7 +699,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let required_ready = writer_task.is_some()
         && dispatcher_task.is_some()
         && scheduler_task.is_some()
-        && notification_task.is_some();
+        && notification_task.is_some()
+        && (!config.archive.enabled || archive_task.is_some());
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router(
             identity_service.clone(),
@@ -709,6 +769,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     }
     shutdown.begin();
     if let Some(task) = scheduler_task {
+        task.wait().await;
+    }
+    if let Some(task) = archive_task {
         task.wait().await;
     }
     if let Some(task) = notification_task {

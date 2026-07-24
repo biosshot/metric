@@ -699,8 +699,24 @@ pub(crate) fn event_validator() -> Document {
             "bsonType": "object",
             "required": ["_id", "p", "r", "o", "a", "b"],
             "oneOf": [
-                { "required": ["q"], "not": { "required": ["u", "x"] } },
-                { "required": ["u", "x"], "not": { "required": ["q"] } },
+                { "required": ["q"], "not": { "anyOf": [
+                    { "required": ["u"] },
+                    { "required": ["x"] },
+                    { "required": ["z"] },
+                ] } },
+                { "required": ["q", "x", "z"], "not": { "anyOf": [
+                    { "required": ["u"] },
+                    { "required": ["h"] },
+                ] } },
+                { "required": ["u", "x"], "not": { "anyOf": [
+                    { "required": ["q"] },
+                    { "required": ["h"] },
+                ] } },
+                { "required": ["u", "h"], "not": { "anyOf": [
+                    { "required": ["q"] },
+                    { "required": ["x"] },
+                    { "required": ["z"] },
+                ] } },
             ],
             "additionalProperties": false,
             "properties": {

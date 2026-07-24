@@ -24,6 +24,20 @@ repository = "https://github.com/faultkeep/faultkeep"
 [workspace.dependencies]
 async-compression = { version = "0.4.27", features = ["gzip", "tokio", "zlib"] }
 argon2 = { version = "0.5.3", features = ["std"] }
+aws-sdk-s3 = { version = "=1.96.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "rustls"] }
+aws-credential-types = "=1.2.3"
+aws-runtime = "=1.5.8"
+aws-sigv4 = "=1.3.3"
+aws-smithy-async = "=1.2.5"
+aws-smithy-checksums = "=0.63.4"
+aws-smithy-eventstream = "=0.60.9"
+aws-smithy-http = "=0.62.1"
+aws-smithy-json = "=0.61.4"
+aws-smithy-runtime = "=1.8.3"
+aws-smithy-runtime-api = "=1.8.1"
+aws-smithy-types = "=1.3.2"
+aws-smithy-xml = "=0.60.10"
+aws-types = "=1.3.7"
 base64 = "0.22.1"
 axum = "0.8.4"
 bytes = "1.10.1"
@@ -40,6 +54,7 @@ hmac = "0.12.1"
 humantime = "2.2.0"
 metrics = "0.24.2"
 mongodb = "3.8.0"
+parquet = { version = "=56.2.0", default-features = false, features = ["zstd"] }
 reqwest = { version = "0.12.22", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"

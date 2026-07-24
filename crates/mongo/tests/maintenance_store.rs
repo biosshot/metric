@@ -280,6 +280,7 @@ fn request(task: MaintenanceTask, now_millis: i64, batch_size: usize) -> Mainten
         batch_size,
         event_retention: Duration::from_secs(10 * 24 * 60 * 60),
         hourly_retention: Duration::from_secs(20 * 24 * 60 * 60),
+        archive_events: false,
     }
 }
 

@@ -9,12 +9,32 @@ repository.workspace = true
 [dependencies]
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
+aws-sdk-s3.workspace = true
+aws-credential-types.workspace = true
+aws-runtime.workspace = true
+aws-sigv4.workspace = true
+aws-smithy-async.workspace = true
+aws-smithy-checksums.workspace = true
+aws-smithy-eventstream.workspace = true
+aws-smithy-http.workspace = true
+aws-smithy-json.workspace = true
+aws-smithy-runtime.workspace = true
+aws-smithy-runtime-api.workspace = true
+aws-smithy-types.workspace = true
+aws-smithy-xml.workspace = true
+aws-types.workspace = true
 blake3.workspace = true
+futures-util.workspace = true
+hex.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 faultkeep-domain = { path = "../domain" }
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

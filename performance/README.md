@@ -388,3 +388,27 @@ unbounded; delivery correctness, signing, retry and timeout behavior use a contr
 receiver test. k6 is not used because there is no public notification HTTP ingress.
 The runner has a hard timeout. After every run, verify that no Cargo, Rust test,
 Faultkeep server or k6 process remains.
+
+## Phase 21 cold Event archive writer
+
+The retained Phase 21 benchmark encodes 24 project/day segments containing 12,000
+canonical scrubbed Events while a foreground BLAKE3 worker remains active. It
+reports explicit archive Event RPS, input and compressed MiB/s, foreground ops/s,
+and the maximum input segment bytes. MongoDB claims and S3 network latency are
+covered by functional integration tests and intentionally excluded from this
+portable writer regression sentinel.
+
+Run at most one candidate per local performance pass:
+
+```text
+node performance/run-archive.mjs
+node performance/compare-archive.mjs performance/baselines/archive/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 20
+```
+
+The local gate is 25,000 archived Events/s and a maximum 64 MiB input segment. The
+comparator requires identical fixture, hardware, Rust toolchain and storage boundary,
+then rejects archive, input-throughput, or foreground-throughput regressions beyond
+the supplied budget. k6 is not used because Phase 21 has no public archive HTTP path;
+using it would measure unrelated ingestion. The runner has a hard timeout and kills
+its Cargo child on expiry. After every run, verify that no Cargo, Rust test,
+Faultkeep server, MinIO or k6 process remains.

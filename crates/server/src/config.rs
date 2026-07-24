@@ -73,6 +73,7 @@ pub struct AppConfig {
     pub development: DevelopmentConfig,
     pub ingest: IngestConfig,
     pub blob: BlobConfig,
+    pub archive: ArchiveSettings,
     pub native_crash: NativeCrashConfig,
     pub symbolicator: SymbolicatorSettings,
     pub artifacts: ArtifactSettings,
@@ -162,10 +163,52 @@ pub struct SymbolicatorSettings {
 
 #[derive(Debug, Clone)]
 pub struct BlobConfig {
+    pub backend: BlobBackend,
     pub root: PathBuf,
     pub capacity_bytes: u64,
     pub reserve_bytes: u64,
     pub max_object_bytes: u64,
+    pub s3: S3BlobSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlobBackend {
+    Local,
+    S3,
+}
+
+impl fmt::Display for BlobBackend {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Local => formatter.write_str("local"),
+            Self::S3 => formatter.write_str("s3"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct S3BlobSettings {
+    pub endpoint: Option<url::Url>,
+    pub region: String,
+    pub bucket: String,
+    pub access_key_id: Option<SecretReference>,
+    pub secret_access_key: Option<SecretReference>,
+    pub session_token: Option<SecretReference>,
+    pub force_path_style: bool,
+    pub part_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArchiveSettings {
+    pub enabled: bool,
+    pub maximum_events: usize,
+    pub target_uncompressed_bytes: usize,
+    pub write_chunk_bytes: usize,
+    pub poll_interval: SchedulerInterval,
+    pub hot_copy_delay: SchedulerInterval,
+    pub orphan_grace: ProjectDeletionDuration,
+    pub cleanup_max_pages: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -552,6 +595,7 @@ struct RawConfig {
     development: RawDevelopmentConfig,
     ingest: RawIngestConfig,
     blob: RawBlobConfig,
+    archive: RawArchiveSettings,
     native_crash: RawNativeCrashConfig,
     symbolicator: RawSymbolicatorSettings,
     artifacts: RawArtifactSettings,
@@ -575,6 +619,7 @@ impl Default for RawConfig {
             development: RawDevelopmentConfig::default(),
             ingest: RawIngestConfig::default(),
             blob: RawBlobConfig::default(),
+            archive: RawArchiveSettings::default(),
             native_crash: RawNativeCrashConfig::default(),
             symbolicator: RawSymbolicatorSettings::default(),
             artifacts: RawArtifactSettings::default(),
@@ -813,19 +858,79 @@ impl Default for RawMinidumpSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawBlobConfig {
+    backend: BlobBackend,
     root: PathBuf,
     capacity: String,
     reserve: String,
     max_object_bytes: String,
+    s3: RawS3BlobSettings,
 }
 
 impl Default for RawBlobConfig {
     fn default() -> Self {
         Self {
+            backend: BlobBackend::Local,
             root: PathBuf::from("./faultkeep-data/blobs"),
             capacity: "1 GiB".to_owned(),
             reserve: "128 MiB".to_owned(),
             max_object_bytes: "100 MiB".to_owned(),
+            s3: RawS3BlobSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawS3BlobSettings {
+    endpoint: Option<String>,
+    region: String,
+    bucket: String,
+    access_key_id: Option<SecretReference>,
+    secret_access_key: Option<SecretReference>,
+    session_token: Option<SecretReference>,
+    force_path_style: bool,
+    part_bytes: String,
+}
+
+impl Default for RawS3BlobSettings {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            region: "us-east-1".to_owned(),
+            bucket: "faultkeep".to_owned(),
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            force_path_style: true,
+            part_bytes: "8 MiB".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawArchiveSettings {
+    enabled: bool,
+    maximum_events: usize,
+    target_uncompressed_bytes: String,
+    write_chunk_bytes: String,
+    poll_interval: String,
+    hot_copy_delay: String,
+    orphan_grace: String,
+    cleanup_max_pages: usize,
+}
+
+impl Default for RawArchiveSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            maximum_events: 500,
+            target_uncompressed_bytes: "64 MiB".to_owned(),
+            write_chunk_bytes: "256 KiB".to_owned(),
+            poll_interval: "30s".to_owned(),
+            hot_copy_delay: "0s".to_owned(),
+            orphan_grace: "24h".to_owned(),
+            cleanup_max_pages: 4,
         }
     }
 }
@@ -1262,6 +1367,8 @@ pub enum ConfigError {
     InvalidIngestConfig,
     #[error("blob configuration is invalid or outside supported bounds")]
     InvalidBlobConfig,
+    #[error("cold archive configuration is invalid or outside supported bounds")]
+    InvalidArchiveConfig,
     #[error("native crash configuration is invalid or outside supported bounds")]
     InvalidNativeCrashConfig,
     #[error("Symbolicator configuration is invalid or outside supported bounds")]
@@ -1390,6 +1497,36 @@ impl TryFrom<RawConfig> for AppConfig {
             .map_err(|_| ConfigError::InvalidBlobConfig)?;
         let max_object = ConfiguredBytes::from_str(&raw.blob.max_object_bytes)
             .map_err(|_| ConfigError::InvalidBlobConfig)?;
+        for reference in [
+            raw.blob.s3.access_key_id.as_ref(),
+            raw.blob.s3.secret_access_key.as_ref(),
+            raw.blob.s3.session_token.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            reference.validate(raw.development.allow_literal_secrets)?;
+        }
+        let s3_endpoint = raw
+            .blob
+            .s3
+            .endpoint
+            .as_deref()
+            .map(url::Url::parse)
+            .transpose()
+            .map_err(|_| ConfigError::InvalidBlobConfig)?;
+        let s3_part = ConfiguredBytes::from_str(&raw.blob.s3.part_bytes)
+            .map_err(|_| ConfigError::InvalidBlobConfig)?;
+        let archive_target = ConfiguredBytes::from_str(&raw.archive.target_uncompressed_bytes)
+            .map_err(|_| ConfigError::InvalidArchiveConfig)?;
+        let archive_chunk = ConfiguredBytes::from_str(&raw.archive.write_chunk_bytes)
+            .map_err(|_| ConfigError::InvalidArchiveConfig)?;
+        let archive_poll = SchedulerInterval::from_str(&raw.archive.poll_interval)
+            .map_err(|_| ConfigError::InvalidArchiveConfig)?;
+        let archive_hot_copy_delay = SchedulerInterval::from_str(&raw.archive.hot_copy_delay)
+            .map_err(|_| ConfigError::InvalidArchiveConfig)?;
+        let archive_orphan_grace = ProjectDeletionDuration::from_str(&raw.archive.orphan_grace)
+            .map_err(|_| ConfigError::InvalidArchiveConfig)?;
         let minidump_max = ConfiguredBytes::from_str(&raw.native_crash.minidump.max_bytes)
             .map_err(|_| ConfigError::InvalidNativeCrashConfig)?;
         let minidump_chunk = ConfiguredBytes::from_str(&raw.native_crash.minidump.chunk_bytes)
@@ -1453,6 +1590,45 @@ impl TryFrom<RawConfig> for AppConfig {
             || max_object.get() > capacity.get() - reserve.get()
         {
             return Err(ConfigError::InvalidBlobConfig);
+        }
+        let valid_s3_bucket = (3..=63).contains(&raw.blob.s3.bucket.len())
+            && raw.blob.s3.bucket.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+            })
+            && raw
+                .blob
+                .s3
+                .bucket
+                .as_bytes()
+                .first()
+                .zip(raw.blob.s3.bucket.as_bytes().last())
+                .is_some_and(|(first, last)| {
+                    first.is_ascii_alphanumeric() && last.is_ascii_alphanumeric()
+                });
+        let valid_s3 = !raw.blob.s3.region.is_empty()
+            && raw.blob.s3.region.len() <= 64
+            && valid_s3_bucket
+            && s3_endpoint
+                .as_ref()
+                .is_none_or(|endpoint| matches!(endpoint.scheme(), "http" | "https"))
+            && (5 * 1024 * 1024..=64 * 1024 * 1024).contains(&s3_part.get())
+            && (raw.blob.backend != BlobBackend::S3
+                || (raw.blob.s3.access_key_id.is_some()
+                    && raw.blob.s3.secret_access_key.is_some()));
+        if !valid_s3 {
+            return Err(ConfigError::InvalidBlobConfig);
+        }
+        let valid_archive = (1..=10_000).contains(&raw.archive.maximum_events)
+            && (1024..=512 * 1024 * 1024).contains(&archive_target.get())
+            && archive_target.get() <= max_object.get()
+            && (4096..=1024 * 1024).contains(&archive_chunk.get())
+            && !archive_poll.get().is_zero()
+            && archive_hot_copy_delay.get() <= Duration::from_secs(24 * 60 * 60)
+            && !archive_orphan_grace.get().is_zero()
+            && (1..=1_024).contains(&raw.archive.cleanup_max_pages)
+            && (!raw.archive.enabled || raw.mongodb.uri.is_some());
+        if !valid_archive {
+            return Err(ConfigError::InvalidArchiveConfig);
         }
         if minidump_max.get() == 0
             || minidump_max.get() > max_object.get()
@@ -1537,10 +1713,34 @@ impl TryFrom<RawConfig> for AppConfig {
             },
             ingest,
             blob: BlobConfig {
+                backend: raw.blob.backend,
                 root: raw.blob.root,
                 capacity_bytes: capacity.get(),
                 reserve_bytes: reserve.get(),
                 max_object_bytes: max_object.get(),
+                s3: S3BlobSettings {
+                    endpoint: s3_endpoint,
+                    region: raw.blob.s3.region,
+                    bucket: raw.blob.s3.bucket,
+                    access_key_id: raw.blob.s3.access_key_id,
+                    secret_access_key: raw.blob.s3.secret_access_key,
+                    session_token: raw.blob.s3.session_token,
+                    force_path_style: raw.blob.s3.force_path_style,
+                    part_bytes: usize::try_from(s3_part.get())
+                        .map_err(|_| ConfigError::InvalidBlobConfig)?,
+                },
+            },
+            archive: ArchiveSettings {
+                enabled: raw.archive.enabled,
+                maximum_events: raw.archive.maximum_events,
+                target_uncompressed_bytes: usize::try_from(archive_target.get())
+                    .map_err(|_| ConfigError::InvalidArchiveConfig)?,
+                write_chunk_bytes: usize::try_from(archive_chunk.get())
+                    .map_err(|_| ConfigError::InvalidArchiveConfig)?,
+                poll_interval: archive_poll,
+                hot_copy_delay: archive_hot_copy_delay,
+                orphan_grace: archive_orphan_grace,
+                cleanup_max_pages: raw.archive.cleanup_max_pages,
             },
             native_crash: NativeCrashConfig {
                 minidump: MinidumpSettings {
@@ -1613,6 +1813,27 @@ impl AppConfig {
             .as_ref()
             .map(SecretReference::resolve)
             .transpose()?;
+        let s3_access_key_id = self
+            .blob
+            .s3
+            .access_key_id
+            .as_ref()
+            .map(SecretReference::resolve)
+            .transpose()?;
+        let s3_secret_access_key = self
+            .blob
+            .s3
+            .secret_access_key
+            .as_ref()
+            .map(SecretReference::resolve)
+            .transpose()?;
+        let s3_session_token = self
+            .blob
+            .s3
+            .session_token
+            .as_ref()
+            .map(SecretReference::resolve)
+            .transpose()?;
         if mongodb_uri.is_some() && scrub_hmac_key.is_none() {
             return Err(ConfigError::MissingScrubHmacKey);
         }
@@ -1627,6 +1848,9 @@ impl AppConfig {
         Ok(ResolvedSecrets {
             mongodb_uri,
             scrub_hmac_key,
+            s3_access_key_id,
+            s3_secret_access_key,
+            s3_session_token,
         })
     }
 
@@ -1643,7 +1867,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         let rendered = format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -1655,6 +1879,7 @@ impl AppConfig {
             self.projects.max_keys_per_project,
             self.development.allow_literal_secrets,
             self.development.allow_insecure_cookies,
+            self.blob.backend,
             self.blob.root.display(),
             self.blob.capacity_bytes,
             self.blob.reserve_bytes,
@@ -1781,7 +2006,7 @@ impl AppConfig {
             self.incident_capsule.stream_chunk_bytes,
             self.incident_capsule.stream_buffer_chunks,
         );
-        format!(
+        let rendered_notifications = format!(
             "{rendered_extensions}\n[notifications]\ntransition_batch_size = {}\ndue_scan_limit = {}\npoll_interval = \"{}\"\n\n[notifications.queue]\ncapacity = {}\nworker_concurrency = {}\n\n[notifications.retry]\nmax_attempts = {}\ninitial_delay = \"{}\"\nmax_delay = \"{}\"\ntimeout = \"{}\"\nattempt_lease = \"{}\"\n\n[notifications.retention]\ndelivered_days = {}\ndead_days = {}\n\n[notifications.webhook]\nmaximum_response_bytes = {}\nmaximum_retry_after = \"{}\"\nallow_http = {}\nallow_private_networks = {}\n",
             self.notifications.transition_batch_size,
             self.notifications.due_scan_limit,
@@ -1799,6 +2024,45 @@ impl AppConfig {
             humantime::format_duration(self.notifications.maximum_retry_after.get()),
             self.notifications.allow_http,
             self.notifications.allow_private_networks,
+        );
+        let access_key = self
+            .blob
+            .s3
+            .access_key_id
+            .as_ref()
+            .map_or("<not-configured>", SecretReference::redacted_origin);
+        let secret_key = self
+            .blob
+            .s3
+            .secret_access_key
+            .as_ref()
+            .map_or("<not-configured>", SecretReference::redacted_origin);
+        let session_token = self
+            .blob
+            .s3
+            .session_token
+            .as_ref()
+            .map_or("<not-configured>", SecretReference::redacted_origin);
+        let endpoint = self
+            .blob
+            .s3
+            .endpoint
+            .as_ref()
+            .map_or("<aws-default>", url::Url::as_str);
+        format!(
+            "{rendered_notifications}\n[blob.s3]\nendpoint = \"{endpoint}\"\nregion = \"{}\"\nbucket = \"{}\"\naccess_key_id = \"{access_key}\"\nsecret_access_key = \"{secret_key}\"\nsession_token = \"{session_token}\"\nforce_path_style = {}\npart_bytes = {}\n\n[archive]\nenabled = {}\nmaximum_events = {}\ntarget_uncompressed_bytes = {}\nwrite_chunk_bytes = {}\npoll_interval = \"{}\"\nhot_copy_delay = \"{}\"\norphan_grace = \"{}\"\ncleanup_max_pages = {}\n",
+            self.blob.s3.region,
+            self.blob.s3.bucket,
+            self.blob.s3.force_path_style,
+            self.blob.s3.part_bytes,
+            self.archive.enabled,
+            self.archive.maximum_events,
+            self.archive.target_uncompressed_bytes,
+            self.archive.write_chunk_bytes,
+            humantime::format_duration(self.archive.poll_interval.get()),
+            humantime::format_duration(self.archive.hot_copy_delay.get()),
+            humantime::format_duration(self.archive.orphan_grace.get()),
+            self.archive.cleanup_max_pages,
         )
     }
 
@@ -1807,6 +2071,18 @@ impl AppConfig {
         matches!(self.mongodb.uri, Some(SecretReference::Literal(_)))
             || matches!(
                 self.projects.scrub_hmac_key,
+                Some(SecretReference::Literal(_))
+            )
+            || matches!(
+                self.blob.s3.access_key_id,
+                Some(SecretReference::Literal(_))
+            )
+            || matches!(
+                self.blob.s3.secret_access_key,
+                Some(SecretReference::Literal(_))
+            )
+            || matches!(
+                self.blob.s3.session_token,
                 Some(SecretReference::Literal(_))
             )
     }
@@ -2219,6 +2495,9 @@ impl TryFrom<RawAuthSettings> for AuthSettings {
 pub struct ResolvedSecrets {
     pub mongodb_uri: Option<SecretValue>,
     pub scrub_hmac_key: Option<faultkeep_domain::SecretBytes>,
+    pub s3_access_key_id: Option<SecretValue>,
+    pub s3_secret_access_key: Option<SecretValue>,
+    pub s3_session_token: Option<SecretValue>,
 }
 
 fn validate_secret_bytes(bytes: &[u8]) -> Result<(), ConfigError> {
@@ -2256,6 +2535,8 @@ mod tests {
         assert_eq!(config.notifications.queue_capacity, 1_000);
         assert_eq!(config.notifications.max_attempts, 8);
         assert!(!config.notifications.allow_private_networks);
+        assert_eq!(config.blob.backend, BlobBackend::Local);
+        assert!(!config.archive.enabled);
         assert_eq!(
             config.incident_capsule.max_total_uncompressed_bytes,
             100 * 1024 * 1024
@@ -2543,6 +2824,64 @@ mod tests {
         let output = config.effective_redacted();
         assert!(!output.contains("do-not-print-this"));
         assert!(output.contains("<redacted:literal>"));
+    }
+
+    #[test]
+    fn s3_credentials_are_required_and_redacted() {
+        let missing_credentials = RawConfig {
+            blob: RawBlobConfig {
+                backend: BlobBackend::S3,
+                ..RawBlobConfig::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(missing_credentials),
+            Err(ConfigError::InvalidBlobConfig)
+        ));
+
+        let raw = RawConfig {
+            blob: RawBlobConfig {
+                backend: BlobBackend::S3,
+                s3: RawS3BlobSettings {
+                    access_key_id: Some(SecretReference::Literal(LiteralReference {
+                        literal: "phase21-access-key".to_owned(),
+                    })),
+                    secret_access_key: Some(SecretReference::Literal(LiteralReference {
+                        literal: "phase21-secret-key".to_owned(),
+                    })),
+                    ..RawS3BlobSettings::default()
+                },
+                ..RawBlobConfig::default()
+            },
+            development: RawDevelopmentConfig {
+                allow_literal_secrets: true,
+                ..RawDevelopmentConfig::default()
+            },
+            ..RawConfig::default()
+        };
+        let config = AppConfig::try_from(raw).unwrap();
+        let output = config.effective_redacted();
+        assert!(output.contains("backend = \"s3\""));
+        assert!(!output.contains("phase21-access-key"));
+        assert!(!output.contains("phase21-secret-key"));
+        assert!(output.contains("access_key_id = \"<redacted:literal>\""));
+        assert!(output.contains("secret_access_key = \"<redacted:literal>\""));
+    }
+
+    #[test]
+    fn archive_requires_mongodb_and_stays_disabled_by_default() {
+        let raw = RawConfig {
+            archive: RawArchiveSettings {
+                enabled: true,
+                ..RawArchiveSettings::default()
+            },
+            ..RawConfig::default()
+        };
+        assert!(matches!(
+            AppConfig::try_from(raw),
+            Err(ConfigError::InvalidArchiveConfig)
+        ));
     }
 
     #[test]

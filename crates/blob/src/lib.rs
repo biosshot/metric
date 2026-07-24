@@ -1,5 +1,9 @@
 //! Local filesystem BlobStore with atomic temporary-to-final publication.
 
+mod s3;
+
+pub use s3::{S3BlobConfig, S3BlobStore};
+
 use std::{
     collections::BinaryHeap,
     path::{Path, PathBuf},
@@ -486,16 +490,17 @@ fn scan_objects(root: &Path, request: BlobScanRequest) -> Result<BlobScanPage, B
     keys.sort_unstable();
     let has_more = keys.len() > request.limit;
     keys.truncate(request.limit);
+    let last_examined = keys.last().cloned();
     let mut objects = Vec::with_capacity(keys.len());
     for key in keys {
         let full = root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
         let metadata = std::fs::symlink_metadata(&full).map_err(|_| BlobStoreError::Unavailable)?;
         let key = BlobKey::new(key).map_err(|_| BlobStoreError::Invalid)?;
+        let Ok(kind) = request.namespace.kind_for_key(&key) else {
+            continue;
+        };
         objects.push(BlobObject {
-            kind: request
-                .namespace
-                .kind_for_key(&key)
-                .map_err(|_| BlobStoreError::Invalid)?,
+            kind,
             key,
             size: metadata.len(),
             checksum: checksum_file(&full)?,
@@ -503,7 +508,7 @@ fn scan_objects(root: &Path, request: BlobScanRequest) -> Result<BlobScanPage, B
         });
     }
     let next_cursor = has_more
-        .then(|| objects.last().map(|object| object.key.as_str().into()))
+        .then(|| last_examined.map(String::into_boxed_str))
         .flatten();
     Ok(BlobScanPage {
         objects,

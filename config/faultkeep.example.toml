@@ -19,10 +19,33 @@ allow_literal_secrets = false
 allow_insecure_cookies = false
 
 [blob]
+backend = "local"
 root = "./faultkeep-data/blobs"
 capacity = "1 GiB"
 reserve = "128 MiB"
 max_object_bytes = "100 MiB"
+
+[blob.s3]
+# Set backend = "s3" above to enable this adapter. Endpoint may be omitted for AWS S3.
+# endpoint = "http://127.0.0.1:9000"
+region = "us-east-1"
+bucket = "faultkeep"
+# access_key_id = { env = "S3_ACCESS_KEY_ID" }
+# secret_access_key = { env = "S3_SECRET_ACCESS_KEY" }
+# session_token = { env = "S3_SESSION_TOKEN" }
+force_path_style = true
+part_bytes = "8 MiB"
+
+[archive]
+# Disabled installations retain the ordinary MongoDB TTL behavior.
+enabled = false
+maximum_events = 500
+target_uncompressed_bytes = "64 MiB"
+write_chunk_bytes = "256 KiB"
+poll_interval = "30s"
+hot_copy_delay = "0s"
+orphan_grace = "24h"
+cleanup_max_pages = 4
 
 [native_crash.minidump]
 # Minidumps may contain unsrubbable process memory. Enable only after accepting that risk.

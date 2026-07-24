@@ -28,6 +28,7 @@ pub struct FinalizerConfig {
     pub max_processed_body_bytes: usize,
     pub event_retention: Duration,
     pub hourly_retention: Duration,
+    pub archive_events: bool,
     pub max_implicit_releases_per_project_day: u32,
     pub max_implicit_environments_per_project: u32,
 }
@@ -39,6 +40,7 @@ impl Default for FinalizerConfig {
             max_processed_body_bytes: 2 * 1024 * 1024,
             event_retention: Duration::from_secs(30 * 24 * 60 * 60),
             hourly_retention: Duration::from_secs(400 * 24 * 60 * 60),
+            archive_events: false,
             max_implicit_releases_per_project_day: 1_000,
             max_implicit_environments_per_project: 100,
         }
@@ -63,6 +65,7 @@ impl FinalizerConfig {
         FinalizationPolicy {
             event_retention: self.event_retention,
             hourly_retention: self.hourly_retention,
+            archive_events: self.archive_events,
             max_implicit_releases_per_project_day: self.max_implicit_releases_per_project_day,
             max_implicit_environments_per_project: self.max_implicit_environments_per_project,
         }

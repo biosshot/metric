@@ -163,6 +163,7 @@ pub struct FinalizeBatch {
 pub struct FinalizationPolicy {
     pub event_retention: Duration,
     pub hourly_retention: Duration,
+    pub archive_events: bool,
     pub max_implicit_releases_per_project_day: u32,
     pub max_implicit_environments_per_project: u32,
 }

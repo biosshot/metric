@@ -3,6 +3,7 @@
 //! MongoDB project-identity adapter and initial empty-schema bootstrap.
 
 mod api;
+mod archive;
 mod artifacts;
 mod auth;
 mod debug_files;
@@ -14,6 +15,7 @@ mod maintenance;
 mod notifications;
 
 pub use api::MongoInvestigationStore;
+pub use archive::MongoArchiveStore;
 pub use artifacts::{ArtifactQuota, MongoArtifactStore};
 pub use auth::MongoAuthStore;
 pub use debug_files::{DebugFileQuota, MongoDebugFileStore};
@@ -47,9 +49,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 6;
+pub const SCHEMA_GENERATION: i32 = 7;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 9] = [
+const SCHEMA_MODULES: [&str; 10] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -59,13 +61,15 @@ const SCHEMA_MODULES: [&str; 9] = [
     "native_debug_files_v1",
     "javascript_artifact_bundles_v1",
     "notification_outbox_webhooks_v1",
+    "event_cold_archive_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 24] = [
+const REQUIRED_COLLECTIONS: [&str; 25] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
     "artifact_bundles",
     "artifact_uploads",
+    "archive_manifests",
     "environments",
     "events",
     "debug_files",
@@ -186,6 +190,11 @@ impl MongoProjectStore {
     }
 
     #[must_use]
+    pub fn archive_store(&self, codec: EventCodecConfig) -> MongoArchiveStore {
+        MongoArchiveStore::from_database(self.database.clone(), codec)
+    }
+
+    #[must_use]
     pub fn debug_file_store(&self, quota: DebugFileQuota) -> MongoDebugFileStore {
         MongoDebugFileStore::from_database(self.database.clone(), quota)
     }
@@ -253,6 +262,11 @@ impl MongoProjectStore {
         self.create_validated_collection(
             "artifact_bundles",
             artifacts::artifact_bundle_validator(),
+        )
+        .await?;
+        self.create_validated_collection(
+            "archive_manifests",
+            archive::archive_manifest_validator(),
         )
         .await?;
         self.create_validated_collection("events", event::event_validator())
@@ -336,6 +350,12 @@ impl MongoProjectStore {
         }
         debug_files::create_debug_file_indexes(&self.database).await?;
         artifacts::create_artifact_indexes(&self.database).await?;
+        for model in archive::archive_indexes() {
+            self.database
+                .collection::<Document>("archive_manifests")
+                .create_index(model)
+                .await?;
+        }
         event::create_event_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
@@ -402,6 +422,9 @@ impl MongoProjectStore {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !artifacts::validate_artifact_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
+        if !archive::validate_archive_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !self.validate_project_slug_index().await? {

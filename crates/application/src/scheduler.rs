@@ -39,6 +39,7 @@ pub struct SchedulerConfig {
     pub batch_size: usize,
     pub event_retention: Duration,
     pub hourly_retention: Duration,
+    pub archive_events: bool,
 }
 
 impl Default for SchedulerConfig {
@@ -54,6 +55,7 @@ impl Default for SchedulerConfig {
             batch_size: 500,
             event_retention: Duration::from_secs(30 * 24 * 60 * 60),
             hourly_retention: Duration::from_secs(400 * 24 * 60 * 60),
+            archive_events: false,
         }
     }
 }
@@ -190,6 +192,7 @@ impl Scheduler {
             batch_size: self.config.batch_size,
             event_retention: self.config.event_retention,
             hourly_retention: self.config.hourly_retention,
+            archive_events: self.config.archive_events,
         };
         let wall_started = Instant::now();
         let result = AssertUnwindSafe(timeout(self.config.task_timeout, self.store.run(request)))
@@ -440,6 +443,7 @@ mod tests {
             batch_size: 10,
             event_retention: Duration::from_secs(60),
             hourly_retention: Duration::from_secs(120),
+            archive_events: false,
         }
     }
 

@@ -5,8 +5,8 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::{
-    EventId, OrganizationId, ProjectId, Timestamp, artifacts::ArtifactBundleId,
-    debug_files::DebugFileId,
+    EventId, OrganizationId, ProjectId, Timestamp, archive::ArchiveSegmentId,
+    artifacts::ArtifactBundleId, debug_files::DebugFileId,
 };
 
 pub const MAX_BLOB_KEY_BYTES: usize = 512;
@@ -92,6 +92,23 @@ impl BlobKey {
     }
 
     #[must_use]
+    pub fn event_archive(
+        project_id: ProjectId,
+        year: i32,
+        month: u8,
+        day: u8,
+        segment_id: ArchiveSegmentId,
+    ) -> Self {
+        Self(
+            format!(
+                "projects/{}/archives/events/{year:04}/{month:02}/{day:02}/{segment_id}.parquet",
+                project_id.get()
+            )
+            .into(),
+        )
+    }
+
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -121,6 +138,23 @@ impl BlobKey {
         let project_id = ProjectId::new(project_value).map_err(|_| BlobValueError::InvalidKey)?;
         let file_id = DebugFileId::parse(segments[2]).map_err(|_| BlobValueError::InvalidKey)?;
         Ok((project_id, file_id))
+    }
+
+    pub fn archive_project(&self) -> Result<ProjectId, BlobValueError> {
+        let segments = self.0.split('/').collect::<Vec<_>>();
+        if segments.len() != 8
+            || segments[0] != "projects"
+            || segments[2] != "archives"
+            || segments[3] != "events"
+            || !segments[7].ends_with(".parquet")
+        {
+            return Err(BlobValueError::InvalidKey);
+        }
+        segments[1]
+            .parse::<i32>()
+            .ok()
+            .and_then(|value| ProjectId::new(value).ok())
+            .ok_or(BlobValueError::InvalidKey)
     }
 }
 
@@ -206,6 +240,7 @@ pub enum BlobKind {
     DebugChunk,
     DebugFile,
     ArtifactBundle,
+    EventArchive,
 }
 
 impl BlobKind {
@@ -217,6 +252,7 @@ impl BlobKind {
             Self::DebugChunk => "debug_chunk",
             Self::DebugFile => "debug_file",
             Self::ArtifactBundle => "artifact_bundle",
+            Self::EventArchive => "event_archive",
         }
     }
 }
@@ -227,6 +263,7 @@ pub enum BlobNamespace {
     DebugChunks,
     DebugFiles,
     ArtifactBundles,
+    EventArchives,
 }
 
 impl BlobNamespace {
@@ -237,6 +274,7 @@ impl BlobNamespace {
             Self::DebugChunks => "debug-chunks/",
             Self::DebugFiles => "d/",
             Self::ArtifactBundles => "a/",
+            Self::EventArchives => "projects/",
         }
     }
 
@@ -245,10 +283,17 @@ impl BlobNamespace {
             return Err(BlobValueError::InvalidKey);
         }
         Ok(match self {
-            Self::EventOwned => BlobKind::EventAttachment,
+            Self::EventOwned => {
+                key.event_relation()?;
+                BlobKind::EventAttachment
+            }
             Self::DebugChunks => BlobKind::DebugChunk,
             Self::DebugFiles => BlobKind::DebugFile,
             Self::ArtifactBundles => BlobKind::ArtifactBundle,
+            Self::EventArchives => {
+                key.archive_project()?;
+                BlobKind::EventArchive
+            }
         })
     }
 }

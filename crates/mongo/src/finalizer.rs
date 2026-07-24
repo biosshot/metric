@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, time::Instant};
 
 use faultkeep_domain::{
     EventKey, OrganizationId, ProjectId, Timestamp,
+    archive::ArchiveSegmentId,
     event::{EventLevel, EventPlatform},
     finalization::{
         FinalizationPolicy, FinalizeBatch, FinalizeEvent, FinalizeResult, ProcessedEventPayload,
@@ -451,8 +452,12 @@ impl MongoFinalizationStore {
                 "o": date(event.occurred_at),
                 "a": platform_code(&event.platform),
                 "b": Binary { subtype: BinarySubtype::Generic, bytes: body },
-                "x": date(expire),
             };
+            if policy.archive_events {
+                set.insert("h", date(expire));
+            } else {
+                set.insert("x", date(expire));
+            }
             if let Some(level) = level_code(event.level) {
                 set.insert("l", level);
             }
@@ -467,6 +472,12 @@ impl MongoFinalizationStore {
                 );
             }
             let mut unset = doc! { "q": "" };
+            if policy.archive_events {
+                unset.insert("x", "");
+            } else {
+                unset.insert("h", "");
+            }
+            unset.insert("z", "");
             if level_code(event.level).is_none() {
                 unset.insert("l", "");
             }
@@ -526,7 +537,9 @@ impl FinalizationStore for MongoFinalizationStore {
 pub struct DecodedFinalizedEvent {
     pub key: EventKey,
     pub issue_id: IssueId,
-    pub expire_at: Timestamp,
+    pub expire_at: Option<Timestamp>,
+    pub archive_due: Option<Timestamp>,
+    pub archive_segment: Option<ArchiveSegmentId>,
     pub search_tokens: Vec<SearchToken>,
     pub payload: ProcessedEventPayload,
 }
@@ -541,13 +554,21 @@ pub fn decode_finalized_event(
     let key = EventKey::from_bytes(fixed_binary::<20>(document, "_id")?)
         .map_err(|_| FinalizationStoreError::InvalidData)?;
     let issue_id = IssueId::from_bytes(fixed_binary::<16>(document, "u")?);
-    let expire_at = Timestamp::from_unix_millis(
-        document
-            .get_datetime("x")
-            .map_err(|_| FinalizationStoreError::InvalidData)?
-            .timestamp_millis(),
-    )
-    .map_err(|_| FinalizationStoreError::InvalidData)?;
+    let expire_at = optional_timestamp(document, "x")?;
+    let archive_due = optional_timestamp(document, "h")?;
+    let archive_segment = match document.get("z") {
+        None => None,
+        Some(Bson::Binary(value)) if value.subtype == BinarySubtype::Generic => {
+            Some(ArchiveSegmentId::from_bytes(
+                value
+                    .bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| FinalizationStoreError::InvalidData)?,
+            ))
+        }
+        Some(_) => return Err(FinalizationStoreError::InvalidData),
+    };
     let search_tokens = match document.get("k") {
         None => Vec::new(),
         Some(Bson::Array(values)) if values.len() <= 16 => values
@@ -568,6 +589,8 @@ pub fn decode_finalized_event(
         key,
         issue_id,
         expire_at,
+        archive_due,
+        archive_segment,
         search_tokens,
         payload: ProcessedEventPayload::new(payload),
     })
@@ -676,6 +699,19 @@ fn checked_add_millis(
             .ok_or(FinalizationStoreError::InvalidData)?,
     )
     .map_err(|_| FinalizationStoreError::InvalidData)
+}
+
+fn optional_timestamp(
+    document: &Document,
+    field: &str,
+) -> Result<Option<Timestamp>, FinalizationStoreError> {
+    match document.get(field) {
+        None => Ok(None),
+        Some(Bson::DateTime(value)) => Timestamp::from_unix_millis(value.timestamp_millis())
+            .map(Some)
+            .map_err(|_| FinalizationStoreError::InvalidData),
+        Some(_) => Err(FinalizationStoreError::InvalidData),
+    }
 }
 
 fn receipt_day(timestamp: Timestamp) -> Timestamp {

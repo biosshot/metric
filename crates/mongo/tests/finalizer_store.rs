@@ -90,7 +90,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         assert_eq!(decoded.issue_id, item.issue.issue_id);
         assert_eq!(decoded.search_tokens.len(), 2);
         assert_eq!(
-            decoded.expire_at.unix_millis(),
+            decoded.expire_at.unwrap().unix_millis(),
             item.received_at.unix_millis() + 30 * 24 * 60 * 60 * 1_000
         );
         assert!(serde_json::from_slice::<serde_json::Value>(decoded.payload.as_bytes()).is_ok());
@@ -471,6 +471,7 @@ fn policy(releases: u32, environments: u32) -> FinalizationPolicy {
     FinalizationPolicy {
         event_retention: Duration::from_secs(30 * 24 * 60 * 60),
         hourly_retention: Duration::from_secs(400 * 24 * 60 * 60),
+        archive_events: false,
         max_implicit_releases_per_project_day: releases,
         max_implicit_environments_per_project: environments,
     }
