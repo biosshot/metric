@@ -32,6 +32,10 @@
   --semantic-warning: #c6aa78;
   --semantic-success: #83ad91;
   --semantic-info: #82a8c2;
+  --semantic-error-surface: #211719;
+  --semantic-warning-surface: #211d15;
+  --semantic-success-surface: #162019;
+  --semantic-info-surface: #151d22;
   --radius-small: 6px;
   --radius: 10px;
   --radius-large: 16px;
@@ -166,7 +170,7 @@ input[type='checkbox'] {
   width: 17px;
   min-height: 17px;
   margin: 0.15rem 0 0;
-  accent-color: var(--accent);
+  accent-color: var(--semantic-success);
 }
 
 .app-icon {
@@ -275,8 +279,8 @@ input[type='checkbox'] {
 }
 
 .sidebar nav a.router-link-active {
-  border-color: var(--border-strong);
-  background: var(--surface-strong);
+  border-color: var(--semantic-info);
+  background: var(--semantic-info-surface);
   color: var(--text);
 }
 
@@ -408,8 +412,8 @@ input[type='checkbox'] {
 }
 
 .button--primary {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--semantic-info);
+  background: var(--semantic-info);
   color: var(--text-inverse);
 }
 
@@ -434,7 +438,7 @@ input[type='checkbox'] {
 }
 
 .button--danger:hover:not(:disabled) {
-  background: var(--accent);
+  background: var(--semantic-error);
   color: var(--text-inverse);
 }
 
@@ -594,7 +598,8 @@ label small,
 }
 
 .check-control:has(input:checked) {
-  border-color: var(--border-strong);
+  border-color: var(--semantic-success);
+  background: var(--semantic-success-surface);
 }
 
 .check-control span,
@@ -702,13 +707,13 @@ label small,
 
 .base-select__option--active,
 .base-select__option[aria-selected='true'] {
-  border-color: var(--border);
-  background: var(--surface-strong);
+  border-color: var(--semantic-info);
+  background: var(--semantic-info-surface);
   color: var(--text);
 }
 
 .base-select__check {
-  color: var(--text);
+  color: var(--semantic-info);
 }
 
 .select-popover-enter-active,
@@ -775,6 +780,7 @@ label small,
 
 .success-notice {
   border-color: var(--semantic-success);
+  background: var(--semantic-success-surface);
   color: var(--text);
 }
 
@@ -782,10 +788,12 @@ label small,
 .permission-note {
   border-color: var(--semantic-warning);
   border-style: dashed;
+  background: var(--semantic-warning-surface);
 }
 
 .info-note {
   border-color: var(--semantic-info);
+  background: var(--semantic-info-surface);
   margin-top: 1rem;
   margin-bottom: 0;
 }
@@ -796,7 +804,7 @@ label small,
   padding: 1rem;
   border: 1px solid var(--semantic-error);
   border-radius: var(--radius);
-  background: var(--surface-subtle);
+  background: var(--semantic-error-surface);
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.85rem;
 }
@@ -963,16 +971,23 @@ label small,
 .status-badge--resolved,
 .status-badge--healthy,
 .status-badge--active,
-.status-badge--enabled {
+.status-badge--enabled,
+.status-badge--ready,
+.status-badge--running,
+.status-badge--available,
+.status-badge--success {
   border-color: var(--semantic-success);
+  background: var(--semantic-success-surface);
   color: var(--text);
 }
 
+.status-badge--open,
 .status-badge--error,
 .status-badge--fatal,
 .status-badge--unresolved,
 .status-badge--degraded {
   border-color: var(--semantic-error);
+  background: var(--semantic-error-surface);
 }
 
 .status-badge--warning,
@@ -980,6 +995,7 @@ label small,
 .status-badge--disabled,
 .status-badge--unavailable {
   border-color: var(--semantic-warning);
+  background: var(--semantic-warning-surface);
 }
 
 .event-results,
@@ -1016,7 +1032,19 @@ label small,
 
 .level-dot--error,
 .level-dot--fatal {
-  background: var(--accent);
+  border-color: var(--semantic-error);
+  background: var(--semantic-error);
+}
+
+.level-dot--warning {
+  border-color: var(--semantic-warning);
+  background: var(--semantic-warning);
+}
+
+.level-dot--info,
+.level-dot--debug {
+  border-color: var(--semantic-info);
+  background: var(--semantic-info);
 }
 
 .level-dot--fatal {
@@ -1120,11 +1148,11 @@ label small,
 .stat-bar span {
   width: 100%;
   min-height: 3px;
-  background: var(--text-muted);
+  background: var(--semantic-info);
 }
 
 .stat-bar:hover span {
-  background: var(--accent);
+  background: var(--text);
 }
 
 .detail-columns,
@@ -1165,7 +1193,8 @@ label small,
 
 .timeline__dot {
   margin-top: 0.42rem;
-  background: var(--accent);
+  border-color: var(--semantic-info);
+  background: var(--semantic-info);
 }
 
 .timeline p {
@@ -1292,8 +1321,8 @@ label small,
 }
 
 .source-context li.source-context__current {
-  border-left: 2px solid var(--accent);
-  background: var(--surface-strong);
+  border-left: 2px solid var(--semantic-info);
+  background: var(--semantic-info-surface);
   color: var(--text);
 }
 

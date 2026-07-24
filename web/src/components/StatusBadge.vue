@@ -4,9 +4,22 @@ import AppIcon, { type AppIconName } from './AppIcon.vue';
 
 const props = defineProps<{ status: string }>();
 const icon = computed<AppIconName>(() => {
-  if (['resolved', 'healthy', 'active', 'success'].includes(props.status)) return 'success';
+  if (
+    [
+      'resolved',
+      'healthy',
+      'active',
+      'success',
+      'ready',
+      'running',
+      'available',
+      'enabled',
+    ].includes(props.status)
+  )
+    return 'success';
   if (['ignored', 'disabled', 'unavailable'].includes(props.status)) return 'blocked';
-  if (['unresolved', 'degraded', 'warning'].includes(props.status)) return 'alert';
+  if (['open', 'error', 'fatal', 'unresolved', 'degraded', 'warning'].includes(props.status))
+    return 'alert';
   return 'status';
 });
 </script>
