@@ -4,9 +4,10 @@ use faultkeep_domain::{
     DisplayName, IpScrubPolicy, ItemCapabilities, OrganizationId, ProjectAcceptanceState,
     ProjectId, ProjectIdentity, ProjectIngestLimits, SecretBytes, Slug, Timestamp,
     auth::{
-        ApiToken, BootstrapIdentity, CredentialId, EmailAddress, MembershipMutation,
-        MembershipMutationKind, OrganizationMembership, OrganizationRole, PasswordHash, Permission,
-        PermissionSet, SecretDigest, SetupPurpose, SetupToken, TokenName, UserAccount,
+        Actor, ApiToken, AuditAction, AuditMetadata, AuditRecord, AuditTargetId, BootstrapIdentity,
+        CredentialId, EmailAddress, MembershipMutation, MembershipMutationKind,
+        OrganizationMembership, OrganizationRole, PasswordHash, Permission, PermissionSet,
+        RequestCorrelationId, SecretDigest, SetupPurpose, SetupToken, TokenName, UserAccount,
         UserDisplayName, UserId, WebSession,
     },
 };
@@ -135,6 +136,37 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             timestamp: now,
         })
         .await?;
+    let organization = store.load_organization(organization_id).await?;
+    assert_eq!(organization.slug.as_str(), "acme");
+    assert_eq!(organization.display_name.as_str(), "Acme");
+    let members = store
+        .list_organization_members(organization_id, 100)
+        .await?;
+    assert_eq!(members.len(), 2);
+    assert!(
+        members
+            .iter()
+            .any(|member| member.user_id == owner_id && member.role == OrganizationRole::Admin)
+    );
+    assert!(members.iter().any(|member| {
+        member.user_id == second_owner && member.role == OrganizationRole::Owner
+    }));
+    store
+        .append_audit(AuditRecord {
+            request_id: RequestCorrelationId::new("request-organization-view")?,
+            organization_id,
+            actor: Actor::WebSession,
+            actor_user_id: owner_id,
+            action: AuditAction::MembershipRoleChanged,
+            target_kind: "user",
+            target_id: AuditTargetId::new(second_owner.get().to_string())?,
+            timestamp: later,
+            metadata: AuditMetadata::new([])?,
+        })
+        .await?;
+    let audit = store.list_audit_log(organization_id, 100).await?;
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].action.as_ref(), "membership.role_changed");
     assert_eq!(
         store
             .set_user_disabled(second_owner, Some(now), CredentialId::new(8)?)

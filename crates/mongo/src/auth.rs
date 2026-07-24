@@ -1,10 +1,13 @@
 //! MongoDB identity, credential, authorization, and audit adapter.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    time::Duration,
+};
 
 use faultkeep_domain::{
-    OrganizationId, ProjectId, Timestamp,
-    api::ApiTokenView,
+    DisplayName, OrganizationId, OrganizationIdentity, ProjectId, Slug, Timestamp,
+    api::{ApiTokenView, AuditLogView, OrganizationMemberView},
     auth::{
         Actor, ApiToken, AuditRecord, BootstrapIdentity, CredentialId, EmailAddress,
         MembershipMutation, MembershipMutationKind, OrganizationMembership, OrganizationRole,
@@ -598,6 +601,152 @@ impl MongoAuthStore {
         Ok(values)
     }
 
+    async fn load_organization_inner(
+        &self,
+        organization_id: OrganizationId,
+    ) -> Result<OrganizationIdentity, AuthStoreError> {
+        let document = self
+            .database
+            .collection::<Document>("organizations")
+            .find_one(doc! { "_id": organization_i64(organization_id)? })
+            .await
+            .map_err(unavailable)?
+            .ok_or(AuthStoreError::NotFound)?;
+        Ok(OrganizationIdentity {
+            id: organization_id,
+            slug: Slug::new(
+                document
+                    .get_str("slug")
+                    .map_err(|_| AuthStoreError::InvalidData)?,
+            )
+            .map_err(|_| AuthStoreError::InvalidData)?,
+            display_name: DisplayName::new(
+                document
+                    .get_str("display_name")
+                    .map_err(|_| AuthStoreError::InvalidData)?,
+            )
+            .map_err(|_| AuthStoreError::InvalidData)?,
+            created_at: required_date(&document, "created_at")?,
+        })
+    }
+
+    async fn list_organization_members_inner(
+        &self,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> Result<Vec<OrganizationMemberView>, AuthStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(AuthStoreError::InvalidData);
+        }
+        let mut membership_cursor = self
+            .database
+            .collection::<Document>("organization_memberships")
+            .find(doc! { "organization_id": organization_i64(organization_id)? })
+            .sort(doc! { "created_at": 1, "_id": 1 })
+            .limit(i64::try_from(limit).unwrap_or(100))
+            .await
+            .map_err(unavailable)?;
+        let mut memberships = Vec::with_capacity(limit);
+        let mut user_ids = Vec::with_capacity(limit);
+        while let Some(document) = membership_cursor.try_next().await.map_err(unavailable)? {
+            let membership = decode_membership(&document)?;
+            user_ids.push(user_i64(membership.user_id)?);
+            memberships.push(membership);
+        }
+        if memberships.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut user_cursor = self
+            .database
+            .collection::<Document>("users")
+            .find(doc! { "_id": { "$in": user_ids } })
+            .await
+            .map_err(unavailable)?;
+        let mut users = HashMap::with_capacity(memberships.len());
+        while let Some(document) = user_cursor.try_next().await.map_err(unavailable)? {
+            let user = decode_user(&document)?;
+            users.insert(user.id, user);
+        }
+        memberships
+            .into_iter()
+            .map(|membership| {
+                let user = users
+                    .remove(&membership.user_id)
+                    .ok_or(AuthStoreError::InvalidData)?;
+                Ok(OrganizationMemberView {
+                    user_id: user.id,
+                    email: user.email.display().into(),
+                    display_name: user.display_name.as_str().into(),
+                    role: membership.role,
+                    disabled_at: user.disabled_at,
+                    joined_at: membership.created_at,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_audit_log_inner(
+        &self,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> Result<Vec<AuditLogView>, AuthStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(AuthStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("audit_log")
+            .find(doc! { "organization_id": organization_i64(organization_id)? })
+            .sort(doc! { "timestamp": -1, "_id": -1 })
+            .limit(i64::try_from(limit).unwrap_or(100))
+            .await
+            .map_err(unavailable)?;
+        let mut values = Vec::with_capacity(limit);
+        while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+            let metadata = document
+                .get_document("metadata")
+                .map_err(|_| AuthStoreError::InvalidData)?
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| (key.as_str().into(), value.into()))
+                        .ok_or(AuthStoreError::InvalidData)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            values.push(AuditLogView {
+                request_id: document
+                    .get_str("_id")
+                    .map_err(|_| AuthStoreError::InvalidData)?
+                    .into(),
+                actor: document
+                    .get_str("actor")
+                    .map_err(|_| AuthStoreError::InvalidData)?
+                    .into(),
+                actor_user_id: parse_user_id(
+                    document
+                        .get_i64("actor_user_id")
+                        .map_err(|_| AuthStoreError::InvalidData)?,
+                )?,
+                action: document
+                    .get_str("action")
+                    .map_err(|_| AuthStoreError::InvalidData)?
+                    .into(),
+                target_kind: document
+                    .get_str("target_kind")
+                    .map_err(|_| AuthStoreError::InvalidData)?
+                    .into(),
+                target_id: document
+                    .get_str("target_id")
+                    .map_err(|_| AuthStoreError::InvalidData)?
+                    .into(),
+                timestamp: required_date(&document, "timestamp")?,
+                metadata,
+            });
+        }
+        Ok(values)
+    }
+
     async fn acquire_organization_lock(
         &self,
         organization_id: OrganizationId,
@@ -933,6 +1082,29 @@ impl AuthStore for MongoAuthStore {
         limit: usize,
     ) -> PortFuture<'_, Result<Vec<ApiTokenView>, AuthStoreError>> {
         Box::pin(self.list_api_tokens_inner(user_id, organization_id, limit))
+    }
+
+    fn load_organization(
+        &self,
+        organization_id: OrganizationId,
+    ) -> PortFuture<'_, Result<OrganizationIdentity, AuthStoreError>> {
+        Box::pin(self.load_organization_inner(organization_id))
+    }
+
+    fn list_organization_members(
+        &self,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<OrganizationMemberView>, AuthStoreError>> {
+        Box::pin(self.list_organization_members_inner(organization_id, limit))
+    }
+
+    fn list_audit_log(
+        &self,
+        organization_id: OrganizationId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<AuditLogView>, AuthStoreError>> {
+        Box::pin(self.list_audit_log_inner(organization_id, limit))
     }
 }
 

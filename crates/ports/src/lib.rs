@@ -6,9 +6,9 @@ use faultkeep_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
     api::{
-        ActivityPage, ApiTokenView, EnvironmentPage, EventPage, EventView, IssueListQuery,
-        IssuePage, IssueStatBucket, ProjectKeyView, ProjectPolicyUpdate, ProjectView, ReleasePage,
-        SearchStorageQuery,
+        ActivityPage, ApiTokenView, AuditLogView, EnvironmentPage, EventPage, EventView,
+        IssueListQuery, IssuePage, IssueStatBucket, OrganizationMemberView, ProjectKeyView,
+        ProjectPolicyUpdate, ProjectView, ReleasePage, SearchStorageQuery,
     },
     archive::{ArchiveBatch, ArchiveSegmentId},
     artifacts::{
@@ -1124,6 +1124,29 @@ pub trait AuthStore: Send + Sync + 'static {
         _organization_id: faultkeep_domain::OrganizationId,
         _limit: usize,
     ) -> PortFuture<'_, Result<Vec<ApiTokenView>, AuthStoreError>> {
+        Box::pin(async { Err(AuthStoreError::Unavailable) })
+    }
+
+    fn load_organization(
+        &self,
+        _organization_id: faultkeep_domain::OrganizationId,
+    ) -> PortFuture<'_, Result<OrganizationIdentity, AuthStoreError>> {
+        Box::pin(async { Err(AuthStoreError::Unavailable) })
+    }
+
+    fn list_organization_members(
+        &self,
+        _organization_id: faultkeep_domain::OrganizationId,
+        _limit: usize,
+    ) -> PortFuture<'_, Result<Vec<OrganizationMemberView>, AuthStoreError>> {
+        Box::pin(async { Err(AuthStoreError::Unavailable) })
+    }
+
+    fn list_audit_log(
+        &self,
+        _organization_id: faultkeep_domain::OrganizationId,
+        _limit: usize,
+    ) -> PortFuture<'_, Result<Vec<AuditLogView>, AuthStoreError>> {
         Box::pin(async { Err(AuthStoreError::Unavailable) })
     }
 }

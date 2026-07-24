@@ -1,7 +1,8 @@
-# ADR-0041: Monochrome minimal Web design system
+# ADR-0041: Dark neutral Web design system with muted semantic accents
 
 - Status: Accepted
 - Date: 2026-07-24
+- Amended: 2026-07-24
 
 ## Context
 
@@ -16,11 +17,13 @@ new post-MVP product screens establish more incompatible visual patterns.
 
 ## Decision
 
-Faultkeep Web uses a monochrome design system:
+Faultkeep Web uses a dark neutral design system:
 
-- black, white and neutral gray are the only product-interface hues;
-- there is no purple brand accent and no colored severity/status palette;
-- semantic state is never communicated by hue;
+- black, white and neutral gray remain the foundation;
+- muted semantic accents may identify error, warning, success, information and
+  selected/active states;
+- accent colors are deliberately desaturated and subordinate to investigation data;
+- semantic state is never communicated by hue alone;
 - typography, spacing, border weight, icon shape, fill pattern and explicit text carry
   hierarchy and meaning;
 - data density is preferred over decorative chrome;
@@ -34,7 +37,8 @@ system status.
 
 ## Palette
 
-The initial token family is intentionally small:
+The initial token family is intentionally small. Semantic accents are centralized
+alongside the neutral tokens rather than introduced as component-local literals:
 
 ```css
 :root {
@@ -52,28 +56,47 @@ The initial token family is intentionally small:
   --border-strong: #777777;
   --accent: #ffffff;
   --focus: #ffffff;
+
+  --semantic-error: #c88f93;
+  --semantic-warning: #c6aa78;
+  --semantic-success: #83ad91;
+  --semantic-info: #82a8c2;
+
+  --semantic-error-surface: #211719;
+  --semantic-warning-surface: #211d15;
+  --semantic-success-surface: #162019;
+  --semantic-info-surface: #151d22;
+
+  --syntax-comment: #82909a;
+  --syntax-keyword: #b6a6d9;
+  --syntax-number: #d0ad86;
+  --syntax-string: #91b39a;
 }
 ```
 
 Components consume semantic tokens. Raw color literals outside the token definition
-require an explicit visual-system change. Alpha values are permitted only for
-functional overlays and focus treatment, not as a source of additional brand hues.
+require an explicit visual-system change. Alpha values are permitted for functional
+overlays, focus treatment and subtle semantic surfaces derived from accepted tokens.
 
 Pure white is reserved for the strongest emphasis, selected state, primary action and
 high-contrast data. Ordinary long-form text uses near-white to reduce visual fatigue.
 Black and near-black surfaces remain visually distinct without decorative shadows.
+The bounded syntax tokens are permitted only inside code, stack traces and raw
+payload views; they are not a second general UI palette.
 
-## Semantic states without color
+## Semantic states
 
-Every state includes explicit text and a stable icon/shape:
+Every state includes explicit text and a stable icon/shape. Color reinforces the
+state but never replaces the label or shape:
 
 | State | Visual treatment |
 | --- | --- |
-| new/error/failed | solid light marker, strong border, explicit label |
-| warning/retry/degraded | triangle or hatched marker, medium border, explicit label |
-| resolved/success/healthy | check marker, outline treatment, explicit label |
+| new/error/failed | muted error accent, error icon, strong border, explicit label |
+| warning/retry/degraded | muted warning accent, triangle icon, medium border, explicit label |
+| resolved/success/healthy | muted success accent, check icon, outline treatment, explicit label |
+| information/pending | muted information accent, information icon, explicit label |
 | ignored/disabled/unknown | muted text, dashed border where useful, explicit label |
-| selected/active | black fill with white text or strong underline |
+| selected/active | high-contrast fill or strong underline, optionally reinforced by an accent |
 
 Severity is distinguishable in grayscale print and for users with any form of color
 vision deficiency. A badge containing only a differently colored dot is prohibited.
@@ -83,9 +106,10 @@ vision deficiency. A badge containing only a differently colored dot is prohibit
 - Use the operating-system UI font stack; no remote Web font is downloaded.
 - Code, identifiers, stack traces and raw payloads use the system monospace stack.
 - Use font weight sparingly; hierarchy starts with spacing and size.
-- Icons are small local inline SVGs or CSS shapes with a consistent stroke.
-- No icon font, remote icon service or large general-purpose icon dependency is
-  introduced.
+- Icons use named, tree-shaken imports from `@lucide/vue` with a consistent stroke.
+- Icon fonts, remote icon services and runtime icon requests are prohibited.
+- The icon dependency remains subject to the production asset-size gate; importing
+  the whole icon catalog is prohibited.
 - An icon without adjacent text has an accessible name or is explicitly decorative.
 
 ## Layout and components
@@ -95,14 +119,16 @@ vision deficiency. A badge containing only a differently colored dot is prohibit
 - Use a restrained radius scale; controls do not become decorative pills unless their
   semantics require a compact badge.
 - Tables and timelines remain readable at investigation density.
-- Primary actions are white with black text. Secondary actions use a dark surface with
-  a light border. Destructive actions use explicit wording and confirmation, not red.
+- Primary actions use either white or the muted information accent with dark text.
+  Secondary actions use a dark surface with a light border. Destructive actions use
+  explicit wording and confirmation. A muted error accent may reinforce them, but
+  must not be the only warning.
 - Focus state uses a high-contrast outline and is never removed.
 - Empty and loading states are concise and do not use decorative illustrations.
 
 ## Charts and technical visualization
 
-Charts remain monochrome and distinguish series using:
+Charts remain neutral-first and distinguish series using:
 
 - solid, dashed and dotted strokes;
 - line width;
@@ -110,6 +136,9 @@ Charts remain monochrome and distinguish series using:
 - neutral-gray luminance;
 - hatch/pattern fill;
 - direct labels and a readable legend.
+
+Muted semantic accents may reinforce a small number of series when the same data
+remains distinguishable through stroke, point shape, pattern and labels.
 
 Hover is supplemental. Exact values and series identity remain available to keyboard,
 touch and assistive-technology users. A chart must not require color perception to
@@ -127,7 +156,8 @@ separate Error, Log, Span or environment series.
 
 ## Weight and runtime discipline
 
-Monochrome is a product and implementation constraint, not only a palette:
+The restrained visual system is a product and implementation constraint, not only a
+palette:
 
 - no general-purpose UI framework is added for future product screens;
 - no runtime theming library is added;
@@ -159,11 +189,12 @@ new capabilities do not require an accumulating theme/component framework.
 
 Phase 23 is the dedicated migration of the complete existing MVP Web:
 
-1. replace the current purple/color status variables with the accepted neutral tokens;
+1. replace the current purple/status variables with the accepted neutral and muted
+   semantic tokens;
 2. remove gradients and decorative shadows;
 3. update buttons, links, badges, alerts, spinner, sidebar and authentication view;
 4. make status components use label plus shape/icon rather than hue;
-5. convert charts/timelines to grayscale-safe styles;
+5. convert charts/timelines to grayscale-safe styles with optional muted reinforcement;
 6. remove duplicated raw color literals from components;
 7. capture reference renders for every existing route at desktop and narrow width;
 8. run accessibility, keyboard, reduced-motion and grayscale checks;
@@ -188,9 +219,11 @@ A phase with Web changes does not close until:
 
 - Faultkeep gains a distinct, recognizable visual identity aligned with its small and
   stable positioning.
-- Error and success states require better labels/icons rather than conventional red
-  and green shortcuts.
+- Error and success states use restrained accents together with labels and icons,
+  avoiding conventional saturated red and green shortcuts.
 - Charts need explicit grayscale series design.
 - A future light theme remains possible without changing semantic components.
+- Named Lucide imports provide a coherent local icon language while making their
+  bundle cost visible and bounded.
 - The current MVP stylesheet requires a deliberate migration before additional
   product UI expands it.

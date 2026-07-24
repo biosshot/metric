@@ -7,6 +7,7 @@ use crate::{
     ProjectAcceptanceState, ProjectId, ProjectIngestLimits, ProjectKeyLabel, ProjectKeyState, Slug,
     Timestamp,
     auth::CredentialId,
+    auth::{OrganizationRole, UserId},
     event::{EventLevel, EventPlatform},
     finalization::{EnvironmentId, ProcessedEventPayload, ReleaseId, SearchToken},
     grouping::IssueId,
@@ -167,6 +168,28 @@ pub struct ApiTokenView {
     pub created_at: Timestamp,
     pub expires_at: Timestamp,
     pub last_used_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrganizationMemberView {
+    pub user_id: UserId,
+    pub email: Box<str>,
+    pub display_name: Box<str>,
+    pub role: OrganizationRole,
+    pub disabled_at: Option<Timestamp>,
+    pub joined_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditLogView {
+    pub request_id: Box<str>,
+    pub actor: Box<str>,
+    pub actor_user_id: UserId,
+    pub action: Box<str>,
+    pub target_kind: Box<str>,
+    pub target_id: Box<str>,
+    pub timestamp: Timestamp,
+    pub metadata: Vec<(Box<str>, Box<str>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

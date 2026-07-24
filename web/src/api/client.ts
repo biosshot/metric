@@ -3,6 +3,7 @@ import type {
   ApiToken,
   CapabilityDocument,
   ComponentStatus,
+  CreatedInvitation,
   CreatedApiToken,
   CreateProjectInput,
   CreateProjectResponse,
@@ -12,6 +13,10 @@ import type {
   IssueActivity,
   IssueStatistic,
   LoginResponse,
+  Organization,
+  OrganizationAuditRecord,
+  OrganizationMember,
+  OrganizationRole,
   Page,
   Project,
   ProjectKey,
@@ -150,6 +155,19 @@ export const api = {
       { public: true },
     );
   },
+  setupPassword: (setupToken: string, password: string, organizationId: string) =>
+    request<void>(
+      '/api/v1/auth/setup-password',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          setup_token: setupToken,
+          password,
+          organization_id: organizationId,
+        }),
+      },
+      { public: true },
+    ),
   me: () => request<Identity>('/api/v1/auth/me'),
   logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
   tokens: () => request<{ items: ApiToken[] }>('/api/v1/auth/tokens'),
@@ -160,6 +178,25 @@ export const api = {
     }),
   revokeToken: (tokenId: string) =>
     request<void>(`/api/v1/auth/tokens/${tokenId}`, { method: 'DELETE' }),
+  organization: () => request<Organization>('/api/v1/organization'),
+  organizationMembers: () =>
+    request<{ items: OrganizationMember[] }>('/api/v1/organization/members'),
+  inviteOrganizationMember: (email: string, displayName: string, role: OrganizationRole) =>
+    request<CreatedInvitation>('/api/v1/organization/members', {
+      method: 'POST',
+      body: JSON.stringify({ email, display_name: displayName, role }),
+    }),
+  updateOrganizationMember: (
+    userId: string,
+    action: 'change_role' | 'disable' | 'enable' | 'remove',
+    role?: OrganizationRole,
+  ) =>
+    request<void>(`/api/v1/organization/members/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action, ...(role ? { role } : {}) }),
+    }),
+  organizationAudit: () =>
+    request<{ items: OrganizationAuditRecord[] }>('/api/v1/organization/audit'),
   projects: () => request<{ items: Project[] }>('/api/v1/projects'),
   createProject: (project: CreateProjectInput) =>
     request<CreateProjectResponse>('/api/v1/projects', {

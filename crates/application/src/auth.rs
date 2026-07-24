@@ -14,8 +14,8 @@ use argon2::{
     },
 };
 use faultkeep_domain::{
-    DisplayName, OrganizationId, ProjectId, Slug, Timestamp,
-    api::ApiTokenView,
+    DisplayName, OrganizationId, OrganizationIdentity, ProjectId, Slug, Timestamp,
+    api::{ApiTokenView, AuditLogView, OrganizationMemberView},
     auth::{
         Actor, ApiToken, AuditAction, AuditMetadata, AuditMetadataKey, AuditMetadataValue,
         AuditRecord, AuditTargetId, AuthContext, BootstrapIdentity, CredentialId, EmailAddress,
@@ -811,6 +811,43 @@ impl IdentityService {
                 .list_api_tokens(context.user_id, context.organization_id, limit),
         )
         .await
+    }
+
+    pub async fn organization(
+        &self,
+        context: &AuthContext,
+    ) -> Result<OrganizationIdentity, AuthError> {
+        self.call(self.store.load_organization(context.organization_id))
+            .await
+    }
+
+    pub async fn list_organization_members(
+        &self,
+        context: &AuthContext,
+        limit: usize,
+    ) -> Result<Vec<OrganizationMemberView>, AuthError> {
+        require(context, Permission::OrganizationAdmin)?;
+        if !(1..=100).contains(&limit) {
+            return Err(AuthError::InvalidTokenPolicy);
+        }
+        self.call(
+            self.store
+                .list_organization_members(context.organization_id, limit),
+        )
+        .await
+    }
+
+    pub async fn list_audit_log(
+        &self,
+        context: &AuthContext,
+        limit: usize,
+    ) -> Result<Vec<AuditLogView>, AuthError> {
+        require(context, Permission::OrganizationAdmin)?;
+        if !(1..=100).contains(&limit) {
+            return Err(AuthError::InvalidTokenPolicy);
+        }
+        self.call(self.store.list_audit_log(context.organization_id, limit))
+            .await
     }
 
     pub async fn record_project_audit(

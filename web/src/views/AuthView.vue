@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -8,16 +8,22 @@ import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const router = useRouter();
-const mode = ref<'login' | 'bootstrap'>('login');
+const route = useRoute();
+const invited = typeof route.query.setup_token === 'string';
+const mode = ref<'login' | 'bootstrap' | 'setup'>(invited ? 'setup' : 'login');
 const busy = ref(false);
 const error = ref<unknown>(null);
-const bootstrapResult = ref<{ organizationId: string } | null>(null);
+const successNotice = ref('');
 
-const email = ref('');
+const email = ref(typeof route.query.email === 'string' ? route.query.email : '');
 const password = ref('');
-const organizationId = ref(session.organizationId ?? '');
+const organizationId = ref(
+  typeof route.query.organization_id === 'string'
+    ? route.query.organization_id
+    : (session.organizationId ?? ''),
+);
 
-const setupToken = ref('');
+const setupToken = ref(typeof route.query.setup_token === 'string' ? route.query.setup_token : '');
 const displayName = ref('');
 const organizationSlug = ref('');
 const organizationName = ref('');
@@ -48,7 +54,22 @@ async function bootstrap(): Promise<void> {
       organization_name: organizationName.value,
     });
     organizationId.value = identity.organization_id;
-    bootstrapResult.value = { organizationId: identity.organization_id };
+    successNotice.value = `Organization created. Its ID is ${identity.organization_id}. Sign in to continue.`;
+    mode.value = 'login';
+  } catch (cause) {
+    error.value = cause;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function setupInvitedPassword(): Promise<void> {
+  busy.value = true;
+  error.value = null;
+  try {
+    await api.setupPassword(setupToken.value, password.value, organizationId.value);
+    password.value = '';
+    successNotice.value = 'Password set. Sign in with your invited email to continue.';
     mode.value = 'login';
   } catch (cause) {
     error.value = cause;
@@ -89,11 +110,11 @@ async function bootstrap(): Promise<void> {
         >
           First setup
         </button>
+        <button type="button" role="tab" :aria-selected="mode === 'setup'" @click="mode = 'setup'">
+          Invitation
+        </button>
       </div>
-      <div v-if="bootstrapResult" class="success-notice" role="status">
-        Organization created. Its ID is <strong>{{ bootstrapResult.organizationId }}</strong
-        >. Sign in to continue.
-      </div>
+      <div v-if="successNotice" class="success-notice" role="status">{{ successNotice }}</div>
       <form v-if="mode === 'login'" @submit.prevent="login">
         <p class="eyebrow">Secure session</p>
         <h2 id="auth-title">Sign in to Faultkeep</h2>
@@ -122,7 +143,7 @@ async function bootstrap(): Promise<void> {
           {{ busy ? 'Signing in…' : 'Sign in' }}
         </button>
       </form>
-      <form v-else @submit.prevent="bootstrap">
+      <form v-else-if="mode === 'bootstrap'" @submit.prevent="bootstrap">
         <p class="eyebrow">One-time initialization</p>
         <h2 id="auth-title">Create the first owner</h2>
         <label>
@@ -167,6 +188,39 @@ async function bootstrap(): Promise<void> {
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
           <AppIcon :name="busy ? 'loading' : 'plus'" :size="16" />
           {{ busy ? 'Creating…' : 'Create owner and organization' }}
+        </button>
+      </form>
+      <form v-else @submit.prevent="setupInvitedPassword">
+        <p class="eyebrow">Organization invitation</p>
+        <h2 id="auth-title">Set your password</h2>
+        <label>
+          Setup token
+          <input
+            v-model.trim="setupToken"
+            autocomplete="off"
+            minlength="64"
+            maxlength="64"
+            required
+          />
+        </label>
+        <label>
+          Organization ID
+          <input v-model.trim="organizationId" inputmode="numeric" pattern="[1-9][0-9]*" required />
+        </label>
+        <label>
+          New password
+          <input
+            v-model="password"
+            type="password"
+            autocomplete="new-password"
+            minlength="12"
+            required
+          />
+        </label>
+        <ApiErrorPanel v-if="error" :error="error" title="Password was not set" />
+        <button class="button button--primary button--wide" type="submit" :disabled="busy">
+          <AppIcon :name="busy ? 'loading' : 'key'" :size="16" />
+          {{ busy ? 'Saving…' : 'Set password' }}
         </button>
       </form>
     </section>

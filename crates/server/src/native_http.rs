@@ -15,7 +15,10 @@ use axum::{
     routing::{delete, get, post},
 };
 use faultkeep_application::{
-    auth::{BootstrapRequest, CreateApiTokenRequest, IdentityService, LoginRequest, PasswordInput},
+    auth::{
+        BootstrapRequest, CreateApiTokenRequest, IdentityService, InviteUserRequest, LoginRequest,
+        PasswordInput,
+    },
     incident_capsule::{
         IncidentCapsuleError, IncidentCapsuleRequest, IncidentCapsuleService,
         IncidentEventSelection,
@@ -33,8 +36,9 @@ use faultkeep_domain::{
         ProjectPolicyUpdate, ProjectView, ReleaseView,
     },
     auth::{
-        Actor, AuthContext, CredentialId, EmailAddress, OrganizationRole, Permission,
-        PermissionSet, PlainSecret, RequestCorrelationId, SecretDigest, TokenName, UserDisplayName,
+        Actor, AuthContext, CredentialId, EmailAddress, MembershipMutationKind, OrganizationRole,
+        Permission, PermissionSet, PlainSecret, RequestCorrelationId, SecretDigest, TokenName,
+        UserDisplayName, UserId,
     },
     blob::BlobObjectId,
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
@@ -233,11 +237,22 @@ pub fn router(
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
+        .route("/api/v1/auth/setup-password", post(setup_password))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(current_identity))
         .route("/api/v1/auth/tokens", get(list_tokens).post(create_token))
         .route("/api/v1/auth/tokens/{token_id}", delete(revoke_token))
+        .route("/api/v1/organization", get(get_organization))
+        .route(
+            "/api/v1/organization/members",
+            get(list_organization_members).post(invite_organization_member),
+        )
+        .route(
+            "/api/v1/organization/members/{user_id}",
+            axum::routing::patch(update_organization_member),
+        )
+        .route("/api/v1/organization/audit", get(list_organization_audit))
         .route("/api/v1/projects", get(list_projects).post(create_project))
         .route(
             "/api/v1/projects/{project_id}",
@@ -548,6 +563,32 @@ async fn bootstrap(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SetupPasswordBody {
+    setup_token: String,
+    password: String,
+    organization_id: LoginOrganizationId,
+}
+
+async fn setup_password(
+    State(state): State<NativeHttpState>,
+    Extension(request_id): Extension<RequestId>,
+    body: Result<Json<SetupPasswordBody>, JsonRejection>,
+) -> Result<StatusCode, HttpApiError> {
+    let body = json_body(body)?;
+    identity(&state)?
+        .setup_password(
+            &secret(&body.setup_token)?,
+            PasswordInput::new(body.password).map_err(|_| HttpApiError::InvalidRequest)?,
+            body.organization_id.parse()?,
+            correlation_id(request_id)?,
+        )
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LoginBody {
     email: String,
     password: String,
@@ -718,6 +759,172 @@ async fn revoke_token(
         .await
         .map_err(|error| HttpApiError::Api(map_auth(error)))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_organization(
+    State(state): State<NativeHttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let organization = identity(&state)?
+        .organization(&context)
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    Ok(Json(json!({
+        "id": organization.id.get().to_string(),
+        "slug": organization.slug.as_str(),
+        "display_name": organization.display_name.as_str(),
+        "created_at": timestamp_string(organization.created_at)?,
+    })))
+}
+
+async fn list_organization_members(
+    State(state): State<NativeHttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let members = identity(&state)?
+        .list_organization_members(&context, 100)
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    let items = members
+        .into_iter()
+        .map(|member| {
+            Ok(json!({
+                "user_id": member.user_id.get().to_string(),
+                "email": member.email,
+                "display_name": member.display_name,
+                "role": role_name(member.role),
+                "disabled_at": optional_timestamp(member.disabled_at),
+                "joined_at": timestamp_string(member.joined_at)?,
+            }))
+        })
+        .collect::<Result<Vec<_>, HttpApiError>>()?;
+    Ok(Json(json!({ "items": items })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InviteMemberBody {
+    email: String,
+    display_name: String,
+    role: String,
+}
+
+async fn invite_organization_member(
+    State(state): State<NativeHttpState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Result<Json<InviteMemberBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let setup_token = identity(&state)?
+        .invite_user(
+            &context,
+            InviteUserRequest {
+                email: EmailAddress::parse(body.email).map_err(|_| HttpApiError::InvalidRequest)?,
+                display_name: UserDisplayName::new(body.display_name)
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                role: parse_role(&body.role)?,
+                request_id: correlation_id(request_id)?,
+            },
+        )
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "setup_token": setup_token.encode_hex(),
+            "organization_id": context.organization_id.get().to_string(),
+        })),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateMemberBody {
+    action: String,
+    role: Option<String>,
+}
+
+async fn update_organization_member(
+    State(state): State<NativeHttpState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(user_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<UpdateMemberBody>, JsonRejection>,
+) -> Result<StatusCode, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let user_id = parse_user_id(&user_id)?;
+    let body = json_body(body)?;
+    match body.action.as_str() {
+        "change_role" => {
+            let role = body
+                .role
+                .as_deref()
+                .ok_or(HttpApiError::InvalidRequest)
+                .and_then(parse_role)?;
+            identity(&state)?
+                .mutate_membership(
+                    &context,
+                    user_id,
+                    MembershipMutationKind::ChangeRole(role),
+                    correlation_id(request_id)?,
+                )
+                .await
+        }
+        "remove" if body.role.is_none() => {
+            identity(&state)?
+                .mutate_membership(
+                    &context,
+                    user_id,
+                    MembershipMutationKind::Remove,
+                    correlation_id(request_id)?,
+                )
+                .await
+        }
+        "disable" if body.role.is_none() => {
+            identity(&state)?
+                .set_user_disabled(&context, user_id, true, correlation_id(request_id)?)
+                .await
+        }
+        "enable" if body.role.is_none() => {
+            identity(&state)?
+                .set_user_disabled(&context, user_id, false, correlation_id(request_id)?)
+                .await
+        }
+        _ => return Err(HttpApiError::InvalidRequest),
+    }
+    .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_organization_audit(
+    State(state): State<NativeHttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let records = identity(&state)?
+        .list_audit_log(&context, 100)
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    let items = records
+        .into_iter()
+        .map(|record| {
+            Ok(json!({
+                "request_id": record.request_id,
+                "actor": record.actor,
+                "actor_user_id": record.actor_user_id.get().to_string(),
+                "action": record.action,
+                "target_kind": record.target_kind,
+                "target_id": record.target_id,
+                "timestamp": timestamp_string(record.timestamp)?,
+                "metadata": record.metadata.into_iter().collect::<BTreeMap<_, _>>(),
+            }))
+        })
+        .collect::<Result<Vec<_>, HttpApiError>>()?;
+    Ok(Json(json!({ "items": items })))
 }
 
 async fn list_projects(
@@ -1694,6 +1901,25 @@ const fn role_name(role: OrganizationRole) -> &'static str {
     }
 }
 
+fn parse_role(value: &str) -> Result<OrganizationRole, HttpApiError> {
+    match value {
+        "owner" => Ok(OrganizationRole::Owner),
+        "admin" => Ok(OrganizationRole::Admin),
+        "member" => Ok(OrganizationRole::Member),
+        "viewer" => Ok(OrganizationRole::Viewer),
+        _ => Err(HttpApiError::InvalidRequest),
+    }
+}
+
+fn parse_user_id(value: &str) -> Result<UserId, HttpApiError> {
+    UserId::new(
+        value
+            .parse::<u64>()
+            .map_err(|_| HttpApiError::InvalidRequest)?,
+    )
+    .map_err(|_| HttpApiError::InvalidRequest)
+}
+
 fn project_value(project: &ProjectView) -> Result<Value, HttpApiError> {
     Ok(json!({
         "id": project.id.get().to_string(),
@@ -1939,12 +2165,30 @@ mod tests {
     fn every_native_route_has_a_pinned_permission_contract() {
         let matrix = [
             ("POST /auth/bootstrap", RouteAccess::Public),
+            ("POST /auth/setup-password", RouteAccess::Public),
             ("POST /auth/login", RouteAccess::Public),
             ("POST /auth/logout", RouteAccess::Authenticated),
             ("GET /auth/me", RouteAccess::Authenticated),
             ("GET /auth/tokens", RouteAccess::Authenticated),
             ("POST /auth/tokens", RouteAccess::Authenticated),
             ("DELETE /auth/tokens/:id", RouteAccess::Authenticated),
+            ("GET /organization", RouteAccess::Authenticated),
+            (
+                "GET /organization/members",
+                RouteAccess::Permission(Permission::OrganizationAdmin),
+            ),
+            (
+                "POST /organization/members",
+                RouteAccess::Permission(Permission::OrganizationAdmin),
+            ),
+            (
+                "PATCH /organization/members/:id",
+                RouteAccess::Permission(Permission::OrganizationAdmin),
+            ),
+            (
+                "GET /organization/audit",
+                RouteAccess::Permission(Permission::OrganizationAdmin),
+            ),
             (
                 "GET /projects",
                 RouteAccess::Permission(Permission::ProjectRead),
@@ -2048,7 +2292,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 34);
+        assert_eq!(matrix.len(), 40);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

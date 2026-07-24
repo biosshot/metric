@@ -50,6 +50,44 @@ describe('native API client', () => {
     });
   });
 
+  it('loads organization context with the authoritative organization header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: '7',
+          slug: 'acme',
+          display_name: 'Acme',
+          created_at: '2030-01-01T00:00:00Z',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.organization();
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/v1/organization');
+    expect((init.headers as Headers).get('x-faultkeep-organization-id')).toBe('7');
+    expect((init.headers as Headers).get('x-csrf-token')).toBeNull();
+  });
+
+  it('updates one organization member action under CSRF protection', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.updateOrganizationMember('42', 'change_role', 'admin');
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/v1/organization/members/42');
+    expect(init.method).toBe('PATCH');
+    expect((init.headers as Headers).get('x-csrf-token')).toBe('a'.repeat(64));
+    expect(JSON.parse(String(init.body))).toEqual({
+      action: 'change_role',
+      role: 'admin',
+    });
+  });
+
   it('sends large organization IDs without JavaScript precision loss', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

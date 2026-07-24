@@ -9,6 +9,8 @@ import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 const queryClient = useQueryClient();
 const tokenName = ref('sentry-cli debug files');
 const expiresOn = ref(new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10));
@@ -57,7 +59,7 @@ function formatTimestamp(value: string | null): string {
 
 <template>
   <section>
-    <header class="page-header">
+    <header v-if="!embedded" class="page-header">
       <div>
         <p class="eyebrow">Account security</p>
         <h1>API tokens</h1>

@@ -38,6 +38,40 @@ export interface CreatedApiToken {
   expires_at: string;
 }
 
+export interface Organization {
+  id: string;
+  slug: string;
+  display_name: string;
+  created_at: string;
+}
+
+export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+
+export interface OrganizationMember {
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: OrganizationRole;
+  disabled_at: string | null;
+  joined_at: string;
+}
+
+export interface OrganizationAuditRecord {
+  request_id: string;
+  actor: string;
+  actor_user_id: string;
+  action: string;
+  target_kind: string;
+  target_id: string;
+  timestamp: string;
+  metadata: Record<string, string>;
+}
+
+export interface CreatedInvitation {
+  setup_token: string;
+  organization_id: string;
+}
+
 export interface ProjectPolicy {
   revision: number;
   ip_policy: 'hmac' | 'keep' | 'remove' | 'truncate';
