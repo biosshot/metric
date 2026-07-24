@@ -226,8 +226,8 @@ async function copy(value: string): Promise<void> {
       />
       <p class="info-note">
         <AppIcon name="info" :size="16" />
-        Faultkeep currently supports the Error Event path. Transactions, replays, profiles, and
-        metrics remain disabled and are reported through capabilities.
+        Faultkeep accepts Error Events, Structured Logs, Transactions, and Spans. Replays, profiles,
+        and metrics remain disabled and are reported through capabilities.
       </p>
     </section>
   </section>

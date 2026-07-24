@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import SdkSetupButton from '../components/SdkSetupButton.vue';
 import { api } from '../api/client';
 import { useSessionStore } from '../stores/session';
 
@@ -70,7 +71,9 @@ const failed = computed(() =>
       icon="gauge"
       title="No performance data"
       description="Performance buckets are created after a root transaction or segment is accepted."
-    />
+    >
+      <SdkSetupButton />
+    </EmptyState>
     <template v-else>
       <div class="metric-grid">
         <article>

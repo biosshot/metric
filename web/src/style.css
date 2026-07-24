@@ -391,6 +391,13 @@ input[type='checkbox'] {
   margin-bottom: 0;
 }
 
+.section-heading__content,
+.onboarding-summary__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
 .button {
   display: inline-flex;
   min-height: 40px;
@@ -564,6 +571,10 @@ label small,
   display: grid;
   gap: 1rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid > label {
+  align-content: start;
 }
 
 .form-grid--three {
@@ -797,6 +808,22 @@ label small,
 .check-control span,
 .check-control small {
   display: grid;
+}
+
+.check-control__copy {
+  min-width: 0;
+  flex: 1;
+  gap: 0.28rem;
+}
+
+.check-control__title {
+  display: flex !important;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.check-control__title .app-icon {
+  color: var(--semantic-success);
 }
 
 .base-select {
@@ -1090,6 +1117,10 @@ label small,
   color: var(--text-muted);
 }
 
+.empty-state > .button {
+  margin-top: 0.75rem;
+}
+
 .issue-table-wrap {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -1372,16 +1403,25 @@ label small,
   display: grid;
   align-items: end;
   margin-bottom: 1rem;
-  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
   grid-template-columns:
-    minmax(220px, 1fr) repeat(3, minmax(130px, 0.35fr))
-    160px auto;
+    minmax(220px, 1fr) repeat(3, minmax(120px, 0.4fr))
+    minmax(190px, 0.65fr) max-content;
+  gap: 0.75rem;
 }
 
 .signal-toolbar label,
 .compact-filter {
   display: grid;
   gap: 0.35rem;
+}
+
+.signal-toolbar > .button {
+  align-self: end;
+  white-space: nowrap;
 }
 
 .compact-filter span {
@@ -2096,6 +2136,17 @@ label small,
   background: var(--surface-subtle);
 }
 
+.capability-list__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-transform: capitalize;
+}
+
+.capability-list__name .app-icon {
+  color: var(--text-muted);
+}
+
 .component-grid article div {
   display: grid;
 }
@@ -2106,13 +2157,31 @@ label small,
 
 .search-capability {
   margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.search-capability__heading {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.search-capability__heading .app-icon {
+  color: var(--semantic-info);
+}
+
+.search-capability__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .search-capability code {
-  display: inline-block;
-  margin: 0.5rem 0.35rem 0 0;
+  display: block;
+  margin-top: 0.65rem;
   padding: 0.25rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-small);
@@ -2128,11 +2197,22 @@ label small,
 }
 
 .onboarding-layout {
+  width: 100%;
   max-width: 1280px;
+  margin-inline: auto;
 }
 
 .onboarding-summary {
   align-self: start;
+}
+
+.onboarding-summary__heading {
+  margin-bottom: 1.1rem;
+}
+
+.onboarding-summary__heading h2,
+.onboarding-summary__heading p {
+  margin-bottom: 0;
 }
 
 .sr-only {
@@ -2145,6 +2225,16 @@ label small,
   border: 0;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+}
+
+@media (max-width: 1350px) {
+  .signal-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compact-filter-group {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 1050px) {

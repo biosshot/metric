@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import SdkSetupButton from '../components/SdkSetupButton.vue';
 import { api } from '../api/client';
 import { useSessionStore } from '../stores/session';
 
@@ -84,7 +85,9 @@ function previousPage(): void {
       icon="traces"
       title="No transactions yet"
       description="Set tracesSampleRate above zero in a supported SDK and finish a transaction."
-    />
+    >
+      <SdkSetupButton />
+    </EmptyState>
     <div v-else class="transaction-list">
       <RouterLink
         v-for="transaction in transactions.data.value.items"

@@ -6,6 +6,7 @@ import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import SdkSetupButton from '../components/SdkSetupButton.vue';
 import { api } from '../api/client';
 import type { StructuredLog } from '../api/types';
 import { useSessionStore } from '../stores/session';
@@ -146,7 +147,9 @@ function traceLink(log: StructuredLog): string | null {
       icon="logs"
       title="No logs in this view"
       description="Enable Sentry SDK Logs and send a log entry. Filters are exact except for message text."
-    />
+    >
+      <SdkSetupButton />
+    </EmptyState>
     <div v-else class="signal-list">
       <div class="signal-histogram" aria-label="Log levels on this page">
         <span

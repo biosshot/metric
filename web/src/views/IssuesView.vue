@@ -8,6 +8,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
+import SdkSetupButton from '../components/SdkSetupButton.vue';
 import { useSessionStore } from '../stores/session';
 import type { Event, Issue, Page } from '../api/types';
 
@@ -163,10 +164,7 @@ function formatTime(value: string): string {
           : 'Events sent by your SDK will appear here after processing.'
       "
     >
-      <RouterLink v-if="!submittedSearch" class="button button--primary" to="/project/setup">
-        <AppIcon name="connect" :size="16" />
-        View SDK setup
-      </RouterLink>
+      <SdkSetupButton v-if="!submittedSearch" />
     </EmptyState>
 
     <div v-else class="issue-table-wrap">

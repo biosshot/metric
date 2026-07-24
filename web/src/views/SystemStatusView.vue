@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import AppIcon from '../components/AppIcon.vue';
 
 const capabilities = useQuery({
   queryKey: ['capabilities'],
@@ -58,15 +59,23 @@ const status = useQuery({
       </div>
       <div class="capability-list">
         <article v-for="(enabled, name) in capabilities.data.value?.features" :key="name">
-          <span>{{ name.replaceAll('_', ' ') }}</span>
+          <span class="capability-list__name">
+            <AppIcon :name="enabled ? 'check' : 'blocked'" :size="16" />
+            {{ name.replaceAll('_', ' ') }}
+          </span>
           <StatusBadge :status="enabled ? 'enabled' : 'disabled'" />
         </article>
       </div>
       <div class="search-capability">
-        <strong>Search v1 indexed fields</strong>
-        <code v-for="field in capabilities.data.value?.search.fields" :key="field">{{
-          field
-        }}</code>
+        <div class="search-capability__heading">
+          <AppIcon name="search" :size="18" />
+          <strong>Search v1 indexed fields</strong>
+        </div>
+        <div class="search-capability__fields">
+          <code v-for="field in capabilities.data.value?.search.fields" :key="field">{{
+            field
+          }}</code>
+        </div>
         <p>
           Full text and arbitrary custom tags are not enabled. Unsupported expressions return an
           explicit error.

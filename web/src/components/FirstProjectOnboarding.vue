@@ -89,9 +89,14 @@ const createProject = useMutation({
     <div class="onboarding-grid">
       <form class="panel settings-form" @submit.prevent="createProject.mutate()">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">Project identity</p>
-            <h2>Name the service you want to monitor</h2>
+          <div class="section-heading__content">
+            <span class="section-icon section-icon--info">
+              <AppIcon name="server" :size="18" />
+            </span>
+            <div>
+              <p class="eyebrow">Project identity</p>
+              <h2>Name the service you want to monitor</h2>
+            </div>
           </div>
         </div>
 
@@ -137,30 +142,53 @@ const createProject = useMutation({
         <div class="check-grid">
           <label class="check-control">
             <input v-model="project.error_enabled" type="checkbox" />
-            <span
-              ><strong>Error Events</strong><small>Required for Issue investigation.</small></span
-            >
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="bug" :size="17" />
+                <strong>Error Events</strong>
+              </span>
+              <small>Required for Issue investigation.</small>
+            </span>
           </label>
           <label class="check-control">
             <input v-model="project.client_report_enabled" type="checkbox" />
-            <span
-              ><strong>Client reports</strong
-              ><small>Accept SDK delivery outcome reports.</small></span
-            >
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="activity" :size="17" />
+                <strong>Client reports</strong>
+              </span>
+              <small>Accept SDK delivery outcome reports.</small>
+            </span>
           </label>
           <label class="check-control">
             <input v-model="project.log_enabled" type="checkbox" />
-            <span><strong>Structured Logs</strong><small>Accept SDK log records.</small></span>
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="logs" :size="17" />
+                <strong>Structured Logs</strong>
+              </span>
+              <small>Accept SDK log records.</small>
+            </span>
           </label>
           <label class="check-control">
             <input v-model="project.transaction_enabled" type="checkbox" />
-            <span
-              ><strong>Transactions</strong><small>Accept root performance segments.</small></span
-            >
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="traces" :size="17" />
+                <strong>Transactions</strong>
+              </span>
+              <small>Accept root performance segments.</small>
+            </span>
           </label>
           <label class="check-control">
             <input v-model="project.span_enabled" type="checkbox" />
-            <span><strong>Spans</strong><small>Accept child and standalone spans.</small></span>
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="activity" :size="17" />
+                <strong>Spans</strong>
+              </span>
+              <small>Accept child and standalone spans.</small>
+            </span>
           </label>
         </div>
 
@@ -206,8 +234,15 @@ const createProject = useMutation({
       </form>
 
       <aside class="panel onboarding-summary">
-        <p class="eyebrow">What happens next</p>
-        <h2>Connect without hidden setup</h2>
+        <div class="onboarding-summary__heading">
+          <span class="section-icon section-icon--success">
+            <AppIcon name="connect" :size="18" />
+          </span>
+          <div>
+            <p class="eyebrow">What happens next</p>
+            <h2>Connect without hidden setup</h2>
+          </div>
+        </div>
         <ol>
           <li><span>1</span>Faultkeep creates the project and its first DSN key.</li>
           <li><span>2</span>The new project becomes the active investigation context.</li>
