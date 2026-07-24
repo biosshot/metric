@@ -31,8 +31,8 @@ def fail(message: str) -> None:
 
 
 matrix = tomllib.loads(MATRIX.read_text(encoding="utf-8"))
-if matrix.get("manifest_version") != 2:
-    fail("manifest_version must be 2")
+if matrix.get("manifest_version") != 3:
+    fail("manifest_version must be 3")
 
 rows = matrix.get("sdk", [])
 families = [row.get("family", row.get("name")) for row in rows]
@@ -42,6 +42,12 @@ missing = REQUIRED_FAMILIES.difference(families)
 extra = set(families).difference(REQUIRED_FAMILIES)
 if missing or extra:
     fail(f"family inventory differs: missing={sorted(missing)}, extra={sorted(extra)}")
+release_required = set(matrix.get("release_required_families", []))
+if release_required != {"python", "java", "dotnet"}:
+    fail(
+        "Phase 22 release-required SDK families must be exactly "
+        "['dotnet', 'java', 'python']"
+    )
 
 for row in rows:
     family = row["family"]
@@ -75,6 +81,14 @@ for row in matrix.get("cli", []):
 
 passed = sorted(row["family"] for row in rows if row["status"] == "pass")
 untested = sorted(row["family"] for row in rows if row["status"] == "untested")
-print(f"compatibility matrix valid: pass={passed}; untested={untested}")
-if "--require-all" in sys.argv and untested:
-    fail(f"release gate still has untested SDK families: {untested}")
+required_not_passing = sorted(
+    row["family"]
+    for row in rows
+    if row["family"] in release_required and row["status"] != "pass"
+)
+print(
+    "compatibility matrix valid: "
+    f"required={sorted(release_required)}; pass={passed}; untested={untested}"
+)
+if "--require-all" in sys.argv and required_not_passing:
+    fail(f"release-required SDK families are not passing: {required_not_passing}")

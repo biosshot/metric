@@ -9,13 +9,16 @@ Currently verified:
 - official `@sentry/browser` 10.66.0 through Chromium 149.0.7827.55;
 - official `@sentry/node` 10.66.0 through a real Node process, with separate base
   Error and safe JSON attachment gates;
+- official Python `sentry-sdk` 2.32.0 through a real CPython 3.11 process;
+- official Java `sentry-java` 8.50.1 through a real Java 25 process;
+- official .NET `Sentry` 6.7.0 through a real .NET 9 process;
 - official Go `sentry-go` 0.48.0 through a real Go 1.25.1 process;
 - official Rust `sentry` 0.48.5 through a real Rust 1.88.0 process;
-- captured official Python `sentry-sdk` 2.32.0 Error Event fixture;
 - `sentry-cli` 3.6.2 and 2.58.6 debug-file and Artifact Bundle contracts.
 
-The remaining nine ADR-0036 SDK families are explicitly `untested`, not implicitly
-supported.
+Python, Java and .NET are the Phase 22 release-required SDK families. The remaining
+seven untested inventory families are not implicitly supported and do not block this
+selected version-one scope.
 The fail-closed validator is:
 
 ```text

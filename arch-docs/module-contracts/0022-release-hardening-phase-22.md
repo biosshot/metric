@@ -56,8 +56,10 @@ Phase 22 defines no new public application error code.
 
 Only a row with exact version/runtime, immutable fixture revision, executable
 evidence and last passing server build may use `status = "pass"`. Similar wire JSON
-is not evidence for another SDK family. The release gate fails while any ADR-0036
-initial family is `untested` or `failed`.
+is not evidence for another SDK family. The release gate fails while any family in
+the compatibility manifest's versioned `release_required_families` set is not
+passing. Non-required inventory rows remain honest and visible without blocking the
+selected version-one scope.
 
 Disabled transactions, spans, profiles, sessions, replays, check-ins, metrics/logs
 and feedback remain advertised as disabled.

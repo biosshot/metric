@@ -61,6 +61,13 @@ browser/Node, Python, Java/Kotlin/Android, .NET, Go, Rust, PHP, Ruby, Cocoa, Rea
 Native, Flutter/Dart, and native C/C++ families for Error Events. A family is not
 listed as supported merely because another SDK happens to serialize similar JSON.
 
+For the Phase 22 version-one release gate, the explicitly selected required SDK
+families are Python, Java and .NET. Other inventory rows remain visible and retain
+their honest `pass`, `untested`, `disabled` or `failed` state, but an untested
+non-required family does not block that release. Adding a family to the required set
+is a versioned compatibility-manifest change and requires its own executable
+evidence.
+
 Minimum/maximum supported SDK versions are published from passing rows, not guessed
 from protocol age. New SDK releases enter scheduled compatibility CI before the
 documented range changes.
