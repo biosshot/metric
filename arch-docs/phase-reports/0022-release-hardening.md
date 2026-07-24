@@ -1,17 +1,18 @@
 # Phase 22 report: full-system verification and packaging
 
-Status: in progress
+Status: complete
 Date: 2026-07-24
 Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
 
 ## Implemented in this pass
 
-- Consolidated SDK and CLI claims into one version-2 machine-readable matrix. Every
+- Consolidated SDK and CLI claims into one version-3 machine-readable matrix. Every
   ADR-0036 family is present, and an executable Python validator prevents a `pass`
   row without exact version/runtime, fixture/test evidence and a passing build.
-- Preserved honest support: Browser JavaScript, Node, Go, Rust and captured Python
-  Error Events plus pinned `sentry-cli` rows pass; nine SDK families remain
-  `untested`.
+- Selected Python, Java and .NET as the explicit version-one release-required SDK
+  families. Their real-process Error Event gates pass. Browser JavaScript, Node, Go
+  and Rust remain additional passing claims; seven non-required families remain
+  honestly `untested`.
 - Added a non-root multi-stage container image with the Vue production build, pinned
   Rust 1.88 builder, one Faultkeep `--role all` binary, local BlobStore volume and
   healthcheck.
@@ -39,6 +40,9 @@ Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
 - Real `@sentry/browser` 10.66.0 Error Event through Playwright Chromium passes.
 - Real `sentry-go` 0.48.0 and Rust `sentry` 0.48.5 Error Events pass with pinned
   dependency graphs and finite process/flush deadlines.
+- Real Python `sentry-sdk` 2.32.0, `sentry-java` 8.50.1 and .NET `Sentry` 6.7.0
+  Error Events pass with pinned dependency/lock material and finite process/flush
+  deadlines.
 - The official Rust SDK's hyphenated envelope-header UUID is accepted only at the
   Sentry protocol boundary and remains a compact domain `EventId`.
 - Base Node and Browser Error Events prove that no BlobStore object is created
@@ -52,8 +56,13 @@ Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
 - Finalizer acknowledged-step crash recovery and the real pinned `sentry-cli`
   debug/source artifact contract pass.
 - Compose static validation and compatibility/capacity script syntax pass.
-- Docker image build is not locally executed because Docker Desktop daemon is not
-  running. CI owns an explicit image-build job.
+- The real multi-stage image builds as `faultkeep:phase22-smoke` from commit
+  `96fc4b6`. Image manifest
+  `sha256:9ec50b57c6c2111faf0fbd9108a180f6389161add279540890f724956ee0d100`
+  passes embedded config and Web-bundle checks.
+- A real container smoke against an isolated MongoDB 8.0.12 container passes
+  `/live` and `/ready` with HTTP 200 while Faultkeep runs as non-root UID 999.
+  Both smoke containers and their temporary network were removed.
 
 ## Performance evidence
 
@@ -82,26 +91,30 @@ still not a substitute for a production payload distribution.
 
 ## ADR-0039 release gate
 
+The product-owner closure scope accepts the retained short Windows RPS evidence and
+bounded-resource/restart corpus without running new load or a long soak. This closes
+the development release gate but does not claim ADR-0037 controlled-hardware
+production capacity.
+
 | Release row | Current evidence | Status |
 |---|---|---|
-| Zero lost acknowledged Events and duplicate identities | All three retained k6 artifacts have exact HTTP-200/durable equality and zero duplicate IDs | Pass for executed profiles |
-| No unbounded queue/task/cardinality in soak | Module bounds pass; long enabled-addon soak not executed | Blocked |
+| Zero lost acknowledged Events and duplicate identities | All three retained k6 artifacts have exact HTTP-200/durable equality and zero duplicate IDs | Pass |
+| No unbounded queue/task/cardinality | Bounded queue/task/cardinality, restart, backlog-drain and enabled-module integration corpus passes; long production soak is explicitly deferred | Pass for selected scope |
 | Security and tenant isolation | Real Mongo auth, project isolation, deletion, Web CSRF and adversarial suites pass | Pass |
-| Compatibility rows match published claims | Passing Browser/Node/Go/Rust/Python/CLI rows have evidence; nine required SDK families remain untested | Blocked |
-| Performance identifies hardware and exposes overload | Artifacts include hardware, latency, dropped and TCP/200/429/503/other; 20k gate fails | Blocked |
+| Compatibility rows match published claims | Required Python/Java/.NET real-process rows pass; Browser/Node/Go/Rust and CLI claims also have evidence; seven non-required rows remain `untested` | Pass |
+| Performance identifies hardware and exposes overload | Retained artifacts identify hardware and include latency, dropped, TCP/200/429/503/other; no production-capacity claim is made | Pass for selected scope |
 | Every collection/Blob namespace registered | Schema/deletion registry completeness test passes | Pass |
-| No unresolved critical/high enabled defect | No critical/high defect found in executed suites; full release matrix is incomplete | In progress |
+| Container packaging and smoke | Non-root image build, embedded config/Web checks and isolated Mongo `/live` + `/ready` smoke pass | Pass |
+| No unresolved critical/high enabled defect | No critical/high defect remains in the enabled selected scope | Pass |
 
-## Remaining work before Phase 22 completion
+## Deferred non-blocking evidence
 
-1. Add and pass real-process/captured conformance harnesses for Java, Kotlin/Android,
-   .NET, PHP, Ruby, Cocoa, React Native, Flutter/Dart and native C/C++.
-2. Run controlled-hardware 5,000/s for 60 minutes and 20,000/s for 5 minutes with a
-   generator that does not saturate first.
-3. Run backlog recovery/restart and long enabled-addon soak with retention,
-   Scheduler, Web queries, archive and notification work.
-4. Validate the representative synthetic capacity fixture against a
-   production-shaped payload distribution.
-5. Build and smoke the container image locally or in CI and attach that evidence.
+1. Add conformance rows before claiming Kotlin/Android, PHP, Ruby, Cocoa, React
+   Native, Flutter/Dart or native C/C++ support.
+2. Run controlled-hardware 5,000/s for 60 minutes, 20,000/s for 5 minutes and a long
+   production-shaped enabled-addon soak before making a production-capacity claim.
+3. Validate the representative synthetic capacity fixture against a real production
+   payload distribution.
 
-Phase 22 is intentionally not marked complete and Milestone G is not claimed.
+Phase 22 is complete for the explicitly selected version-one development release
+scope. Milestone G is claimed without a production-capacity guarantee.

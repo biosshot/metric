@@ -82,5 +82,9 @@ zero acknowledged loss/duplicate identity, bounded soak, security/tenant isolati
 complete claimed compatibility, visible overload metrics, complete
 deletion/retention registration and no unresolved critical/high enabled defect.
 
+The ADR-0039 closure amendment accepts the retained bounded-resource/restart corpus
+and short Windows RPS artifacts for the selected development release. It deliberately
+does not turn them into a controlled-hardware production-capacity or long-soak claim.
+
 Until then, commits may advance the release harness but the Phase report must remain
 `in progress` and must name the blocking rows.

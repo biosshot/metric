@@ -573,6 +573,17 @@ Release gate:
 - every enabled collection/Blob namespace is registered for deletion/retention;
 - no unresolved critical/high defect in an enabled module.
 
+Closure scope amendment (2026-07-24):
+
+- the version-one required SDK subset is the versioned
+  `release_required_families` set in the compatibility manifest: Python, Java and
+  .NET;
+- retained bounded-resource/restart tests and the recorded short Windows
+  correctness/saturation profiles are accepted for this Phase 22 development
+  release instead of a new long soak or controlled-duration load run;
+- ADR-0037's 60-minute steady, five-minute burst and long production-shaped soak
+  remain future production-capacity evidence and are not claimed by this closure.
+
 Milestone G: version-one release candidate.
 
 ## Cumulative E2E ladder
