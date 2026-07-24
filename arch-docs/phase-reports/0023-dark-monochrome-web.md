@@ -87,3 +87,10 @@ runtime highlighter was added.
 
 Phase 23 is complete. The next sequential phase is Phase 24, structured Logs end to
 end; it has not been started.
+
+## Post-gate presentation exception
+
+On 2026-07-24 the product owner explicitly approved a narrowly scoped chromatic
+exception for syntax-highlighted code. Keywords, strings, numbers and comments use
+muted colors only inside code/source presentation; navigation, statuses, actions and
+all other product semantics remain monochrome and never depend on color alone.

@@ -24,6 +24,10 @@
   --border-strong: #777777;
   --accent: #ffffff;
   --focus: #ffffff;
+  --syntax-comment: #82909a;
+  --syntax-keyword: #b6a6d9;
+  --syntax-number: #d0ad86;
+  --syntax-string: #91b39a;
   --radius-small: 6px;
   --radius: 10px;
   --radius-large: 16px;
@@ -1249,6 +1253,11 @@ label small,
   grid-template-columns: 3.5rem minmax(0, 1fr);
 }
 
+.source-context code {
+  tab-size: 2;
+  white-space: pre;
+}
+
 .source-context__number {
   padding-right: 0.75rem;
   color: var(--text-muted);
@@ -1461,18 +1470,21 @@ label small,
 }
 
 .token--comment {
-  color: var(--text-muted);
+  color: var(--syntax-comment);
   font-style: italic;
 }
 
 .token--keyword {
-  color: var(--accent);
+  color: var(--syntax-keyword);
   font-weight: 700;
 }
 
-.token--number,
 .token--string {
-  color: var(--text-muted);
+  color: var(--syntax-string);
+}
+
+.token--number {
+  color: var(--syntax-number);
 }
 
 .inline-form {
