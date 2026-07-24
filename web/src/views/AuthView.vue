@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -27,6 +27,22 @@ const setupToken = ref(typeof route.query.setup_token === 'string' ? route.query
 const displayName = ref('');
 const organizationSlug = ref('');
 const organizationName = ref('');
+
+watch(
+  () => [route.name, route.query.setup_token, route.query.organization_id],
+  () => {
+    const token = route.query.setup_token;
+    const invitedOrganizationId = route.query.organization_id;
+    if (route.name === 'password-setup' || typeof token === 'string') {
+      mode.value = 'setup';
+      if (typeof token === 'string') setupToken.value = token;
+      if (typeof invitedOrganizationId === 'string') {
+        organizationId.value = invitedOrganizationId;
+      }
+    }
+  },
+  { immediate: true },
+);
 
 async function login(): Promise<void> {
   busy.value = true;

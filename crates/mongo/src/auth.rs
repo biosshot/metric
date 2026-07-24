@@ -839,6 +839,7 @@ impl AuthStore for MongoAuthStore {
     ) -> PortFuture<'_, Result<(), AuthStoreError>> {
         Box::pin(async move {
             let user_id = token.user_id.ok_or(AuthStoreError::InvalidData)?;
+            let purpose = setup_purpose_name(token.purpose);
             if self
                 .database
                 .collection::<Document>("users")
@@ -850,12 +851,40 @@ impl AuthStore for MongoAuthStore {
             {
                 return Err(AuthStoreError::NotFound);
             }
-            self.database
-                .collection::<Document>("password_setup_tokens")
+            let tokens = self
+                .database
+                .collection::<Document>("password_setup_tokens");
+            if token.purpose == SetupPurpose::PasswordSetup {
+                let replacement = tokens
+                    .update_one(
+                        doc! {
+                            "user_id": user_i64(user_id)?,
+                            "purpose": purpose,
+                            "consumed_at": { "$exists": false },
+                        },
+                        doc! {
+                            "$set": {
+                                "digest": digest_binary(token.digest),
+                                "created_at": date(token.created_at),
+                                "expires_at": date(token.expires_at),
+                            },
+                            "$unset": {
+                                "operation_id": "",
+                                "operation_state": "",
+                            },
+                        },
+                    )
+                    .await
+                    .map_err(classify_duplicate)?;
+                if replacement.matched_count == 1 {
+                    return Ok(());
+                }
+            }
+            tokens
                 .insert_one(encode_setup_token(&token)?)
                 .await
-                .map(|_| ())
-                .map_err(classify_duplicate)
+                .map_err(classify_duplicate)?;
+            Ok(())
         })
     }
 

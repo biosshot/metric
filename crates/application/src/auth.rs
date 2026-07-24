@@ -504,6 +504,18 @@ impl IdentityService {
         if request.role == OrganizationRole::Owner {
             require(context, Permission::OrganizationOwner)?;
         }
+        match self
+            .call(self.store.load_user_by_email(&request.email))
+            .await
+        {
+            Ok(user) => {
+                return self
+                    .reissue_pending_invitation(context, &request, user)
+                    .await;
+            }
+            Err(AuthError::NotFound) => {}
+            Err(error) => return Err(error),
+        }
         for _ in 0..self.config.identity_collision_retries {
             let user_id =
                 UserId::new(self.random_u63()?).map_err(|_| AuthError::RandomUnavailable)?;
@@ -552,6 +564,56 @@ impl IdentityService {
                 }
                 Err(AuthError::IdentityCollision) => {}
                 Err(AuthError::AlreadyExists) => return Err(AuthError::AlreadyExists),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(AuthError::CollisionExhausted)
+    }
+
+    async fn reissue_pending_invitation(
+        &self,
+        context: &AuthContext,
+        request: &InviteUserRequest,
+        user: UserAccount,
+    ) -> Result<PlainSecret, AuthError> {
+        if user.password_hash.is_some() || user.disabled_at.is_some() {
+            return Err(AuthError::AlreadyExists);
+        }
+        let membership = self
+            .call(self.store.load_membership(user.id, context.organization_id))
+            .await?;
+        if membership.role == OrganizationRole::Owner {
+            require(context, Permission::OrganizationOwner)?;
+        }
+        for _ in 0..self.config.identity_collision_retries {
+            let secret = self.random_secret()?;
+            let now = self.clock.now();
+            let token = SetupToken {
+                id: self.random_id()?,
+                digest: digest(secret.expose()),
+                purpose: SetupPurpose::PasswordSetup,
+                user_id: Some(user.id),
+                created_at: now,
+                expires_at: add_duration(now, self.config.setup_token_timeout)?,
+                consumed_at: None,
+            };
+            match self
+                .call(self.store.create_password_setup_token(token))
+                .await
+            {
+                Ok(()) => {
+                    self.audit(
+                        context,
+                        request.request_id.clone(),
+                        AuditAction::MembershipInvitationReissued,
+                        "user",
+                        user.id.get().to_string(),
+                        role_metadata(membership.role),
+                    )
+                    .await?;
+                    return Ok(secret);
+                }
+                Err(AuthError::IdentityCollision) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -2160,6 +2222,52 @@ mod tests {
                 .authenticate_session(&rotated.session, None, false, context.organization_id,)
                 .await,
             Err(AuthError::InvalidCredential)
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_invitation_can_be_reissued_and_replaces_the_previous_secret() {
+        let (service, _store, _clock, owner, _session) = bootstrapped().await;
+        let invitation = |request_id: &str| InviteUserRequest {
+            email: EmailAddress::parse("pending@example.com").unwrap(),
+            display_name: UserDisplayName::new("Pending User").unwrap(),
+            role: OrganizationRole::Member,
+            request_id: BoundedId::new(request_id).unwrap(),
+        };
+        let previous = service
+            .invite_user(&owner, invitation("invite-pending-1"))
+            .await
+            .unwrap();
+        let replacement = service
+            .invite_user(&owner, invitation("invite-pending-2"))
+            .await
+            .unwrap();
+        assert_ne!(previous.expose(), replacement.expose());
+        assert_eq!(
+            service
+                .setup_password(
+                    &previous,
+                    PasswordInput::new("pending correct horse password").unwrap(),
+                    owner.organization_id,
+                    BoundedId::new("setup-old-invitation").unwrap(),
+                )
+                .await,
+            Err(AuthError::InvalidCredential)
+        );
+        service
+            .setup_password(
+                &replacement,
+                PasswordInput::new("pending correct horse password").unwrap(),
+                owner.organization_id,
+                BoundedId::new("setup-new-invitation").unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .invite_user(&owner, invitation("invite-active-user"))
+                .await,
+            Err(AuthError::AlreadyExists)
         );
     }
 

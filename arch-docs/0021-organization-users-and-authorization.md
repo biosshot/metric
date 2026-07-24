@@ -254,6 +254,11 @@ copied manually. Password setup and administrator-initiated reset tokens are sto
 only as digests, are single-use, and expire after 24 hours by default. SMTP is
 therefore optional rather than required for account administration.
 
+An administrator may reissue an invitation while the invited account has no
+password. The new password-setup token replaces every older unconsumed setup token
+for that user. Once the account has a password, the invitation operation cannot
+silently become a password reset; the explicit administrator reset flow is required.
+
 ### Audit log
 
 Security and administrative mutations append an `audit_log` record containing the

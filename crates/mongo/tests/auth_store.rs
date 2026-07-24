@@ -127,6 +127,35 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         )
         .await?;
     store
+        .create_password_setup_token(setup_token(
+            66,
+            [66; 32],
+            SetupPurpose::PasswordSetup,
+            Some(second_owner),
+            now,
+        ))
+        .await?;
+    assert_eq!(
+        store
+            .consume_password_setup(
+                SecretDigest::new([6; 32]),
+                later,
+                PasswordHash::new("$argon2id$v=19$m=19456,t=2,p=1$old$hash")?,
+            )
+            .await,
+        Err(AuthStoreError::InvalidCredential)
+    );
+    assert_eq!(
+        store
+            .consume_password_setup(
+                SecretDigest::new([66; 32]),
+                later,
+                PasswordHash::new("$argon2id$v=19$m=19456,t=2,p=1$new$hash")?,
+            )
+            .await?,
+        second_owner
+    );
+    store
         .mutate_membership(MembershipMutation {
             organization_id,
             user_id: owner_id,
