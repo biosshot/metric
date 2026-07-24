@@ -34,6 +34,9 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/issues", index.clone())
         .route_service("/issues/{issue_id}", index.clone())
         .route_service("/events/{event_id}", index.clone())
+        .route_service("/organization", index.clone())
+        .route_service("/account/tokens", index.clone())
+        .route_service("/auth/setup", index.clone())
         .route_service("/project/setup", index.clone())
         .route_service("/project/settings", index.clone())
         .route_service("/system", index)
@@ -82,25 +85,27 @@ mod tests {
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("index.html"), "<main>Faultkeep Web</main>").unwrap();
 
-        let response = router_with_root(&root)
-            .oneshot(
-                Request::builder()
-                    .uri("/issues/001122")
-                    .body(Body::empty())
+        for path in [
+            "/issues/001122",
+            "/organization",
+            "/account/tokens",
+            "/auth/setup",
+        ] {
+            let response = router_with_root(&root)
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::X_CONTENT_TYPE_OPTIONS)
                     .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::X_CONTENT_TYPE_OPTIONS)
-                .unwrap(),
-            "nosniff"
-        );
-        let body = to_bytes(response.into_body(), 1024).await.unwrap();
-        assert_eq!(body, "<main>Faultkeep Web</main>");
+                "nosniff"
+            );
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(body, "<main>Faultkeep Web</main>");
+        }
 
         std::fs::remove_dir_all(root).unwrap();
     }

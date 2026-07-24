@@ -9,7 +9,7 @@ import { useSessionStore } from '../stores/session';
 const session = useSessionStore();
 const router = useRouter();
 const route = useRoute();
-const invited = typeof route.query.setup_token === 'string';
+const invited = route.name === 'password-setup' || typeof route.query.setup_token === 'string';
 const mode = ref<'login' | 'bootstrap' | 'setup'>(invited ? 'setup' : 'login');
 const busy = ref(false);
 const error = ref<unknown>(null);

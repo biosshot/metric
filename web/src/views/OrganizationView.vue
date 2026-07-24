@@ -12,6 +12,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { useSessionStore } from '../stores/session';
 import ApiTokensView from './ApiTokensView.vue';
+import { organizationInvitationUrl } from './organizationInvitation';
 
 const session = useSessionStore();
 const queryClient = useQueryClient();
@@ -112,10 +113,7 @@ const updateMember = useMutation({
 
 const setupLink = computed(() => {
   if (!invitation.value) return '';
-  const url = new URL('/', window.location.origin);
-  url.searchParams.set('setup_token', invitation.value.setup_token);
-  url.searchParams.set('organization_id', invitation.value.organization_id);
-  return url.toString();
+  return organizationInvitationUrl(window.location.origin, invitation.value);
 });
 
 function saveRole(member: OrganizationMember): void {

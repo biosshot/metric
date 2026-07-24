@@ -57,7 +57,7 @@ async function logout(): Promise<void> {
       Open sign-in instead
     </button>
   </div>
-  <AuthView v-else-if="!session.authenticated" />
+  <AuthView v-else-if="!session.authenticated || $route.name === 'password-setup'" />
   <div v-else class="app-shell">
     <header class="mobile-header">
       <button
