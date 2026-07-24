@@ -16,10 +16,14 @@ rewritten to `index.html`.
 
 - The HttpOnly session cookie remains owned by the server.
 - The current organization is sent through `x-faultkeep-organization-id`.
-- The login response CSRF token is retained in `sessionStorage` for the current
-  tab only.
-- A state-changing request is rejected locally when the tab no longer owns the
-  CSRF token. The UI requires a new login instead of sending an unsafe request.
+- The login response CSRF token is retained in origin-scoped `localStorage` for
+  the lifetime of the HttpOnly session cookie. This allows a browser restart or
+  a new same-origin tab to keep performing protected mutations without exposing
+  the opaque session identifier.
+- Legacy per-tab `sessionStorage` CSRF state is migrated once and removed.
+- A cookie session is not restored into the authenticated UI when matching CSRF
+  state is absent. The UI requires a new login instead of creating an unusable
+  read-only half-session or sending an unsafe request.
 - Personal API tokens are never stored by the Web client.
 - Permission-dependent controls improve clarity but do not replace server-side
   authorization.

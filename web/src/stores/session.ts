@@ -8,9 +8,16 @@ const CSRF_KEY = 'faultkeep.csrf';
 const PROJECT_KEY = 'faultkeep.project';
 
 export const useSessionStore = defineStore('session', () => {
+  const legacyTabCsrf = sessionStorage.getItem(CSRF_KEY);
+  const persistedCsrf = localStorage.getItem(CSRF_KEY) ?? legacyTabCsrf;
+  if (persistedCsrf && !localStorage.getItem(CSRF_KEY)) {
+    localStorage.setItem(CSRF_KEY, persistedCsrf);
+  }
+  sessionStorage.removeItem(CSRF_KEY);
+
   const identity = ref<Identity | null>(null);
   const organizationId = ref(localStorage.getItem(ORG_KEY));
-  const csrfToken = ref(sessionStorage.getItem(CSRF_KEY));
+  const csrfToken = ref(persistedCsrf);
   const selectedProjectId = ref(localStorage.getItem(PROJECT_KEY));
   const projects = ref<Project[]>([]);
   const restoring = ref(true);
@@ -37,6 +44,12 @@ export const useSessionStore = defineStore('session', () => {
       restoring.value = false;
       return;
     }
+    if (!csrfToken.value) {
+      identity.value = null;
+      projects.value = [];
+      restoring.value = false;
+      return;
+    }
     try {
       identity.value = await api.me();
       await refreshProjects();
@@ -57,7 +70,7 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const issued = await api.login(email, password, orgId);
       csrfToken.value = issued.csrf_token;
-      sessionStorage.setItem(CSRF_KEY, issued.csrf_token);
+      localStorage.setItem(CSRF_KEY, issued.csrf_token);
       identity.value = await api.me();
       await refreshProjects();
     } catch (error) {
@@ -67,7 +80,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function logout(): Promise<void> {
-    await api.logout();
+    if (csrfToken.value) await api.logout();
     clear();
   }
 
@@ -92,6 +105,7 @@ export const useSessionStore = defineStore('session', () => {
     identity.value = null;
     csrfToken.value = null;
     projects.value = [];
+    localStorage.removeItem(CSRF_KEY);
     sessionStorage.removeItem(CSRF_KEY);
   }
 

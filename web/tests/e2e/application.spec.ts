@@ -73,6 +73,7 @@ const event = {
 interface ApiState {
   role: 'owner' | 'viewer';
   csrfSeen: boolean;
+  logoutCsrfSeen?: boolean;
   sessionCookieSeen: boolean;
   failIssues: boolean;
   emptyIssues?: boolean;
@@ -144,6 +145,10 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
             ],
       credential_id: '12',
     });
+  }
+  if (path === '/api/v1/auth/logout' && request.method() === 'POST') {
+    state.logoutCsrfSeen = request.headers()['x-csrf-token'] === 'c'.repeat(64);
+    return route.fulfill({ status: 204 });
   }
   if (path === '/api/v1/projects' && request.method() === 'POST') {
     state.projectCreationSeen =
@@ -261,6 +266,8 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   };
   await installApi(page, state);
   await login(page);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();
   expect(state.sessionCookieSeen).toBe(true);
   expect(await page.evaluate(() => document.cookie)).not.toContain('faultkeep_session');
 
@@ -286,6 +293,10 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await page.getByRole('button', { name: 'Save policy' }).click();
   await expect(page.getByRole('status')).toContainText('Project policy saved');
   expect(state.policyRevisionSeen).toBe(true);
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in to Faultkeep' })).toBeVisible();
+  expect(state.logoutCsrfSeen).toBe(true);
 });
 
 test('first setup creates a project and reaches an actionable SDK DSN', async ({ page }) => {
