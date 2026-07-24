@@ -36,7 +36,31 @@ const frames = computed<Frame[]>(() => {
   });
   if (exceptionFrames.length) return exceptionFrames.toReversed();
   const stacktrace = props.body.stacktrace as { frames?: unknown[] } | undefined;
-  return Array.isArray(stacktrace?.frames) ? (stacktrace.frames as Frame[]).toReversed() : [];
+  if (Array.isArray(stacktrace?.frames) && stacktrace.frames.length) {
+    return (stacktrace.frames as Frame[]).toReversed();
+  }
+  const threads = props.body.threads as { values?: unknown[] } | undefined;
+  const threadValues = Array.isArray(threads?.values) ? threads.values : [];
+  const selectedThread =
+    threadValues.find((value) => {
+      const item = value as { current?: boolean; stacktrace?: { frames?: unknown[] } };
+      return (
+        item.current && Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length
+      );
+    }) ??
+    threadValues.find((value) => {
+      const item = value as { crashed?: boolean; stacktrace?: { frames?: unknown[] } };
+      return (
+        item.crashed && Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length
+      );
+    }) ??
+    threadValues.find((value) => {
+      const item = value as { stacktrace?: { frames?: unknown[] } };
+      return Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length;
+    });
+  const threadFrames = (selectedThread as { stacktrace?: { frames?: unknown[] } } | undefined)
+    ?.stacktrace?.frames;
+  return Array.isArray(threadFrames) ? (threadFrames as Frame[]).toReversed() : [];
 });
 
 const visibleFrames = computed(() =>

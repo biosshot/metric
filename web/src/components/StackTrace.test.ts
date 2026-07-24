@@ -69,4 +69,35 @@ describe('StackTrace', () => {
     await fireEvent.click(showAll);
     expect(document.querySelectorAll('.stack-frame')).toHaveLength(120);
   });
+
+  it('renders the current thread stack when an exception has no stacktrace', () => {
+    render(StackTrace, {
+      props: {
+        body: {
+          exception: { values: [{ type: 'FaultkeepRustSdkCompatibilityError' }] },
+          threads: {
+            values: [
+              {
+                current: true,
+                stacktrace: {
+                  frames: [
+                    {
+                      filename: 'src/main.rs',
+                      function: 'faultkeep_sdk_compatibility_rust::main',
+                      lineno: 40,
+                      in_app: true,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(screen.getByRole('heading', { name: '1 frames' })).toBeVisible();
+    expect(screen.getByText('faultkeep_sdk_compatibility_rust::main')).toBeVisible();
+    expect(screen.getByText('src/main.rs')).toBeVisible();
+  });
 });

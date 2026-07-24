@@ -29,6 +29,7 @@ fn main() {
         traces_sample_rate: 0.0,
         send_default_pii: false,
         auto_session_tracking: false,
+        attach_stacktrace: true,
         shutdown_timeout: Duration::from_secs(8),
         ..Default::default()
     });
