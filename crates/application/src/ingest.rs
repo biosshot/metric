@@ -7,11 +7,15 @@ use faultkeep_domain::{
         AttachmentFilename, BlobChecksum, BlobContentType, BlobKey, BlobKind, BlobObjectId,
         EventAttachment,
     },
+    signals::{
+        LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
+        SpanRecordId, TraceId,
+    },
 };
 use faultkeep_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
     IngestOutcome, IngestOutcomeKind, OutcomeSink, ProjectResolveError, ProjectResolver,
-    RandomSource,
+    RandomSource, SignalStore, SignalStoreError,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Map, Value};
@@ -76,6 +80,19 @@ pub struct PendingAttachment {
     pub bytes: Box<[u8]>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingSignalKind {
+    Log,
+    Transaction,
+    Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingSignal {
+    pub kind: PendingSignalKind,
+    pub raw_json: Box<[u8]>,
+}
+
 impl std::fmt::Debug for PrimaryEvent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -93,6 +110,7 @@ pub struct IngestRequest {
     pub dsn_project_id: Option<ProjectId>,
     pub envelope_event_id: Option<EventId>,
     pub primary: Option<PrimaryEvent>,
+    pub signals: Vec<PendingSignal>,
     pub attachments: Vec<PendingAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
@@ -210,6 +228,9 @@ pub struct IngestService {
     blob_store: Option<Arc<dyn BlobStore>>,
     attachment_config: AttachmentIngestConfig,
     minidump_config: MinidumpIngestConfig,
+    signal_store: Option<Arc<dyn SignalStore>>,
+    log_permits: Arc<Semaphore>,
+    span_permits: Arc<Semaphore>,
 }
 
 impl IngestService {
@@ -234,7 +255,16 @@ impl IngestService {
             blob_store: None,
             attachment_config: AttachmentIngestConfig::default(),
             minidump_config: MinidumpIngestConfig::default(),
+            signal_store: None,
+            log_permits: Arc::new(Semaphore::new(max_waiting_for_storage.max(1))),
+            span_permits: Arc::new(Semaphore::new(max_waiting_for_storage.max(1))),
         }
+    }
+
+    #[must_use]
+    pub fn with_signal_store(mut self, signal_store: Arc<dyn SignalStore>) -> Self {
+        self.signal_store = Some(signal_store);
+        self
     }
 
     #[must_use]
@@ -294,6 +324,10 @@ impl IngestService {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+
+        disabled_categories.extend(self.persist_signals(&snapshot, request.signals).await?);
+        disabled_categories.sort_unstable();
+        disabled_categories.dedup();
 
         let Some(primary) = request.primary else {
             if !request.attachments.is_empty() {
@@ -384,6 +418,99 @@ impl IngestService {
             durable: Some(durable),
             disabled_categories,
         })
+    }
+
+    async fn persist_signals(
+        &self,
+        snapshot: &ProjectSnapshot,
+        signals: Vec<PendingSignal>,
+    ) -> Result<Vec<&'static str>, IngestError> {
+        if signals.is_empty() {
+            return Ok(Vec::new());
+        }
+        let received_at = self.clock.now();
+        let mut logs = Vec::new();
+        let mut spans = Vec::new();
+        let mut disabled_categories = Vec::new();
+        for signal in signals {
+            if signal.raw_json.len() > snapshot.limits.max_event_bytes.get() as usize {
+                return Err(IngestError {
+                    kind: IngestErrorKind::TooLarge,
+                    code: "project_signal_too_large",
+                });
+            }
+            match signal.kind {
+                PendingSignalKind::Log if snapshot.items.log => {
+                    logs.extend(normalize_logs(snapshot, received_at, &signal.raw_json)?)
+                }
+                PendingSignalKind::Transaction if snapshot.items.transaction => spans.extend(
+                    normalize_transaction(snapshot, received_at, &signal.raw_json)?,
+                ),
+                PendingSignalKind::Span if snapshot.items.span => {
+                    spans.extend(normalize_spans(snapshot, received_at, &signal.raw_json)?)
+                }
+                PendingSignalKind::Log
+                | PendingSignalKind::Transaction
+                | PendingSignalKind::Span => {
+                    disabled_categories.push(match signal.kind {
+                        PendingSignalKind::Log => "log",
+                        PendingSignalKind::Transaction => "transaction",
+                        PendingSignalKind::Span => "span",
+                    });
+                    self.outcome_sink.record(IngestOutcome {
+                        kind: IngestOutcomeKind::Unsupported,
+                        reason: "feature_disabled",
+                        quantity: 1,
+                    });
+                }
+            }
+        }
+        if logs.is_empty() && spans.is_empty() {
+            disabled_categories.sort_unstable();
+            disabled_categories.dedup();
+            return Ok(disabled_categories);
+        }
+        let store = self
+            .signal_store
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("signal_storage_unavailable"))?;
+        if !logs.is_empty() {
+            let _permit = self
+                .log_permits
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| IngestError::rate_limited("log_lane_capacity"))?;
+            let quantity = u64::try_from(logs.len()).unwrap_or(u64::MAX);
+            store
+                .persist_logs(logs)
+                .await
+                .map_err(map_signal_store_error)?;
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Accepted,
+                reason: "log",
+                quantity,
+            });
+        }
+        if !spans.is_empty() {
+            let _permit = self
+                .span_permits
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| IngestError::rate_limited("span_lane_capacity"))?;
+            let quantity = u64::try_from(spans.len()).unwrap_or(u64::MAX);
+            store
+                .persist_spans(spans)
+                .await
+                .map_err(map_signal_store_error)?;
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Accepted,
+                reason: "span",
+                quantity,
+            });
+        }
+        disabled_categories.sort_unstable();
+        disabled_categories.dedup();
+        Ok(disabled_categories)
     }
 
     pub fn record_outcome(&self, outcome: IngestOutcome) {
@@ -957,6 +1084,412 @@ fn normalize_field(field: &str) -> String {
         .collect()
 }
 
+fn normalize_logs(
+    snapshot: &ProjectSnapshot,
+    received_at: faultkeep_domain::Timestamp,
+    payload: &[u8],
+) -> Result<Vec<LogRecord>, IngestError> {
+    let mut container: Value =
+        serde_json::from_slice(payload).map_err(|_| IngestError::invalid("invalid_log_json"))?;
+    scrub_value(&mut container, None, &snapshot.scrub_policy, 0)?;
+    let values = container
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(|| vec![container]);
+    if values.is_empty() || values.len() > 100 {
+        return Err(IngestError::invalid("invalid_log_count"));
+    }
+    let mut records = Vec::with_capacity(values.len());
+    for value in values {
+        let occurred_at_ns = seconds_to_ns(
+            value
+                .get("timestamp")
+                .ok_or_else(|| IngestError::invalid("missing_log_timestamp"))?,
+        )?;
+        let message = bounded_text(
+            value
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or_else(|| IngestError::invalid("missing_log_body"))?,
+            8_192,
+            "log_body_too_large",
+        )?;
+        let level = value.get("level").and_then(Value::as_str).unwrap_or("info");
+        let attributes = value.get("attributes").and_then(Value::as_object);
+        let trace_id = value
+            .get("trace_id")
+            .and_then(Value::as_str)
+            .map(TraceId::parse)
+            .transpose()
+            .map_err(|_| IngestError::invalid("invalid_log_trace_id"))?;
+        let span_id = attribute_string(attributes, "sentry.trace.parent_span_id")
+            .map(SpanId::parse)
+            .transpose()
+            .map_err(|_| IngestError::invalid("invalid_log_span_id"))?;
+        let body =
+            serde_json::to_vec(&value).map_err(|_| IngestError::invalid("invalid_log_json"))?;
+        let id = LogId::deterministic(snapshot.project_id, received_at, occurred_at_ns, &body);
+        records.push(LogRecord {
+            id,
+            project_id: snapshot.project_id,
+            received_at,
+            occurred_at_ns,
+            severity: LogSeverity::from_wire(level),
+            message,
+            trace_id,
+            span_id,
+            environment: attribute_boxed(attributes, "sentry.environment", 128),
+            release: attribute_boxed(attributes, "sentry.release", 256),
+            service: attribute_boxed(attributes, "service.name", 256)
+                .or_else(|| attribute_boxed(attributes, "sentry.service.name", 256)),
+            body: SignalBody::new(body),
+        });
+    }
+    Ok(records)
+}
+
+fn normalize_transaction(
+    snapshot: &ProjectSnapshot,
+    received_at: faultkeep_domain::Timestamp,
+    payload: &[u8],
+) -> Result<Vec<SpanRecord>, IngestError> {
+    let mut value: Value = serde_json::from_slice(payload)
+        .map_err(|_| IngestError::invalid("invalid_transaction_json"))?;
+    scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
+    let trace = value
+        .pointer("/contexts/trace")
+        .and_then(Value::as_object)
+        .ok_or_else(|| IngestError::invalid("missing_transaction_trace"))?;
+    let trace_id = required_trace_id(trace.get("trace_id"))?;
+    let root_span_id = required_span_id(trace.get("span_id"))?;
+    let environment = optional_bounded(value.get("environment"), 128);
+    let release = optional_bounded(value.get("release"), 256);
+    let service = attribute_boxed(
+        trace.get("data").and_then(Value::as_object),
+        "service.name",
+        256,
+    );
+    let root = span_from_parts(
+        snapshot.project_id,
+        received_at,
+        &value,
+        trace,
+        trace_id,
+        root_span_id,
+        true,
+        environment.clone(),
+        release.clone(),
+        service.clone(),
+    )?;
+    let children = value
+        .get("spans")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if children.len() > 1_000 {
+        return Err(IngestError::invalid("too_many_transaction_spans"));
+    }
+    let mut records = Vec::with_capacity(children.len() + 1);
+    records.push(root);
+    for child in children {
+        let object = child
+            .as_object()
+            .ok_or_else(|| IngestError::invalid("invalid_transaction_span"))?;
+        let child_trace_id = object
+            .get("trace_id")
+            .map(|value| required_trace_id(Some(value)))
+            .transpose()?
+            .unwrap_or(trace_id);
+        if child_trace_id != trace_id {
+            return Err(IngestError::invalid("conflicting_span_trace_id"));
+        }
+        let span_id = required_span_id(object.get("span_id"))?;
+        records.push(span_from_parts(
+            snapshot.project_id,
+            received_at,
+            &child,
+            object,
+            trace_id,
+            span_id,
+            false,
+            environment.clone(),
+            release.clone(),
+            service.clone(),
+        )?);
+    }
+    derive_insights(&mut records);
+    Ok(records)
+}
+
+fn normalize_spans(
+    snapshot: &ProjectSnapshot,
+    received_at: faultkeep_domain::Timestamp,
+    payload: &[u8],
+) -> Result<Vec<SpanRecord>, IngestError> {
+    let mut container: Value =
+        serde_json::from_slice(payload).map_err(|_| IngestError::invalid("invalid_span_json"))?;
+    scrub_value(&mut container, None, &snapshot.scrub_policy, 0)?;
+    let values = container
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(|| vec![container]);
+    if values.is_empty() || values.len() > 1_000 {
+        return Err(IngestError::invalid("invalid_span_count"));
+    }
+    let mut records = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value
+            .as_object()
+            .ok_or_else(|| IngestError::invalid("invalid_span_json"))?;
+        let trace_id = required_trace_id(object.get("trace_id"))?;
+        let span_id = required_span_id(object.get("span_id"))?;
+        let attributes = object
+            .get("attributes")
+            .or_else(|| object.get("data"))
+            .and_then(Value::as_object);
+        let environment = attribute_boxed(attributes, "sentry.environment", 128);
+        let release = attribute_boxed(attributes, "sentry.release", 256);
+        let service = attribute_boxed(attributes, "service.name", 256);
+        records.push(span_from_parts(
+            snapshot.project_id,
+            received_at,
+            &value,
+            object,
+            trace_id,
+            span_id,
+            object
+                .get("is_segment")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            environment,
+            release,
+            service,
+        )?);
+    }
+    derive_insights(&mut records);
+    Ok(records)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn span_from_parts(
+    project_id: ProjectId,
+    received_at: faultkeep_domain::Timestamp,
+    value: &Value,
+    fields: &Map<String, Value>,
+    trace_id: TraceId,
+    span_id: SpanId,
+    is_segment: bool,
+    environment: Option<Box<str>>,
+    release: Option<Box<str>>,
+    service: Option<Box<str>>,
+) -> Result<SpanRecord, IngestError> {
+    let context = value.pointer("/contexts/trace").and_then(Value::as_object);
+    let start = fields
+        .get("start_timestamp")
+        .or_else(|| value.get("start_timestamp"))
+        .ok_or_else(|| IngestError::invalid("missing_span_start"))?;
+    let end = fields
+        .get("end_timestamp")
+        .or_else(|| fields.get("timestamp"))
+        .or_else(|| value.get("timestamp"))
+        .ok_or_else(|| IngestError::invalid("missing_span_end"))?;
+    let started_at_ns = seconds_to_ns(start)?;
+    let ended_at_ns = seconds_to_ns(end)?;
+    let duration_ns = ended_at_ns
+        .checked_sub(started_at_ns)
+        .filter(|duration| *duration >= 0)
+        .ok_or_else(|| IngestError::invalid("invalid_span_duration"))?;
+    let attributes = fields
+        .get("attributes")
+        .or_else(|| fields.get("data"))
+        .and_then(Value::as_object)
+        .or_else(|| {
+            context
+                .and_then(|trace| trace.get("data"))
+                .and_then(Value::as_object)
+        });
+    let operation = fields
+        .get("op")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            context
+                .and_then(|trace| trace.get("op"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| attribute_string(attributes, "sentry.op"))
+        .unwrap_or("unknown");
+    let name = fields
+        .get("name")
+        .or_else(|| fields.get("description"))
+        .or_else(|| value.get("transaction"))
+        .and_then(Value::as_str)
+        .unwrap_or("unnamed span");
+    let status = fields
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            context
+                .and_then(|trace| trace.get("status"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("");
+    let parent_span_id = fields
+        .get("parent_span_id")
+        .or_else(|| context.and_then(|trace| trace.get("parent_span_id")))
+        .and_then(Value::as_str)
+        .map(SpanId::parse)
+        .transpose()
+        .map_err(|_| IngestError::invalid("invalid_parent_span_id"))?;
+    let body = serde_json::to_vec(value).map_err(|_| IngestError::invalid("invalid_span_json"))?;
+    Ok(SpanRecord {
+        id: SpanRecordId::deterministic(project_id, trace_id, span_id),
+        project_id,
+        received_at,
+        started_at_ns,
+        duration_ns,
+        trace_id,
+        span_id,
+        parent_span_id,
+        is_segment,
+        operation_class: SpanOperationClass::from_operation(operation),
+        operation: bounded_text(operation, 128, "span_operation_too_large")?,
+        status: bounded_text(status, 64, "span_status_too_large")?,
+        name: bounded_text(name, 1_024, "span_name_too_large")?,
+        environment,
+        release,
+        service,
+        insight_flags: 0,
+        body: SignalBody::new(body),
+    })
+}
+
+fn derive_insights(records: &mut [SpanRecord]) {
+    let Some(root_index) = records.iter().position(|record| record.is_segment) else {
+        for record in records {
+            record.insight_flags = insight_flags_for_span(record);
+        }
+        return;
+    };
+    let mut flags = insight_flags_for_span(&records[root_index]);
+    let mut databases = std::collections::BTreeMap::<Box<str>, usize>::new();
+    let mut http = std::collections::BTreeMap::<Box<str>, usize>::new();
+    let mut cache = 0_usize;
+    for record in records.iter().filter(|record| !record.is_segment) {
+        flags |= insight_flags_for_span(record);
+        match record.operation_class {
+            SpanOperationClass::Database => {
+                *databases.entry(record.name.clone()).or_default() += 1;
+            }
+            SpanOperationClass::HttpClient => {
+                *http.entry(record.name.clone()).or_default() += 1;
+            }
+            SpanOperationClass::Cache => cache += 1,
+            _ => {}
+        }
+    }
+    if databases.values().any(|count| *count >= 5) {
+        flags |= 1 << 1;
+    }
+    if http.values().any(|count| *count >= 3) {
+        flags |= 1 << 2;
+    }
+    if cache >= 5 {
+        flags |= 1 << 4;
+    }
+    records[root_index].insight_flags = flags;
+}
+
+fn insight_flags_for_span(record: &SpanRecord) -> u32 {
+    let mut flags = 0_u32;
+    if record.is_segment && record.duration_ns >= 1_000_000_000 {
+        flags |= 1;
+    }
+    if record.operation_class == SpanOperationClass::Database && record.duration_ns >= 250_000_000 {
+        flags |= 1 << 3;
+    }
+    if record.operation_class == SpanOperationClass::Queue && record.duration_ns >= 500_000_000 {
+        flags |= 1 << 5;
+    }
+    if record.operation_class == SpanOperationClass::Task && record.duration_ns >= 1_000_000_000 {
+        flags |= 1 << 6;
+    }
+    if !record.is_segment && !matches!(record.status.as_ref(), "" | "ok" | "cancelled") {
+        flags |= 1 << 7;
+    }
+    flags
+}
+
+fn required_trace_id(value: Option<&Value>) -> Result<TraceId, IngestError> {
+    value
+        .and_then(Value::as_str)
+        .ok_or_else(|| IngestError::invalid("missing_trace_id"))
+        .and_then(|value| {
+            TraceId::parse(value).map_err(|_| IngestError::invalid("invalid_trace_id"))
+        })
+}
+
+fn required_span_id(value: Option<&Value>) -> Result<SpanId, IngestError> {
+    value
+        .and_then(Value::as_str)
+        .ok_or_else(|| IngestError::invalid("missing_span_id"))
+        .and_then(|value| SpanId::parse(value).map_err(|_| IngestError::invalid("invalid_span_id")))
+}
+
+fn seconds_to_ns(value: &Value) -> Result<i64, IngestError> {
+    let seconds = value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| IngestError::invalid("invalid_signal_timestamp"))?;
+    let nanoseconds = seconds * 1_000_000_000.0;
+    if nanoseconds < i64::MIN as f64 || nanoseconds > i64::MAX as f64 {
+        return Err(IngestError::invalid("signal_timestamp_out_of_range"));
+    }
+    Ok(nanoseconds.round() as i64)
+}
+
+fn attribute_string<'a>(attributes: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a str> {
+    let value = attributes?.get(key)?;
+    value
+        .get("value")
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+}
+
+fn attribute_boxed(
+    attributes: Option<&Map<String, Value>>,
+    key: &str,
+    maximum: usize,
+) -> Option<Box<str>> {
+    attribute_string(attributes, key).map(|value| truncate_text(value, maximum).into())
+}
+
+fn optional_bounded(value: Option<&Value>, maximum: usize) -> Option<Box<str>> {
+    value
+        .and_then(Value::as_str)
+        .map(|value| truncate_text(value, maximum).into())
+}
+
+fn bounded_text(value: &str, maximum: usize, code: &'static str) -> Result<Box<str>, IngestError> {
+    if value.chars().any(char::is_control) || value.len() > maximum {
+        return Err(IngestError::invalid(code));
+    }
+    Ok(value.into())
+}
+
+fn truncate_text(value: &str, maximum: usize) -> &str {
+    if value.len() <= maximum {
+        return value;
+    }
+    let mut boundary = maximum;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &value[..boundary]
+}
+
 fn map_resolve_error(error: ProjectResolveError) -> IngestError {
     match error {
         ProjectResolveError::Unauthorized => IngestError {
@@ -964,6 +1497,17 @@ fn map_resolve_error(error: ProjectResolveError) -> IngestError {
             code: "unauthorized",
         },
         ProjectResolveError::Unavailable => IngestError::unavailable("project_unavailable"),
+    }
+}
+
+fn map_signal_store_error(error: SignalStoreError) -> IngestError {
+    match error {
+        SignalStoreError::Conflict | SignalStoreError::InvalidData => {
+            IngestError::invalid("signal_conflict")
+        }
+        SignalStoreError::NotFound | SignalStoreError::Unavailable => {
+            IngestError::unavailable("signal_storage_unavailable")
+        }
     }
 }
 
@@ -1006,6 +1550,9 @@ mod tests {
             items: ItemCapabilities {
                 error: true,
                 client_report: true,
+                log: true,
+                transaction: true,
+                span: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,
@@ -1049,6 +1596,102 @@ mod tests {
             .code(),
             "conflicting_event_id"
         );
+    }
+
+    #[test]
+    fn official_node_log_container_normalizes_correlation_and_scrubs_secrets() {
+        let payload = br#"{
+            "version":2,
+            "items":[{
+                "timestamp":1753372800.125,
+                "level":"error",
+                "body":"payment failed",
+                "trace_id":"0123456789abcdef0123456789abcdef",
+                "attributes":{
+                    "sentry.trace.parent_span_id":{"value":"0123456789abcdef","type":"string"},
+                    "sentry.environment":{"value":"production","type":"string"},
+                    "service.name":{"value":"checkout","type":"string"},
+                    "authorization":{"value":"Bearer secret","type":"string"}
+                }
+            }]
+        }"#;
+        let records = normalize_logs(
+            &snapshot(),
+            faultkeep_domain::Timestamp::from_unix_millis(1_753_372_800_200).unwrap(),
+            payload,
+        )
+        .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].message.as_ref(), "payment failed");
+        assert_eq!(records[0].service.as_deref(), Some("checkout"));
+        assert_eq!(
+            records[0].trace_id.unwrap().to_string(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert!(!String::from_utf8_lossy(records[0].body.as_bytes()).contains("Bearer secret"));
+    }
+
+    #[test]
+    fn transaction_expands_to_stable_root_and_children_with_insights() {
+        let payload = br#"{
+            "type":"transaction",
+            "transaction":"GET /orders",
+            "start_timestamp":1753372800.0,
+            "timestamp":1753372801.5,
+            "environment":"production",
+            "contexts":{"trace":{
+                "trace_id":"0123456789abcdef0123456789abcdef",
+                "span_id":"1111111111111111",
+                "op":"http.server",
+                "status":"ok",
+                "data":{"service.name":"api"}
+            }},
+            "spans":[{
+                "trace_id":"0123456789abcdef0123456789abcdef",
+                "span_id":"2222222222222222",
+                "parent_span_id":"1111111111111111",
+                "start_timestamp":1753372800.1,
+                "timestamp":1753372800.6,
+                "op":"db.sql.query",
+                "status":"ok",
+                "description":"SELECT orders"
+            }]
+        }"#;
+        let first = normalize_transaction(
+            &snapshot(),
+            faultkeep_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
+            payload,
+        )
+        .unwrap();
+        let second = normalize_transaction(
+            &snapshot(),
+            faultkeep_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
+            payload,
+        )
+        .unwrap();
+        assert_eq!(first.len(), 2);
+        assert!(first[0].is_segment);
+        assert_eq!(first[0].id, second[0].id);
+        assert_ne!(first[0].insight_flags & 1, 0);
+        assert_ne!(first[0].insight_flags & (1 << 3), 0);
+    }
+
+    #[test]
+    fn malformed_span_time_and_identity_fail_before_storage() {
+        let payload = br#"{
+            "trace_id":"00000000000000000000000000000000",
+            "span_id":"0123456789abcdef",
+            "name":"invalid",
+            "start_timestamp":5,
+            "end_timestamp":4
+        }"#;
+        let error = normalize_spans(
+            &snapshot(),
+            faultkeep_domain::Timestamp::from_unix_millis(5_000).unwrap(),
+            payload,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "invalid_trace_id");
     }
 
     #[test]

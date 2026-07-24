@@ -39,6 +39,10 @@ use faultkeep_domain::{
         NotificationDeliveryId, NotificationDestination,
     },
     processing::{PendingEvent, ProcessingFailure, ProcessingProject, ProcessingStateChange},
+    signals::{
+        LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SignalPage, SpanRecord,
+        TraceId, TraceView,
+    },
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use thiserror::Error;
@@ -1224,4 +1228,103 @@ pub trait InvestigationStore: Send + Sync + 'static {
         before: Option<faultkeep_domain::api::EnvironmentAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<EnvironmentPage, InvestigationStoreError>>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogQuery {
+    pub from_ns: i64,
+    pub until_ns: i64,
+    pub severity: Option<LogSeverity>,
+    pub message: Option<Box<str>>,
+    pub environment: Option<Box<str>>,
+    pub release: Option<Box<str>>,
+    pub service: Option<Box<str>>,
+    pub trace_id: Option<TraceId>,
+    pub before: Option<SignalCursor>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentQuery {
+    pub from_ns: i64,
+    pub until_ns: i64,
+    pub environment: Option<Box<str>>,
+    pub release: Option<Box<str>>,
+    pub service: Option<Box<str>>,
+    pub before: Option<SignalCursor>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerformanceQuery {
+    pub from: Timestamp,
+    pub until: Timestamp,
+    pub environment: Option<Box<str>>,
+    pub release: Option<Box<str>>,
+    pub service: Option<Box<str>>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SignalStoreError {
+    #[error("signal target does not exist")]
+    NotFound,
+    #[error("signal identity conflicts with existing data")]
+    Conflict,
+    #[error("signal data is invalid")]
+    InvalidData,
+    #[error("signal storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Signal-specific durable and query boundary. Raw MongoDB filters never cross it.
+pub trait SignalStore: Send + Sync + 'static {
+    fn persist_logs(
+        &self,
+        records: Vec<LogRecord>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+
+    fn persist_spans(
+        &self,
+        records: Vec<SpanRecord>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+
+    fn list_logs(
+        &self,
+        project_id: ProjectId,
+        query: LogQuery,
+    ) -> PortFuture<'_, Result<SignalPage<LogRecord>, SignalStoreError>>;
+
+    fn load_log(
+        &self,
+        project_id: ProjectId,
+        log_id: LogId,
+    ) -> PortFuture<'_, Result<LogRecord, SignalStoreError>>;
+
+    fn list_segments(
+        &self,
+        project_id: ProjectId,
+        query: SegmentQuery,
+    ) -> PortFuture<'_, Result<SignalPage<SpanRecord>, SignalStoreError>>;
+
+    fn trace(
+        &self,
+        project_ids: Vec<ProjectId>,
+        trace_id: TraceId,
+        maximum_spans: usize,
+        maximum_logs: usize,
+    ) -> PortFuture<'_, Result<TraceView, SignalStoreError>>;
+
+    fn performance(
+        &self,
+        project_id: ProjectId,
+        query: PerformanceQuery,
+    ) -> PortFuture<'_, Result<Vec<PerformanceBucket>, SignalStoreError>>;
+
+    fn rebuild_span_stats(
+        &self,
+        project_id: ProjectId,
+        from: Timestamp,
+        until: Timestamp,
+    ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
 }

@@ -119,6 +119,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         items: ItemCapabilities {
             error: true,
             client_report: true,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,
@@ -186,7 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     writer_task.wait().await;
     let count = database
-        .collection::<mongodb::bson::Document>("events")
+        .collection::<mongodb::bson::Document>("error_events")
         .count_documents(doc! {})
         .await?;
     println!("durable benchmark Event count: {count}");

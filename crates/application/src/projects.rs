@@ -728,6 +728,9 @@ mod tests {
             items: ItemCapabilities {
                 error: true,
                 client_report: true,
+                log: true,
+                transaction: true,
+                span: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,
@@ -893,6 +896,9 @@ mod tests {
                 items: ItemCapabilities {
                     error: true,
                     client_report: true,
+                    log: true,
+                    transaction: true,
+                    span: true,
                 },
                 limits: ProjectIngestLimits::default(),
             })

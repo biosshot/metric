@@ -62,7 +62,7 @@ impl MongoMaintenanceStore {
         }
         let due = self
             .database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .find_one(doc! {
                 "q.s": 0_i32,
                 "q.n": { "$lte": date(request.now) },
@@ -104,7 +104,7 @@ impl MongoMaintenanceStore {
         if let Some(after) = after {
             filter.insert("_id", doc! { "$gt": Bson::Binary(binary(&after)) });
         }
-        let events = self.database.collection::<Document>("events");
+        let events = self.database.collection::<Document>("error_events");
         let mut cursor = events
             .find(filter)
             .sort(doc! { "_id": 1 })
@@ -306,7 +306,7 @@ impl MongoMaintenanceStore {
         }
         let issue_limit = request.batch_size.min(32);
         let issues = self.database.collection::<Document>("issues");
-        let events = self.database.collection::<Document>("events");
+        let events = self.database.collection::<Document>("error_events");
         let mut cursor = issues
             .find(filter)
             .sort(doc! { "_id": 1 })

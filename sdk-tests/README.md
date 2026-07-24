@@ -44,6 +44,17 @@ created when the SDK does not attach one. A separate
 `real_node_sdk_sends_an_attachment_event` gate verifies blob-first attachment
 metadata and the exact bytes read back from BlobStore.
 
+Run the pinned SDK against an already running Faultkeep instance to verify Structured
+Logs and a transaction with one child Span:
+
+```powershell
+$env:FAULTKEEP_DSN = "http://<dsn-key>@localhost:4001/<project-id>"
+node sdk-tests/node/send-signals.mjs
+```
+
+The sender waits for both SDK buffers to flush and then closes the SDK, so it leaves
+no receiver or worker process behind.
+
 ## Browser SDK
 
 Install and bundle its isolated dependencies:

@@ -13,6 +13,7 @@ mod finalizer;
 mod issue;
 mod maintenance;
 mod notifications;
+mod signals;
 
 pub use api::MongoInvestigationStore;
 pub use archive::MongoArchiveStore;
@@ -30,6 +31,7 @@ pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finali
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 pub use maintenance::MongoMaintenanceStore;
 pub use notifications::MongoNotificationStore;
+pub use signals::{MongoSignalStore, SignalRetention};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
@@ -49,9 +51,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 7;
+pub const SCHEMA_GENERATION: i32 = 8;
 const SCHEMA_ID: &str = "faultkeep.schema";
-const SCHEMA_MODULES: [&str; 10] = [
+const SCHEMA_MODULES: [&str; 13] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -62,8 +64,11 @@ const SCHEMA_MODULES: [&str; 10] = [
     "javascript_artifact_bundles_v1",
     "notification_outbox_webhooks_v1",
     "event_cold_archive_v1",
+    "structured_logs_v1",
+    "spans_virtual_traces_v1",
+    "performance_insights_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 25] = [
+const REQUIRED_COLLECTIONS: [&str; 28] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -71,12 +76,13 @@ const REQUIRED_COLLECTIONS: [&str; 25] = [
     "artifact_uploads",
     "archive_manifests",
     "environments",
-    "events",
+    "error_events",
     "debug_files",
     "debug_uploads",
     "issue_activities",
     "issues",
     "issue_stats_hourly",
+    "logs",
     "notification_deliveries",
     "notification_destinations",
     "organization_memberships",
@@ -87,6 +93,8 @@ const REQUIRED_COLLECTIONS: [&str; 25] = [
     "projects",
     "releases",
     "schema_meta",
+    "span_stats_hourly",
+    "spans",
     "users",
     "web_sessions",
 ];
@@ -204,6 +212,16 @@ impl MongoProjectStore {
         MongoArtifactStore::from_database(self.database.clone(), quota)
     }
 
+    #[must_use]
+    pub fn signal_store(&self) -> MongoSignalStore {
+        MongoSignalStore::from_database(self.database.clone())
+    }
+
+    #[must_use]
+    pub fn signal_store_with_retention(&self, retention: SignalRetention) -> MongoSignalStore {
+        MongoSignalStore::with_retention(self.database.clone(), retention)
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -269,7 +287,13 @@ impl MongoProjectStore {
             archive::archive_manifest_validator(),
         )
         .await?;
-        self.create_validated_collection("events", event::event_validator())
+        self.create_validated_collection("error_events", event::event_validator())
+            .await?;
+        self.create_validated_collection("logs", signals::log_validator())
+            .await?;
+        self.create_validated_collection("spans", signals::span_validator())
+            .await?;
+        self.create_validated_collection("span_stats_hourly", signals::span_stats_validator())
             .await?;
         self.create_validated_collection("issues", issue::issue_validator())
             .await?;
@@ -357,6 +381,7 @@ impl MongoProjectStore {
                 .await?;
         }
         event::create_event_indexes(&self.database).await?;
+        signals::create_signal_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
         auth::create_auth_indexes(&self.database).await?;
@@ -470,7 +495,13 @@ impl MongoProjectStore {
                 BTreeSet::from(["_id_", "project_key_administration"]),
             ),
             ("project_deletions", deletion::deletion_index_names()),
-            ("events", event::event_index_names()),
+            ("error_events", event::event_index_names()),
+            ("logs", signals::signal_index_names("logs")),
+            ("spans", signals::signal_index_names("spans")),
+            (
+                "span_stats_hourly",
+                signals::signal_index_names("span_stats_hourly"),
+            ),
             ("issues", issue::issue_index_names()),
             ("issue_activities", issue::issue_activity_index_names()),
             (
@@ -530,7 +561,10 @@ impl MongoProjectStore {
             ("debug_files", debug_files::debug_file_validator()),
             ("artifact_uploads", artifacts::artifact_upload_validator()),
             ("artifact_bundles", artifacts::artifact_bundle_validator()),
-            ("events", event::event_validator()),
+            ("error_events", event::event_validator()),
+            ("logs", signals::log_validator()),
+            ("spans", signals::span_validator()),
+            ("span_stats_hourly", signals::span_stats_validator()),
             ("issues", issue::issue_validator()),
             ("issue_activities", issue::issue_activity_validator()),
             ("issue_stats_hourly", finalizer::hourly_validator()),
@@ -637,6 +671,9 @@ impl MongoProjectStore {
             "items": {
                 "error": project.items.error,
                 "client_report": project.items.client_report,
+                "log": project.items.log,
+                "transaction": project.items.transaction,
+                "span": project.items.span,
             },
             "limits": limits,
             "grouping_revision": i64::try_from(project.grouping_revision).map_err(|_| ProjectStoreError::InvalidData)?,
@@ -952,6 +989,9 @@ impl MongoProjectStore {
                     "items": {
                         "error": update.items.error,
                         "client_report": update.items.client_report,
+                        "log": update.items.log,
+                        "transaction": update.items.transaction,
+                        "span": update.items.span,
                     },
                     "limits": limits,
                 }},
@@ -1195,6 +1235,15 @@ fn decode_snapshot(
             client_report: items
                 .get_bool("client_report")
                 .map_err(|_| ProjectStoreError::InvalidData)?,
+            log: items
+                .get_bool("log")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            transaction: items
+                .get_bool("transaction")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            span: items
+                .get_bool("span")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
         },
         limits: ProjectIngestLimits {
             max_event_bytes,
@@ -1262,6 +1311,15 @@ pub(crate) fn decode_project_view(document: &Document) -> Result<ProjectView, Pr
                 .map_err(|_| ProjectStoreError::InvalidData)?,
             client_report: items
                 .get_bool("client_report")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            log: items
+                .get_bool("log")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            transaction: items
+                .get_bool("transaction")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            span: items
+                .get_bool("span")
                 .map_err(|_| ProjectStoreError::InvalidData)?,
         },
         limits: ProjectIngestLimits {
@@ -1451,13 +1509,16 @@ fn project_validator() -> Document {
                     "ip": { "enum": ["hmac", "keep", "remove", "truncate"] },
                 },
             },
-            "items": {
-                "bsonType": "object",
-                "required": ["error", "client_report"],
-                "additionalProperties": false,
-                "properties": {
-                    "error": { "bsonType": "bool" },
-                    "client_report": { "bsonType": "bool" },
+                    "items": {
+                        "bsonType": "object",
+                        "required": ["error", "client_report", "log", "transaction", "span"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "error": { "bsonType": "bool" },
+                            "client_report": { "bsonType": "bool" },
+                            "log": { "bsonType": "bool" },
+                            "transaction": { "bsonType": "bool" },
+                            "span": { "bsonType": "bool" },
                 },
             },
             "limits": {

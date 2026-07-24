@@ -98,7 +98,7 @@ impl MongoFinalizationStore {
             .collect::<Vec<_>>();
         let mut cursor = self
             .database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .find(doc! { "_id": { "$in": ids }, "q.s": 0_i32 })
             .projection(doc! { "_id": 1, "p": 1 })
             .await
@@ -440,7 +440,7 @@ impl MongoFinalizationStore {
         policy: FinalizationPolicy,
     ) -> Result<usize, FinalizationStoreError> {
         let retention = duration_millis(policy.event_retention)?;
-        let collection = self.database.collection::<Document>("events");
+        let collection = self.database.collection::<Document>("error_events");
         let namespace = collection.namespace();
         let mut models = Vec::with_capacity(events.len());
         for event in events {
@@ -453,6 +453,11 @@ impl MongoFinalizationStore {
                 "a": platform_code(&event.platform),
                 "b": Binary { subtype: BinarySubtype::Generic, bytes: body },
             };
+            let correlation = event_correlation(event.payload.as_bytes());
+            if let Some((trace_id, span_id)) = correlation {
+                set.insert("g", binary(trace_id));
+                set.insert("n", binary(span_id));
+            }
             if policy.archive_events {
                 set.insert("h", date(expire));
             } else {
@@ -484,6 +489,10 @@ impl MongoFinalizationStore {
             if event.search_tokens.is_empty() {
                 unset.insert("k", "");
             }
+            if correlation.is_none() {
+                unset.insert("g", "");
+                unset.insert("n", "");
+            }
             models.push(
                 UpdateOneModel::builder()
                     .namespace(namespace.clone())
@@ -504,6 +513,39 @@ impl MongoFinalizationStore {
             .await
             .map_err(|_| FinalizationStoreError::Unavailable)?;
         usize::try_from(result.modified_count).map_err(|_| FinalizationStoreError::InvalidData)
+    }
+}
+
+fn event_correlation(payload: &[u8]) -> Option<([u8; 16], [u8; 8])> {
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let trace = value.pointer("/contexts/trace")?;
+    let trace_id = trace.get("trace_id")?.as_str()?;
+    let span_id = trace.get("span_id")?.as_str()?;
+    let mut trace_bytes = [0_u8; 16];
+    let mut span_bytes = [0_u8; 8];
+    if trace_id.len() != 32
+        || span_id.len() != 16
+        || hex::decode_to_slice(trace_id, &mut trace_bytes).is_err()
+        || hex::decode_to_slice(span_id, &mut span_bytes).is_err()
+        || trace_bytes == [0; 16]
+        || span_bytes == [0; 8]
+    {
+        return None;
+    }
+    Some((trace_bytes, span_bytes))
+}
+
+#[cfg(test)]
+mod correlation_tests {
+    use super::*;
+
+    #[test]
+    fn valid_error_trace_context_gets_a_compact_projection() {
+        let payload = br#"{"contexts":{"trace":{"trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef"}}}"#;
+        let (trace_id, span_id) = event_correlation(payload).unwrap();
+        assert_eq!(hex::encode(trace_id), "0123456789abcdef0123456789abcdef");
+        assert_eq!(hex::encode(span_id), "0123456789abcdef");
+        assert!(event_correlation(br#"{"contexts":{"trace":{"trace_id":"bad"}}}"#).is_none());
     }
 }
 

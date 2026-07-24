@@ -75,7 +75,13 @@ export interface CreatedInvitation {
 export interface ProjectPolicy {
   revision: number;
   ip_policy: 'hmac' | 'keep' | 'remove' | 'truncate';
-  items: { error: boolean; client_report: boolean };
+  items: {
+    error: boolean;
+    client_report: boolean;
+    log: boolean;
+    transaction: boolean;
+    span: boolean;
+  };
   limits: {
     max_event_bytes: number;
     max_events_per_second: number | null;
@@ -100,6 +106,9 @@ export interface CreateProjectInput {
   ip_policy: ProjectPolicy['ip_policy'];
   error_enabled: boolean;
   client_report_enabled: boolean;
+  log_enabled: boolean;
+  transaction_enabled: boolean;
+  span_enabled: boolean;
   max_event_bytes: number;
   max_events_per_second: number | null;
   burst: number | null;
@@ -164,6 +173,78 @@ export interface Event {
   body: Record<string, unknown>;
 }
 
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+
+export interface StructuredLog {
+  id: string;
+  project_id: string;
+  received_at: string;
+  timestamp: string;
+  timestamp_ns: string;
+  level: LogLevel;
+  message: string;
+  trace_id: string | null;
+  span_id: string | null;
+  environment: string | null;
+  release: string | null;
+  service: string | null;
+  body: Record<string, unknown>;
+}
+
+export interface Span {
+  id: string;
+  project_id: string;
+  received_at: string;
+  started_at: string;
+  started_at_ns: string;
+  ended_at: string;
+  duration_ns: string;
+  duration_ms: number;
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string | null;
+  is_segment: boolean;
+  operation_class: string;
+  operation: string;
+  status: string;
+  name: string;
+  environment: string | null;
+  release: string | null;
+  service: string | null;
+  insight_flags: number;
+  body: Record<string, unknown>;
+}
+
+export interface Trace {
+  trace_id: string;
+  spans: Span[];
+  logs: StructuredLog[];
+  errors: Array<{ event_id: string }>;
+  partial: boolean;
+  omitted_spans: number;
+}
+
+export interface PerformanceBucket {
+  hour: string;
+  name: string;
+  service: string | null;
+  environment: string | null;
+  release: string | null;
+  representative_trace_id: string;
+  operation: string;
+  count: number;
+  failure_count: number;
+  failure_rate: number;
+  average_duration_ms: number;
+  p50_ms: number;
+  p75_ms: number;
+  p90_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  approximate: true;
+  sample_limit: number;
+}
+
 export interface IssueStatistic {
   bucket_start: string;
   occurrence_count: number;
@@ -191,6 +272,9 @@ export interface CapabilityDocument {
   retention: {
     events_days: number;
     issue_stats_hourly_days: number;
+    logs_days: number;
+    spans_days: number;
+    span_stats_hourly_days: number;
     clock: 'received_at';
     gradual_policy_reduction: boolean;
   } | null;

@@ -137,7 +137,7 @@ impl MongoInvestigationStore {
         }
         let document = self
             .database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .find_one(doc! {
                 "_id": binary(event_key.as_bytes()),
                 "p": project_id.get(),
@@ -200,7 +200,7 @@ impl MongoInvestigationStore {
     ) -> Result<EventPage, InvestigationStoreError> {
         let mut cursor = self
             .database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .find(filter)
             .sort(doc! { "o": -1, "_id": -1 })
             .limit(i64::try_from(database_limit).unwrap_or(10_000))

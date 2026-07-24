@@ -7,9 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+blake3.workspace = true
 faultkeep-domain = { path = "../domain" }
 faultkeep-ports = { path = "../ports" }
 futures-util.workspace = true
+hex.workspace = true
 metrics.workspace = true
 mongodb.workspace = true
 serde_json.workspace = true

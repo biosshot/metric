@@ -7,6 +7,11 @@ import OrganizationView from './views/OrganizationView.vue';
 import ProjectSetupView from './views/ProjectSetupView.vue';
 import ProjectSettingsView from './views/ProjectSettingsView.vue';
 import SystemStatusView from './views/SystemStatusView.vue';
+import LogsView from './views/LogsView.vue';
+import LogDetailView from './views/LogDetailView.vue';
+import TransactionsView from './views/TransactionsView.vue';
+import TraceView from './views/TraceView.vue';
+import PerformanceView from './views/PerformanceView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -15,6 +20,11 @@ export const router = createRouter({
     { path: '/issues', name: 'issues', component: IssuesView },
     { path: '/issues/:issueId', name: 'issue', component: IssueDetailView },
     { path: '/events/:eventId', name: 'event', component: EventDetailView },
+    { path: '/logs', name: 'logs', component: LogsView },
+    { path: '/logs/:logId', name: 'log', component: LogDetailView },
+    { path: '/traces', name: 'traces', component: TransactionsView },
+    { path: '/traces/:traceId', name: 'trace', component: TraceView },
+    { path: '/performance', name: 'performance', component: PerformanceView },
     { path: '/auth/setup', name: 'password-setup', component: AuthView },
     { path: '/organization', name: 'organization', component: OrganizationView },
     { path: '/account/tokens', redirect: '/organization' },

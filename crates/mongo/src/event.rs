@@ -187,7 +187,7 @@ impl EventStore for MongoEventStore {
             let started = std::time::Instant::now();
             let result = self
                 .database
-                .collection::<Document>("events")
+                .collection::<Document>("error_events")
                 .insert_many(events.iter().map(|event| &event.document))
                 .ordered(false)
                 .await;
@@ -222,7 +222,7 @@ impl BlobReferenceStore for MongoEventStore {
             let key = EventKey::new(reference.project_id, reference.event_id);
             let Some(document) = self
                 .database
-                .collection::<Document>("events")
+                .collection::<Document>("error_events")
                 .find_one(doc! {
                     "_id": binary(key.as_bytes()),
                     "p": reference.project_id.get(),
@@ -293,7 +293,7 @@ impl EventBacklog for MongoEventStore {
             let scan_limit = limit.saturating_mul(8).min(32_768).max(limit);
             let mut cursor = self
                 .database
-                .collection::<Document>("events")
+                .collection::<Document>("error_events")
                 .find(filter)
                 .sort(doc! { "q.n": 1, "r": 1, "_id": 1 })
                 .limit(i64::try_from(scan_limit).map_err(|_| EventBacklogError::InvalidData)?)
@@ -359,7 +359,7 @@ impl EventBacklog for MongoEventStore {
             if count_limit == 0 {
                 return Err(EventBacklogError::InvalidData);
             }
-            let events = self.database.collection::<Document>("events");
+            let events = self.database.collection::<Document>("error_events");
             let pending_count = events
                 .count_documents(doc! { "q.s": 0_i32 })
                 .limit(count_limit)
@@ -488,7 +488,7 @@ impl ProcessingStateStore for MongoEventStore {
             }
             let result = self
                 .database
-                .collection::<Document>("events")
+                .collection::<Document>("error_events")
                 .update_one(
                     doc! {
                         "_id": binary(failure.key.as_bytes()),
@@ -728,6 +728,8 @@ pub(crate) fn event_validator() -> Document {
                 "h": { "bsonType": "date" },
                 "z": { "bsonType": "binData" },
                 "u": { "bsonType": "binData" },
+                "g": { "bsonType": "binData" },
+                "n": { "bsonType": "binData" },
                 "l": { "bsonType": "int", "minimum": 1, "maximum": 4 },
                 "a": { "bsonType": "int", "minimum": 0, "maximum": 9 },
                 "s": { "bsonType": "long", "minimum": 1 },
@@ -760,6 +762,7 @@ pub(crate) fn event_index_names() -> BTreeSet<&'static str> {
         "event_archive_due",
         "event_expiration",
         "event_issue_timeline",
+        "event_project_trace",
         "event_pending_due",
         "event_project_timeline",
         "event_search_tokens",
@@ -767,7 +770,7 @@ pub(crate) fn event_index_names() -> BTreeSet<&'static str> {
 }
 
 pub(crate) async fn create_event_indexes(database: &Database) -> Result<(), mongodb::error::Error> {
-    let collection = database.collection::<Document>("events");
+    let collection = database.collection::<Document>("error_events");
     for model in event_indexes() {
         collection.create_index(model).await?;
     }
@@ -789,7 +792,7 @@ pub(crate) async fn validate_event_indexes(
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut indexes = database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .list_indexes()
         .await?;
     while let Some(actual) = indexes.try_next().await? {
@@ -819,7 +822,7 @@ pub(crate) async fn validate_event_indexes(
     Ok(expected.is_empty())
 }
 
-fn event_indexes() -> [IndexModel; 6] {
+fn event_indexes() -> [IndexModel; 7] {
     [
         event_index(
             doc! { "q.n": 1, "r": 1, "_id": 1 },
@@ -843,6 +846,12 @@ fn event_indexes() -> [IndexModel; 6] {
             doc! { "p": 1, "k": 1, "o": -1, "_id": -1 },
             "event_search_tokens",
             Some(doc! { "k.0": { "$exists": true } }),
+            None,
+        ),
+        event_index(
+            doc! { "p": 1, "g": 1, "o": 1 },
+            "event_project_trace",
+            Some(doc! { "g": { "$exists": true } }),
             None,
         ),
         event_index(

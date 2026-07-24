@@ -110,6 +110,18 @@ async function logout(): Promise<void> {
           <AppIcon name="clipboard" :size="18" />
           Issues
         </RouterLink>
+        <RouterLink to="/logs" @click="navigationOpen = false">
+          <AppIcon name="logs" :size="18" />
+          Logs
+        </RouterLink>
+        <RouterLink to="/traces" @click="navigationOpen = false">
+          <AppIcon name="traces" :size="18" />
+          Traces
+        </RouterLink>
+        <RouterLink to="/performance" @click="navigationOpen = false">
+          <AppIcon name="gauge" :size="18" />
+          Performance
+        </RouterLink>
         <RouterLink to="/project/setup" @click="navigationOpen = false">
           <AppIcon name="connect" :size="18" />
           SDK setup

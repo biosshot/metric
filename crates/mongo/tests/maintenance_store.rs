@@ -66,7 +66,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     MongoIssueStore::from_database(database.clone(), IssueCodecConfig::default())
         .apply_occurrence(occurrence.clone())
         .await?;
-    let events = database.collection::<Document>("events");
+    let events = database.collection::<Document>("error_events");
     for seed in [2_u8, 3] {
         events
             .update_one(
@@ -227,7 +227,7 @@ async fn assert_bounded_plans(
         (
             doc! {
                 "explain": {
-                    "find": "events",
+                    "find": "error_events",
                     "filter": {},
                     "sort": { "_id": 1 },
                     "hint": "_id_",
@@ -240,7 +240,7 @@ async fn assert_bounded_plans(
         (
             doc! {
                 "explain": {
-                    "find": "events",
+                    "find": "error_events",
                     "filter": { "p": 7_i32, "u": binary(issue_id) },
                     "hint": "event_issue_timeline",
                     "limit": 10_i64,
@@ -305,6 +305,9 @@ fn project() -> ProjectIdentity {
         items: ItemCapabilities {
             error: true,
             client_report: true,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

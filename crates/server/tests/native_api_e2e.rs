@@ -183,7 +183,7 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
 
     let collision_key = EventKey::new(ProjectId::new(42)?, EventId::from_bytes(event_bytes(1)));
     database
-        .collection::<mongodb::bson::Document>("events")
+        .collection::<mongodb::bson::Document>("error_events")
         .update_one(
             doc! { "_id": binary(collision_key.as_bytes()) },
             doc! { "$set": { "k": [SearchToken::environment("production").stored()] } },
@@ -243,7 +243,7 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
     let token_explain = database
         .run_command(doc! {
             "explain": {
-                "find": "events",
+                "find": "error_events",
                 "filter": {
                     "p": 42_i32,
                     "k": SearchToken::environment("staging").stored(),
@@ -375,6 +375,9 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
                 items: ItemCapabilities {
                     error: true,
                     client_report: true,
+                    log: true,
+                    transaction: true,
+                    span: true,
                 },
                 limits: ProjectIngestLimits::default(),
             },
@@ -473,7 +476,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if database
-                .collection::<mongodb::bson::Document>("events")
+                .collection::<mongodb::bson::Document>("error_events")
                 .find_one(doc! { "p": created.project_id.get(), "q": { "$exists": false } })
                 .await
                 .unwrap()
@@ -776,6 +779,9 @@ async fn setup(database: &Database) -> Result<MongoProjectStore, Box<dyn Error>>
             items: ItemCapabilities {
                 error: true,
                 client_report: true,
+                log: true,
+                transaction: true,
+                span: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,

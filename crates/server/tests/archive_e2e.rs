@@ -65,7 +65,7 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
     );
     let event_key = EventKey::new(event.project_id, event.event_id);
     database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .update_one(
             doc! { "_id": binary(event_key.as_bytes()) },
             doc! {
@@ -125,7 +125,7 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
     assert_eq!(&archived[archived.len() - 4..], b"PAR1");
 
     let hot = database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .find_one(doc! { "_id": binary(event_key.as_bytes()) })
         .await?
         .unwrap();

@@ -30,6 +30,9 @@ const project = reactive<CreateProjectInput>({
   ip_policy: 'hmac',
   error_enabled: true,
   client_report_enabled: true,
+  log_enabled: true,
+  transaction_enabled: true,
+  span_enabled: true,
   max_event_bytes: 1_048_576,
   max_events_per_second: null,
   burst: null,
@@ -144,6 +147,20 @@ const createProject = useMutation({
               ><strong>Client reports</strong
               ><small>Accept SDK delivery outcome reports.</small></span
             >
+          </label>
+          <label class="check-control">
+            <input v-model="project.log_enabled" type="checkbox" />
+            <span><strong>Structured Logs</strong><small>Accept SDK log records.</small></span>
+          </label>
+          <label class="check-control">
+            <input v-model="project.transaction_enabled" type="checkbox" />
+            <span
+              ><strong>Transactions</strong><small>Accept root performance segments.</small></span
+            >
+          </label>
+          <label class="check-control">
+            <input v-model="project.span_enabled" type="checkbox" />
+            <span><strong>Spans</strong><small>Accept child and standalone spans.</small></span>
           </label>
         </div>
 

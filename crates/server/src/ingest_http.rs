@@ -19,7 +19,8 @@ use axum::{
 use faultkeep_application::{
     ingest::{
         DisabledCategory, DiscardedItem, IngestError, IngestErrorKind, IngestRequest, IngestResult,
-        IngestService, MinidumpRequest, PendingAttachment, PrimaryEvent,
+        IngestService, MinidumpRequest, PendingAttachment, PendingSignal, PendingSignalKind,
+        PrimaryEvent,
     },
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
@@ -30,7 +31,8 @@ use faultkeep_ports::{
 };
 use faultkeep_sentry_protocol::{
     AttachmentLimits, EnvelopeLimits, ParsedEnvelope, ProtocolError, ProtocolErrorKind,
-    parse_envelope_with_attachments, parse_query_auth, parse_store_event, parse_x_sentry_auth,
+    RawSignalKind, parse_envelope_with_attachments, parse_query_auth, parse_store_event,
+    parse_x_sentry_auth,
 };
 use futures_util::{TryStreamExt, future};
 use serde::Serialize;
@@ -383,6 +385,7 @@ async fn process_request(
             event_id: None,
             dsn: None,
             primary: Some(parse_store_event(&decoded, state.config.max_event_bytes)?),
+            signals: Vec::new(),
             attachments: Vec::new(),
             discarded: Vec::new(),
             client_report_quantity: 0,
@@ -410,6 +413,18 @@ fn map_request(
             header_event_id: event.header_event_id,
             raw_json: event.bytes,
         }),
+        signals: parsed
+            .signals
+            .into_iter()
+            .map(|signal| PendingSignal {
+                kind: match signal.kind {
+                    RawSignalKind::Log => PendingSignalKind::Log,
+                    RawSignalKind::Transaction => PendingSignalKind::Transaction,
+                    RawSignalKind::Span => PendingSignalKind::Span,
+                },
+                raw_json: signal.bytes,
+            })
+            .collect(),
         attachments: parsed
             .attachments
             .into_iter()

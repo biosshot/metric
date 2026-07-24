@@ -203,6 +203,9 @@ fn project(id: i32, organization_id: u64, slug: &str) -> ProjectIdentity {
         items: ItemCapabilities {
             error: true,
             client_report: true,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

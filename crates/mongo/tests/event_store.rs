@@ -88,7 +88,7 @@ async fn exercise(client: &Client, database: &Database) -> Result<(), Box<dyn Er
     control.insert_organization(organization()).await?;
     control.insert_project(project()).await?;
     let store = MongoEventStore::from_database(database.clone(), EventCodecConfig::default());
-    let collection = database.collection::<mongodb::bson::Document>("events");
+    let collection = database.collection::<mongodb::bson::Document>("error_events");
 
     let index_names = collection.list_index_names().await?;
     for required in [
@@ -261,6 +261,9 @@ fn project() -> ProjectIdentity {
         items: ItemCapabilities {
             error: true,
             client_report: true,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

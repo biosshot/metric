@@ -16,9 +16,14 @@ use faultkeep_domain::{
         ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueSnapshot,
         IssueStatus,
     },
+    signals::{
+        LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SpanRecord, TraceId,
+        TraceView,
+    },
 };
 use faultkeep_ports::{
     BlobReadSession, BlobStore, BlobStoreError, Clock, InvestigationStore, InvestigationStoreError,
+    LogQuery, PerformanceQuery, SegmentQuery, SignalStore, SignalStoreError,
 };
 use thiserror::Error;
 
@@ -92,6 +97,41 @@ pub struct EventListRequest<'a> {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LogListRequest<'a> {
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
+    pub severity: Option<LogSeverity>,
+    pub message: Option<Box<str>>,
+    pub environment: Option<Box<str>>,
+    pub release: Option<Box<str>>,
+    pub service: Option<Box<str>>,
+    pub trace_id: Option<TraceId>,
+    pub cursor: Option<&'a str>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionListRequest<'a> {
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
+    pub environment: Option<Box<str>>,
+    pub release: Option<Box<str>>,
+    pub service: Option<Box<str>>,
+    pub cursor: Option<&'a str>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerformanceListRequest {
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
+    pub environment: Option<Box<str>>,
+    pub release: Option<Box<str>>,
+    pub service: Option<Box<str>>,
+    pub limit: Option<usize>,
+}
+
 pub struct NativeApiService {
     identity: Arc<IdentityService>,
     projects: Arc<ProjectService>,
@@ -101,6 +141,7 @@ pub struct NativeApiService {
     clock: Arc<dyn Clock>,
     deletion: Option<Arc<ProjectDeletionService>>,
     blob_store: Option<Arc<dyn BlobStore>>,
+    signal_store: Option<Arc<dyn SignalStore>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +174,207 @@ impl NativeApiService {
             clock,
             deletion: None,
             blob_store: None,
+            signal_store: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_signal_store(mut self, signal_store: Arc<dyn SignalStore>) -> Self {
+        self.signal_store = Some(signal_store);
+        self
+    }
+
+    pub async fn list_logs(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        request: LogListRequest<'_>,
+    ) -> Result<NativePage<LogRecord>, NativeApiError> {
+        let LogListRequest {
+            from,
+            until,
+            severity,
+            message,
+            environment,
+            release,
+            service,
+            trace_id,
+            cursor,
+            limit,
+        } = request;
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        let store = self.signal_store()?;
+        let until = until.unwrap_or_else(|| self.clock.now());
+        let from = from.unwrap_or_else(|| {
+            Timestamp::from_unix_millis(until.unix_millis().saturating_sub(DAY_MILLIS))
+                .expect("one-day subtraction remains in the timestamp range")
+        });
+        validate_time_range(from, until)?;
+        let normalized = format!(
+            "logs:{}:{}:{}:{}:{}:{}",
+            severity.map_or("*", LogSeverity::as_str),
+            message.as_deref().unwrap_or("*"),
+            environment.as_deref().unwrap_or("*"),
+            release.as_deref().unwrap_or("*"),
+            service.as_deref().unwrap_or("*"),
+            trace_id.map_or_else(|| "*".to_owned(), |value| value.to_string()),
+        );
+        let before = cursor
+            .map(|value| decode_signal_cursor(value, project_id, &normalized, 6))
+            .transpose()?;
+        let page = store
+            .list_logs(
+                project_id,
+                LogQuery {
+                    from_ns: millis_to_ns(from)?,
+                    until_ns: millis_to_ns(until)?,
+                    severity,
+                    message,
+                    environment,
+                    release,
+                    service,
+                    trace_id,
+                    before,
+                    limit: page_size(limit)?,
+                },
+            )
+            .await
+            .map_err(map_signal_error)?;
+        Ok(NativePage {
+            next_cursor: page
+                .next
+                .map(|cursor| encode_signal_cursor(cursor, project_id, &normalized, 6)),
+            items: page.items,
+        })
+    }
+
+    pub async fn log(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        log_id: LogId,
+    ) -> Result<LogRecord, NativeApiError> {
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        self.signal_store()?
+            .load_log(project_id, log_id)
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn list_transactions(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        request: TransactionListRequest<'_>,
+    ) -> Result<NativePage<SpanRecord>, NativeApiError> {
+        let TransactionListRequest {
+            from,
+            until,
+            environment,
+            release,
+            service,
+            cursor,
+            limit,
+        } = request;
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        let until = until.unwrap_or_else(|| self.clock.now());
+        let from = from.unwrap_or_else(|| {
+            Timestamp::from_unix_millis(until.unix_millis().saturating_sub(DAY_MILLIS))
+                .expect("one-day subtraction remains in the timestamp range")
+        });
+        validate_time_range(from, until)?;
+        let normalized = format!(
+            "transactions:{}:{}:{}",
+            environment.as_deref().unwrap_or("*"),
+            release.as_deref().unwrap_or("*"),
+            service.as_deref().unwrap_or("*"),
+        );
+        let before = cursor
+            .map(|value| decode_signal_cursor(value, project_id, &normalized, 7))
+            .transpose()?;
+        let page = self
+            .signal_store()?
+            .list_segments(
+                project_id,
+                SegmentQuery {
+                    from_ns: millis_to_ns(from)?,
+                    until_ns: millis_to_ns(until)?,
+                    environment,
+                    release,
+                    service,
+                    before,
+                    limit: page_size(limit)?,
+                },
+            )
+            .await
+            .map_err(map_signal_error)?;
+        Ok(NativePage {
+            next_cursor: page
+                .next
+                .map(|cursor| encode_signal_cursor(cursor, project_id, &normalized, 7)),
+            items: page.items,
+        })
+    }
+
+    pub async fn trace(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        trace_id: TraceId,
+    ) -> Result<TraceView, NativeApiError> {
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        self.signal_store()?
+            .trace(vec![project_id], trace_id, 1_000, 250)
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn performance(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        request: PerformanceListRequest,
+    ) -> Result<Vec<PerformanceBucket>, NativeApiError> {
+        let PerformanceListRequest {
+            from,
+            until,
+            environment,
+            release,
+            service,
+            limit,
+        } = request;
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        let until = until.unwrap_or_else(|| self.clock.now());
+        let from = from.unwrap_or_else(|| {
+            Timestamp::from_unix_millis(until.unix_millis().saturating_sub(7 * DAY_MILLIS))
+                .expect("seven-day subtraction remains in the timestamp range")
+        });
+        validate_time_range(from, until)?;
+        self.signal_store()?
+            .performance(
+                project_id,
+                PerformanceQuery {
+                    from,
+                    until,
+                    environment,
+                    release,
+                    service,
+                    limit: page_size(limit)?,
+                },
+            )
+            .await
+            .map_err(map_signal_error)
+    }
+
+    fn signal_store(&self) -> Result<&Arc<dyn SignalStore>, NativeApiError> {
+        self.signal_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)
     }
 
     #[must_use]
@@ -863,6 +1104,71 @@ fn time_range(
     Ok((from, until))
 }
 
+fn validate_time_range(from: Timestamp, until: Timestamp) -> Result<(), NativeApiError> {
+    if from >= until || until.unix_millis().saturating_sub(from.unix_millis()) > MAX_RANGE_MILLIS {
+        Err(NativeApiError::InvalidRequest)
+    } else {
+        Ok(())
+    }
+}
+
+fn millis_to_ns(value: Timestamp) -> Result<i64, NativeApiError> {
+    value
+        .unix_millis()
+        .checked_mul(1_000_000)
+        .ok_or(NativeApiError::InvalidRequest)
+}
+
+fn signal_cursor_digest(project_id: ProjectId, normalized: &str, kind: u8) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"faultkeep/signal-api-cursor/v1");
+    hasher.update(&[kind]);
+    hasher.update(&project_id.get().to_be_bytes());
+    hasher.update(normalized.as_bytes());
+    hasher.finalize().as_bytes()[..16]
+        .try_into()
+        .expect("BLAKE3 digest prefix")
+}
+
+fn encode_signal_cursor(
+    cursor: SignalCursor,
+    project_id: ProjectId,
+    normalized: &str,
+    kind: u8,
+) -> String {
+    let mut bytes = Vec::with_capacity(42);
+    bytes.extend_from_slice(&[1, kind]);
+    bytes.extend_from_slice(&cursor.time_ns.to_be_bytes());
+    bytes.extend_from_slice(&cursor.id);
+    bytes.extend_from_slice(&signal_cursor_digest(project_id, normalized, kind));
+    hex::encode(bytes)
+}
+
+fn decode_signal_cursor(
+    value: &str,
+    project_id: ProjectId,
+    normalized: &str,
+    kind: u8,
+) -> Result<SignalCursor, NativeApiError> {
+    let bytes = hex::decode(value).map_err(|_| NativeApiError::InvalidCursor)?;
+    if bytes.len() != 42
+        || bytes[..2] != [1, kind]
+        || bytes[26..] != signal_cursor_digest(project_id, normalized, kind)
+    {
+        return Err(NativeApiError::InvalidCursor);
+    }
+    Ok(SignalCursor {
+        time_ns: i64::from_be_bytes(
+            bytes[2..10]
+                .try_into()
+                .map_err(|_| NativeApiError::InvalidCursor)?,
+        ),
+        id: bytes[10..26]
+            .try_into()
+            .map_err(|_| NativeApiError::InvalidCursor)?,
+    })
+}
+
 fn status_name(status: Option<IssueStatus>) -> &'static str {
     match status {
         None => "all",
@@ -938,6 +1244,16 @@ fn map_store_error(error: InvestigationStoreError) -> NativeApiError {
     match error {
         InvestigationStoreError::NotFound => NativeApiError::NotFound,
         InvestigationStoreError::InvalidData | InvestigationStoreError::Unavailable => {
+            NativeApiError::Unavailable
+        }
+    }
+}
+
+fn map_signal_error(error: SignalStoreError) -> NativeApiError {
+    match error {
+        SignalStoreError::NotFound => NativeApiError::NotFound,
+        SignalStoreError::Conflict => NativeApiError::Conflict,
+        SignalStoreError::InvalidData | SignalStoreError::Unavailable => {
             NativeApiError::Unavailable
         }
     }

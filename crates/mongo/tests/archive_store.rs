@@ -42,7 +42,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         vec![EventWriteStatus::Inserted]
     );
     database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .update_one(
             doc! { "_id": binary(EventKey::new(event.project_id, event.event_id).as_bytes()) },
             doc! {
@@ -106,7 +106,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         1
     );
     let stored = database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .find_one(doc! { "_id": event_key(&event) })
         .await?
         .unwrap();
@@ -148,7 +148,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .insert_batch(&[events.prepare(failed.clone())?])
         .await?;
     database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .update_one(
             doc! { "_id": binary(EventKey::new(failed.project_id, failed.event_id).as_bytes()) },
             doc! {
@@ -178,7 +178,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 
 async fn assert_hot_event_waiting(database: &Database, id: Binary) -> Result<(), Box<dyn Error>> {
     let event = database
-        .collection::<Document>("events")
+        .collection::<Document>("error_events")
         .find_one(doc! { "_id": id })
         .await?
         .unwrap();

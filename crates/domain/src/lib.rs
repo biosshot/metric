@@ -13,6 +13,7 @@ pub mod grouping;
 pub mod issue;
 pub mod notifications;
 pub mod processing;
+pub mod signals;
 pub mod symbolication;
 
 use std::{
@@ -474,6 +475,9 @@ pub struct ScrubPolicy {
 pub struct ItemCapabilities {
     pub error: bool,
     pub client_report: bool,
+    pub log: bool,
+    pub transaction: bool,
+    pub span: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

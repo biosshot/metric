@@ -639,6 +639,9 @@ async fn test_app(
                     items: ItemCapabilities {
                         error: true,
                         client_report: true,
+                        log: true,
+                        transaction: true,
+                        span: true,
                     },
                     limits: ProjectIngestLimits::default(),
                     grouping_revision: 1,

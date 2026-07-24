@@ -18,10 +18,14 @@ import type {
   OrganizationMember,
   OrganizationRole,
   Page,
+  PerformanceBucket,
   Project,
   ProjectKey,
   ProjectDeletionStatus,
   ProjectPolicy,
+  Span,
+  StructuredLog,
+  Trace,
 } from './types';
 
 type SessionProvider = () => { organizationId: string | null; csrfToken: string | null };
@@ -234,6 +238,9 @@ export const api = {
         ip_policy: policy.ip_policy,
         error_enabled: policy.items.error,
         client_report_enabled: policy.items.client_report,
+        log_enabled: policy.items.log,
+        transaction_enabled: policy.items.transaction,
+        span_enabled: policy.items.span,
         max_event_bytes: policy.limits.max_event_bytes,
         max_events_per_second: policy.limits.max_events_per_second,
         burst: policy.limits.burst,
@@ -268,6 +275,64 @@ export const api = {
     ),
   event: (projectId: string, eventId: string) =>
     request<Event>(`/api/v1/projects/${projectId}/events/${eventId}`),
+  logs: (
+    projectId: string,
+    filters: {
+      level?: string;
+      message?: string;
+      environment?: string;
+      release?: string;
+      service?: string;
+      traceId?: string;
+      cursor?: string | null;
+    } = {},
+  ) =>
+    request<Page<StructuredLog>>(
+      `/api/v1/projects/${projectId}/logs${query({
+        level: filters.level,
+        message: filters.message,
+        environment: filters.environment,
+        release: filters.release,
+        service: filters.service,
+        trace_id: filters.traceId,
+        cursor: filters.cursor,
+        limit: 50,
+      })}`,
+    ),
+  log: (projectId: string, logId: string) =>
+    request<StructuredLog>(`/api/v1/projects/${projectId}/logs/${logId}`),
+  transactions: (
+    projectId: string,
+    filters: {
+      environment?: string;
+      release?: string;
+      service?: string;
+      cursor?: string | null;
+    } = {},
+  ) =>
+    request<Page<Span>>(
+      `/api/v1/projects/${projectId}/transactions${query({
+        environment: filters.environment,
+        release: filters.release,
+        service: filters.service,
+        cursor: filters.cursor,
+        limit: 50,
+      })}`,
+    ),
+  trace: (projectId: string, traceId: string) =>
+    request<Trace>(`/api/v1/projects/${projectId}/traces/${traceId}`),
+  performance: (
+    projectId: string,
+    filters: { environment?: string; release?: string; service?: string } = {},
+  ) =>
+    request<{ items: PerformanceBucket[] }>(
+      `/api/v1/projects/${projectId}/performance${query({
+        environment: filters.environment,
+        release: filters.release,
+        service: filters.service,
+        limit: 100,
+      })}`,
+    ),
   search: (projectId: string, expression: string, cursor?: string | null) =>
     request<Page<Event> & { candidates_examined: number }>(
       `/api/v1/projects/${projectId}/events/search${query({

@@ -96,11 +96,11 @@ async fn measure_purge_rps(database: &Database) -> Result<(), Box<dyn Error>> {
     let p95 = samples[(samples.len() - 1) * 95 / 100];
     let rps = f64::from(DELETED_EVENTS) / elapsed.as_secs_f64();
     let deleted_remaining = database
-        .collection::<mongodb::bson::Document>("events")
+        .collection::<mongodb::bson::Document>("error_events")
         .count_documents(doc! { "p": 42 })
         .await?;
     let active_count = database
-        .collection::<mongodb::bson::Document>("events")
+        .collection::<mongodb::bson::Document>("error_events")
         .count_documents(doc! { "p": 43 })
         .await?;
     eprintln!(
@@ -233,14 +233,14 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     assert!(status.reconciliation_pass);
     assert_eq!(
         database
-            .collection::<mongodb::bson::Document>("events")
+            .collection::<mongodb::bson::Document>("error_events")
             .count_documents(doc! { "p": 42 })
             .await?,
         0
     );
     assert_eq!(
         database
-            .collection::<mongodb::bson::Document>("events")
+            .collection::<mongodb::bson::Document>("error_events")
             .count_documents(doc! { "p": 43 })
             .await?,
         1
@@ -326,6 +326,9 @@ fn project(id: i32, slug: &str) -> ProjectIdentity {
         items: ItemCapabilities {
             error: true,
             client_report: true,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

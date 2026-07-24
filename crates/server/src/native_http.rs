@@ -23,7 +23,10 @@ use faultkeep_application::{
         IncidentCapsuleError, IncidentCapsuleRequest, IncidentCapsuleService,
         IncidentEventSelection,
     },
-    native_api::{EventListRequest, NativeApiError, NativeApiService},
+    native_api::{
+        EventListRequest, LogListRequest, NativeApiError, NativeApiService, PerformanceListRequest,
+        TransactionListRequest,
+    },
     observability::RequestId,
     projects::CreateProject,
     search::SearchError,
@@ -44,6 +47,7 @@ use faultkeep_domain::{
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
     grouping::IssueId,
     issue::{ActorKind, ActorRef, IssueCommandAction, IssueSnapshot, IssueStatus},
+    signals::{LogId, LogRecord, LogSeverity, SpanRecord, TraceId},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -73,6 +77,9 @@ struct NativeHttpState {
 pub struct RetentionCapability {
     pub events_days: u32,
     pub issue_stats_hourly_days: u32,
+    pub logs_days: u32,
+    pub spans_days: u32,
+    pub span_stats_hourly_days: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -320,6 +327,20 @@ pub fn router(
             get(get_event),
         )
         .route("/api/v1/projects/{project_id}/events", get(list_events))
+        .route("/api/v1/projects/{project_id}/logs", get(list_logs))
+        .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
+        .route(
+            "/api/v1/projects/{project_id}/transactions",
+            get(list_transactions),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/traces/{trace_id}",
+            get(get_trace),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/performance",
+            get(get_performance),
+        )
         .route("/api/v1/projects/{project_id}/releases", get(list_releases))
         .route(
             "/api/v1/projects/{project_id}/environments",
@@ -952,6 +973,12 @@ struct ProjectBody {
     error_enabled: bool,
     #[serde(default = "default_true")]
     client_report_enabled: bool,
+    #[serde(default = "default_true")]
+    log_enabled: bool,
+    #[serde(default = "default_true")]
+    transaction_enabled: bool,
+    #[serde(default = "default_true")]
+    span_enabled: bool,
     #[serde(default = "default_event_bytes")]
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
@@ -978,6 +1005,9 @@ async fn create_project(
                 items: ItemCapabilities {
                     error: body.error_enabled,
                     client_report: body.client_report_enabled,
+                    log: body.log_enabled,
+                    transaction: body.transaction_enabled,
+                    span: body.span_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -1164,6 +1194,9 @@ struct PolicyBody {
     ip_policy: String,
     error_enabled: bool,
     client_report_enabled: bool,
+    log_enabled: bool,
+    transaction_enabled: bool,
+    span_enabled: bool,
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
     burst: Option<u32>,
@@ -1188,6 +1221,9 @@ async fn update_project_policy(
                 items: ItemCapabilities {
                     error: body.error_enabled,
                     client_report: body.client_report_enabled,
+                    log: body.log_enabled,
+                    transaction: body.transaction_enabled,
+                    span: body.span_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -1361,6 +1397,192 @@ async fn list_events(
     event_page(&state, &headers, &project_id, None, raw.as_deref()).await
 }
 
+async fn list_logs(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let severity = query
+        .get("level")
+        .map(|value| match value.as_str() {
+            "trace" => Ok(LogSeverity::Trace),
+            "debug" => Ok(LogSeverity::Debug),
+            "info" => Ok(LogSeverity::Info),
+            "warn" | "warning" => Ok(LogSeverity::Warn),
+            "error" => Ok(LogSeverity::Error),
+            "fatal" => Ok(LogSeverity::Fatal),
+            _ => Err(HttpApiError::InvalidRequest),
+        })
+        .transpose()?;
+    let trace_id = query
+        .get("trace_id")
+        .map(|value| TraceId::parse(value).map_err(|_| HttpApiError::InvalidRequest))
+        .transpose()?;
+    let page = api(&state)?
+        .list_logs(
+            &context,
+            project_id_from(&project_id)?,
+            LogListRequest {
+                from: optional_query_timestamp(&query, "from")?,
+                until: optional_query_timestamp(&query, "until")?,
+                severity,
+                message: query.get("message").cloned().map(String::into_boxed_str),
+                environment: query
+                    .get("environment")
+                    .cloned()
+                    .map(String::into_boxed_str),
+                release: query.get("release").cloned().map(String::into_boxed_str),
+                service: query.get("service").cloned().map(String::into_boxed_str),
+                trace_id,
+                cursor: query.get("cursor").map(String::as_str),
+                limit: query_limit(&query)?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": page.items.iter().map(log_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": page.next_cursor,
+    })))
+}
+
+async fn get_log(
+    State(state): State<NativeHttpState>,
+    Path((project_id, log_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let log = api(&state)?
+        .log(
+            &context,
+            project_id_from(&project_id)?,
+            LogId::parse(&log_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(log_value(&log)?))
+}
+
+async fn list_transactions(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let page = api(&state)?
+        .list_transactions(
+            &context,
+            project_id_from(&project_id)?,
+            TransactionListRequest {
+                from: optional_query_timestamp(&query, "from")?,
+                until: optional_query_timestamp(&query, "until")?,
+                environment: query
+                    .get("environment")
+                    .cloned()
+                    .map(String::into_boxed_str),
+                release: query.get("release").cloned().map(String::into_boxed_str),
+                service: query.get("service").cloned().map(String::into_boxed_str),
+                cursor: query.get("cursor").map(String::as_str),
+                limit: query_limit(&query)?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": page.items.iter().map(span_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": page.next_cursor,
+    })))
+}
+
+async fn get_trace(
+    State(state): State<NativeHttpState>,
+    Path((project_id, trace_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let trace = api(&state)?
+        .trace(
+            &context,
+            project_id_from(&project_id)?,
+            TraceId::parse(&trace_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "trace_id": trace.trace_id.to_string(),
+        "spans": trace.spans.iter().map(span_value).collect::<Result<Vec<_>, _>>()?,
+        "logs": trace.logs.iter().map(log_value).collect::<Result<Vec<_>, _>>()?,
+        "errors": trace.errors.iter().map(|event_id| json!({
+            "event_id": event_id.to_string(),
+        })).collect::<Vec<_>>(),
+        "partial": trace.partial,
+        "omitted_spans": trace.omitted_spans,
+    })))
+}
+
+async fn get_performance(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let buckets = api(&state)?
+        .performance(
+            &context,
+            project_id_from(&project_id)?,
+            PerformanceListRequest {
+                from: optional_query_timestamp(&query, "from")?,
+                until: optional_query_timestamp(&query, "until")?,
+                environment: query
+                    .get("environment")
+                    .cloned()
+                    .map(String::into_boxed_str),
+                release: query.get("release").cloned().map(String::into_boxed_str),
+                service: query.get("service").cloned().map(String::into_boxed_str),
+                limit: query_limit(&query)?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    let items = buckets
+        .into_iter()
+        .map(|bucket| {
+            Ok(json!({
+                "hour": timestamp_string(bucket.hour)?,
+                "name": bucket.name,
+                "service": bucket.service,
+                "environment": bucket.environment,
+                "release": bucket.release,
+                "representative_trace_id": hex::encode(bucket.representative_trace_id.as_bytes()),
+                "operation": bucket.operation.as_str(),
+                "count": bucket.count,
+                "failure_count": bucket.failure_count,
+                "failure_rate": if bucket.count == 0 {
+                    0.0
+                } else {
+                    bucket.failure_count as f64 / bucket.count as f64
+                },
+                "average_duration_ms": bucket.average_duration_ms,
+                "p50_ms": bucket.p50_ms,
+                "p75_ms": bucket.p75_ms,
+                "p90_ms": bucket.p90_ms,
+                "p95_ms": bucket.p95_ms,
+                "p99_ms": bucket.p99_ms,
+                "approximate": true,
+                "sample_limit": 2048,
+            }))
+        })
+        .collect::<Result<Vec<_>, HttpApiError>>()?;
+    Ok(Json(json!({ "items": items })))
+}
+
 async fn event_page(
     state: &NativeHttpState,
     headers: &HeaderMap,
@@ -1484,6 +1706,9 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
         json!({
             "events_days": policy.events_days,
             "issue_stats_hourly_days": policy.issue_stats_hourly_days,
+            "logs_days": policy.logs_days,
+            "spans_days": policy.spans_days,
+            "span_stats_hourly_days": policy.span_stats_hourly_days,
             "clock": "received_at",
             "gradual_policy_reduction": true,
         })
@@ -1522,6 +1747,11 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
                 .is_some_and(|capability| capability.artifact_bundles),
             "incident_capsule": state.incident_capsule.is_some(),
             "notifications": state.notifications,
+            "structured_logs": state.required_ready,
+            "transactions": state.required_ready,
+            "spans": state.required_ready,
+            "virtual_traces": state.required_ready,
+            "performance_insights": state.required_ready,
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -1978,6 +2208,9 @@ fn policy_value(project: &ProjectView) -> Value {
         "items": {
             "error": project.items.error,
             "client_report": project.items.client_report,
+            "log": project.items.log,
+            "transaction": project.items.transaction,
+            "span": project.items.span,
         },
         "limits": {
             "max_event_bytes": project.limits.max_event_bytes.get(),
@@ -2055,6 +2288,65 @@ fn event_value(event: &EventView) -> Result<Value, HttpApiError> {
     }))
 }
 
+fn log_value(log: &LogRecord) -> Result<Value, HttpApiError> {
+    let body: Value =
+        serde_json::from_slice(log.body.as_bytes()).map_err(|_| HttpApiError::Unavailable)?;
+    Ok(json!({
+        "id": log.id.to_string(),
+        "project_id": log.project_id.get().to_string(),
+        "received_at": timestamp_string(log.received_at)?,
+        "timestamp": nanosecond_timestamp_string(log.occurred_at_ns)?,
+        "timestamp_ns": log.occurred_at_ns.to_string(),
+        "level": log.severity.as_str(),
+        "message": log.message,
+        "trace_id": log.trace_id.map(|value| value.to_string()),
+        "span_id": log.span_id.map(|value| value.to_string()),
+        "environment": log.environment,
+        "release": log.release,
+        "service": log.service,
+        "body": body,
+    }))
+}
+
+fn span_value(span: &SpanRecord) -> Result<Value, HttpApiError> {
+    let body: Value =
+        serde_json::from_slice(span.body.as_bytes()).map_err(|_| HttpApiError::Unavailable)?;
+    let end_ns = span
+        .started_at_ns
+        .checked_add(span.duration_ns)
+        .ok_or(HttpApiError::Unavailable)?;
+    Ok(json!({
+        "id": hex::encode(span.id.as_bytes()),
+        "project_id": span.project_id.get().to_string(),
+        "received_at": timestamp_string(span.received_at)?,
+        "started_at": nanosecond_timestamp_string(span.started_at_ns)?,
+        "started_at_ns": span.started_at_ns.to_string(),
+        "ended_at": nanosecond_timestamp_string(end_ns)?,
+        "duration_ns": span.duration_ns.to_string(),
+        "duration_ms": span.duration_ns as f64 / 1_000_000.0,
+        "trace_id": span.trace_id.to_string(),
+        "span_id": span.span_id.to_string(),
+        "parent_span_id": span.parent_span_id.map(|value| value.to_string()),
+        "is_segment": span.is_segment,
+        "operation_class": span.operation_class.as_str(),
+        "operation": span.operation,
+        "status": span.status,
+        "name": span.name,
+        "environment": span.environment,
+        "release": span.release,
+        "service": span.service,
+        "insight_flags": span.insight_flags,
+        "body": body,
+    }))
+}
+
+fn nanosecond_timestamp_string(value: i64) -> Result<String, HttpApiError> {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(value))
+        .map_err(|_| HttpApiError::Unavailable)?
+        .format(&Rfc3339)
+        .map_err(|_| HttpApiError::Unavailable)
+}
+
 fn activity_value(activity: &IssueActivityView) -> Result<Value, HttpApiError> {
     Ok(json!({
         "id": hex::encode(activity.id.as_bytes()),
@@ -2117,6 +2409,9 @@ mod tests {
             items: ItemCapabilities {
                 error: true,
                 client_report: true,
+                log: true,
+                transaction: true,
+                span: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,
@@ -2124,7 +2419,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&project_value(&project).unwrap()).unwrap(),
-            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null}},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null}},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
         );
     }
 

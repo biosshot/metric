@@ -358,6 +358,9 @@ pub struct SchedulerSettings {
 pub struct RetentionSettings {
     pub events_days: u32,
     pub issue_stats_hourly_days: u32,
+    pub logs_days: u32,
+    pub spans_days: u32,
+    pub span_stats_hourly_days: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -452,6 +455,9 @@ impl Default for RetentionSettings {
         Self {
             events_days: 30,
             issue_stats_hourly_days: 400,
+            logs_days: 30,
+            spans_days: 30,
+            span_stats_hourly_days: 90,
         }
     }
 }
@@ -1218,6 +1224,9 @@ struct RawSchedulerSettings {
 struct RawRetentionSettings {
     events_days: u32,
     issue_stats_hourly_days: u32,
+    logs_days: u32,
+    spans_days: u32,
+    span_stats_hourly_days: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1270,6 +1279,9 @@ impl Default for RawRetentionSettings {
         Self {
             events_days: 30,
             issue_stats_hourly_days: 400,
+            logs_days: 30,
+            spans_days: 30,
+            span_stats_hourly_days: 90,
         }
     }
 }
@@ -1867,7 +1879,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         let rendered = format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nissue_stats_hourly_days = {}\nlogs_days = {}\nspans_days = {}\nspan_stats_hourly_days = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -1937,6 +1949,9 @@ impl AppConfig {
             self.scheduler.batch_size,
             self.retention.events_days,
             self.retention.issue_stats_hourly_days,
+            self.retention.logs_days,
+            self.retention.spans_days,
+            self.retention.span_stats_hourly_days,
             humantime::format_duration(self.project_deletion.grace_period.get()),
             self.project_deletion.delete_batch_documents,
             humantime::format_duration(self.project_deletion.completed_job_retention.get()),
@@ -2356,11 +2371,17 @@ impl TryFrom<RawRetentionSettings> for RetentionSettings {
 
     fn try_from(raw: RawRetentionSettings) -> Result<Self, Self::Error> {
         let valid = (1..=3_650).contains(&raw.events_days)
-            && (1..=3_650).contains(&raw.issue_stats_hourly_days);
+            && (1..=3_650).contains(&raw.issue_stats_hourly_days)
+            && (1..=3_650).contains(&raw.logs_days)
+            && (1..=3_650).contains(&raw.spans_days)
+            && (1..=3_650).contains(&raw.span_stats_hourly_days);
         valid
             .then_some(Self {
                 events_days: raw.events_days,
                 issue_stats_hourly_days: raw.issue_stats_hourly_days,
+                logs_days: raw.logs_days,
+                spans_days: raw.spans_days,
+                span_stats_hourly_days: raw.span_stats_hourly_days,
             })
             .ok_or(ConfigError::InvalidRetentionConfig)
     }

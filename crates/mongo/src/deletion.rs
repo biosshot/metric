@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 25] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 28] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -69,7 +69,22 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 25] = [
     },
     DatasetRegistration {
         code: 10,
-        name: "events",
+        name: "error_events",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 11,
+        name: "logs",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 12,
+        name: "spans",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 13,
+        name: "span_stats_hourly",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -198,7 +213,9 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 5] = [
     },
 ];
 
-const PURGE_CODES: [u16; 15] = [10, 20, 30, 40, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70];
+const PURGE_CODES: [u16; 18] = [
+    10, 11, 12, 13, 20, 30, 40, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70,
+];
 
 impl MongoProjectStore {
     async fn request_deletion_inner(
@@ -468,7 +485,19 @@ impl MongoProjectStore {
         let cursor = job.get("cursor").cloned();
         match code {
             10 => {
-                self.delete_owned_batch("events", "p", project_id, cursor, batch_size)
+                self.delete_owned_batch("error_events", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            11 => {
+                self.delete_owned_batch("logs", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            12 => {
+                self.delete_owned_batch("spans", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            13 => {
+                self.delete_owned_batch("span_stats_hourly", "p", project_id, cursor, batch_size)
                     .await
             }
             20 => {

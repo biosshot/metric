@@ -61,7 +61,7 @@ impl MongoArchiveStore {
             return self.decode_manifest_batch(&existing).await.map(Some);
         }
 
-        let events = self.database.collection::<Document>("events");
+        let events = self.database.collection::<Document>("error_events");
         let terminal = doc! {
             "$or": [
                 { "q": { "$exists": false } },
@@ -235,7 +235,7 @@ impl MongoArchiveStore {
                 .collect::<Vec<_>>();
             let mut cursor = self
                 .database
-                .collection::<Document>("events")
+                .collection::<Document>("error_events")
                 .find(doc! { "_id": { "$in": ids } })
                 .projection(event_projection())
                 .await
@@ -342,7 +342,7 @@ impl MongoArchiveStore {
             .collect::<Vec<_>>();
         let conflicting = self
             .database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .count_documents(doc! {
                 "_id": { "$in": &ids },
                 "z": { "$exists": true, "$ne": Bson::Binary(id.clone()) },
@@ -354,7 +354,7 @@ impl MongoArchiveStore {
         }
         let result = self
             .database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .update_many(
                 doc! { "_id": { "$in": ids } },
                 doc! {

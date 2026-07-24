@@ -62,6 +62,9 @@ fn snapshot() -> ProjectSnapshot {
         items: ItemCapabilities {
             error: true,
             client_report: true,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,
@@ -69,10 +72,19 @@ fn snapshot() -> ProjectSnapshot {
 }
 
 fn test_app(config: IngestConfig, sink: FakeEventSink, root: &ShutdownRoot) -> Router {
+    test_app_with_snapshot(config, sink, root, snapshot())
+}
+
+fn test_app_with_snapshot(
+    config: IngestConfig,
+    sink: FakeEventSink,
+    root: &ShutdownRoot,
+    snapshot: ProjectSnapshot,
+) -> Router {
     let service = Arc::new(IngestService::new(
         Arc::new(FakeProjectResolver::new(
             DsnKey::parse(KEY_TEXT).unwrap(),
-            snapshot(),
+            snapshot,
         )),
         Arc::new(sink),
         Arc::new(FakeOutcomeSink::default()),
@@ -383,7 +395,9 @@ async fn captured_official_python_sdk_2_32_fixture_is_accepted() {
 async fn mixed_disabled_item_preserves_error_and_returns_category_backoff() {
     let root = ShutdownRoot::new();
     let sink = FakeEventSink::accepting();
-    let response = test_app(config(), sink.clone(), &root)
+    let mut project = snapshot();
+    project.items.transaction = false;
+    let response = test_app_with_snapshot(config(), sink.clone(), &root, project)
         .oneshot(request(envelope(
             "\n{\"type\":\"transaction\",\"length\":2}\n{}",
         )))

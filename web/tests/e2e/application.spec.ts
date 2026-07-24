@@ -12,7 +12,7 @@ const project = {
   policy: {
     revision: 1,
     ip_policy: 'hmac',
-    items: { error: true, client_report: true },
+    items: { error: true, client_report: true, log: true, transaction: true, span: true },
     limits: { max_event_bytes: 1048576, max_events_per_second: null, burst: null },
   },
   grouping_revision: 1,

@@ -1,6 +1,6 @@
 # ADR-0040: Post-MVP vertical product plan
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-24
 - Supersedes: the post-MVP exclusions of ADR-0039 only
 
@@ -28,6 +28,21 @@ Sentry SDK item
 The initial deployment remains one Rust process in `--role=all`. Separate lanes and
 collections are resource-isolation boundaries inside that process, not services and
 not an inter-role protocol.
+
+## Current execution status
+
+Status as of 2026-07-24:
+
+| Phase | Capability | Status |
+| ---: | --- | --- |
+| 23 | Dark Web redesign | Complete |
+| 24 | Structured Logs | Implemented |
+| 25 | Transactions, Spans and Traces | Implemented |
+| 26 | Performance Insights | Implemented |
+
+Phase 23 evidence is published in
+`arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
+evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
 
 ## Accepted direction
 
@@ -65,21 +80,22 @@ The current `events` collection contains occurrences of errors, while `issues`
 contains their groups. Once other signal types exist, the physical name `events`
 becomes ambiguous.
 
-For an installation without production data, Phase 24 renames the physical collection
-to:
+Phase 24 performs a deliberate breaking physical rename to:
 
 ```text
 error_events
 ```
 
-Domain code uses `ErrorEvent`, `ErrorEventStore` and `ErrorProcessor`. Existing native
-API routes may keep `/events` because they expose events belonging to an Issue and
-because changing the public route provides no storage benefit.
+There is no migration, collection alias, dual-read, dual-write or automatic rename.
+Schema generation 8 and all runtime/test adapters use `error_events` exclusively.
+An existing generation-7 database is intentionally incompatible and must be dropped
+or recreated by its operator. Data in a legacy `events` collection is intentionally
+not imported.
 
-If production data exists before Phase 24 starts, the rename requires an explicit
-schema operation and rollback procedure. It must not be hidden inside ordinary
-startup. If that migration is not accepted, the physical legacy name `events` may
-remain while all Rust/application names become Error-specific.
+This owner-directed breaking decision supersedes the earlier conditional compatibility
+language in this ADR. Existing native API routes keep `/events` because they expose
+Error occurrences belonging to an Issue; the route name does not select a MongoDB
+collection.
 
 ## Physical collection map
 
@@ -256,13 +272,15 @@ Exit gate:
 ### Phase 24 — Structured Logs end to end
 
 This phase creates the reusable typed-lane extension while delivering a complete
-user-visible feature. There is no separate horizontal framework phase.
+user-visible feature. There is no separate horizontal framework phase. ADR-0042
+defines the accepted compact `logs` BSON model, pending/final lifecycle, indexes and
+query limits.
 
 Implement:
 
 - accepted Sentry SDK Log Envelope fixtures and capability flag;
 - `AcceptedRecord::Log`, `LogProcessor` and a dedicated bounded Log lane;
-- typed `logs` codec, validator, indexes and pending-recovery query;
+- ADR-0042 typed `logs` codec, validator, indexes and pending-recovery query;
 - compact severity, timestamps, message/body, environment, release, SDK and bounded
   attributes;
 - optional trace/span correlation when supplied by the SDK;
@@ -273,8 +291,8 @@ Implement:
 - client-report accounting for rejected or rate-limited Logs;
 - archive/deletion registration using Log-specific segments.
 
-Phase 24 also performs the accepted `events` to `error_events` physical rename only
-when the migration precondition above is satisfied.
+Phase 24 also performs the breaking `events` to `error_events` physical rename defined
+above.
 
 Exit gate:
 
@@ -288,6 +306,10 @@ Exit gate:
 - the browser can send, find, filter and inspect a real SDK Log.
 
 ### Phase 25 — Transactions, Spans and basic Trace investigation
+
+ADR-0043 defines Transactions as root/segment Spans, the compact `spans` collection,
+deterministic identities, idempotent child expansion and bounded virtual Trace
+assembly.
 
 Implement:
 
@@ -314,6 +336,9 @@ Exit gate:
 
 ### Phase 26 — Performance aggregates and Insights
 
+ADR-0043 defines rebuildable `span_stats_hourly`, bounded rollups, approximation
+semantics and deterministic segment-local Insight enrichment.
+
 Implement:
 
 - `span_stats_hourly` as rebuildable derived state;
@@ -331,6 +356,15 @@ Exit gate:
 - percentile and extrapolation semantics are documented and golden-tested;
 - aggregate work remains behind foreground signal processing;
 - representative performance queries meet their published latency budgets.
+
+### Phase 24-26 performance-gate amendment
+
+By explicit owner decision on 2026-07-24, Phase 24-26 do not run sustained, burst,
+mixed-ingest, search-under-ingest or latency/load tests in this implementation pass.
+The Envelope endpoint is shared, and these phases add protocol fixtures, functional
+tests and saved real-SDK smoke programs instead. This amendment does not permit a
+background server, SDK or test process to remain after a test run. Performance
+baselines may be added later when separate measured regressions justify them.
 
 ### Phase 27 — Unified Explore query surface
 

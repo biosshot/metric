@@ -59,6 +59,7 @@ use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, M
 use faultkeep_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
     OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource,
+    SignalStore,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -118,6 +119,7 @@ pub enum ServerError {
 struct RuntimeModules {
     project_resolver: std::sync::Arc<dyn ProjectResolver>,
     event_sink: std::sync::Arc<dyn EventSink>,
+    signal_store: Option<std::sync::Arc<dyn SignalStore>>,
     writer_task: Option<MongoWriterTask>,
     dispatcher_task: Option<DispatcherTask>,
     scheduler_task: Option<SchedulerTask>,
@@ -212,6 +214,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let RuntimeModules {
         project_resolver,
         event_sink,
+        signal_store,
         writer_task,
         dispatcher_task,
         scheduler_task,
@@ -412,6 +415,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             },
             shutdown.signal(),
         )?);
+        let signal_store: std::sync::Arc<dyn SignalStore> = std::sync::Arc::new(
+            store.signal_store_with_retention(faultkeep_mongo::SignalRetention {
+                logs_days: config.retention.logs_days,
+                spans_days: config.retention.spans_days,
+                span_stats_hourly_days: config.retention.span_stats_hourly_days,
+            }),
+        );
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
@@ -422,7 +432,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 std::sync::Arc::clone(&clock),
             )
             .with_project_deletion(deletion_service)
-            .with_blob_store(std::sync::Arc::clone(&blob_store)),
+            .with_blob_store(std::sync::Arc::clone(&blob_store))
+            .with_signal_store(std::sync::Arc::clone(&signal_store)),
         );
         let debug_metadata: std::sync::Arc<dyn faultkeep_ports::DebugFileStore> =
             std::sync::Arc::new(store.debug_file_store(faultkeep_mongo::DebugFileQuota::default()));
@@ -631,6 +642,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         RuntimeModules {
             project_resolver,
             event_sink,
+            signal_store: Some(signal_store),
             writer_task: Some(writer_task),
             dispatcher_task: Some(dispatcher_task),
             scheduler_task: Some(scheduler_task),
@@ -653,6 +665,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         RuntimeModules {
             project_resolver: std::sync::Arc::new(UnavailableProjectResolver),
             event_sink: std::sync::Arc::new(UnavailableEventSink),
+            signal_store: None,
             writer_task: None,
             dispatcher_task: None,
             scheduler_task: None,
@@ -672,30 +685,32 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             artifact_cleanup_task: None,
         }
     };
-    let ingest = std::sync::Arc::new(
-        faultkeep_application::ingest::IngestService::new(
-            project_resolver,
-            event_sink,
-            std::sync::Arc::new(NoopOutcomeSink),
-            clock,
-            random,
-            config.ingest.max_waiting_for_storage,
-            shutdown.signal(),
-        )
-        .with_blob_store(
-            blob_store,
-            faultkeep_application::ingest::AttachmentIngestConfig {
-                enabled: config.ingest.attachments.enabled,
-                chunk_bytes: config.ingest.attachments.chunk_bytes,
-            },
-        )
-        .with_minidumps(faultkeep_application::ingest::MinidumpIngestConfig {
-            enabled: config.native_crash.minidump.enabled,
-            max_bytes: config.native_crash.minidump.max_bytes,
-            chunk_bytes: config.native_crash.minidump.chunk_bytes,
-            retained_header_bytes: 64 * 1024,
-        }),
-    );
+    let mut ingest_service = faultkeep_application::ingest::IngestService::new(
+        project_resolver,
+        event_sink,
+        std::sync::Arc::new(NoopOutcomeSink),
+        clock,
+        random,
+        config.ingest.max_waiting_for_storage,
+        shutdown.signal(),
+    )
+    .with_blob_store(
+        blob_store,
+        faultkeep_application::ingest::AttachmentIngestConfig {
+            enabled: config.ingest.attachments.enabled,
+            chunk_bytes: config.ingest.attachments.chunk_bytes,
+        },
+    )
+    .with_minidumps(faultkeep_application::ingest::MinidumpIngestConfig {
+        enabled: config.native_crash.minidump.enabled,
+        max_bytes: config.native_crash.minidump.max_bytes,
+        chunk_bytes: config.native_crash.minidump.chunk_bytes,
+        retained_header_bytes: 64 * 1024,
+    });
+    if let Some(signal_store) = signal_store {
+        ingest_service = ingest_service.with_signal_store(signal_store);
+    }
+    let ingest = std::sync::Arc::new(ingest_service);
     let required_ready = writer_task.is_some()
         && dispatcher_task.is_some()
         && scheduler_task.is_some()
@@ -711,6 +726,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 retention: required_ready.then_some(native_http::RetentionCapability {
                     events_days: config.retention.events_days,
                     issue_stats_hourly_days: config.retention.issue_stats_hourly_days,
+                    logs_days: config.retention.logs_days,
+                    spans_days: config.retention.spans_days,
+                    span_stats_hourly_days: config.retention.span_stats_hourly_days,
                 }),
                 project_deletion: required_ready.then_some(
                     native_http::ProjectDeletionCapability {

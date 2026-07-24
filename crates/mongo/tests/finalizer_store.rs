@@ -80,7 +80,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .await?;
     assert_eq!(result.finalized, 2);
 
-    let events = database.collection::<Document>("events");
+    let events = database.collection::<Document>("error_events");
     for item in [&first, &second] {
         let document = events
             .find_one(doc! { "_id": binary(item.key().as_bytes()) })
@@ -232,7 +232,7 @@ async fn exercise_crash_boundaries(database: &Database) -> Result<(), Box<dyn Er
         EventCodecConfig::default(),
         IssueCodecConfig::default(),
     );
-    let boundaries = ["issues", "issue_stats_hourly", "releases", "events"];
+    let boundaries = ["issues", "issue_stats_hourly", "releases", "error_events"];
 
     for (offset, collection) in boundaries.into_iter().enumerate() {
         let seed = u8::try_from(20 + offset)?;
@@ -273,7 +273,7 @@ async fn exercise_crash_boundaries(database: &Database) -> Result<(), Box<dyn Er
         assert_eq!(retry.finalized, 1);
         assert_eq!(
             database
-                .collection::<Document>("events")
+                .collection::<Document>("error_events")
                 .count_documents(doc! { "_id": binary(event.key().as_bytes()) })
                 .await?,
             1
@@ -286,7 +286,7 @@ async fn exercise_crash_boundaries(database: &Database) -> Result<(), Box<dyn Er
             1
         );
         let terminal = database
-            .collection::<Document>("events")
+            .collection::<Document>("error_events")
             .find_one(doc! { "_id": binary(event.key().as_bytes()) })
             .await?
             .unwrap();
@@ -498,6 +498,9 @@ fn project() -> ProjectIdentity {
         items: ItemCapabilities {
             error: true,
             client_report: false,
+            log: true,
+            transaction: true,
+            span: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

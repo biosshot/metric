@@ -36,9 +36,33 @@ pub struct ParsedEnvelope {
     pub event_id: Option<EventId>,
     pub dsn: Option<DsnAuth>,
     pub primary: Option<RawEvent>,
+    pub signals: Vec<RawSignal>,
     pub attachments: Vec<RawAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawSignalKind {
+    Log,
+    Transaction,
+    Span,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawSignal {
+    pub kind: RawSignalKind,
+    pub bytes: Box<[u8]>,
+}
+
+impl std::fmt::Debug for RawSignal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawSignal")
+            .field("kind", &self.kind)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -209,6 +233,7 @@ pub fn parse_envelope_with_attachments(
     let event_id = parse_optional_event_id(header.event_id.as_deref())?;
     let dsn = header.dsn.as_deref().map(parse_dsn).transpose()?;
     let mut primary = None;
+    let mut signals = Vec::new();
     let mut attachments = Vec::new();
     let mut attachment_bytes = 0_usize;
     let mut discarded = Vec::new();
@@ -308,6 +333,15 @@ pub fn parse_envelope_with_attachments(
                     });
                 }
             }
+            ItemClass::Signal(kind) => {
+                if length > limits.max_event_bytes {
+                    return Err(ProtocolError::too_large("signal_too_large"));
+                }
+                signals.push(RawSignal {
+                    kind,
+                    bytes: payload.into(),
+                });
+            }
             ItemClass::Disabled(category) => discarded.push(DiscardedItem {
                 category: Some(category),
                 reason: "feature_disabled",
@@ -320,13 +354,18 @@ pub fn parse_envelope_with_attachments(
         cursor = next_cursor;
     }
 
-    if primary.is_none() && discarded.is_empty() && client_report_quantity == 0 {
+    if primary.is_none()
+        && signals.is_empty()
+        && discarded.is_empty()
+        && client_report_quantity == 0
+    {
         return Err(ProtocolError::invalid("empty_envelope"));
     }
     Ok(ParsedEnvelope {
         event_id,
         dsn,
         primary,
+        signals,
         attachments,
         discarded,
         client_report_quantity,
@@ -493,6 +532,7 @@ fn parse_client_report(payload: &[u8]) -> Result<u64, ProtocolError> {
 
 enum ItemClass {
     Event,
+    Signal(RawSignalKind),
     ClientReport,
     Attachment,
     Disabled(DisabledCategory),
@@ -503,12 +543,13 @@ fn classify_item(kind: &str) -> ItemClass {
     match kind {
         "event" => ItemClass::Event,
         "client_report" => ItemClass::ClientReport,
-        "transaction" => ItemClass::Disabled(DisabledCategory::Transaction),
+        "log" => ItemClass::Signal(RawSignalKind::Log),
+        "transaction" => ItemClass::Signal(RawSignalKind::Transaction),
         "session" | "sessions" => ItemClass::Disabled(DisabledCategory::Session),
         "profile" | "profile_chunk" => ItemClass::Disabled(DisabledCategory::Profile),
         "replay_event" | "replay_recording" => ItemClass::Disabled(DisabledCategory::Replay),
         "check_in" => ItemClass::Disabled(DisabledCategory::CheckIn),
-        "span" => ItemClass::Disabled(DisabledCategory::Span),
+        "span" => ItemClass::Signal(RawSignalKind::Span),
         "statsd" | "metric_buckets" => ItemClass::Disabled(DisabledCategory::Statsd),
         "attachment" => ItemClass::Attachment,
         "view_hierarchy" => ItemClass::Disabled(DisabledCategory::Attachment),
@@ -544,6 +585,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn structured_logs_transactions_and_streamed_spans_are_signal_items() {
+        for (kind, expected) in [
+            ("log", RawSignalKind::Log),
+            ("transaction", RawSignalKind::Transaction),
+            ("span", RawSignalKind::Span),
+        ] {
+            let payload = if kind == "log" {
+                r#"{"version":2,"items":[{"timestamp":1,"level":"info","body":"ready"}]}"#
+            } else {
+                r#"{"trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef"}"#
+            };
+            let body = envelope(&format!(r#"{{"type":"{kind}"}}"#), payload);
+            let parsed = parse_envelope(
+                &body,
+                EnvelopeLimits {
+                    max_items: 10,
+                    max_event_bytes: 1024,
+                },
+            )
+            .unwrap();
+            assert_eq!(parsed.signals.len(), 1);
+            assert_eq!(parsed.signals[0].kind, expected);
+            assert!(parsed.discarded.is_empty());
+        }
     }
 
     #[test]
@@ -721,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_disabled_item_does_not_remove_error() {
+    fn mixed_signal_item_does_not_remove_error() {
         let body = format!(
             "{{}}\n{{\"type\":\"event\",\"length\":{}}}\n{}\n{{\"type\":\"transaction\",\"length\":2}}\n{{}}",
             EVENT.len(),
@@ -736,7 +804,9 @@ mod tests {
         )
         .unwrap();
         assert!(parsed.primary.is_some());
-        assert_eq!(parsed.discarded[0].reason, "feature_disabled");
+        assert!(parsed.discarded.is_empty());
+        assert_eq!(parsed.signals.len(), 1);
+        assert_eq!(parsed.signals[0].kind, RawSignalKind::Transaction);
     }
 
     #[test]

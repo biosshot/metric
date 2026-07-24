@@ -1368,6 +1368,280 @@ label small,
   color: var(--text-muted);
 }
 
+.signal-toolbar {
+  display: grid;
+  align-items: end;
+  margin-bottom: 1rem;
+  gap: 0.75rem;
+  grid-template-columns:
+    minmax(220px, 1fr) repeat(3, minmax(130px, 0.35fr))
+    160px auto;
+}
+
+.signal-toolbar label,
+.compact-filter {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.compact-filter span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.compact-filter-group {
+  display: flex;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.compact-filter-group .compact-filter {
+  min-width: 150px;
+}
+
+.signal-histogram {
+  display: grid;
+  height: 104px;
+  align-items: end;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+  grid-template-columns: repeat(6, minmax(48px, 1fr));
+  gap: 0.65rem;
+}
+
+.signal-histogram > span {
+  display: grid;
+  height: 100%;
+  align-items: end;
+  gap: 0.35rem;
+}
+
+.signal-histogram i {
+  display: block;
+  min-height: 2px;
+  height: var(--level-height);
+  border-radius: 3px 3px 0 0;
+  background: var(--semantic-info);
+}
+
+.signal-histogram .signal-accent--warn i {
+  background: var(--semantic-warning);
+}
+
+.signal-histogram .signal-accent--error i,
+.signal-histogram .signal-accent--fatal i {
+  background: var(--semantic-error);
+}
+
+.signal-histogram .signal-accent--debug i,
+.signal-histogram .signal-accent--trace i {
+  background: var(--syntax-keyword);
+}
+
+.signal-histogram small {
+  color: var(--text-faint);
+  font-size: 0.66rem;
+}
+
+.signal-list,
+.transaction-list,
+.trace-waterfall,
+.detail-panel {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  background: var(--surface);
+}
+
+.detail-panel,
+.trace-waterfall {
+  margin-top: 1rem;
+  padding: 1rem;
+}
+
+.log-row {
+  position: relative;
+  display: grid;
+  min-height: 64px;
+  align-items: center;
+  padding: 0.75rem 1rem 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  text-decoration: none;
+  grid-template-columns: 72px minmax(220px, 1fr) minmax(120px, 0.35fr) auto auto;
+  gap: 0.75rem;
+}
+
+.log-row::before {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--semantic-info);
+  content: '';
+}
+
+.log-row:last-child,
+.transaction-row:last-child {
+  border-bottom: 0;
+}
+
+.log-row:hover,
+.transaction-row:hover,
+.waterfall-row:hover {
+  background: var(--surface-subtle);
+}
+
+.signal-accent--warn::before {
+  background: var(--semantic-warning);
+}
+
+.signal-accent--error::before,
+.signal-accent--fatal::before {
+  background: var(--semantic-error);
+}
+
+.signal-accent--debug::before,
+.signal-accent--trace::before {
+  background: var(--syntax-keyword);
+}
+
+.signal-level {
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-title,
+.text-link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.text-link {
+  color: var(--semantic-info);
+  font-size: 0.78rem;
+}
+
+.transaction-row {
+  display: grid;
+  min-height: 76px;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  text-decoration: none;
+  grid-template-columns: minmax(260px, 1fr) auto 100px 210px;
+  gap: 1rem;
+}
+
+.transaction-row div {
+  display: grid;
+}
+
+.transaction-row strong {
+  color: var(--text);
+}
+
+.transaction-row time,
+.log-row time {
+  color: var(--text-faint);
+  font-size: 0.74rem;
+}
+
+.insight-pill {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--semantic-warning);
+  border-radius: 999px;
+  background: var(--semantic-warning-surface);
+  color: var(--semantic-warning);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.duration--slow {
+  color: var(--semantic-warning);
+}
+
+.waterfall-row {
+  display: grid;
+  align-items: center;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+  grid-template-columns: minmax(220px, 0.45fr) minmax(260px, 1fr);
+  gap: 1rem;
+}
+
+.waterfall-label {
+  display: grid;
+  min-width: 0;
+}
+
+.waterfall-label strong,
+.waterfall-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waterfall-label small {
+  color: var(--text-muted);
+}
+
+.waterfall-track {
+  position: relative;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--surface-strong);
+}
+
+.waterfall-track i {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: var(--span-left);
+  width: var(--span-width);
+  border-radius: 2px;
+  background: var(--semantic-info);
+}
+
+.waterfall-track .waterfall-bar--failed {
+  background: var(--semantic-error);
+}
+
+.performance-table {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+}
+
+.performance-table td:first-child {
+  display: grid;
+}
+
+.performance-table td:first-child span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.approximation-note {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--semantic-info);
+  background: var(--semantic-info-surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 .timeline {
   display: grid;
   margin: 0;
@@ -1874,6 +2148,31 @@ label small,
 }
 
 @media (max-width: 1050px) {
+  .signal-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .compact-filter-group {
+    flex-wrap: wrap;
+  }
+
+  .log-row {
+    grid-template-columns: 72px minmax(180px, 1fr) auto;
+  }
+
+  .log-row time,
+  .log-row .text-link {
+    grid-column: 2 / -1;
+  }
+
+  .transaction-row {
+    grid-template-columns: minmax(220px, 1fr) auto 100px;
+  }
+
+  .transaction-row time {
+    grid-column: 1 / -1;
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2015,6 +2314,37 @@ label small,
   .issue-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .signal-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-filter-group {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .signal-toolbar .button {
+    width: 100%;
+  }
+
+  .log-row,
+  .transaction-row,
+  .waterfall-row {
+    align-items: start;
+    grid-template-columns: 1fr;
+  }
+
+  .log-row {
+    padding-left: 1rem;
+  }
+
+  .log-row time,
+  .log-row .text-link,
+  .transaction-row time {
+    grid-column: auto;
   }
 
   .search-field {

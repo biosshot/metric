@@ -1287,9 +1287,11 @@ dependencies = [
 name = "faultkeep-mongo"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "faultkeep-domain",
  "faultkeep-ports",
  "futures-util",
+ "hex",
  "metrics",
  "mongodb",
  "serde_json",

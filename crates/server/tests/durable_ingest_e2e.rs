@@ -108,7 +108,7 @@ impl WorkHandler for CompletingWorkHandler {
             self.started.notify_one();
             self.release.notified().await;
             self.database
-                .collection::<mongodb::bson::Document>("events")
+                .collection::<mongodb::bson::Document>("error_events")
                 .update_one(
                     doc! { "_id": mongodb::bson::Binary {
                         subtype: mongodb::bson::spec::BinarySubtype::Generic,
@@ -245,7 +245,7 @@ async fn measure_writer(database: &Database) -> Result<(), Box<dyn Error>> {
     }
     assert_eq!(
         database
-            .collection::<mongodb::bson::Document>("events")
+            .collection::<mongodb::bson::Document>("error_events")
             .count_documents(doc! {})
             .await?,
         u64::from(iterations)
@@ -351,7 +351,7 @@ async fn measure_processor_recovery(database: &Database) -> Result<(), Box<dyn E
     );
     assert_eq!(
         database
-            .collection::<mongodb::bson::Document>("events")
+            .collection::<mongodb::bson::Document>("error_events")
             .count_documents(doc! { "q.s": 0_i32 })
             .await?,
         0
@@ -483,7 +483,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     tokio::time::timeout(Duration::from_secs(2), handler.started.notified()).await?;
     assert_eq!(app.oneshot(request()).await?.status(), StatusCode::OK);
 
-    let events = database.collection::<mongodb::bson::Document>("events");
+    let events = database.collection::<mongodb::bson::Document>("error_events");
     assert_eq!(events.count_documents(doc! {}).await?, 1);
     let document = events.find_one(doc! {}).await?.unwrap();
     let decoded = decode_pending_event(&document, codec)?;
@@ -607,7 +607,7 @@ async fn exercise_processor_e2e(database: &Database) -> Result<(), Box<dyn Error
         app.clone().oneshot(request()).await?.status(),
         StatusCode::OK
     );
-    let events = database.collection::<mongodb::bson::Document>("events");
+    let events = database.collection::<mongodb::bson::Document>("error_events");
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if events
@@ -699,7 +699,7 @@ async fn exercise_processor_recovery(database: &Database) -> Result<(), Box<dyn 
             .await,
         ProcessorOutcome::RetryScheduled
     );
-    let events = database.collection::<mongodb::bson::Document>("events");
+    let events = database.collection::<mongodb::bson::Document>("error_events");
     let retried = events
         .find_one(doc! { "_id": event_binary(&retry_event) })
         .await?
@@ -861,6 +861,9 @@ async fn seed(store: &MongoProjectStore) -> Result<(), Box<dyn Error>> {
             items: ItemCapabilities {
                 error: true,
                 client_report: true,
+                log: true,
+                transaction: true,
+                span: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,
