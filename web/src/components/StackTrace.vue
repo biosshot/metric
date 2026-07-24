@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
+import { tokenizeSyntaxLine, type SyntaxToken } from './syntaxHighlight';
 
 interface Frame {
   filename?: string;
@@ -19,6 +20,7 @@ interface SourceLine {
   content: string;
   lineNumber?: number;
   current: boolean;
+  tokens: SyntaxToken[];
 }
 
 const props = defineProps<{ body: Record<string, unknown> }>();
@@ -49,6 +51,7 @@ function sourceLines(frame: Frame): SourceLine[] {
     content: line,
     lineNumber: frame.lineno ? frame.lineno - before.length + index : undefined,
     current: Boolean(frame.context_line) && index === before.length,
+    tokens: tokenizeSyntaxLine(line),
   }));
 }
 </script>
@@ -101,7 +104,14 @@ function sourceLines(frame: Frame): SourceLine[] {
               <span class="source-context__number" aria-hidden="true">{{
                 line.lineNumber ?? '·'
               }}</span>
-              <code>{{ line.content || ' ' }}</code>
+              <code
+                ><span
+                  v-for="(token, tokenIndex) in line.tokens"
+                  :key="tokenIndex"
+                  :class="`token--${token.type}`"
+                  >{{ token.text }}</span
+                ><template v-if="!line.content"> </template
+              ></code>
             </li>
           </ol>
         </div>

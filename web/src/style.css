@@ -28,6 +28,10 @@
   --syntax-keyword: #b6a6d9;
   --syntax-number: #d0ad86;
   --syntax-string: #91b39a;
+  --semantic-error: #c88f93;
+  --semantic-warning: #c6aa78;
+  --semantic-success: #83ad91;
+  --semantic-info: #82a8c2;
   --radius-small: 6px;
   --radius: 10px;
   --radius-large: 16px;
@@ -424,7 +428,7 @@ input[type='checkbox'] {
 }
 
 .button--danger {
-  border-color: var(--border-strong);
+  border-color: var(--semantic-error);
   background: transparent;
   color: var(--text);
 }
@@ -565,6 +569,11 @@ label small,
 .settings-form {
   display: grid;
   gap: 1.25rem;
+}
+
+.settings-form > .button {
+  width: auto;
+  justify-self: start;
 }
 
 .check-grid {
@@ -765,16 +774,18 @@ label small,
 }
 
 .success-notice {
-  border-color: var(--border-strong);
+  border-color: var(--semantic-success);
   color: var(--text);
 }
 
 .permission-banner,
 .permission-note {
+  border-color: var(--semantic-warning);
   border-style: dashed;
 }
 
 .info-note {
+  border-color: var(--semantic-info);
   margin-top: 1rem;
   margin-bottom: 0;
 }
@@ -783,7 +794,7 @@ label small,
   display: grid;
   margin-bottom: 1rem;
   padding: 1rem;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--semantic-error);
   border-radius: var(--radius);
   background: var(--surface-subtle);
   grid-template-columns: auto minmax(0, 1fr);
@@ -794,7 +805,8 @@ label small,
   display: grid;
   width: 38px;
   height: 38px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--semantic-error);
+  color: var(--semantic-error);
   border-radius: 50%;
   place-items: center;
 }
@@ -952,8 +964,22 @@ label small,
 .status-badge--healthy,
 .status-badge--active,
 .status-badge--enabled {
-  border-color: var(--border-strong);
+  border-color: var(--semantic-success);
   color: var(--text);
+}
+
+.status-badge--error,
+.status-badge--fatal,
+.status-badge--unresolved,
+.status-badge--degraded {
+  border-color: var(--semantic-error);
+}
+
+.status-badge--warning,
+.status-badge--ignored,
+.status-badge--disabled,
+.status-badge--unavailable {
+  border-color: var(--semantic-warning);
 }
 
 .event-results,
@@ -1391,6 +1417,15 @@ label small,
 .key-list article code {
   color: var(--text-muted);
   font-size: 0.72rem;
+}
+
+.key-list article {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.key-list .button {
+  width: auto;
+  justify-self: end;
 }
 
 .code-examples__heading {

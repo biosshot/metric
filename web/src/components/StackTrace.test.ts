@@ -47,9 +47,13 @@ describe('StackTrace', () => {
 
     render(StackTrace, { props: { body } });
 
-    expect(screen.getByText('const attempt = prepare();')).toBeVisible();
-    expect(screen.getByText('attempt.run();')).toBeVisible();
-    expect(screen.getByText('report(error);')).toBeVisible();
+    const sourceLines = Array.from(document.querySelectorAll('.source-context code')).map(
+      (element) => element.textContent,
+    );
+    expect(sourceLines).toContain('const attempt = prepare();');
+    expect(sourceLines).toContain('  attempt.run();');
+    expect(sourceLines).toContain('  report(error);');
+    expect(document.querySelector('.source-context .token--keyword')).toHaveTextContent('const');
     expect(document.querySelector('.source-context__current')).toHaveTextContent('12');
     expect(document.querySelectorAll('.source-context li')).toHaveLength(5);
   });

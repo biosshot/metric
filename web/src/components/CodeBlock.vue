@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
-
-type TokenType = 'comment' | 'keyword' | 'number' | 'plain' | 'string';
-interface Token {
-  text: string;
-  type: TokenType;
-}
+import { tokenizeSyntaxLine } from './syntaxHighlight';
 
 const props = withDefaults(
   defineProps<{
@@ -20,55 +15,7 @@ const props = withDefaults(
 const copied = ref(false);
 const copyFailed = ref(false);
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
-const keywords = new Set([
-  'const',
-  'let',
-  'var',
-  'import',
-  'from',
-  'new',
-  'true',
-  'false',
-  'null',
-  'class',
-  'public',
-  'static',
-  'void',
-  'string',
-  'using',
-  'def',
-  'None',
-  'package',
-  'func',
-  'return',
-  'use',
-  'mut',
-]);
-
-function tokenize(line: string): Token[] {
-  const tokens: Token[] = [];
-  const pattern =
-    /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/.*$|#.*$|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
-  let cursor = 0;
-
-  for (const match of line.matchAll(pattern)) {
-    const index = match.index ?? 0;
-    if (index > cursor) tokens.push({ text: line.slice(cursor, index), type: 'plain' });
-    const text = match[0];
-    let type: TokenType = 'plain';
-    if (text.startsWith('//') || text.startsWith('#')) type = 'comment';
-    else if (text.startsWith('"') || text.startsWith("'")) type = 'string';
-    else if (/^\d/.test(text)) type = 'number';
-    else if (keywords.has(text)) type = 'keyword';
-    tokens.push({ text, type });
-    cursor = index + text.length;
-  }
-
-  if (cursor < line.length) tokens.push({ text: line.slice(cursor), type: 'plain' });
-  return tokens;
-}
-
-const lines = computed(() => props.code.split('\n').map(tokenize));
+const lines = computed(() => props.code.split('\n').map(tokenizeSyntaxLine));
 
 async function copyCode(): Promise<void> {
   copied.value = false;
