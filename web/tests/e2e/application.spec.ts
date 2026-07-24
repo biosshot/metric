@@ -1,5 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 const project = {
   id: '42',
@@ -56,7 +58,9 @@ const event = {
               filename: `src/frame-${index}.ts`,
               function: `function${index}`,
               lineno: index + 1,
+              pre_context: ['const state = restore();'],
               context_line: `throw new Error("frame ${index}")`,
+              post_context: ['report(state);'],
               in_app: index % 2 === 0,
             })),
           },
@@ -269,13 +273,16 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await page.getByRole('link', { name: /javascript · error/ }).click();
   await expect(page.getByRole('heading', { name: '120 frames' })).toBeVisible();
   await expect(page.locator('.stack-frame')).toHaveCount(40);
+  await expect(page.locator('.source-context').first()).toContainText('const state = restore();');
+  await expect(page.locator('.source-context').first()).toContainText('report(state);');
   await page.getByRole('button', { name: 'Show all 120' }).click();
   await expect(page.locator('.stack-frame')).toHaveCount(120);
 
   await page.getByRole('link', { name: /Project settings/ }).click();
   await expect(page.getByText(/Raw Events are retained for/)).toContainText('30 days');
   await expect(page.getByText(/Hourly Issue statistics/)).toContainText('400 days');
-  await page.getByLabel('IP address handling').selectOption('remove');
+  await page.getByRole('combobox', { name: 'IP address handling' }).click();
+  await page.getByRole('option', { name: 'Remove completely', exact: true }).click();
   await page.getByRole('button', { name: 'Save policy' }).click();
   await expect(page.getByRole('status')).toContainText('Project policy saved');
   expect(state.policyRevisionSeen).toBe(true);
@@ -312,6 +319,11 @@ test('first setup creates a project and reaches an actionable SDK DSN', async ({
   await expect(page.getByRole('heading', { name: 'Connect an SDK' })).toBeVisible();
   await expect(page.getByText('Default')).toBeVisible();
   await expect(page.locator('.dsn-list code')).toContainText('e'.repeat(32));
+  await expect(page.locator('.code-block')).toContainText('e'.repeat(32));
+  await expect(page.locator('.code-block')).not.toContainText('PASTE_DSN_HERE');
+  await page.getByRole('combobox', { name: 'SDK' }).click();
+  await page.getByRole('option', { name: 'Python', exact: true }).click();
+  await expect(page.locator('.code-block')).toContainText('sentry_sdk.init');
   expect(state.bootstrapSeen).toBe(true);
   expect(state.projectCreationSeen).toBe(true);
   expect(state.createdProjectBody).toMatchObject({
@@ -376,7 +388,10 @@ test('loading and empty states explain what is happening', async ({ page }) => {
   await expect(page.getByText('Events sent by your SDK will appear here')).toBeVisible();
 });
 
-test('primary investigation view has no serious accessibility violations', async ({ page }) => {
+test('all routes have no serious accessibility violations at desktop and narrow widths', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
   const state: ApiState = {
     role: 'owner',
     csrfSeen: false,
@@ -384,10 +399,137 @@ test('primary investigation view has no serious accessibility violations', async
     failIssues: false,
   };
   await installApi(page, state);
-  await login(page);
 
-  const results = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze();
-  expect(
-    results.violations.filter((item) => item.impact === 'serious' || item.impact === 'critical'),
-  ).toEqual([]);
+  async function expectAccessible(label: string): Promise<void> {
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(
+      results.violations
+        .filter((item) => item.impact === 'serious' || item.impact === 'critical')
+        .map((item) => ({ id: item.id, targets: item.nodes.map((node) => node.target) })),
+      label,
+    ).toEqual([]);
+  }
+
+  await page.goto('/');
+  for (const viewport of [
+    { name: 'desktop', width: 1440, height: 1000 },
+    { name: 'narrow', width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expectAccessible(`auth/${viewport.name}`);
+  }
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await login(page);
+  const routes = [
+    { name: 'issues', url: '/issues', heading: 'Issues' },
+    { name: 'issue-detail', url: `/issues/${issue.id}`, heading: issue.title },
+    { name: 'event-detail', url: `/events/${event.event_id}`, heading: '120 frames' },
+    { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
+    { name: 'project-settings', url: '/project/settings', heading: 'Project settings' },
+    { name: 'system-status', url: '/system', heading: 'System status' },
+  ];
+
+  for (const route of routes) {
+    await page.goto(route.url);
+    await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
+    for (const viewport of [
+      { name: 'desktop', width: 1440, height: 1000 },
+      { name: 'narrow', width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expectAccessible(`${route.name}/${viewport.name}`);
+    }
+  }
+});
+
+test('capture Phase 23 desktop and narrow route reference renders', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(
+    browserName !== 'chromium' || process.env.FAULTKEEP_CAPTURE_PHASE23 !== '1',
+    'Reference renders are regenerated explicitly with Chromium.',
+  );
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  issue.status = 'open';
+  await installApi(page, state);
+  const output = path.resolve(process.cwd(), '../arch-docs/phase-reports/assets/0023');
+  await mkdir(output, { recursive: true });
+
+  async function capture(name: string): Promise<void> {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({
+      path: path.join(output, `${name}-desktop.png`),
+      animations: 'disabled',
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: path.join(output, `${name}-narrow.png`),
+      animations: 'disabled',
+    });
+  }
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Sign in to Faultkeep' })).toBeVisible();
+  await capture('auth');
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByLabel('Email').fill('owner@example.com');
+  await page.getByLabel('Password').fill('correct horse battery staple');
+  await page.getByLabel('Organization ID').fill('7');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+
+  const routes = [
+    { name: 'issues', url: '/issues', heading: 'Issues' },
+    { name: 'issue-detail', url: `/issues/${issue.id}`, heading: issue.title },
+    { name: 'event-detail', url: `/events/${event.event_id}`, heading: '120 frames' },
+    { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
+    { name: 'project-settings', url: '/project/settings', heading: 'Project settings' },
+    { name: 'system-status', url: '/system', heading: 'System status' },
+  ];
+
+  for (const route of routes) {
+    await page.goto(route.url);
+    await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
+    await capture(route.name);
+  }
+
+  await page.goto('/project/settings');
+  const dangerZone = page.locator('.danger-zone');
+  await expect(dangerZone).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await dangerZone.screenshot({
+    path: path.join(output, 'delete-project-desktop.png'),
+    animations: 'disabled',
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await dangerZone.screenshot({
+    path: path.join(output, 'delete-project-narrow.png'),
+    animations: 'disabled',
+  });
+
+  await page.goto('/project/setup');
+  await page.getByRole('combobox', { name: 'SDK' }).click();
+  await capture('sdk-select-open');
+
+  await page.emulateMedia({ media: 'print', colorScheme: 'dark' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  for (const route of [
+    { name: 'issues-print', url: '/issues', heading: 'Issues' },
+    { name: 'event-detail-print', url: `/events/${event.event_id}`, heading: '120 frames' },
+  ]) {
+    await page.goto(route.url);
+    await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
+    await page.screenshot({
+      path: path.join(output, `${route.name}.png`),
+      animations: 'disabled',
+    });
+  }
+  await page.emulateMedia({ media: 'screen', colorScheme: 'dark' });
 });

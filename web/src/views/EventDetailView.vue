@@ -7,6 +7,7 @@ import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StackTrace from '../components/StackTrace.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import AppIcon from '../components/AppIcon.vue';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
@@ -34,7 +35,8 @@ const exceptionTitle = computed(() => {
       class="back-link"
       :to="`/issues/${event.data.value.issue_id}`"
     >
-      ← Issue details
+      <AppIcon name="back" :size="16" />
+      Issue details
     </RouterLink>
     <LoadingPanel v-if="event.isPending.value" label="Loading exact Event…" />
     <ApiErrorPanel
@@ -79,7 +81,9 @@ const exceptionTitle = computed(() => {
           This is the complete stable API representation. Secrets and disallowed PII have already
           been processed by the server policy.
         </p>
-        <pre><code>{{ JSON.stringify(event.data.value.body, null, 2) }}</code></pre>
+        <pre tabindex="0" aria-label="Scrollable normalized Event JSON"><code>{{
+          JSON.stringify(event.data.value.body, null, 2)
+        }}</code></pre>
       </details>
     </template>
   </section>

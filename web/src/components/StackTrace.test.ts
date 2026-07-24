@@ -22,6 +22,38 @@ function eventWithFrames(count: number): Record<string, unknown> {
 }
 
 describe('StackTrace', () => {
+  it('renders pre, current, and post source context with line numbers', () => {
+    const body = {
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  filename: 'src/example.ts',
+                  function: 'explode',
+                  lineno: 12,
+                  pre_context: ['const attempt = prepare();', 'try {'],
+                  context_line: '  attempt.run();',
+                  post_context: ['} catch (error) {', '  report(error);'],
+                  in_app: true,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    render(StackTrace, { props: { body } });
+
+    expect(screen.getByText('const attempt = prepare();')).toBeVisible();
+    expect(screen.getByText('attempt.run();')).toBeVisible();
+    expect(screen.getByText('report(error);')).toBeVisible();
+    expect(document.querySelector('.source-context__current')).toHaveTextContent('12');
+    expect(document.querySelectorAll('.source-context li')).toHaveLength(5);
+  });
+
   it('bounds initial rendering and exposes the exact hidden count', async () => {
     render(StackTrace, { props: { body: eventWithFrames(120) } });
 

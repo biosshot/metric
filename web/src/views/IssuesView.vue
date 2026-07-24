@@ -6,6 +6,8 @@ import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import AppIcon from '../components/AppIcon.vue';
+import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import { useSessionStore } from '../stores/session';
 import type { Event, Issue, Page } from '../api/types';
 
@@ -17,6 +19,12 @@ const search = ref('');
 const submittedSearch = ref('');
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
+const statusOptions: SelectOption[] = [
+  { value: '', label: 'All statuses', icon: 'filter' },
+  { value: 'open', label: 'Open', icon: 'status' },
+  { value: 'resolved', label: 'Resolved', icon: 'success' },
+  { value: 'ignored', label: 'Ignored', icon: 'blocked' },
+];
 
 const projectId = computed(() => session.selectedProjectId ?? '');
 const queryKey = computed(() => [
@@ -95,7 +103,10 @@ function formatTime(value: string): string {
         <h1>Issues</h1>
         <p>Errors grouped by their stable failure signature.</p>
       </div>
-      <RouterLink class="button button--secondary" to="/project/setup">Configure SDK</RouterLink>
+      <RouterLink class="button button--secondary" to="/project/setup">
+        <AppIcon name="connect" :size="16" />
+        Configure SDK
+      </RouterLink>
     </header>
 
     <form class="issue-toolbar" role="search" @submit.prevent="submitSearch">
@@ -108,24 +119,26 @@ function formatTime(value: string): string {
           maxlength="4096"
         />
       </label>
-      <button class="button button--primary" type="submit">Search</button>
+      <button class="button button--primary" type="submit">
+        <AppIcon name="search" :size="16" />
+        Search
+      </button>
       <button
         v-if="submittedSearch"
         class="button button--secondary"
         type="button"
         @click="clearSearch"
       >
+        <AppIcon name="close" :size="16" />
         Clear
       </button>
-      <label v-if="!submittedSearch" class="status-filter">
-        <span>Status</span>
-        <select v-model="status">
-          <option value="">All</option>
-          <option value="open">Open</option>
-          <option value="resolved">Resolved</option>
-          <option value="ignored">Ignored</option>
-        </select>
-      </label>
+      <BaseSelect
+        v-if="!submittedSearch"
+        v-model="status"
+        class="status-filter"
+        :options="statusOptions"
+        aria-label="Issue status"
+      />
     </form>
 
     <div v-if="submittedSearch" class="search-context">
@@ -151,6 +164,7 @@ function formatTime(value: string): string {
       "
     >
       <RouterLink v-if="!submittedSearch" class="button button--primary" to="/project/setup">
+        <AppIcon name="connect" :size="16" />
         View SDK setup
       </RouterLink>
     </EmptyState>

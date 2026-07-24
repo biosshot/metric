@@ -6,6 +6,8 @@ import type { ProjectPolicy } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import AppIcon from '../components/AppIcon.vue';
+import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -14,6 +16,17 @@ const projectId = computed(() => session.selectedProjectId ?? '');
 const newKeyLabel = ref('');
 const notice = ref('');
 const deleteConfirmation = ref('');
+const ipPolicyOptions: SelectOption[] = [
+  {
+    value: 'hmac',
+    label: 'HMAC pseudonymization',
+    description: 'Recommended for investigation without retaining the original address.',
+    icon: 'shield',
+  },
+  { value: 'remove', label: 'Remove completely', icon: 'blocked' },
+  { value: 'truncate', label: 'Truncate address', icon: 'shield' },
+  { value: 'keep', label: 'Keep original address', icon: 'view' },
+];
 
 const project = useQuery({
   queryKey: computed(() => ['project', projectId.value]),
@@ -55,6 +68,10 @@ watch(
   },
   { immediate: true },
 );
+
+function setIpPolicy(value: string): void {
+  policy.ip_policy = value as ProjectPolicy['ip_policy'];
+}
 
 const savePolicy = useMutation({
   mutationFn: () => api.updatePolicy(projectId.value, policy),
@@ -133,16 +150,16 @@ const cancelDeletion = useMutation({
           <h2>Privacy and ingestion</h2>
         </div>
       </div>
-      <label>
-        IP address handling
-        <select v-model="policy.ip_policy" :disabled="!session.has('project:admin')">
-          <option value="hmac">HMAC pseudonymization (recommended)</option>
-          <option value="remove">Remove completely</option>
-          <option value="truncate">Truncate address</option>
-          <option value="keep">Keep original address</option>
-        </select>
-        <small>The policy is applied before durable Event storage.</small>
-      </label>
+      <div>
+        <BaseSelect
+          :model-value="policy.ip_policy"
+          :options="ipPolicyOptions"
+          label="IP address handling"
+          :disabled="!session.has('project:admin')"
+          @update:model-value="setIpPolicy"
+        />
+        <small class="field-help">The policy is applied before durable Event storage.</small>
+      </div>
       <div class="check-grid">
         <label class="check-control">
           <input
@@ -204,6 +221,7 @@ const cancelDeletion = useMutation({
         type="submit"
         :disabled="savePolicy.isPending.value"
       >
+        <AppIcon :name="savePolicy.isPending.value ? 'loading' : 'save'" :size="16" />
         {{ savePolicy.isPending.value ? 'Saving…' : 'Save policy' }}
       </button>
     </form>
@@ -235,6 +253,7 @@ const cancelDeletion = useMutation({
             :disabled="disableKey.isPending.value"
             @click="disableKey.mutate(key.dsn_key)"
           >
+            <AppIcon name="blocked" :size="16" />
             Disable
           </button>
         </article>
@@ -253,6 +272,7 @@ const cancelDeletion = useMutation({
           type="submit"
           :disabled="createKey.isPending.value"
         >
+          <AppIcon name="plus" :size="16" />
           Create key
         </button>
       </form>
@@ -309,24 +329,29 @@ const cancelDeletion = useMutation({
           Deletion immediately blocks every active DSN. Purge starts after the grace period and then
           cannot be cancelled. Audit records are retained.
         </p>
-        <label>
-          Type <code>{{ project.data.value.slug }}</code> to confirm
-          <input
-            v-model.trim="deleteConfirmation"
-            autocomplete="off"
-            :placeholder="project.data.value.slug"
-          />
-        </label>
-        <button
-          class="button button--danger"
-          type="button"
-          :disabled="
-            requestDeletion.isPending.value || deleteConfirmation !== project.data.value.slug
-          "
-          @click="requestDeletion.mutate()"
-        >
-          {{ requestDeletion.isPending.value ? 'Scheduling…' : 'Schedule project deletion' }}
-        </button>
+        <div class="destructive-confirmation">
+          <label>
+            <span
+              >Type <code>{{ project.data.value.slug }}</code> to confirm</span
+            >
+            <input
+              v-model.trim="deleteConfirmation"
+              autocomplete="off"
+              :placeholder="project.data.value.slug"
+            />
+          </label>
+          <button
+            class="button button--danger"
+            type="button"
+            :disabled="
+              requestDeletion.isPending.value || deleteConfirmation !== project.data.value.slug
+            "
+            @click="requestDeletion.mutate()"
+          >
+            <AppIcon :name="requestDeletion.isPending.value ? 'loading' : 'delete'" :size="16" />
+            {{ requestDeletion.isPending.value ? 'Scheduling…' : 'Schedule project deletion' }}
+          </button>
+        </div>
       </template>
       <template v-else-if="project.data.value?.state === 'pending_delete'">
         <LoadingPanel v-if="deletion.isPending.value" label="Loading deletion status…" />
@@ -349,6 +374,7 @@ const cancelDeletion = useMutation({
             :disabled="cancelDeletion.isPending.value"
             @click="cancelDeletion.mutate()"
           >
+            <AppIcon name="back" :size="16" />
             {{ cancelDeletion.isPending.value ? 'Cancelling…' : 'Cancel deletion' }}
           </button>
         </div>

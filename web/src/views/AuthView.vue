@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
+import AppIcon from '../components/AppIcon.vue';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -60,7 +61,9 @@ async function bootstrap(): Promise<void> {
 <template>
   <main id="main-content" class="auth-layout">
     <section class="auth-brand">
-      <div class="brand-mark" aria-hidden="true">F</div>
+      <div class="brand-mark" aria-hidden="true">
+        <AppIcon name="bug" :size="30" />
+      </div>
       <p class="eyebrow">Faultkeep</p>
       <h1>Understand failures.<br />Keep the signal.</h1>
       <p>
@@ -115,6 +118,7 @@ async function bootstrap(): Promise<void> {
         </label>
         <ApiErrorPanel v-if="error" :error="error" title="Sign in failed" />
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
+          <AppIcon :name="busy ? 'loading' : 'signOut'" :size="16" />
           {{ busy ? 'Signing in…' : 'Sign in' }}
         </button>
       </form>
@@ -161,6 +165,7 @@ async function bootstrap(): Promise<void> {
         </div>
         <ApiErrorPanel v-if="error" :error="error" title="Setup failed" />
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
+          <AppIcon :name="busy ? 'loading' : 'plus'" :size="16" />
           {{ busy ? 'Creating…' : 'Create owner and organization' }}
         </button>
       </form>

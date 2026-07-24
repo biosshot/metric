@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import AppIcon from './AppIcon.vue';
 
 interface Frame {
   filename?: string;
@@ -9,7 +10,15 @@ interface Frame {
   lineno?: number;
   colno?: number;
   context_line?: string;
+  pre_context?: string[];
+  post_context?: string[];
   in_app?: boolean;
+}
+
+interface SourceLine {
+  content: string;
+  lineNumber?: number;
+  current: boolean;
 }
 
 const props = defineProps<{ body: Record<string, unknown> }>();
@@ -31,6 +40,17 @@ const frames = computed<Frame[]>(() => {
 const visibleFrames = computed(() =>
   expanded.value ? frames.value : frames.value.slice(0, INITIAL_FRAMES),
 );
+
+function sourceLines(frame: Frame): SourceLine[] {
+  const before = Array.isArray(frame.pre_context) ? frame.pre_context : [];
+  const after = Array.isArray(frame.post_context) ? frame.post_context : [];
+  const content = [...before, ...(frame.context_line ? [frame.context_line] : []), ...after];
+  return content.map((line, index) => ({
+    content: line,
+    lineNumber: frame.lineno ? frame.lineno - before.length + index : undefined,
+    current: Boolean(frame.context_line) && index === before.length,
+  }));
+}
 </script>
 
 <template>
@@ -47,6 +67,7 @@ const visibleFrames = computed(() =>
         :aria-expanded="expanded"
         @click="expanded = !expanded"
       >
+        <AppIcon name="view" :size="16" />
         {{ expanded ? 'Show first 40' : `Show all ${frames.length}` }}
       </button>
     </div>
@@ -66,7 +87,23 @@ const visibleFrames = computed(() =>
               >:{{ frame.lineno }}<template v-if="frame.colno">:{{ frame.colno }}</template></span
             >
           </p>
-          <code v-if="frame.context_line">{{ frame.context_line }}</code>
+          <ol
+            v-if="sourceLines(frame).length"
+            class="source-context"
+            tabindex="0"
+            :aria-label="`Source context for ${frame.filename || frame.abs_path || 'frame'}`"
+          >
+            <li
+              v-for="(line, lineIndex) in sourceLines(frame)"
+              :key="`${line.lineNumber}-${lineIndex}`"
+              :class="{ 'source-context__current': line.current }"
+            >
+              <span class="source-context__number" aria-hidden="true">{{
+                line.lineNumber ?? '·'
+              }}</span>
+              <code>{{ line.content || ' ' }}</code>
+            </li>
+          </ol>
         </div>
         <span v-if="frame.in_app" class="frame-label">in app</span>
       </article>

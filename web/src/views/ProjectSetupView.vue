@@ -3,22 +3,105 @@ import { computed, ref } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
+import AppIcon from '../components/AppIcon.vue';
+import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
+import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { useSessionStore } from '../stores/session';
 
+type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet';
+
 const session = useSessionStore();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const copyNotice = ref('');
 const copyError = ref('');
+const selectedSdk = ref<SdkId>('browser');
+const sdkOptions: SelectOption[] = [
+  { value: 'browser', label: 'JavaScript — Browser', icon: 'fileCode' },
+  { value: 'node', label: 'JavaScript — Node.js', icon: 'server' },
+  { value: 'python', label: 'Python', icon: 'fileCode' },
+  { value: 'java', label: 'Java', icon: 'fileCode' },
+  { value: 'dotnet', label: 'C# / .NET', icon: 'fileCode' },
+];
 const keys = useQuery({
   queryKey: computed(() => ['project-keys', projectId.value]),
   queryFn: () => api.keys(projectId.value),
 });
+const activeKeys = computed(
+  () => keys.data.value?.items.filter((item) => item.state === 'active') ?? [],
+);
 
 function dsn(key: string): string {
   return `${window.location.protocol}//${key}@${window.location.host}/${projectId.value}`;
+}
+
+const activeDsn = computed(() => {
+  const key = activeKeys.value[0];
+  return key ? dsn(key.dsn_key) : '';
+});
+
+const codeExample = computed(() => {
+  const value = activeDsn.value;
+  const examples: Record<SdkId, { language: string; title: string; code: string }> = {
+    browser: {
+      language: 'javascript',
+      title: 'JavaScript — Browser',
+      code: `import * as Sentry from "@sentry/browser";
+
+Sentry.init({
+  dsn: "${value}",
+  tracesSampleRate: 0
+});`,
+    },
+    node: {
+      language: 'javascript',
+      title: 'JavaScript — Node.js',
+      code: `import * as Sentry from "@sentry/node";
+
+Sentry.init({
+  dsn: "${value}",
+  tracesSampleRate: 0
+});`,
+    },
+    python: {
+      language: 'python',
+      title: 'Python',
+      code: `import sentry_sdk
+
+sentry_sdk.init(
+    dsn="${value}",
+    traces_sample_rate=0,
+)`,
+    },
+    java: {
+      language: 'java',
+      title: 'Java',
+      code: `import io.sentry.Sentry;
+
+Sentry.init(options -> {
+    options.setDsn("${value}");
+    options.setTracesSampleRate(0.0);
+});`,
+    },
+    dotnet: {
+      language: 'csharp',
+      title: 'C# / .NET',
+      code: `using Sentry;
+
+SentrySdk.Init(options =>
+{
+    options.Dsn = "${value}";
+    options.TracesSampleRate = 0;
+});`,
+    },
+  };
+  return examples[selectedSdk.value];
+});
+
+function setSdk(value: string): void {
+  selectedSdk.value = value as SdkId;
 }
 
 async function copy(value: string): Promise<void> {
@@ -42,25 +125,26 @@ async function copy(value: string): Promise<void> {
         <p>Use an official Sentry SDK and send Error Events to this Faultkeep project.</p>
       </div>
     </header>
+
     <div class="setup-grid">
       <section class="panel setup-steps">
         <ol>
           <li>
-            <span>1</span>
+            <span><AppIcon name="key" :size="18" /></span>
             <div>
               <h2>Choose an active DSN</h2>
               <p>DSN keys identify this project. They are not personal API tokens.</p>
             </div>
           </li>
           <li>
-            <span>2</span>
+            <span><AppIcon name="code" :size="18" /></span>
             <div>
               <h2>Configure your SDK</h2>
-              <p>Set the DSN in the official SDK initialization for your language.</p>
+              <p>Select your language and copy the ready-to-run initialization.</p>
             </div>
           </li>
           <li>
-            <span>3</span>
+            <span><AppIcon name="bug" :size="18" /></span>
             <div>
               <h2>Send a test error</h2>
               <p>
@@ -70,6 +154,7 @@ async function copy(value: string): Promise<void> {
           </li>
         </ol>
       </section>
+
       <section class="panel">
         <div class="section-heading">
           <div>
@@ -81,6 +166,7 @@ async function copy(value: string): Promise<void> {
             class="button button--secondary"
             to="/project/settings"
           >
+            <AppIcon name="settings" :size="16" />
             Manage keys
           </RouterLink>
         </div>
@@ -90,40 +176,56 @@ async function copy(value: string): Promise<void> {
           :error="keys.error.value"
           @retry="keys.refetch()"
         />
-        <p v-if="copyNotice" class="success-notice" role="status">{{ copyNotice }}</p>
-        <p v-if="copyError" class="permission-banner" role="alert">{{ copyError }}</p>
+        <p v-if="copyNotice" class="success-notice" role="status">
+          <AppIcon name="success" :size="16" />
+          {{ copyNotice }}
+        </p>
+        <p v-if="copyError" class="permission-banner" role="alert">
+          <AppIcon name="alert" :size="16" />
+          {{ copyError }}
+        </p>
         <EmptyState
-          v-else-if="!keys.data.value?.items.some((key) => key.state === 'active')"
+          v-else-if="!activeKeys.length"
+          icon="key"
           title="No active DSN"
           description="A project administrator must create or enable a key before an SDK can send events."
         />
         <div v-else class="dsn-list">
-          <article
-            v-for="key in keys.data.value?.items.filter((item) => item.state === 'active')"
-            :key="key.dsn_key"
-          >
+          <article v-for="key in activeKeys" :key="key.dsn_key">
             <div>
               <strong>{{ key.label }}</strong>
               <StatusBadge :status="key.state" />
             </div>
             <code>{{ dsn(key.dsn_key) }}</code>
             <button class="button button--secondary" type="button" @click="copy(dsn(key.dsn_key))">
+              <AppIcon name="copy" :size="16" />
               Copy DSN
             </button>
           </article>
         </div>
       </section>
     </div>
-    <section class="panel code-examples">
-      <p class="eyebrow">Example</p>
-      <h2>JavaScript browser SDK</h2>
-      <pre><code>import * as Sentry from "@sentry/browser";
 
-Sentry.init({
-  dsn: "PASTE_DSN_HERE",
-  tracesSampleRate: 0
-});</code></pre>
+    <section v-if="activeDsn" class="panel code-examples">
+      <div class="code-examples__heading">
+        <div>
+          <p class="eyebrow">Ready-to-use example</p>
+          <h2>Initialize the SDK</h2>
+        </div>
+        <BaseSelect
+          :model-value="selectedSdk"
+          :options="sdkOptions"
+          label="SDK"
+          @update:model-value="setSdk"
+        />
+      </div>
+      <CodeBlock
+        :code="codeExample.code"
+        :language="codeExample.language"
+        :title="codeExample.title"
+      />
       <p class="info-note">
+        <AppIcon name="info" :size="16" />
         Faultkeep currently supports the Error Event path. Transactions, replays, profiles, and
         metrics remain disabled and are reported through capabilities.
       </p>

@@ -6,10 +6,23 @@ import { api } from '../api/client';
 import type { CreateProjectInput } from '../api/types';
 import { useSessionStore } from '../stores/session';
 import ApiErrorPanel from './ApiErrorPanel.vue';
+import AppIcon from './AppIcon.vue';
+import BaseSelect, { type SelectOption } from './BaseSelect.vue';
 
 const session = useSessionStore();
 const router = useRouter();
 const slugWasEdited = ref(false);
+const ipPolicyOptions: SelectOption[] = [
+  {
+    value: 'hmac',
+    label: 'HMAC pseudonymization',
+    description: 'Recommended for investigation without retaining the original address.',
+    icon: 'shield',
+  },
+  { value: 'remove', label: 'Remove completely', icon: 'blocked' },
+  { value: 'truncate', label: 'Truncate address', icon: 'shield' },
+  { value: 'keep', label: 'Keep original address', icon: 'view' },
+];
 
 const project = reactive<CreateProjectInput>({
   display_name: '',
@@ -39,6 +52,10 @@ function updateName(event: Event): void {
 
 function normalizeOptionalLimit(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function setIpPolicy(value: string): void {
+  project.ip_policy = value as CreateProjectInput['ip_policy'];
 }
 
 const createProject = useMutation({
@@ -102,16 +119,17 @@ const createProject = useMutation({
           </label>
         </div>
 
-        <label>
-          IP address handling
-          <select v-model="project.ip_policy">
-            <option value="hmac">HMAC pseudonymization (recommended)</option>
-            <option value="remove">Remove completely</option>
-            <option value="truncate">Truncate address</option>
-            <option value="keep">Keep original address</option>
-          </select>
-          <small>This policy is applied before an Event reaches durable storage.</small>
-        </label>
+        <div>
+          <BaseSelect
+            :model-value="project.ip_policy"
+            :options="ipPolicyOptions"
+            label="IP address handling"
+            @update:model-value="setIpPolicy"
+          />
+          <small class="field-help"
+            >This policy is applied before an Event reaches durable storage.</small
+          >
+        </div>
 
         <div class="check-grid">
           <label class="check-control">
@@ -165,6 +183,7 @@ const createProject = useMutation({
           type="submit"
           :disabled="createProject.isPending.value"
         >
+          <AppIcon :name="createProject.isPending.value ? 'loading' : 'plus'" :size="16" />
           {{ createProject.isPending.value ? 'Creating…' : 'Create project and DSN' }}
         </button>
       </form>

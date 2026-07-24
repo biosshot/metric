@@ -6,6 +6,7 @@ import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import AppIcon from '../components/AppIcon.vue';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
@@ -57,7 +58,10 @@ function formatTime(value: string): string {
 
 <template>
   <section>
-    <RouterLink class="back-link" to="/issues">← All Issues</RouterLink>
+    <RouterLink class="back-link" to="/issues">
+      <AppIcon name="back" :size="16" />
+      All Issues
+    </RouterLink>
     <LoadingPanel v-if="issue.isPending.value" label="Loading Issue details…" />
     <ApiErrorPanel
       v-else-if="issue.error.value"
@@ -82,6 +86,7 @@ function formatTime(value: string): string {
             :disabled="lifecycle.isPending.value"
             @click="lifecycle.mutate('resolve')"
           >
+            <AppIcon name="success" :size="16" />
             Resolve
           </button>
           <button
@@ -91,6 +96,7 @@ function formatTime(value: string): string {
             :disabled="lifecycle.isPending.value"
             @click="lifecycle.mutate('ignore')"
           >
+            <AppIcon name="blocked" :size="16" />
             Ignore
           </button>
           <button
@@ -100,6 +106,7 @@ function formatTime(value: string): string {
             :disabled="lifecycle.isPending.value"
             @click="lifecycle.mutate('reopen')"
           >
+            <AppIcon name="refresh" :size="16" />
             Reopen
           </button>
         </div>

@@ -1,24 +1,33 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import AuthView from './views/AuthView.vue';
-import LoadingPanel from './components/LoadingPanel.vue';
 import ApiErrorPanel from './components/ApiErrorPanel.vue';
+import AppIcon from './components/AppIcon.vue';
+import BaseSelect, { type SelectOption } from './components/BaseSelect.vue';
 import EmptyState from './components/EmptyState.vue';
 import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
+import LoadingPanel from './components/LoadingPanel.vue';
 import { useSessionStore } from './stores/session';
+import AuthView from './views/AuthView.vue';
 
 const session = useSessionStore();
 const router = useRouter();
 const navigationOpen = ref(false);
 const logoutError = ref<unknown>(null);
+const projectOptions = computed<SelectOption[]>(() =>
+  session.projects.map((project) => ({
+    value: project.id,
+    label: project.display_name,
+    icon: 'bug',
+  })),
+);
 
 onMounted(() => session.restore());
 
-function changeProject(): void {
-  session.selectProject(session.selectedProjectId);
+function changeProject(projectId: string): void {
+  session.selectProject(projectId);
   navigationOpen.value = false;
-  router.push('/issues');
+  void router.push('/issues');
 }
 
 async function logout(): Promise<void> {
@@ -33,6 +42,7 @@ async function logout(): Promise<void> {
 </script>
 
 <template>
+  <a class="skip-link" href="#main-content">Skip to content</a>
   <div v-if="session.restoring" class="app-loading">
     <LoadingPanel label="Restoring your secure session…" />
   </div>
@@ -43,6 +53,7 @@ async function logout(): Promise<void> {
       @retry="session.restore()"
     />
     <button class="button button--secondary" type="button" @click="session.dismissRestoreError()">
+      <AppIcon name="back" :size="16" />
       Open sign-in instead
     </button>
   </div>
@@ -56,45 +67,69 @@ async function logout(): Promise<void> {
         :aria-expanded="navigationOpen"
         @click="navigationOpen = !navigationOpen"
       >
-        ☰
+        <AppIcon :name="navigationOpen ? 'close' : 'menu'" :size="20" />
       </button>
-      <strong>Faultkeep</strong>
+      <span class="mobile-header__brand">
+        <AppIcon name="bug" :size="18" />
+        <strong>Faultkeep</strong>
+      </span>
     </header>
+
+    <button
+      v-if="navigationOpen"
+      class="navigation-backdrop"
+      type="button"
+      aria-label="Close navigation"
+      @click="navigationOpen = false"
+    ></button>
+
     <aside class="sidebar" :class="{ 'sidebar--open': navigationOpen }">
       <div class="sidebar__brand">
-        <span class="brand-mark brand-mark--small" aria-hidden="true">F</span>
+        <span class="brand-mark brand-mark--small" aria-hidden="true">
+          <AppIcon name="bug" :size="18" />
+        </span>
         <strong>faultkeep</strong>
       </div>
-      <label class="project-switcher">
-        <span>Project</span>
-        <select v-model="session.selectedProjectId" @change="changeProject">
-          <option v-for="project in session.projects" :key="project.id" :value="project.id">
-            {{ project.display_name }}
-          </option>
-        </select>
-      </label>
+
+      <BaseSelect
+        class="project-switcher"
+        :model-value="session.selectedProjectId ?? ''"
+        :options="projectOptions"
+        label="Project"
+        @update:model-value="changeProject"
+      />
+
       <nav aria-label="Primary">
         <RouterLink to="/issues" @click="navigationOpen = false">
-          <span aria-hidden="true">◆</span> Issues
+          <AppIcon name="clipboard" :size="18" />
+          Issues
         </RouterLink>
         <RouterLink to="/project/setup" @click="navigationOpen = false">
-          <span aria-hidden="true">⌁</span> SDK setup
+          <AppIcon name="connect" :size="18" />
+          SDK setup
         </RouterLink>
         <RouterLink to="/project/settings" @click="navigationOpen = false">
-          <span aria-hidden="true">⚙</span> Project settings
+          <AppIcon name="settings" :size="18" />
+          Project settings
         </RouterLink>
         <RouterLink to="/system" @click="navigationOpen = false">
-          <span aria-hidden="true">●</span> System status
+          <AppIcon name="activity" :size="18" />
+          System status
         </RouterLink>
       </nav>
+
       <div class="sidebar__account">
         <div>
           <strong>{{ session.identity?.role }}</strong>
           <span>Org {{ session.organizationId }}</span>
         </div>
-        <button type="button" @click="logout">Sign out</button>
+        <button type="button" @click="logout">
+          <AppIcon name="signOut" :size="16" />
+          Sign out
+        </button>
       </div>
     </aside>
+
     <main id="main-content" class="main-content">
       <ApiErrorPanel v-if="logoutError" :error="logoutError" title="Sign out failed" />
       <FirstProjectOnboarding
@@ -104,6 +139,7 @@ async function logout(): Promise<void> {
       />
       <EmptyState
         v-else-if="!session.selectedProject && $route.name !== 'system'"
+        icon="blocked"
         title="No accessible projects"
         description="Your account is valid, but an organization administrator must grant access to a project."
       />
