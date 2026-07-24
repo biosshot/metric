@@ -30,5 +30,7 @@ web/coverage/
 web/playwright-report/
 web/test-results/
 sdk-tests/*/node_modules/
+sdk-tests/*/dist/
 .env.local
 .env.*.local
+faultkeep-data/

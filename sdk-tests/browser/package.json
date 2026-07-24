@@ -1,0 +1,21 @@
+{
+  "name": "faultkeep-sdk-compatibility-browser",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild send-error.js --bundle --format=iife --platform=browser --outfile=dist/send-error.js",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0"
+  },
+  "dependencies": {
+    "@sentry/browser": "10.66.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.31.0",
+    "@playwright/test": "1.61.1",
+    "esbuild": "0.25.6",
+    "eslint": "9.31.0",
+    "prettier": "3.6.2"
+  }
+}
