@@ -28,6 +28,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
+            sdk-tests/browser/package-lock.json
             sdk-tests/node/package-lock.json
             sdk-tests/sentry-cli/package-lock.json
       - name: Verify Web
@@ -44,7 +45,16 @@ jobs:
           npm ci
           npm run format:check
           npm run lint
-      - run: cargo test -p faultkeep-server --test sdk_compatibility_e2e real_node_sdk_sends_an_error_event -- --ignored --exact --nocapture
+      - name: Verify real Browser SDK
+        working-directory: sdk-tests/browser
+        run: |
+          npm ci
+          npm run format:check
+          npm run lint
+          npm run build
+          npx playwright install --with-deps chromium
+      - name: Run real JavaScript SDK gates
+        run: cargo test -p faultkeep-server --test sdk_compatibility_e2e -- --ignored --nocapture
       - name: Verify pinned Sentry CLI versions
         working-directory: sdk-tests/sentry-cli
         run: |

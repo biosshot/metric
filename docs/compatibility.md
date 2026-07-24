@@ -6,8 +6,9 @@ only for exact rows marked `pass` in
 
 Currently verified:
 
-- official `@sentry/node` 10.66.0 through a real Node process, including a safe JSON
-  attachment;
+- official `@sentry/browser` 10.66.0 through Chromium 149.0.7827.55;
+- official `@sentry/node` 10.66.0 through a real Node process, with separate base
+  Error and safe JSON attachment gates;
 - captured official Python `sentry-sdk` 2.32.0 Error Event fixture;
 - `sentry-cli` 3.6.2 and 2.58.6 debug-file and Artifact Bundle contracts.
 

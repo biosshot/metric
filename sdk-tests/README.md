@@ -33,14 +33,33 @@ Run the real SDK gate from the repository root:
 
 ```text
 cargo test -p faultkeep-server --test sdk_compatibility_e2e \
-  real_node_sdk_sends_an_error_event -- --ignored --nocapture
+  real_node_sdk_sends_an_error_event_without_blob -- --ignored --nocapture
 ```
 
 The test starts the real Faultkeep HTTP router on an ephemeral port, invokes the
 official `@sentry/node` process with a real DSN, waits for `captureException` and
 `flush`, and verifies the accepted Event ID, exception, release, environment and
-exact SDK metadata. The same real Envelope includes a safe JSON attachment; the gate
-also verifies blob-first metadata and the exact bytes read back from BlobStore.
+exact SDK metadata. The base Error Event also proves that no BlobStore object is
+created when the SDK does not attach one. A separate
+`real_node_sdk_sends_an_attachment_event` gate verifies blob-first attachment
+metadata and the exact bytes read back from BlobStore.
+
+## Browser SDK
+
+Install and bundle its isolated dependencies:
+
+```text
+cd sdk-tests/browser
+npm ci
+npm run build
+npx playwright install chromium
+```
+
+Run `real_browser_sdk_sends_an_error_event` from the same Rust E2E target. The harness
+serves the bundled official `@sentry/browser` 10.66.0 client from the ephemeral
+Faultkeep router, launches the pinned Playwright Chromium, sends through a real DSN,
+waits for `flush`, and verifies the accepted Error Event and absence of attachment
+blobs. The browser and server are closed before the test returns.
 
 ## Sentry CLI debug files
 

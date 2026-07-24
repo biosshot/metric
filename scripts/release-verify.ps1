@@ -46,7 +46,26 @@ function Invoke-Compatibility {
     }
     Invoke-Checked 'real Node SDK Error Event' {
         cargo test -p faultkeep-server --test sdk_compatibility_e2e `
-            real_node_sdk_sends_an_error_event -- --ignored --exact --nocapture
+            real_node_sdk_sends_an_error_event_without_blob -- --ignored --exact --nocapture
+    }
+    Invoke-Checked 'real Node SDK attachment Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_node_sdk_sends_an_attachment_event -- --ignored --exact --nocapture
+    }
+
+    Push-Location sdk-tests/browser
+    try {
+        Invoke-Checked 'Browser SDK install' { npm ci }
+        Invoke-Checked 'Browser SDK format' { npm run format:check }
+        Invoke-Checked 'Browser SDK lint' { npm run lint }
+        Invoke-Checked 'Browser SDK bundle' { npm run build }
+        Invoke-Checked 'Playwright Chromium install' { npx playwright install chromium }
+    } finally {
+        Pop-Location
+    }
+    Invoke-Checked 'real Browser SDK Error Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_browser_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
     Push-Location sdk-tests/sentry-cli
