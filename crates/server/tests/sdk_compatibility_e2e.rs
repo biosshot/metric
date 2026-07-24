@@ -29,6 +29,9 @@ use tokio::{net::TcpListener, task::JoinHandle};
 const KEY_TEXT: &str = "0123456789abcdef0123456789abcdef";
 const NODE_SDK_VERSION: &str = "10.66.0";
 const BROWSER_SDK_VERSION: &str = "10.66.0";
+const PYTHON_SDK_VERSION: &str = "2.32.0";
+const JAVA_SDK_VERSION: &str = "8.50.1";
+const DOTNET_SDK_VERSION: &str = "6.7.0";
 const GO_SDK_VERSION: &str = "0.48.0";
 const RUST_SDK_VERSION: &str = "0.48.5";
 
@@ -71,6 +74,28 @@ async fn real_browser_sdk_sends_an_error_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Python 3.11 with sentry-sdk 2.32.0"]
+async fn real_python_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Python)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Java 25 and sdk-tests/java/prepare.mjs"]
+async fn real_java_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Java).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires .NET 9 and a restored Release build in sdk-tests/dotnet"]
+async fn real_dotnet_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Dotnet)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Go 1.25 and downloaded sdk-tests/go modules"]
 async fn real_go_sdk_sends_an_error_event() {
     exercise_external_sdk(ExternalFixture::Go).await.unwrap();
@@ -90,6 +115,9 @@ enum NodeFixture {
 
 #[derive(Clone, Copy)]
 enum ExternalFixture {
+    Python,
+    Java,
+    Dotnet,
     Go,
     Rust,
 }
@@ -247,7 +275,37 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
     let harness = start_harness(Router::new()).await?;
     let workspace = workspace();
     let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let java_classpath = std::env::join_paths([
+        workspace.join(format!(
+            "sdk-tests/java/.deps/sentry-{JAVA_SDK_VERSION}.jar"
+        )),
+        workspace.join("sdk-tests/java/.deps/classes"),
+    ])?;
     let output = tokio::task::spawn_blocking(move || match fixture {
+        ExternalFixture::Python => Command::new("python")
+            .current_dir(&workspace)
+            .args(["sdk-tests/python/send_error.py", &dsn])
+            .output(),
+        ExternalFixture::Java => Command::new("java")
+            .current_dir(&workspace)
+            .arg("-cp")
+            .arg(java_classpath)
+            .args(["FaultkeepSdkCompatibility", &dsn])
+            .output(),
+        ExternalFixture::Dotnet => Command::new("dotnet")
+            .current_dir(&workspace)
+            .args([
+                "run",
+                "--project",
+                "sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj",
+                "--configuration",
+                "Release",
+                "--no-build",
+                "--no-restore",
+                "--",
+                &dsn,
+            ])
+            .output(),
         ExternalFixture::Go => Command::new("go")
             .current_dir(workspace.join("sdk-tests/go"))
             .args(["run", ".", &dsn])
@@ -271,6 +329,9 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
     let verification = (|| -> Result<(), Box<dyn Error>> {
         let output = output??;
         let runtime = match fixture {
+            ExternalFixture::Python => "Python",
+            ExternalFixture::Java => "Java",
+            ExternalFixture::Dotnet => ".NET",
             ExternalFixture::Go => "Go",
             ExternalFixture::Rust => "Rust",
         };
@@ -284,6 +345,33 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
         )?;
         let payload: Value = serde_json::from_slice(event.payload.as_bytes())?;
         match fixture {
+            ExternalFixture::Python => {
+                verify_sdk(
+                    &payload,
+                    "sentry.python",
+                    PYTHON_SDK_VERSION,
+                    "faultkeep-python-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Faultkeep real Python SDK compatibility event")?;
+            }
+            ExternalFixture::Java => {
+                verify_sdk(
+                    &payload,
+                    "sentry.java",
+                    JAVA_SDK_VERSION,
+                    "faultkeep-java-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Faultkeep real Java SDK compatibility event")?;
+            }
+            ExternalFixture::Dotnet => {
+                verify_sdk(
+                    &payload,
+                    "sentry.dotnet",
+                    DOTNET_SDK_VERSION,
+                    "faultkeep-dotnet-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Faultkeep real .NET SDK compatibility event")?;
+            }
             ExternalFixture::Go => {
                 verify_sdk(
                     &payload,

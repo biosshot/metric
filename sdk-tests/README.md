@@ -61,6 +61,46 @@ Faultkeep router, launches the pinned Playwright Chromium, sends through a real 
 waits for `flush`, and verifies the accepted Error Event and absence of attachment
 blobs. The browser and server are closed before the test returns.
 
+## Python SDK
+
+`python/requirements.lock.txt` pins `sentry-sdk` 2.32.0 and its transport
+dependencies. Install and run the real-process gate:
+
+```text
+python -m pip install -r sdk-tests/python/requirements.lock.txt
+cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+  real_python_sdk_sends_an_error_event -- --ignored --exact --nocapture
+```
+
+Default framework integrations are disabled because this gate isolates the official
+transport and Error Event schema.
+
+## Java SDK
+
+`java/prepare.mjs` downloads the standalone `sentry-java` 8.50.1 JAR, verifies its
+pinned SHA-256 and compiles the sender with Java 25:
+
+```text
+node sdk-tests/java/prepare.mjs
+cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+  real_java_sdk_sends_an_error_event -- --ignored --exact --nocapture
+```
+
+## .NET SDK
+
+The isolated .NET 9 project pins `Sentry` 6.7.0 and commits NuGet lock data:
+
+```text
+dotnet restore --locked-mode sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+dotnet build --configuration Release --no-restore \
+  sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+  real_dotnet_sdk_sends_an_error_event -- --ignored --exact --nocapture
+```
+
+All three gates verify Event identity, SDK/release/environment metadata, exception
+content, bounded process completion and zero blob objects for a base Error Event.
+
 ## Go SDK
 
 The isolated `go/` module pins `sentry-go` 0.48.0. Verify the lock data and run the

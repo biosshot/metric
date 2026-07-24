@@ -31,6 +31,10 @@ web/playwright-report/
 web/test-results/
 sdk-tests/*/node_modules/
 sdk-tests/*/dist/
+sdk-tests/*/.deps/
+sdk-tests/*/bin/
+sdk-tests/*/obj/
+sdk-tests/*/__pycache__/
 .env.local
 .env.*.local
 faultkeep-data/

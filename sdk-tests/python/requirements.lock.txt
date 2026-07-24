@@ -1,0 +1,3 @@
+certifi==2025.6.15
+sentry-sdk==2.32.0
+urllib3==2.5.0

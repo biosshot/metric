@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net9.0": {
+      "Sentry": {
+        "type": "Direct",
+        "requested": "[6.7.0, 6.7.0]",
+        "resolved": "6.7.0",
+        "contentHash": "fE8rXrzo1xZrKYtvSxDcww7ZLJbB4t+pZK748zrS5ctFo4L0sNNEkRDkJ6smSGwe0kpDRBQn4bQHPrvUOmzUaA=="
+      }
+    }
+  }
+}

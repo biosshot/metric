@@ -68,6 +68,36 @@ function Invoke-Compatibility {
             real_browser_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
+    Invoke-Checked 'Python SDK dependencies' {
+        python -m pip install -r sdk-tests/python/requirements.lock.txt
+    }
+    Invoke-Checked 'real Python SDK Error Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_python_sdk_sends_an_error_event -- --ignored --exact --nocapture
+    }
+
+    Invoke-Checked 'Java SDK prepare' { node sdk-tests/java/prepare.mjs }
+    Invoke-Checked 'real Java SDK Error Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_java_sdk_sends_an_error_event -- --ignored --exact --nocapture
+    }
+
+    Invoke-Checked '.NET SDK restore' {
+        dotnet restore --locked-mode sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+    }
+    Invoke-Checked '.NET SDK format' {
+        dotnet format --verify-no-changes --no-restore `
+            sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+    }
+    Invoke-Checked '.NET SDK build' {
+        dotnet build --configuration Release --no-restore `
+            sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+    }
+    Invoke-Checked 'real .NET SDK Error Event' {
+        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+            real_dotnet_sdk_sends_an_error_event -- --ignored --exact --nocapture
+    }
+
     Push-Location sdk-tests/go
     try {
         Invoke-Checked 'Go SDK format' {
