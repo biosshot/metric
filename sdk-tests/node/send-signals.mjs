@@ -1,9 +1,9 @@
 import * as Sentry from '@sentry/node';
-import { env, stdout } from 'node:process';
+import { argv, stdout } from 'node:process';
 
-const dsn = env.FAULTKEEP_DSN;
+const [dsn] = argv.slice(2);
 if (!dsn) {
-  throw new Error('FAULTKEEP_DSN is required');
+  throw new Error('Faultkeep DSN argument is required');
 }
 
 Sentry.init({
