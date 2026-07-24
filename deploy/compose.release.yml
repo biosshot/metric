@@ -1,0 +1,57 @@
+name: faultkeep
+
+services:
+  mongodb:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: ["mongod", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: faultkeep
+      MONGO_INITDB_ROOT_PASSWORD: ${FAULTKEEP_MONGO_PASSWORD:?set in release.env}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--username",
+          "faultkeep",
+          "--password",
+          "${FAULTKEEP_MONGO_PASSWORD}",
+          "--authenticationDatabase",
+          "admin",
+          "--eval",
+          "db.adminCommand('ping').ok",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  faultkeep:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGODB_URI: mongodb://faultkeep:${FAULTKEEP_MONGO_PASSWORD}@mongodb:27017/?authSource=admin
+      SCRUB_HMAC_KEY: ${FAULTKEEP_SCRUB_HMAC_KEY:?64 lowercase hex characters}
+      FAULTKEEP_WEB_DIR: /opt/faultkeep/web
+    ports:
+      - "${FAULTKEEP_HTTP_PORT:-4001}:4001"
+    volumes:
+      - blob-data:/var/lib/faultkeep/blobs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_grace_period: 40s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  mongo-data:
+  blob-data:

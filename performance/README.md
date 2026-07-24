@@ -412,3 +412,33 @@ the supplied budget. k6 is not used because Phase 21 has no public archive HTTP 
 using it would measure unrelated ingestion. The runner has a hard timeout and kills
 its Cargo child on expiry. After every run, verify that no Cargo, Rust test,
 Faultkeep server, MinIO or k6 process remains.
+
+## Phase 22 release load and saturation
+
+`run-release-load.ps1` is the Windows durable-load wrapper for the cumulative release
+path. It accepts only the ADR-0037 average, steady and burst rates, creates a
+validated fresh `faultkeep_phase22_*` database, starts one tracked benchmark server,
+runs k6, and compares `status_200` with the durable Event count before cleanup.
+
+```powershell
+./performance/run-release-load.ps1 -Rps 5000 -Duration 15s
+./performance/run-release-load.ps1 -Rps 20000 -Duration 15s
+```
+
+Every artifact includes explicit TCP, total HTTP, `200`, `429`, `503`, other-status,
+dropped-iteration and latency values. A threshold failure still retains the artifact
+and performs the durable-count verification. The server is stopped in `finally`, and
+only the validated fresh database is dropped; the user's MongoDB process is never
+stopped.
+
+The reviewed local Windows artifacts under `baselines/release-hardening/` are short
+smoke/saturation evidence, not passing release-capacity baselines. The 5,000/s run
+achieved 4,983.16 RPS with p95 27.69 ms, no response failure, zero acknowledged loss
+and 190 generator-dropped iterations. The 20,000/s saturation run achieved 7,307.42
+RPS with p95 296.83 ms, no response failure, zero acknowledged loss and 188,444
+generator-dropped iterations. The latter documents the current machine/generator
+ceiling and fails the arrival-rate and latency gates.
+
+Phase 22 remains blocked until controlled hardware passes 5,000/s for 60 minutes,
+20,000/s for 5 minutes, backlog recovery/restart and the long soak. Run at most two
+performance profiles per local implementation pass.

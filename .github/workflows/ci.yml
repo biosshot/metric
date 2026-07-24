@@ -19,5 +19,40 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo dep-graph --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test-fast --locked
+      - run: python scripts/validate-compatibility.py
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --all-features --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk-tests/node/package-lock.json
+            sdk-tests/sentry-cli/package-lock.json
+      - name: Verify Web
+        working-directory: web
+        run: |
+          npm ci
+          npm run format:check
+          npm run lint
+          npm test
+          npm run build
+      - name: Verify real Node SDK
+        working-directory: sdk-tests/node
+        run: |
+          npm ci
+          npm run format:check
+          npm run lint
+      - run: cargo test -p faultkeep-server --test sdk_compatibility_e2e real_node_sdk_sends_an_error_event -- --ignored --exact --nocapture
+      - name: Verify pinned Sentry CLI versions
+        working-directory: sdk-tests/sentry-cli
+        run: |
+          npm ci
+          npm run versions
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag faultkeep:ci .

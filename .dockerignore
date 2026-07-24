@@ -1,0 +1,10 @@
+.git
+.github
+target
+faultkeep-data
+performance/results
+web/node_modules
+web/dist
+sdk-tests/*/node_modules
+**/*.pdb
+**/mutants.out

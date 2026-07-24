@@ -1,0 +1,24 @@
+role = "all"
+
+[server]
+http_address = "0.0.0.0:4001"
+shutdown_grace = "30s"
+
+[mongodb]
+uri = { env = "MONGODB_URI" }
+database = "faultkeep"
+bootstrap_timeout = "30s"
+
+[projects]
+scrub_hmac_key = { env = "SCRUB_HMAC_KEY" }
+
+[blob]
+backend = "local"
+root = "/var/lib/faultkeep/blobs"
+capacity = "100 GiB"
+reserve = "10 GiB"
+max_object_bytes = "512 MiB"
+
+[symbolicator]
+# Optional: set APP__SYMBOLICATOR__ENDPOINT in the environment.
+callback_base_url = "http://faultkeep:4001/"

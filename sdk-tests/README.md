@@ -5,9 +5,10 @@ Sentry SDKs. Each SDK family has its own package/runtime dependencies and must s
 through Faultkeep's public Sentry-compatible HTTP surface. SDK packages are never
 linked into the Faultkeep server or Vue Web application.
 
-`compatibility.toml` is the retained machine-readable result matrix. A row is marked
-`pass` only after the referenced real-process or immutable captured-fixture gate
-passes.
+`../compatibility/sentry-sdk-matrix.toml` is the single retained machine-readable
+result matrix. A row is marked `pass` only after the referenced real-process or
+immutable captured-fixture gate passes. Validate the inventory and evidence with
+`python scripts/validate-compatibility.py`; release gating adds `--require-all`.
 
 ## Rules
 

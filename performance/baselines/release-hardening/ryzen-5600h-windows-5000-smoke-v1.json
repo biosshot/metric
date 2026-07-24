@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "commit": "c1cfc9dc667c0e22b845bb23b2b4a7ec6099e9ee",
+    "fixture_revision": "error-event-v1-mongodb",
+    "target_rps": 5000,
+    "duration": "15s",
+    "run_id": "84889166",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "k6_version": "k6.exe v2.1.0 (commit/83a87a41e2, go1.26.4, windows/amd64)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics; 15.9 GiB RAM; Windows",
+    "mongo": "MongoDB local standalone; direct connection",
+    "durability": "MongoWriter unordered insert_many to MongoDB",
+    "classification": "local smoke; failed zero-dropped-iterations release threshold"
+  },
+  "metrics": {
+    "iterations": 74809,
+    "achieved_rps": 4983.161969710057,
+    "error_rate": 0,
+    "latency_ms": {
+      "average": 17.28855987648567,
+      "p50": 17.3726,
+      "p95": 27.6931,
+      "p99": 31.328851999999934,
+      "maximum": 57.2198
+    },
+    "dropped_iterations": 190,
+    "failures": {
+      "tcp_errors": 0,
+      "http_responses": 74809,
+      "status_200": 74809,
+      "status_429": 0,
+      "status_503": 0,
+      "status_other": 0
+    },
+    "durable_events": 74809,
+    "acknowledged_loss": 0,
+    "duplicate_durable_identities": 0
+  }
+}

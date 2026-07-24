@@ -117,3 +117,9 @@ Parquet/Zstd project/day segments. Faultkeep records and verifies a complete man
 before assigning hot expiry, so a failed archive attempt leaves the source Event
 queryable. This phase does not add archive search or restore. Enabling it advances
 the development schema generation to 7; no online migration is attempted.
+
+Phase 22 release-hardening artifacts live in `docs/`, `compatibility/`, `deploy/`,
+`scripts/`, and `performance/`. The container image includes the Vue build and one
+non-root `--role all` server; `deploy/compose.release.yml` pairs it with pinned
+MongoDB and persistent local BlobStore volumes. Compatibility claims remain
+fail-closed: SDK families marked `untested` are not advertised as supported.
