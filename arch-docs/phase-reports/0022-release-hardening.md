@@ -9,8 +9,9 @@ Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
 - Consolidated SDK and CLI claims into one version-2 machine-readable matrix. Every
   ADR-0036 family is present, and an executable Python validator prevents a `pass`
   row without exact version/runtime, fixture/test evidence and a passing build.
-- Preserved honest support: Browser JavaScript, Node and captured Python Error Events
-  plus pinned `sentry-cli` rows pass; eleven SDK families remain `untested`.
+- Preserved honest support: Browser JavaScript, Node, Go, Rust and captured Python
+  Error Events plus pinned `sentry-cli` rows pass; nine SDK families remain
+  `untested`.
 - Added a non-root multi-stage container image with the Vue production build, pinned
   Rust 1.88 builder, one Faultkeep `--role all` binary, local BlobStore volume and
   healthcheck.
@@ -36,6 +37,10 @@ Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
   normalization pass.
 - Real `@sentry/node` 10.66.0 Error Event plus safe attachment passes.
 - Real `@sentry/browser` 10.66.0 Error Event through Playwright Chromium passes.
+- Real `sentry-go` 0.48.0 and Rust `sentry` 0.48.5 Error Events pass with pinned
+  dependency graphs and finite process/flush deadlines.
+- The official Rust SDK's hyphenated envelope-header UUID is accepted only at the
+  Sentry protocol boundary and remains a compact domain `EventId`.
 - Base Node and Browser Error Events prove that no BlobStore object is created
   without an SDK attachment; the Node attachment is covered separately.
 - Vue format/lint, ten unit tests and production build pass.
@@ -75,7 +80,7 @@ collection/index allocation dominates a dataset this small.
 | Zero lost acknowledged Events and duplicate identities | Both k6 profiles have exact HTTP-200/durable equality and zero duplicate IDs | Pass for executed profiles |
 | No unbounded queue/task/cardinality in soak | Module bounds pass; long enabled-addon soak not executed | Blocked |
 | Security and tenant isolation | Real Mongo auth, project isolation, deletion, Web CSRF and adversarial suites pass | Pass |
-| Compatibility rows match published claims | Passing Browser/Node/Python/CLI rows have evidence; eleven required SDK families remain untested | Blocked |
+| Compatibility rows match published claims | Passing Browser/Node/Go/Rust/Python/CLI rows have evidence; nine required SDK families remain untested | Blocked |
 | Performance identifies hardware and exposes overload | Artifacts include hardware, latency, dropped and TCP/200/429/503/other; 20k gate fails | Blocked |
 | Every collection/Blob namespace registered | Schema/deletion registry completeness test passes | Pass |
 | No unresolved critical/high enabled defect | No critical/high defect found in executed suites; full release matrix is incomplete | In progress |
@@ -83,7 +88,7 @@ collection/index allocation dominates a dataset this small.
 ## Remaining work before Phase 22 completion
 
 1. Add and pass real-process/captured conformance harnesses for Java, Kotlin/Android,
-   .NET, Go, Rust, PHP, Ruby, Cocoa, React Native, Flutter/Dart and native C/C++.
+   .NET, PHP, Ruby, Cocoa, React Native, Flutter/Dart and native C/C++.
 2. Run controlled-hardware 5,000/s for 60 minutes and 20,000/s for 5 minutes with a
    generator that does not saturate first.
 3. Run backlog recovery/restart and long enabled-addon soak with retention,
