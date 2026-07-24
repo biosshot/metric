@@ -1,0 +1,812 @@
+# ADR-0040: Post-MVP vertical product plan
+
+- Status: Proposed
+- Date: 2026-07-24
+- Supersedes: the post-MVP exclusions of ADR-0039 only
+
+## Objective
+
+Extend the completed Error Monitoring MVP toward broad Sentry product compatibility
+without turning every new signal into a separate application architecture and without
+making the existing Error path pay for unused fields, indexes, queues, or processors.
+
+Each capability is implemented as a complete vertical slice:
+
+```text
+Sentry SDK item
+-> bounded protocol parser
+-> shared authentication, limits and PII boundary
+-> typed accepted record
+-> signal-specific bounded lane
+-> signal-specific processor
+-> typed MongoDB collection and optional BlobStore objects
+-> retention/archive/search
+-> native API and Web
+-> compatibility, fault, load and cumulative E2E gates
+```
+
+The initial deployment remains one Rust process in `--role=all`. Separate lanes and
+collections are resource-isolation boundaries inside that process, not services and
+not an inter-role protocol.
+
+## Accepted direction
+
+1. One MongoDB database contains a bounded set of collections by workload class.
+   Databases and collections are never created per project.
+2. Error Events, Logs, Spans, metric buckets, Profiles and Replays do not share one
+   physical collection.
+3. Shared code is reused through accepted enums, generic bounded components and
+   ports. Hot-path dispatch does not require `dyn`.
+4. Each high-volume signal owns a bounded RAM lane and micro-batcher. A Log flood
+   cannot consume the Error queue.
+5. The durable MongoDB record remains the fallback when a RAM lane is full.
+   Dispatchers recover pending records from their owning collection.
+6. Micro-batching combines MongoDB operations, not logical records. One Log and one
+   Span remain individually addressable records.
+7. Transactions are root Spans and live in `spans`; there is no separate
+   `transactions` collection.
+8. Large Replay/Profile/attachment payloads live in BlobStore. MongoDB contains
+   bounded searchable metadata and immutable object references.
+9. Metrics are stored as bounded time buckets, not one MongoDB document per raw
+   measurement.
+10. Retention, archive eligibility, quotas, indexes and failure policy are
+    signal-specific.
+11. Sentry SDK wire compatibility is implemented first. OpenTelemetry ingestion is
+    deliberately deferred.
+12. AI analysis and automatic fixes are deliberately deferred.
+13. MCP remains a later adapter over accepted application services; it does not
+    define domain or storage contracts.
+14. Every existing and future Web surface follows the ADR-0041 monochrome minimal
+    design system.
+
+## Naming the current Event collection
+
+The current `events` collection contains occurrences of errors, while `issues`
+contains their groups. Once other signal types exist, the physical name `events`
+becomes ambiguous.
+
+For an installation without production data, Phase 24 renames the physical collection
+to:
+
+```text
+error_events
+```
+
+Domain code uses `ErrorEvent`, `ErrorEventStore` and `ErrorProcessor`. Existing native
+API routes may keep `/events` because they expose events belonging to an Issue and
+because changing the public route provides no storage benefit.
+
+If production data exists before Phase 24 starts, the rename requires an explicit
+schema operation and rollback procedure. It must not be hidden inside ordinary
+startup. If that migration is not accepted, the physical legacy name `events` may
+remain while all Rust/application names become Error-specific.
+
+## Physical collection map
+
+Collections are created only when their owning phase is enabled:
+
+| Collection | Purpose | Primary write shape |
+| --- | --- | --- |
+| `error_events` | individual Error Events and processing state | insert, then bounded finalization |
+| `issues` | Error groups and lifecycle | aggregate updates |
+| `issue_stats_hourly` | rebuildable Error aggregates | bucket updates |
+| `logs` | structured Logs | append and terminal normalization |
+| `spans` | root transactions and child Spans | append and terminal normalization |
+| `span_stats_hourly` | rebuildable performance aggregates | bucket updates |
+| `metric_buckets` | counters, gauges and distributions | bounded bucket merge |
+| `profiles` | searchable Profile metadata and Blob references | append/finalize |
+| `replays` | Replay session metadata and Blob references | append/session finalize |
+| `sessions` | bounded release-health session state | upsert/terminal transition |
+| `session_stats_hourly` | rebuildable release-health aggregates | bucket updates |
+| `feedback` | user feedback linked to project/Event/Issue | append and workflow updates |
+| `monitors` | Cron monitor definitions and current state | CRUD/state transition |
+| `check_ins` | immutable Cron executions | append |
+| `uptime_monitors` | active HTTP monitor definitions | CRUD/state transition |
+| `uptime_results` | immutable bounded check results | append |
+| `dashboards` | saved dashboard definitions | low-volume CRUD |
+| `alert_rules` | issue/query alert definitions and state | low-volume CRUD/state |
+| `releases` | release lifecycle | low-volume CRUD |
+| `deploys` | release deployments | append |
+| `repositories` | source integration metadata | low-volume CRUD |
+| `commits` | bounded release commit metadata | append/upsert |
+
+This map is not permission to pre-create unused collections or adapters.
+
+## Shared vertical extension contract
+
+### Accepted record
+
+The protocol/application boundary grows through an exhaustive enum:
+
+```rust
+enum AcceptedRecord {
+    Error(AcceptedError),
+    Log(AcceptedLog),
+    Span(AcceptedSpan),
+    MetricBucket(AcceptedMetricBucket),
+    Profile(AcceptedProfile),
+    Replay(AcceptedReplay),
+    Session(AcceptedSession),
+    CheckIn(AcceptedCheckIn),
+    Feedback(AcceptedFeedback),
+}
+```
+
+Variants are added only in their owning phase. Disabled known Envelope items continue
+to use the accepted partial-discard behavior until their complete vertical phase
+passes.
+
+### Routing and lanes
+
+The shared router performs an exhaustive `match` and sends an accepted record to its
+typed lane. A lane owns:
+
+- queue capacity;
+- maximum queued bytes;
+- micro-batch `max_wait`, `max_documents` and `max_bytes`;
+- maximum in-flight batches;
+- retry and permanent-failure policy;
+- foreground versus backlog scheduling weight;
+- metrics and readiness contribution.
+
+The lane implementation may be generic and monomorphized. Signal-specific policies
+are static typed configuration, not a generic runtime workflow engine.
+
+### Processing
+
+The shared dispatcher and cancellation framework are reused, but processing remains
+typed:
+
+```text
+ErrorProcessor   -> normalize, symbolicate, group, finalize Issue
+LogProcessor     -> normalize searchable fields, finalize
+SpanProcessor    -> normalize trace fields, derive buckets, finalize
+ProfileProcessor -> validate metadata, commit Blob reference, finalize
+ReplayProcessor  -> validate segment/session metadata, commit Blob reference
+```
+
+No empty processor hook, optional mega-context or signal branch is added to the Error
+hot loop merely to claim reuse.
+
+### Storage
+
+The MongoDB adapter owns typed collection handles and codecs. A top-level enum router
+may partition a mixed accepted batch by variant and issue one bounded write per
+collection. Application services never construct collection names or MongoDB query
+documents.
+
+The first implementation uses ordinary MongoDB collections. A future benchmark may
+justify MongoDB time-series storage for `logs`, `spans` or `uptime_results`; that
+physical decision stays inside the adapter and must pass the owning port conformance
+suite.
+
+### Cross-signal correlation
+
+Shared value types are added only when a real vertical capability needs them:
+
+- project ID;
+- occurrence and receive timestamps;
+- environment and release;
+- trace ID, span ID and parent span ID;
+- user/session identity after PII policy;
+- Blob reference;
+- source SDK identity.
+
+Correlation IDs use bounded binary representations. Their absence is represented by
+an omitted BSON field, never BSON `null`.
+
+### Extension checklist
+
+Every new signal phase must explicitly provide:
+
+1. supported Sentry Envelope item types and exact fixture versions;
+2. parser limits before allocation or durable side effects;
+3. PII classification and scrub behavior;
+4. accepted domain value and stable errors;
+5. queue, byte and concurrency budgets;
+6. durable identity and idempotency rule;
+7. MongoDB codec, validator, indexes and byte-budget fixtures;
+8. retry, permanent-failure and backlog recovery behavior;
+9. retention, quota, deletion and archive registration;
+10. search fields and query cost limits;
+11. API authorization and cursor pagination;
+12. minimal useful Web investigation flow;
+13. real SDK E2E row and capability advertisement;
+14. unit/property/fuzz tests selected by risk;
+15. load, burst, backlog recovery, restart and dependency-failure results;
+16. confirmation that Error ingest and investigation baselines did not regress.
+17. ADR-0041 visual, accessibility and built-asset-size gates for every Web change.
+
+## Stage H: dark monochrome product identity
+
+### Phase 23 — Dark monochrome Web redesign
+
+The existing MVP Web predates ADR-0041 and uses a purple/color visual system. Phase 23
+migrates the complete existing interface to the accepted dark monochrome design before
+Logs or any other product adds new shared components.
+
+Implement:
+
+- the ADR-0041 dark neutral token palette as the only initial theme;
+- migrate every existing screen and primitive;
+- remove gradients, decorative shadows, remote/decorative asset pressure and
+  color-only states;
+- replace colored status meaning with explicit labels, icon/shape, border and
+  luminance;
+- update navigation, forms, buttons, badges, alerts, stack traces, tables, timelines,
+  authentication and system-status views;
+- preserve a small system-font/local-icon dependency surface;
+- centralize tokens and reusable primitives before Logs-specific components exist;
+- add reference renders for every route at desktop and narrow widths.
+
+Phase 23 changes presentation only. It does not change DTOs, API routes, permissions,
+storage or application behavior.
+
+Exit gate:
+
+- all existing routes pass visual review in dark monochrome;
+- no purple, red, green, amber, gradient or color-only state remains;
+- keyboard navigation, visible focus, accepted contrast and reduced motion pass;
+- grayscale screenshot/print review preserves every semantic state;
+- production CSS/JS asset sizes and their delta are published;
+- existing Web unit/E2E behavior remains unchanged.
+
+## Stage I: high-volume observability signals
+
+### Phase 24 — Structured Logs end to end
+
+This phase creates the reusable typed-lane extension while delivering a complete
+user-visible feature. There is no separate horizontal framework phase.
+
+Implement:
+
+- accepted Sentry SDK Log Envelope fixtures and capability flag;
+- `AcceptedRecord::Log`, `LogProcessor` and a dedicated bounded Log lane;
+- typed `logs` codec, validator, indexes and pending-recovery query;
+- compact severity, timestamps, message/body, environment, release, SDK and bounded
+  attributes;
+- optional trace/span correlation when supplied by the SDK;
+- configurable Log retention and per-project byte/rate quotas;
+- exact attribute filters, bounded message search, time/level/service filters and
+  cursor pagination;
+- Logs list/detail Web views, histogram and links to correlated Error/Trace data;
+- client-report accounting for rejected or rate-limited Logs;
+- archive/deletion registration using Log-specific segments.
+
+Phase 24 also performs the accepted `events` to `error_events` physical rename only
+when the migration precondition above is satisfied.
+
+Exit gate:
+
+- official SDK fixtures preserve supported structured values and correlation IDs;
+- one accepted Log becomes one durable record and survives restart/backlog recovery;
+- a saturated Log lane neither consumes Error queue capacity nor delays Error
+  acknowledgement beyond the published regression budget;
+- BSON, index and compressed-storage cost is published for representative small,
+  medium and attribute-heavy Logs;
+- sustained, burst, retention and search-under-ingest baselines pass;
+- the browser can send, find, filter and inspect a real SDK Log.
+
+### Phase 25 — Transactions, Spans and basic Trace investigation
+
+Implement:
+
+- supported Sentry transaction and standalone span Envelope items;
+- bounded binary trace/span identifiers and validation;
+- transaction normalization into a root `SpanRecord`;
+- `AcceptedRecord::Span`, dedicated Span lane, `SpanProcessor` and `spans`;
+- parent-child relationships, operation, status, duration, service, environment,
+  release and bounded attributes;
+- trace sampling metadata accepted from Sentry SDKs without implementing
+  OpenTelemetry;
+- trace-by-ID retrieval and deterministic parent/child assembly;
+- a minimal Trace Web view with Errors and Logs linked by trace/span IDs;
+- independent retention, quotas, archive and deletion.
+
+Exit gate:
+
+- malformed trees and missing parents remain queryable without unbounded repair;
+- duplicate delivery does not create duplicate durable Span identities;
+- one trace can be reconstructed with bounded queries and response size;
+- Span saturation cannot starve Error or Log lanes;
+- SDK distributed-tracing E2E covers at least two processes/services;
+- ingest, storage, trace-read and backlog recovery baselines pass.
+
+### Phase 26 — Performance aggregates and Insights
+
+Implement:
+
+- `span_stats_hourly` as rebuildable derived state;
+- throughput, failure rate and duration percentiles;
+- transaction/service/operation summaries;
+- bounded detection of slow HTTP/database/cache/queue operations;
+- initially explicit rules for N+1 and repeated slow operations;
+- Web performance views and links back to representative traces;
+- Web Vitals only for SDK payloads with accepted measurements.
+
+Exit gate:
+
+- aggregate replay/rebuild is idempotent within the documented count semantics;
+- high-cardinality attributes cannot create unbounded bucket keys;
+- percentile and extrapolation semantics are documented and golden-tested;
+- aggregate work remains behind foreground signal processing;
+- representative performance queries meet their published latency budgets.
+
+### Phase 27 — Unified Explore query surface
+
+Implement one bounded query language and native API over accepted datasets:
+
+```text
+errors
+logs
+spans
+```
+
+Support:
+
+- dataset selection;
+- typed fields and exact predicates;
+- time, project, environment and release scope;
+- `count`, `sum`, `min`, `max`, `avg` and accepted percentiles;
+- bounded group-by and timeseries intervals;
+- deterministic cursor pagination for raw rows;
+- explicit cost estimation and rejection before executing unsafe queries;
+- table and chart Web views.
+
+This is a shared query surface, not a shared physical collection. Dataset adapters
+translate the accepted query AST to typed storage/search ports.
+
+Exit gate:
+
+- tenant isolation is proven before query execution;
+- invalid/high-cost queries fail with stable errors and no partial background work;
+- query results remain correct during concurrent ingest and retention;
+- dataset addition does not require changing existing dataset codecs;
+- search-under-ingest and adversarial-cardinality suites pass.
+
+### Phase 28 — Saved queries and Dashboards
+
+Implement:
+
+- saved Explore queries;
+- dashboards with bounded widget count;
+- table, number and timeseries widgets;
+- fixed refresh intervals and concurrency budgets;
+- environment/release/project variables;
+- dashboard sharing within accepted authorization scope;
+- cached derived results only where correctness and invalidation are explicit.
+
+Exit gate:
+
+- one dashboard cannot fan out into unbounded MongoDB operations;
+- concurrent refreshes are coalesced or bounded;
+- malformed or deleted fields fail visibly;
+- dashboard load does not violate ingest/query resource reservations.
+
+### Phase 29 — Issue and query Alert rules
+
+Extend the existing notification outbox rather than adding delivery to processors.
+
+Implement:
+
+- new Issue, regression and frequency rules;
+- affected-user rules after accepted user counting exists;
+- Explore aggregate thresholds for Logs/Spans;
+- environment/release/tag predicates;
+- cooldown, deduplication and storm limits;
+- rule evaluation history, test mode and stable failure reasons;
+- webhook actions first; future integrations consume the same outbox contract.
+
+Exit gate:
+
+- rule evaluation cannot perform outbound I/O in Processor;
+- repeated processing/restart does not create unbounded duplicate notifications;
+- high-cardinality rules are rejected before activation;
+- alert bursts respect per-project and global delivery budgets;
+- E2E covers Event/Log/Span -> rule -> outbox -> webhook.
+
+## Stage J: Error workflow and release intelligence
+
+### Phase 30 — Issue collaboration
+
+Implement:
+
+- user assignment and unassignment;
+- comments with cursor pagination;
+- subscriptions and participants;
+- mentions with bounded parsing;
+- activity and notification-outbox integration;
+- `assigned:me`, `assigned:none` and subscription filters.
+
+Store comments and subscriptions outside the bounded Issue document. Teams are not
+introduced implicitly in this phase.
+
+Exit gate:
+
+- authorization and tenant-isolation suites cover every mutation;
+- comments cannot make the Issue document grow without bound;
+- subscription and assignment operations are idempotent;
+- Issue feed does not introduce per-row assignee queries;
+- browser E2E covers assignment, comment, mention and notification.
+
+### Phase 31 — Grouping controls and inbound filters
+
+Implement:
+
+- user-provided SDK fingerprints;
+- accepted server-side fingerprint and stacktrace rules;
+- explanation of grouping inputs/version;
+- explicit Issue merge;
+- bounded selected-Event split;
+- project inbound filters for accepted messages, exception types, releases,
+  environments and request patterns;
+- discard counters/client reports without storing filtered Error bodies.
+
+Deliberately exclude ML/fuzzy grouping and automatic database-wide regrouping.
+
+Exit gate:
+
+- grouping rules are deterministic and versioned;
+- merge/split crash points preserve Event ownership and rebuildable counts;
+- filter evaluation is bounded before durable Event storage;
+- rule changes do not silently rewrite historical Issues;
+- grouping throughput remains within the accepted Error regression budget.
+
+### Phase 32 — Releases, deploys, commits and source ownership
+
+Extend the existing release/artifact support with:
+
+- release create/finalize APIs compatible with the accepted `sentry-cli` subset;
+- deploy records;
+- repository and commit metadata;
+- release authors and first/last/new/regressed Issue summaries;
+- suspect-commit calculation with explicit bounded inputs;
+- source links and CODEOWNERS import;
+- ownership rules and automatic user assignment where identities resolve.
+
+Exit gate:
+
+- release/artifact identity remains consistent for source maps and debug files;
+- commit ingestion is bounded and idempotent;
+- missing integrations degrade to stored metadata rather than broken Issues;
+- suspect-commit calculation publishes its limitations;
+- real `sentry-cli` release/deploy E2E passes.
+
+### Phase 33 — Sessions and Release Health
+
+Implement:
+
+- accepted Sentry session and session-aggregate items;
+- dedicated Session lane and `sessions`;
+- bounded session state transitions;
+- `session_stats_hourly`;
+- crash-free sessions/users and release/environment summaries;
+- configurable retention and rebuild behavior.
+
+Exit gate:
+
+- out-of-order and duplicate session updates have deterministic semantics;
+- active sessions cannot grow without expiry;
+- user cardinality is bounded/approximated according to a documented algorithm;
+- Error-to-session crash correlation works without delaying Error finalization.
+
+### Phase 34 — User Feedback
+
+Implement:
+
+- accepted current Sentry feedback item/widget payloads;
+- legacy feedback only if an exact SDK/API compatibility row requires it;
+- feedback text/contact metadata under PII policy;
+- links to Error Event, Issue, Trace and Replay when present;
+- screenshots/attachments through BlobStore;
+- feedback list/detail/status Web workflow.
+
+Exit gate:
+
+- attachment commit and feedback visibility follow the existing Blob ownership rule;
+- anonymous and authenticated feedback authorization is explicit;
+- spam/rate/body limits apply before durable side effects;
+- real browser SDK/widget E2E passes.
+
+## Stage K: reliability monitoring
+
+### Phase 35 — Cron Monitoring
+
+Implement:
+
+- accepted Sentry `check_in` items;
+- monitor definitions, schedules and environment state;
+- in-progress, success, error, missed and timeout outcomes;
+- Scheduler integration;
+- check-in history, duration and alerts;
+- monitor-specific retention.
+
+Exit gate:
+
+- scheduler restart does not duplicate missed outcomes without bound;
+- clock skew and late/out-of-order check-ins have deterministic semantics;
+- a check-in flood cannot starve Error/Log lanes;
+- SDK Cron E2E covers success, error, timeout and missed.
+
+### Phase 36 — Uptime Monitoring
+
+Implement:
+
+- HTTP/HTTPS monitor definitions;
+- bounded request method, headers, timeout, redirect and body policies;
+- SSRF-safe destination validation and redirect revalidation;
+- scheduled execution with global/per-host concurrency limits;
+- `uptime_results`, latency/history and alert integration;
+- secret redaction and safe operational logs.
+
+Exit gate:
+
+- private/link-local/metadata destinations are blocked according to policy;
+- DNS rebinding and redirects are adversarially tested;
+- scheduler overload delays checks visibly without affecting ingest readiness;
+- result retention and alert deduplication pass restart tests.
+
+## Stage L: metrics and high-volume Blob products
+
+### Phase 37 — Metrics
+
+Implement:
+
+- accepted Sentry metric item types still supported by target SDK versions;
+- counters, gauges and distributions;
+- bounded metric name/unit/tag normalization;
+- `metric_buckets` with fixed bucket widths;
+- cardinality budgets, denied-tag policy and explicit discard accounting;
+- Explore dataset and Dashboard/Alert integration.
+
+Raw measurements are combined before durable storage where idempotency permits; the
+durable model is a metric bucket, not an Event-shaped document.
+
+Exit gate:
+
+- retries cannot silently overcount outside documented at-least-once semantics;
+- cardinality attacks are bounded before collection/index growth;
+- bucket merge contention and recovery baselines pass;
+- Metrics do not share the Span or Log queue.
+
+### Phase 38 — Profiling
+
+Implement:
+
+- accepted Sentry profile/profile-chunk variants for selected SDKs;
+- bounded metadata in `profiles`;
+- immutable compressed payload in BlobStore;
+- stack/sample validation and symbolication through the existing backend boundary;
+- profile-to-trace/release/environment correlation;
+- flamegraph/call-tree API and Web investigation;
+- derived function summaries for bounded Explore queries.
+
+Exit gate:
+
+- decompression/sample/frame limits apply before unbounded allocation;
+- incomplete multipart/chunk uploads are recoverable and cleaned;
+- missing symbols preserve raw frames and visible status;
+- profile processing cannot consume Symbolicator capacity reserved for Errors;
+- representative native/runtime SDK E2E and storage/load results pass.
+
+### Phase 39 — Session Replay
+
+Implement:
+
+- accepted replay event/recording items for selected browser SDKs;
+- Replay metadata/session index in `replays`;
+- immutable recording segments in BlobStore;
+- SDK-side and server-side privacy validation with safe defaults;
+- bounded segment ordering, gap handling and session finalization;
+- Replay player with links to Error, Feedback, Log and Trace context;
+- independent quotas, retention, archive and deletion.
+
+Exit gate:
+
+- DOM/text/input privacy corpus passes before capability enablement;
+- malformed/compression-bomb recordings fail within byte/CPU limits;
+- partial uploads and orphan cleanup pass crash/restart suites;
+- Replay bandwidth cannot consume Error/Log admission reservations;
+- real browser E2E records, uploads, retrieves and plays a bounded session.
+
+## Stage M: organization workflow and ecosystem
+
+### Phase 40 — Teams and advanced authorization
+
+Implement:
+
+- teams and project ownership;
+- team Issue assignment;
+- organization invitations and membership lifecycle;
+- project/team-scoped roles;
+- MFA/passkeys before external enterprise identity;
+- audit coverage for new privileged actions.
+
+OIDC/SSO and SCIM require separate accepted security designs and may follow as
+sub-phases; they are not enabled by placeholder configuration.
+
+Exit gate:
+
+- authorization decision tables and tenant isolation are exhaustive;
+- removal of the final owner/admin remains protected;
+- identity changes invalidate affected sessions/tokens as specified;
+- assignment and notification fan-out remain bounded.
+
+### Phase 41 — Source, chat and issue-tracker integrations
+
+Implement through provider ports and separate accepted provider sub-phases:
+
+1. GitHub or GitLab source integration;
+2. one chat provider using the notification outbox;
+3. one issue tracker with link/create/sync rules.
+
+Reuse releases, commits, ownership, source links and the existing outbox. OAuth
+secrets/tokens use accepted secret storage and redaction contracts.
+
+Exit gate:
+
+- provider outages never block ingest or Issue reads;
+- webhook authenticity, replay prevention and tenant routing pass;
+- retries and rate limits are bounded per installation;
+- uninstall/revocation removes credentials and stops delivery deterministically.
+
+### Phase 42 — Log/Trace drains and export
+
+Implement:
+
+- optional outbound Log and Trace drains;
+- bounded filters and redaction;
+- durable cursor/checkpoint state;
+- delivery retries, lag metrics and circuit breaking;
+- explicit at-least-once semantics;
+- bulk export jobs using existing BlobStore where appropriate.
+
+Exit gate:
+
+- drains never execute in foreground ingest/Processor;
+- a slow destination has bounded disk/RAM impact;
+- redaction is applied before outbound persistence/delivery;
+- restart resumes from a durable checkpoint with documented duplicate semantics.
+
+### Phase 43 — MCP adapter
+
+Implement MCP only over existing application services:
+
+- project/Issue/Event/Log/Trace search;
+- Incident Capsule export;
+- bounded read-only investigation tools first;
+- scoped authentication and audit records;
+- explicit response-size/query-cost limits;
+- mutation tools only in separately accepted sub-phases.
+
+Exit gate:
+
+- MCP cannot bypass native API authorization or query limits;
+- tool output applies the same PII/redaction policy;
+- transport disconnect/cancellation releases work;
+- MCP remains removable without changing domain/application contracts.
+
+AI diagnosis, code generation and automatic pull requests remain outside this plan.
+
+## Stage N: compatibility breadth and operational evolution
+
+### Phase 44 — Extended SDK and platform pipelines
+
+Expand only through exact compatibility rows and bounded provider sub-phases:
+
+- additional official Sentry SDK/runtime versions;
+- ProGuard/R8 mappings;
+- Hermes source maps;
+- IL2CPP, BCSymbolMap or platform-specific debug formats;
+- additional minidump/native contexts;
+- any required legacy Sentry API or `sentry-cli` endpoints.
+
+Each format owns its parser corpus, security limits, artifacts, E2E and performance
+gate. Protocol similarity is not advertised as compatibility.
+
+### Phase 45 — Online schema evolution, backup and reconciliation
+
+Before rolling mixed-version deployment:
+
+- versioned online migrations with resumable progress;
+- compatibility rules for old/new readers and writers;
+- backup/restore runbooks and tested automation;
+- application-consistent recovery boundaries;
+- collection/Blob reconciliation and orphan repair;
+- archive restore/search policy if accepted.
+
+Exit gate:
+
+- upgrade, rollback, interrupted migration and restored-environment suites pass;
+- no migration requires unbounded memory or a single unbounded collection lock;
+- reconciliation is idempotent and rate-limited behind foreground work.
+
+### Phase 46 — Optional distributed roles and horizontal scale
+
+This phase is triggered by measured single-process limits, not product completeness.
+
+Design and implement only after accepting a new inter-role protocol:
+
+- optional `ingest`, `processor`, `symbolicator`, `web` and `scheduler` roles;
+- durable claims/leases or an accepted broker;
+- independent autoscaling and backpressure propagation;
+- MongoDB sharding strategy per high-volume collection;
+- rolling deployment and mixed-version protocol compatibility;
+- no requirement that small installations run more than `--role=all`.
+
+NATS, another broker, disk spool and a second storage engine remain decisions, not
+implicit requirements.
+
+Exit gate:
+
+- `--role=all` retains equivalent correctness and a simple deployment;
+- role loss/restart/network partition tests preserve acknowledged durability;
+- overload is propagated rather than hidden in unbounded broker/database backlog;
+- scaling results publish the actual bottleneck and cost.
+
+## Dependency order and optionality
+
+The required dependency chain is:
+
+```text
+23 Dark monochrome Web
+-> 24 Logs
+-> 25 Spans/Traces
+-> 26 Performance
+-> 27 Explore
+-> 28 Dashboards
+-> 29 Alerts
+```
+
+After Phase 29:
+
+- Phases 30-34 extend Error workflow and release context;
+- Phases 35-36 share Scheduler but are otherwise independent;
+- Phase 37 extends Explore/Dashboards/Alerts;
+- Phases 38-39 depend on BlobStore and correlation contracts;
+- Phases 40-43 extend organization/application adapters;
+- Phases 44-46 are capability- or operations-driven.
+
+A phase may move earlier only if all of its accepted dependencies already exist and
+the move does not introduce a placeholder abstraction into an earlier hot path.
+Profiling and Replay may be disabled indefinitely without weakening Error, Log or
+Trace correctness.
+
+## Cumulative post-MVP E2E ladder
+
+Every completed phase keeps earlier rungs in CI:
+
+```text
+13. SDK Log -> logs -> Logs Web
+14. SDK Error + Log -> shared trace correlation
+15. two-service SDK trace -> spans -> Trace Web
+16. spans -> derived performance bucket -> Insights
+17. Explore -> table/timeseries across accepted datasets
+18. Dashboard -> bounded Explore queries
+19. signal -> Alert rule -> outbox -> webhook
+20. Issue -> assignment/comment/subscription
+21. release/deploy/commit -> suspect/source ownership
+22. Error -> Session -> Release Health
+23. browser Feedback -> attachment -> Issue
+24. SDK Check-in -> Monitor outcome -> Alert
+25. Scheduler -> Uptime result -> Alert
+26. SDK Metric -> bucket -> Explore/Dashboard/Alert
+27. SDK Profile -> Blob -> symbolication -> flamegraph
+28. browser Replay -> Blob segments -> player -> Error
+29. provider webhook/API -> integration action
+30. Log/Trace -> durable drain -> destination
+31. MCP -> authorized application query -> bounded result
+```
+
+## Completion meaning
+
+Completing this roadmap does not mean duplicating Sentry's implementation or every
+commercial/AI feature. It means:
+
+- broad compatibility with explicitly tested Sentry SDK capabilities;
+- complete Error, Log, Trace, Performance, Metrics, Profile, Replay, reliability and
+  feedback investigation flows;
+- predictable bounded operation in one-process installations;
+- physical isolation of workloads that need different indexes, retention and storage;
+- extension points proven by real vertical products rather than speculative generic
+  frameworks.

@@ -175,10 +175,10 @@ project retention/PII/key settings
 system capability/degraded status
 ```
 
-The visual framework and detailed design system can be chosen during implementation.
-The architectural constraint is that UI state derives from stable DTOs/capabilities
-and all mutations use the same commands, permissions, audit, CSRF, and idempotency
-rules as other clients.
+ADR-0041 now defines the accepted monochrome minimal visual system. The architectural
+constraint remains that UI state derives from stable DTOs/capabilities and all
+mutations use the same commands, permissions, audit, CSRF, and idempotency rules as
+other clients.
 
 ### Future MCP
 
@@ -201,5 +201,6 @@ No current endpoint or permission grants MCP a database-level shortcut.
 - Enabling and adding conformance rows for each currently disabled Envelope category.
 - Broader Sentry REST compatibility driven by real tooling rather than endpoint-count
   parity.
-- Detailed Web visual system, accessibility corpus, and localization.
+- Localization; the visual system and its accessibility gate are resolved by
+  ADR-0041.
 - MCP transport and tool schemas.
