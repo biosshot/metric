@@ -24,6 +24,12 @@ BlobStore objects, backups and network copies. Add those backend-specific costs
 before sizing production hardware. A report from a small or unrepresentative dataset
 is evidence about that dataset only.
 
+The retained Windows reference in `capacity/reports/phase22-local.json` measures
+11,581 durable synthetic Error Events and samples 10,000 of them. Its average Event
+BSON is 446.548 bytes and its observed average index allocation is 129.802 bytes per
+Event. The report is marked representative for the fixture shape, but it is not a
+claim that production traffic has the same payload distribution.
+
 Run a short local durable regression profile with:
 
 ```powershell

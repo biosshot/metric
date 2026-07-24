@@ -69,15 +69,22 @@ Both runs prove zero acknowledged loss and zero duplicate durable identities for
 accepted responses. They do not pass the ADR-0037 controlled-hardware duration or
 capacity gates and are not presented as production capacity.
 
-The local capacity report sampled all eight existing Events: average BSON is
-2,048.25 bytes. It is deliberately marked non-representative because fixed
-collection/index allocation dominates a dataset this small.
+A later capacity-evidence pass executed one additional 1,158/s for 10 seconds:
+11,581 HTTP 200 responses equal 11,581 durable Events, with zero drops, TCP failures,
+429, 503 or other responses; p95/p99 were 24.94/46.78 ms. The retained result is a
+regression/capacity-seeding baseline, not a third release-load profile.
+
+The resulting capacity report samples 10,000 of 11,581 Events and is marked
+representative for the bounded synthetic Error fixture. Average BSON is 446.548
+bytes, average observed index allocation is 129.802 bytes/Event, and fixed
+collection/index allocation no longer dominates the sample. This fixture shape is
+still not a substitute for a production payload distribution.
 
 ## ADR-0039 release gate
 
 | Release row | Current evidence | Status |
 |---|---|---|
-| Zero lost acknowledged Events and duplicate identities | Both k6 profiles have exact HTTP-200/durable equality and zero duplicate IDs | Pass for executed profiles |
+| Zero lost acknowledged Events and duplicate identities | All three retained k6 artifacts have exact HTTP-200/durable equality and zero duplicate IDs | Pass for executed profiles |
 | No unbounded queue/task/cardinality in soak | Module bounds pass; long enabled-addon soak not executed | Blocked |
 | Security and tenant isolation | Real Mongo auth, project isolation, deletion, Web CSRF and adversarial suites pass | Pass |
 | Compatibility rows match published claims | Passing Browser/Node/Go/Rust/Python/CLI rows have evidence; nine required SDK families remain untested | Blocked |
@@ -93,8 +100,8 @@ collection/index allocation dominates a dataset this small.
    generator that does not saturate first.
 3. Run backlog recovery/restart and long enabled-addon soak with retention,
    Scheduler, Web queries, archive and notification work.
-4. Capture a production-shaped capacity dataset where fixed index allocation does
-   not dominate.
+4. Validate the representative synthetic capacity fixture against a
+   production-shaped payload distribution.
 5. Build and smoke the container image locally or in CI and attach that evidence.
 
 Phase 22 is intentionally not marked complete and Milestone G is not claimed.
