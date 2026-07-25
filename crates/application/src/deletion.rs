@@ -6,11 +6,11 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, ProjectId, Timestamp,
     deletion::{ProjectDeletionOperationId, ProjectDeletionRequest, ProjectDeletionStatus},
 };
-use faultkeep_ports::{
+use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, PortFuture, ProjectDeletionStore,
     ProjectDeletionStoreError, ProjectPurgeRequest,
 };
@@ -97,8 +97,8 @@ impl ProjectDeletionService {
     pub async fn request(
         &self,
         project_id: ProjectId,
-        organization_id: faultkeep_domain::OrganizationId,
-        requested_by: faultkeep_domain::auth::UserId,
+        organization_id: metric_domain::OrganizationId,
+        requested_by: metric_domain::auth::UserId,
         operation_id: ProjectDeletionOperationId,
         confirmation: &str,
     ) -> Result<ProjectDeletionStatus, ProjectDeletionError> {
@@ -262,7 +262,7 @@ impl EventSink for ProjectFencedEventSink {
         event: AcceptedEvent,
     ) -> PortFuture<'_, Result<DurableOutcome, EventSinkError>> {
         let Some(guard) = self.work.try_enter(event.project_id) else {
-            metrics::counter!("faultkeep_project_deletion_fenced_ingest_total").increment(1);
+            metrics::counter!("metric_project_deletion_fenced_ingest_total").increment(1);
             return Box::pin(async { Err(EventSinkError::Unavailable) });
         };
         Box::pin(async move {
@@ -315,7 +315,7 @@ pub fn start_project_deletion_worker(
                         Err(_) => "timeout",
                     };
                     metrics::counter!(
-                        "faultkeep_project_deletion_worker_runs_total",
+                        "metric_project_deletion_worker_runs_total",
                         "outcome" => label
                     ).increment(1);
                 }
@@ -366,7 +366,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use faultkeep_domain::{EventId, ScrubbedEventPayload};
+    use metric_domain::{EventId, ScrubbedEventPayload};
 
     use super::*;
 

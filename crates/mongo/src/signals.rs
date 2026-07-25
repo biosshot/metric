@@ -1,11 +1,11 @@
-use faultkeep_domain::{
+use metric_domain::{
     EventKey, ProjectId, Timestamp,
     signals::{
         LogId, LogRecord, LogSeverity, PerformanceBucket, SignalBody, SignalCursor, SignalPage,
         SpanId, SpanOperationClass, SpanRecord, SpanRecordId, TraceId, TraceView,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     DurableOutcome, LogQuery, PerformanceQuery, PortFuture, SegmentQuery, SignalStore,
     SignalStoreError,
 };
@@ -489,7 +489,7 @@ impl SignalStore for MongoSignalStore {
                 }
             }
             metrics::histogram!(
-                "faultkeep_mongodb_operation_duration_seconds",
+                "metric_mongodb_operation_duration_seconds",
                 "operation" => "log_insert_batch",
                 "outcome" => "durable"
             )
@@ -540,7 +540,7 @@ impl SignalStore for MongoSignalStore {
                 }
             }
             metrics::histogram!(
-                "faultkeep_mongodb_operation_duration_seconds",
+                "metric_mongodb_operation_duration_seconds",
                 "operation" => "span_insert_batch",
                 "outcome" => "durable"
             )

@@ -1,5 +1,5 @@
 [package]
-name = "faultkeep-blob"
+name = "metric-blob"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-faultkeep-domain = { path = "../domain" }
-faultkeep-ports = { path = "../ports" }
+metric-domain = { path = "../domain" }
+metric-ports = { path = "../ports" }
 aws-sdk-s3.workspace = true
 aws-credential-types.workspace = true
 aws-runtime.workspace = true
@@ -31,7 +31,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-faultkeep-domain = { path = "../domain" }
+metric-domain = { path = "../domain" }
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true

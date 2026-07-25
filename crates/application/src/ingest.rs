@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, sync::Arc};
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DsnKey, EventId, IpScrubPolicy, ProjectAcceptanceState, ProjectId,
     ProjectKeyState, ProjectSnapshot, ScrubbedEventPayload,
     blob::{
@@ -12,7 +12,7 @@ use faultkeep_domain::{
         SpanRecordId, TraceId,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
     IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink, ProjectResolveError, ProjectResolver,
     RandomSource, SignalStoreError, SpanSink,
@@ -776,7 +776,7 @@ fn attachment_object_id(
     checksum: BlobChecksum,
 ) -> BlobObjectId {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep:event-attachment:v1");
+    hasher.update(b"metric:event-attachment:v1");
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(&event_id.as_bytes());
     hasher.update(&position.to_be_bytes());
@@ -807,7 +807,7 @@ fn validate_minidump_header(header: &[u8], total_size: u64) -> Result<(), Ingest
 
 fn minidump_event_id(project_id: ProjectId, checksum: BlobChecksum) -> EventId {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep:minidump-event:v1");
+    hasher.update(b"metric:minidump-event:v1");
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(&checksum.as_bytes());
     let digest = hasher.finalize();
@@ -822,7 +822,7 @@ fn minidump_object_id(
     checksum: BlobChecksum,
 ) -> BlobObjectId {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep:minidump-object:v1");
+    hasher.update(b"metric:minidump-object:v1");
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(&event_id.as_bytes());
     hasher.update(&checksum.as_bytes());
@@ -945,7 +945,7 @@ fn validate_and_scrub_event(
 fn scrub_value(
     value: &mut Value,
     field: Option<&str>,
-    policy: &faultkeep_domain::ScrubPolicy,
+    policy: &metric_domain::ScrubPolicy,
     depth: usize,
 ) -> Result<(), IngestError> {
     if depth > MAX_SCRUB_DEPTH {
@@ -977,7 +977,7 @@ fn scrub_value(
 
 fn scrub_object(
     object: &mut Map<String, Value>,
-    policy: &faultkeep_domain::ScrubPolicy,
+    policy: &metric_domain::ScrubPolicy,
     depth: usize,
 ) -> Result<(), IngestError> {
     for (field, value) in object {
@@ -1002,7 +1002,7 @@ fn scrub_string(text: &mut String) {
     }
 }
 
-fn scrub_ip(value: &mut Value, policy: &faultkeep_domain::ScrubPolicy) -> Result<(), IngestError> {
+fn scrub_ip(value: &mut Value, policy: &metric_domain::ScrubPolicy) -> Result<(), IngestError> {
     match policy.ip_policy {
         IpScrubPolicy::Keep => {}
         IpScrubPolicy::Remove => *value = Value::Null,
@@ -1084,7 +1084,7 @@ fn normalize_field(field: &str) -> String {
 
 fn normalize_logs(
     snapshot: &ProjectSnapshot,
-    received_at: faultkeep_domain::Timestamp,
+    received_at: metric_domain::Timestamp,
     payload: &[u8],
 ) -> Result<Vec<LogRecord>, IngestError> {
     let mut container: Value =
@@ -1149,7 +1149,7 @@ fn normalize_logs(
 
 fn normalize_transaction(
     snapshot: &ProjectSnapshot,
-    received_at: faultkeep_domain::Timestamp,
+    received_at: metric_domain::Timestamp,
     payload: &[u8],
 ) -> Result<Vec<SpanRecord>, IngestError> {
     let mut value: Value = serde_json::from_slice(payload)
@@ -1222,7 +1222,7 @@ fn normalize_transaction(
 
 fn normalize_spans(
     snapshot: &ProjectSnapshot,
-    received_at: faultkeep_domain::Timestamp,
+    received_at: metric_domain::Timestamp,
     payload: &[u8],
 ) -> Result<Vec<SpanRecord>, IngestError> {
     let mut container: Value =
@@ -1273,7 +1273,7 @@ fn normalize_spans(
 #[allow(clippy::too_many_arguments)]
 fn span_from_parts(
     project_id: ProjectId,
-    received_at: faultkeep_domain::Timestamp,
+    received_at: metric_domain::Timestamp,
     value: &Value,
     fields: &Map<String, Value>,
     trace_id: TraceId,
@@ -1546,7 +1546,7 @@ fn map_blob_error(error: BlobStoreError) -> IngestError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{ItemCapabilities, ProjectIngestLimits, ScrubPolicy, SecretBytes};
+    use metric_domain::{ItemCapabilities, ProjectIngestLimits, ScrubPolicy, SecretBytes};
 
     fn snapshot() -> ProjectSnapshot {
         ProjectSnapshot {
@@ -1628,7 +1628,7 @@ mod tests {
         }"#;
         let records = normalize_logs(
             &snapshot(),
-            faultkeep_domain::Timestamp::from_unix_millis(1_753_372_800_200).unwrap(),
+            metric_domain::Timestamp::from_unix_millis(1_753_372_800_200).unwrap(),
             payload,
         )
         .unwrap();
@@ -1670,13 +1670,13 @@ mod tests {
         }"#;
         let first = normalize_transaction(
             &snapshot(),
-            faultkeep_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
+            metric_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
             payload,
         )
         .unwrap();
         let second = normalize_transaction(
             &snapshot(),
-            faultkeep_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
+            metric_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
             payload,
         )
         .unwrap();
@@ -1698,7 +1698,7 @@ mod tests {
         }"#;
         let error = normalize_spans(
             &snapshot(),
-            faultkeep_domain::Timestamp::from_unix_millis(5_000).unwrap(),
+            metric_domain::Timestamp::from_unix_millis(5_000).unwrap(),
             payload,
         )
         .unwrap_err();

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use faultkeep_domain::{
+use metric_domain::{
     OrganizationId, ProjectId, Timestamp,
     api::ProjectView,
     artifacts::{
@@ -11,7 +11,7 @@ use faultkeep_domain::{
     debug_files::DebugId,
     finalization::ReleaseId,
 };
-use faultkeep_ports::{ArtifactStore, ArtifactStoreError, PortFuture};
+use metric_ports::{ArtifactStore, ArtifactStoreError, PortFuture};
 use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,

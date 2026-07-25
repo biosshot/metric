@@ -18,7 +18,7 @@ function run(command, args) {
 }
 
 const output = run("cargo", [
-  "test", "--locked", "--release", "-p", "faultkeep-application",
+  "test", "--locked", "--release", "-p", "metric-application",
   "auth::tests::performance_login_rate_limit_rps", "--", "--ignored", "--exact", "--nocapture",
 ]);
 const metrics = output.match(
@@ -30,7 +30,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "auth-login-rate-limit-phase-11",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

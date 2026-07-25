@@ -2,7 +2,7 @@
 
 use std::{future::Future, pin::Pin, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DsnKey, EventKey, OrganizationIdentity, ProjectAcceptanceState, ProjectId,
     ProjectIdentity, ProjectKeyIdentity, ProjectKeyState, ProjectSnapshot, Timestamp,
     api::{
@@ -188,7 +188,7 @@ pub trait BlobChunkSource: Send + 'static {
 #[derive(Debug, Clone, Copy)]
 pub struct BlobReference {
     pub project_id: ProjectId,
-    pub event_id: faultkeep_domain::EventId,
+    pub event_id: metric_domain::EventId,
     pub object_id: BlobObjectId,
 }
 
@@ -217,13 +217,13 @@ pub trait DebugFileStore: Send + Sync + 'static {
     fn project_organization(
         &self,
         project_id: ProjectId,
-    ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, DebugFileStoreError>>;
+    ) -> PortFuture<'_, Result<metric_domain::OrganizationId, DebugFileStoreError>>;
 
     fn resolve_project_slugs(
         &self,
         organization_slug: Box<str>,
         project_slug: Box<str>,
-    ) -> PortFuture<'_, Result<(faultkeep_domain::OrganizationId, ProjectView), DebugFileStoreError>>;
+    ) -> PortFuture<'_, Result<(metric_domain::OrganizationId, ProjectView), DebugFileStoreError>>;
 
     fn load_by_sha1(
         &self,
@@ -300,17 +300,17 @@ pub trait ArtifactStore: Send + Sync + 'static {
         project_slugs: Vec<Box<str>>,
     ) -> PortFuture<
         '_,
-        Result<(faultkeep_domain::OrganizationId, Vec<ProjectView>), ArtifactStoreError>,
+        Result<(metric_domain::OrganizationId, Vec<ProjectView>), ArtifactStoreError>,
     >;
 
     fn project_organization(
         &self,
         project_id: ProjectId,
-    ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, ArtifactStoreError>>;
+    ) -> PortFuture<'_, Result<metric_domain::OrganizationId, ArtifactStoreError>>;
 
     fn load_by_sha1(
         &self,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         sha1: [u8; 20],
     ) -> PortFuture<'_, Result<Option<ArtifactBundle>, ArtifactStoreError>>;
 
@@ -331,7 +331,7 @@ pub trait ArtifactStore: Send + Sync + 'static {
     /// Returns generation zero for new content or reserves one post-tombstone generation.
     fn publication_generation(
         &self,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         sha1: [u8; 20],
         upload_id: [u8; 16],
         reservation_until: Timestamp,
@@ -358,7 +358,7 @@ pub trait ArtifactStore: Send + Sync + 'static {
     /// Removes one exact binding and returns the new project revision.
     fn remove_binding(
         &self,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         bundle_id: ArtifactBundleId,
         binding: ArtifactBinding,
         orphan_at: Timestamp,
@@ -382,7 +382,7 @@ pub trait ArtifactStore: Send + Sync + 'static {
         bundle_id: ArtifactBundleId,
         generation: u32,
         claim: [u8; 16],
-        minimum_lease_until: faultkeep_domain::Timestamp,
+        minimum_lease_until: metric_domain::Timestamp,
     ) -> PortFuture<'_, Result<bool, ArtifactStoreError>>;
 
     fn finish_gc(
@@ -473,7 +473,7 @@ pub trait ProjectStore: Send + Sync + 'static {
 
     fn list_projects(
         &self,
-        _organization_id: faultkeep_domain::OrganizationId,
+        _organization_id: metric_domain::OrganizationId,
         _limit: usize,
     ) -> PortFuture<'_, Result<Vec<ProjectView>, ProjectStoreError>> {
         Box::pin(async { Err(ProjectStoreError::Unavailable) })
@@ -765,7 +765,7 @@ pub trait NotificationStore: Send + Sync + 'static {
     fn matching_rules(
         &self,
         project_id: ProjectId,
-        kind: faultkeep_domain::issue::IssueNotificationKind,
+        kind: metric_domain::issue::IssueNotificationKind,
         limit: usize,
     ) -> PortFuture<'_, Result<Vec<AlertRule>, NotificationStoreError>>;
 
@@ -1053,7 +1053,7 @@ pub trait AuthStore: Send + Sync + 'static {
     fn load_membership(
         &self,
         user_id: UserId,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
     ) -> PortFuture<'_, Result<OrganizationMembership, AuthStoreError>>;
 
     fn mutate_membership(
@@ -1111,21 +1111,21 @@ pub trait AuthStore: Send + Sync + 'static {
         &self,
         token_id: CredentialId,
         user_id: UserId,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         revoked_at: Timestamp,
     ) -> PortFuture<'_, Result<(), AuthStoreError>>;
 
     fn project_organization(
         &self,
         project_id: ProjectId,
-    ) -> PortFuture<'_, Result<faultkeep_domain::OrganizationId, AuthStoreError>>;
+    ) -> PortFuture<'_, Result<metric_domain::OrganizationId, AuthStoreError>>;
 
     fn append_audit(&self, record: AuditRecord) -> PortFuture<'_, Result<(), AuthStoreError>>;
 
     fn list_api_tokens(
         &self,
         _user_id: UserId,
-        _organization_id: faultkeep_domain::OrganizationId,
+        _organization_id: metric_domain::OrganizationId,
         _limit: usize,
     ) -> PortFuture<'_, Result<Vec<ApiTokenView>, AuthStoreError>> {
         Box::pin(async { Err(AuthStoreError::Unavailable) })
@@ -1133,14 +1133,14 @@ pub trait AuthStore: Send + Sync + 'static {
 
     fn load_organization(
         &self,
-        _organization_id: faultkeep_domain::OrganizationId,
+        _organization_id: metric_domain::OrganizationId,
     ) -> PortFuture<'_, Result<OrganizationIdentity, AuthStoreError>> {
         Box::pin(async { Err(AuthStoreError::Unavailable) })
     }
 
     fn list_organization_members(
         &self,
-        _organization_id: faultkeep_domain::OrganizationId,
+        _organization_id: metric_domain::OrganizationId,
         _limit: usize,
     ) -> PortFuture<'_, Result<Vec<OrganizationMemberView>, AuthStoreError>> {
         Box::pin(async { Err(AuthStoreError::Unavailable) })
@@ -1148,7 +1148,7 @@ pub trait AuthStore: Send + Sync + 'static {
 
     fn list_audit_log(
         &self,
-        _organization_id: faultkeep_domain::OrganizationId,
+        _organization_id: metric_domain::OrganizationId,
         _limit: usize,
     ) -> PortFuture<'_, Result<Vec<AuditLogView>, AuthStoreError>> {
         Box::pin(async { Err(AuthStoreError::Unavailable) })
@@ -1181,7 +1181,7 @@ pub trait InvestigationStore: Send + Sync + 'static {
         issue_id: Option<IssueId>,
         from: Timestamp,
         until: Timestamp,
-        before: Option<faultkeep_domain::api::EventAnchor>,
+        before: Option<metric_domain::api::EventAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<EventPage, InvestigationStoreError>>;
 
@@ -1210,22 +1210,22 @@ pub trait InvestigationStore: Send + Sync + 'static {
         &self,
         project_id: ProjectId,
         issue_id: IssueId,
-        before: Option<faultkeep_domain::api::ActivityAnchor>,
+        before: Option<metric_domain::api::ActivityAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<ActivityPage, InvestigationStoreError>>;
 
     fn list_releases(
         &self,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         project_id: ProjectId,
-        before: Option<faultkeep_domain::api::ReleaseAnchor>,
+        before: Option<metric_domain::api::ReleaseAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<ReleasePage, InvestigationStoreError>>;
 
     fn list_environments(
         &self,
         project_id: ProjectId,
-        before: Option<faultkeep_domain::api::EnvironmentAnchor>,
+        before: Option<metric_domain::api::EnvironmentAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<EnvironmentPage, InvestigationStoreError>>;
 }

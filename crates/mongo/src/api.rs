@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU64;
 
-use faultkeep_domain::{
+use metric_domain::{
     EventKey, OrganizationId, ProjectId, Timestamp,
     api::{
         ActivityAnchor, ActivityPage, EnvironmentAnchor, EnvironmentPage, EnvironmentView,
@@ -15,7 +15,7 @@ use faultkeep_domain::{
     grouping::IssueId,
     issue::{ActorRef, IssueActivityId, IssueStatus},
 };
-use faultkeep_ports::{InvestigationStore, InvestigationStoreError, PortFuture};
+use metric_ports::{InvestigationStore, InvestigationStoreError, PortFuture};
 use futures_util::TryStreamExt;
 use mongodb::{
     Database,
@@ -94,7 +94,7 @@ impl MongoInvestigationStore {
         let has_more = items.len() > query.limit;
         items.truncate(query.limit);
         let next = has_more.then(|| items.last()).flatten().map(|issue| {
-            faultkeep_domain::api::IssueAnchor {
+            metric_domain::api::IssueAnchor {
                 last_seen: issue.last_seen,
                 issue_id: issue.issue_id,
             }
@@ -599,7 +599,7 @@ fn decode_activity(
         None => None,
         Some(Bson::Binary(value)) if value.bytes.len() == 16 => Some(EventKey::new(
             project_id,
-            faultkeep_domain::EventId::from_bytes(
+            metric_domain::EventId::from_bytes(
                 value
                     .bytes
                     .as_slice()

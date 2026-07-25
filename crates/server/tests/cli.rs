@@ -1,12 +1,12 @@
 use std::{fs, path::PathBuf, process::Command};
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_faultkeep-server")
+    env!("CARGO_BIN_EXE_metric-server")
 }
 
 fn temporary_config(label: &str, contents: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "faultkeep-cli-{label}-{}-{}.toml",
+        "metric-cli-{label}-{}-{}.toml",
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
@@ -30,7 +30,7 @@ fn check_config_succeeds_with_clean_defaults() {
 #[test]
 fn container_config_passes_the_production_config_gate() {
     let config =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/faultkeep.container.toml");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/metric.container.toml");
     let output = Command::new(binary())
         .args(["--config", config.to_str().unwrap(), "--check-config"])
         .env("MONGODB_URI", "mongodb://mongo:27017/?retryWrites=false")

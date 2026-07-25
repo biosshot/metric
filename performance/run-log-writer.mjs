@@ -22,7 +22,7 @@ const output = run("cargo", [
   "--locked",
   "--release",
   "-p",
-  "faultkeep-application",
+  "metric-application",
   "performance_log_writer_rps_and_batch_occupancy",
   "--",
   "--ignored",

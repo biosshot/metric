@@ -16,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use faultkeep_application::{
+use metric_application::{
     ingest::{
         DisabledCategory, DiscardedItem, IngestError, IngestErrorKind, IngestRequest, IngestResult,
         IngestService, MinidumpRequest, PendingAttachment, PendingSignal, PendingSignalKind,
@@ -25,11 +25,11 @@ use faultkeep_application::{
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
 };
-use faultkeep_domain::{DsnKey, EventId, ProjectId};
-use faultkeep_ports::{
+use metric_domain::{DsnKey, EventId, ProjectId};
+use metric_ports::{
     BlobChunkSource, BlobStoreError, IngestOutcome, IngestOutcomeKind, PortFuture,
 };
-use faultkeep_sentry_protocol::{
+use metric_sentry_protocol::{
     AttachmentLimits, EnvelopeLimits, ParsedEnvelope, ProtocolError, ProtocolErrorKind,
     RawSignalKind, parse_envelope_with_attachments, parse_query_auth, parse_store_event,
     parse_x_sentry_auth,
@@ -448,8 +448,8 @@ fn map_request(
     }
 }
 
-const fn map_category(category: faultkeep_sentry_protocol::DisabledCategory) -> DisabledCategory {
-    use faultkeep_sentry_protocol::DisabledCategory as Wire;
+const fn map_category(category: metric_sentry_protocol::DisabledCategory) -> DisabledCategory {
+    use metric_sentry_protocol::DisabledCategory as Wire;
     match category {
         Wire::Transaction => DisabledCategory::Transaction,
         Wire::Session => DisabledCategory::Session,

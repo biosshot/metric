@@ -270,7 +270,7 @@ function actionLabel(action: string): string {
           <div>
             <p class="eyebrow">One-time setup</p>
             <h2>Invite member</h2>
-            <p class="muted">Faultkeep shows the password-setup link once. Send it securely.</p>
+            <p class="muted">Metric shows the password-setup link once. Send it securely.</p>
           </div>
           <AppIcon name="userPlus" :size="20" />
         </div>

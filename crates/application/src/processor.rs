@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, ProjectAcceptanceState, ProjectId, Timestamp,
     event::NormalizedEvent,
     grouping::{GroupingError, GroupingResult, group},
@@ -21,7 +21,7 @@ use faultkeep_domain::{
     },
     symbolication::{SymbolicationDisposition, SymbolicationResult},
 };
-use faultkeep_ports::{
+use metric_ports::{
     Clock, PortFuture, ProcessingProjectError, ProcessingProjectStore, ProcessingStateError,
     ProcessingStateStore, SymbolicationBackend,
 };
@@ -287,7 +287,7 @@ impl Default for FinalizerBatchConfig {
 }
 
 struct FinalizerRequest {
-    event: faultkeep_domain::finalization::FinalizeEvent,
+    event: metric_domain::finalization::FinalizeEvent,
     response: oneshot::Sender<Result<(), StageFailure>>,
 }
 
@@ -439,9 +439,9 @@ async fn finalize_one_batch(
     for request in requests {
         let _ = request.response.send(result);
     }
-    metrics::histogram!("faultkeep_processor_finalize_batch_events").record(count as f64);
+    metrics::histogram!("metric_processor_finalize_batch_events").record(count as f64);
     metrics::histogram!(
-        "faultkeep_processor_finalize_batch_duration_seconds",
+        "metric_processor_finalize_batch_duration_seconds",
         "outcome" => outcome
     )
     .record(started.elapsed().as_secs_f64());
@@ -476,7 +476,7 @@ type ProjectLoadFuture = Shared<
         Box<
             dyn Future<
                     Output = Result<
-                        faultkeep_domain::processing::ProcessingProject,
+                        metric_domain::processing::ProcessingProject,
                         ProcessingProjectError,
                     >,
                 > + Send,
@@ -550,21 +550,21 @@ impl Processor {
                 }
             }
         };
-        metrics::gauge!("faultkeep_processor_active").increment(1.0);
+        metrics::gauge!("metric_processor_active").increment(1.0);
         let result = self.execute(&pending, total_deadline).await;
         drop(permit);
-        metrics::gauge!("faultkeep_processor_active").decrement(1.0);
+        metrics::gauge!("metric_processor_active").decrement(1.0);
         let outcome = match result {
             Ok(()) => ProcessorOutcome::Processed,
             Err(failure) => self.persist_failure(&pending, failure).await,
         };
         metrics::histogram!(
-            "faultkeep_processor_duration_seconds",
+            "metric_processor_duration_seconds",
             "outcome" => outcome_name(outcome)
         )
         .record(started.elapsed().as_secs_f64());
         metrics::counter!(
-            "faultkeep_processor_events_total",
+            "metric_processor_events_total",
             "outcome" => outcome_name(outcome)
         )
         .increment(1);
@@ -651,7 +651,7 @@ impl Processor {
     async fn load_project_coalesced(
         &self,
         project_id: ProjectId,
-    ) -> Result<faultkeep_domain::processing::ProcessingProject, ProcessingProjectError> {
+    ) -> Result<metric_domain::processing::ProcessingProject, ProcessingProjectError> {
         let flight = {
             let mut flights = self
                 .project_inflight
@@ -665,7 +665,7 @@ impl Processor {
                         Box<
                             dyn Future<
                                     Output = Result<
-                                        faultkeep_domain::processing::ProcessingProject,
+                                        metric_domain::processing::ProcessingProject,
                                         ProcessingProjectError,
                                     >,
                                 > + Send,
@@ -702,7 +702,7 @@ impl Processor {
         };
         let exhausted = new_attempts >= self.config.max_attempts;
         if exhausted && failure.class == StageFailureClass::Temporary {
-            metrics::counter!("faultkeep_processor_retry_exhausted_total").increment(1);
+            metrics::counter!("metric_processor_retry_exhausted_total").increment(1);
             failure.class = StageFailureClass::Permanent;
         }
         let retry_at = if failure.class == StageFailureClass::Temporary {
@@ -739,7 +739,7 @@ impl Processor {
             disposition,
         };
         metrics::counter!(
-            "faultkeep_processor_failures_total",
+            "metric_processor_failures_total",
             "error_code" => failure.code.as_str(),
             "disposition" => if retry_at.is_some() { "retry" } else { "failed" }
         )
@@ -761,7 +761,7 @@ impl Processor {
     }
 }
 
-impl faultkeep_ports::WorkHandler for Processor {
+impl metric_ports::WorkHandler for Processor {
     fn handle(&self, event: PendingEvent) -> PortFuture<'_, ()> {
         Box::pin(async move {
             let _ = self.process(event).await;
@@ -796,7 +796,7 @@ where
         }
     };
     metrics::histogram!(
-        "faultkeep_processor_stage_duration_seconds",
+        "metric_processor_stage_duration_seconds",
         "stage" => stage,
         "outcome" => if result.is_ok() { "ok" } else { "failed" }
     )
@@ -897,14 +897,14 @@ mod tests {
         time::Duration,
     };
 
-    use faultkeep_domain::{
+    use metric_domain::{
         EventId, ProjectId, ScrubbedEventPayload,
         event::{EventLevel, EventPlatform, NormalizedEventBody},
         grouping::group,
         processing::{ProcessingProject, ProcessingStateChange},
         symbolication::{SymbolicationDisposition, SymbolicationKind, SymbolicationStatus},
     };
-    use faultkeep_ports::{ProcessingProjectError, ProcessingStateError};
+    use metric_ports::{ProcessingProjectError, ProcessingStateError};
 
     use super::*;
 

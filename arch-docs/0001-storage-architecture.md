@@ -5,7 +5,7 @@
 
 ## Context
 
-Faultkeep must keep storage-specific code out of ingestion, grouping, symbolication,
+Metric must keep storage-specific code out of ingestion, grouping, symbolication,
 web, and scheduling logic. At the same time, the first implementation should be
 optimized for one database instead of trying to support several engines before the
 real query patterns and bottlenecks are known.
@@ -70,7 +70,7 @@ MongoDB is the only database backend implemented in the first version.
 [storage]
 backend = "mongodb"
 uri = "mongodb://localhost:27017"
-database = "faultkeep"
+database = "metric"
 ```
 
 The generic name `embedded` is not used. SQLite is not required or planned for the
@@ -78,15 +78,15 @@ first version. A second database backend will only be considered after the Mongo
 implementation, data model, and conformance behavior are stable.
 
 MongoDB Community Server and its SSPL licensing are accepted project dependencies.
-Faultkeep connects through the MongoDB driver but does not embed or redistribute
-`mongod` in the Faultkeep binary or container image.
+Metric connects through the MongoDB driver but does not embed or redistribute
+`mongod` in the Metric binary or container image.
 
 Initial deployments are unsharded. A standalone MongoDB instance may be used for
 development and small installations; a replica set is the production topology when
 high availability or multi-document transactions are required. Native MongoDB
 sharding may be evaluated later.
 
-Faultkeep will not implement application-level routing across independent MongoDB
+Metric will not implement application-level routing across independent MongoDB
 servers. Doing so would require custom balancing, failover, scatter/gather queries,
 and cross-partition consistency.
 

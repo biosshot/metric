@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     event::{CanonicalValue, EventPlatform, NormalizedEvent, NormalizedEventBody},
     symbolication::{
         BackendSymbolicationResult, BackendSymbolicationStatus, RawStacktrace, RawTraceOrigin,
@@ -11,7 +11,7 @@ use faultkeep_domain::{
         SymbolicationStatus,
     },
 };
-use faultkeep_ports::{SymbolicationBackend, SymbolicationBackendError};
+use metric_ports::{SymbolicationBackend, SymbolicationBackendError};
 use thiserror::Error;
 use tokio::{sync::Semaphore, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -533,11 +533,11 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use faultkeep_domain::{
+    use metric_domain::{
         AcceptedEvent, EventId, ProjectId, ScrubbedEventPayload, Timestamp,
         symbolication::{SymbolicatedFrame, SymbolicatedStacktrace},
     };
-    use faultkeep_ports::PortFuture;
+    use metric_ports::PortFuture;
 
     use crate::normalizer::{Normalizer, NormalizerLimits};
 

@@ -14,7 +14,7 @@ impl ArchiveSegmentId {
     #[must_use]
     pub fn derive(project_id: ProjectId, event_keys: &[EventKey]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"faultkeep-event-archive-segment/v1");
+        hasher.update(b"metric-event-archive-segment/v1");
         hasher.update(&project_id.get().to_be_bytes());
         for key in event_keys {
             hasher.update(&key.as_bytes());

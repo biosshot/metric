@@ -6,7 +6,7 @@ use crate::{
     auth::{AuthError, IdentityService},
     shutdown::ShutdownSignal,
 };
-use faultkeep_domain::{
+use metric_domain::{
     Timestamp,
     auth::{AuditAction, AuthContext, Permission, RequestCorrelationId},
     notifications::{
@@ -15,7 +15,7 @@ use faultkeep_domain::{
         notification_delivery_id,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     Clock, NotificationStore, NotificationStoreError, WebhookDeliveryAdapter, WebhookDeliveryError,
     WebhookDeliveryReceipt,
 };
@@ -95,14 +95,14 @@ pub trait NotificationAdminAccess: Send + Sync + 'static {
     fn authorize<'a>(
         &'a self,
         context: &'a AuthContext,
-        project_id: faultkeep_domain::ProjectId,
+        project_id: metric_domain::ProjectId,
     ) -> NotificationAccessFuture<'a>;
 
     fn audit<'a>(
         &'a self,
         context: &'a AuthContext,
         request_id: RequestCorrelationId,
-        project_id: faultkeep_domain::ProjectId,
+        project_id: metric_domain::ProjectId,
         action: AuditAction,
         target_id: String,
     ) -> NotificationAccessFuture<'a>;
@@ -112,7 +112,7 @@ impl NotificationAdminAccess for IdentityService {
     fn authorize<'a>(
         &'a self,
         context: &'a AuthContext,
-        project_id: faultkeep_domain::ProjectId,
+        project_id: metric_domain::ProjectId,
     ) -> NotificationAccessFuture<'a> {
         Box::pin(async move {
             self.authorize_project(context, project_id, Permission::ProjectAdmin)
@@ -125,7 +125,7 @@ impl NotificationAdminAccess for IdentityService {
         &'a self,
         context: &'a AuthContext,
         request_id: RequestCorrelationId,
-        project_id: faultkeep_domain::ProjectId,
+        project_id: metric_domain::ProjectId,
         action: AuditAction,
         target_id: String,
     ) -> NotificationAccessFuture<'a> {
@@ -269,7 +269,7 @@ impl NotificationDispatcher {
         for transition in transitions {
             self.expand_transition(transition).await?;
         }
-        metrics::gauge!("faultkeep_notification_transition_backlog_seen").set(count as f64);
+        metrics::gauge!("metric_notification_transition_backlog_seen").set(count as f64);
         Ok(count)
     }
 
@@ -313,7 +313,7 @@ impl NotificationDispatcher {
             }
         }
         self.store.expand_transition(transition, deliveries).await?;
-        metrics::counter!("faultkeep_notification_transitions_expanded_total").increment(1);
+        metrics::counter!("metric_notification_transitions_expanded_total").increment(1);
         Ok(())
     }
 
@@ -344,7 +344,7 @@ impl NotificationDispatcher {
                     "attempts_exhausted",
                 )
                 .await?;
-            metrics::counter!("faultkeep_notification_delivery_attempts_total", "outcome" => "exhausted")
+            metrics::counter!("metric_notification_delivery_attempts_total", "outcome" => "exhausted")
                 .increment(1);
             return Ok(());
         }
@@ -364,7 +364,7 @@ impl NotificationDispatcher {
                         add_duration(now, self.config.delivered_retention)?,
                     )
                     .await?;
-                metrics::counter!("faultkeep_notification_delivery_attempts_total", "outcome" => "delivered")
+                metrics::counter!("metric_notification_delivery_attempts_total", "outcome" => "delivered")
                     .increment(1);
             }
             DeliveryDisposition::Permanent(code) => {
@@ -376,7 +376,7 @@ impl NotificationDispatcher {
                         code,
                     )
                     .await?;
-                metrics::counter!("faultkeep_notification_delivery_attempts_total", "outcome" => "dead")
+                metrics::counter!("metric_notification_delivery_attempts_total", "outcome" => "dead")
                     .increment(1);
             }
             DeliveryDisposition::Retryable(code, retry_after) => {
@@ -389,7 +389,7 @@ impl NotificationDispatcher {
                             "attempts_exhausted",
                         )
                         .await?;
-                    metrics::counter!("faultkeep_notification_delivery_attempts_total", "outcome" => "exhausted")
+                    metrics::counter!("metric_notification_delivery_attempts_total", "outcome" => "exhausted")
                         .increment(1);
                 } else {
                     let default_backoff = retry_delay(&claim, self.config);
@@ -399,7 +399,7 @@ impl NotificationDispatcher {
                     self.store
                         .schedule_retry(delivery_id, add_duration(now, backoff)?, code)
                         .await?;
-                    metrics::counter!("faultkeep_notification_delivery_attempts_total", "outcome" => "retry")
+                    metrics::counter!("metric_notification_delivery_attempts_total", "outcome" => "retry")
                         .increment(1);
                 }
             }
@@ -509,12 +509,12 @@ fn classify_result(
 
 fn notification_payload(
     transition: &IssueNotificationTransition,
-    rule_id: faultkeep_domain::notifications::AlertRuleId,
-    destination_id: faultkeep_domain::notifications::NotificationDestinationId,
+    rule_id: metric_domain::notifications::AlertRuleId,
+    destination_id: metric_domain::notifications::NotificationDestinationId,
 ) -> Result<NotificationPayload, NotificationError> {
     let kind = match transition.kind {
-        faultkeep_domain::issue::IssueNotificationKind::NewIssue => "new_issue",
-        faultkeep_domain::issue::IssueNotificationKind::Regression => "regression",
+        metric_domain::issue::IssueNotificationKind::NewIssue => "new_issue",
+        metric_domain::issue::IssueNotificationKind::Regression => "regression",
     };
     let bytes = serde_json::to_vec(&json!({
         "version": 1,
@@ -570,7 +570,7 @@ fn add_duration(timestamp: Timestamp, duration: Duration) -> Result<Timestamp, N
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{
+    use metric_domain::{
         EventId, ProjectId,
         grouping::IssueId,
         issue::IssueTransitionId,
@@ -664,10 +664,10 @@ mod tests {
             transition_id: IssueTransitionId::from_bytes([1; 16]),
             project_id: ProjectId::new(1).unwrap(),
             issue_id: IssueId::from_bytes([2; 16]),
-            kind: faultkeep_domain::issue::IssueNotificationKind::Regression,
+            kind: metric_domain::issue::IssueNotificationKind::Regression,
             event_id: EventId::from_bytes([3; 16]),
             created_at: Timestamp::from_unix_millis(4).unwrap(),
-            title: faultkeep_domain::issue::IssueTitle::new("failure").unwrap(),
+            title: metric_domain::issue::IssueTitle::new("failure").unwrap(),
         };
         let payload = notification_payload(
             &transition,

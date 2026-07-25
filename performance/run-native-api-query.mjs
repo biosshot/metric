@@ -18,7 +18,7 @@ function run(command, args) {
 }
 
 const output = run("cargo", [
-  "test", "--locked", "--release", "-p", "faultkeep-server", "--test", "native_api_e2e",
+  "test", "--locked", "--release", "-p", "metric-server", "--test", "native_api_e2e",
   "performance_native_event_query_rps_p95_p99", "--", "--ignored", "--exact", "--nocapture",
 ]);
 const metrics = output.match(
@@ -30,7 +30,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "native-api-query-phase-12",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

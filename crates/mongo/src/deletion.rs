@@ -2,14 +2,14 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     DsnKey, OrganizationId, ProjectId, Timestamp,
     deletion::{
         ProjectDeletionChange, ProjectDeletionOperationId, ProjectDeletionPhase,
         ProjectDeletionRequest, ProjectDeletionStatus,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     PortFuture, ProjectDeletionStore, ProjectDeletionStoreError, ProjectPurgeRequest,
 };
 use futures_util::TryStreamExt;

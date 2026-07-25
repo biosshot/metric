@@ -1,7 +1,7 @@
 .git
 .github
 target
-faultkeep-data
+metric-data
 performance/results
 web/node_modules
 web/dist

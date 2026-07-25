@@ -23,11 +23,11 @@ function run(command, args, options = {}) {
 const output = run(
   "cargo",
   [
-    "test", "--locked", "-p", "faultkeep-server", "--test", "debug_files_e2e",
+    "test", "--locked", "-p", "metric-server", "--test", "debug_files_e2e",
     "real_pinned_sentry_cli_upload_private_isolation_and_exact_delete", "--", "--ignored",
     "--exact", "--nocapture",
   ],
-  { env: { FAULTKEEP_PHASE18_PERF: "1" } },
+  { env: { METRIC_PHASE18_PERF: "1" } },
 );
 const match = output.match(
   /Phase18 Artifact lookup: samples=(\d+),modern_hit_rps=(\d+),legacy_hit_rps=(\d+),miss_rps=(\d+),open_circuit_rps=(\d+)/,

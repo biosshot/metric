@@ -23,7 +23,7 @@ function run(command, args, options = {}) {
 }
 
 const output = run("cargo", [
-  "test", "--locked", "--release", "-p", "faultkeep-application",
+  "test", "--locked", "--release", "-p", "metric-application",
   "archive::tests::performance_archive_writer_rps_mib_with_foreground_work",
   "--lib", "--", "--ignored", "--exact", "--nocapture",
 ]);

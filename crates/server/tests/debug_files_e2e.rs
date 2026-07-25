@@ -9,15 +9,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_application::{
+use metric_application::{
     artifacts::{ArtifactConfig, ArtifactService, AssembleArtifact, AssembleArtifactState},
     auth::{AuthConfig, CreateApiTokenRequest, IdentityService, PasswordConfig},
     debug_files::{DebugFileConfig, DebugFileService},
     normalizer::{Normalizer, NormalizerLimits},
     symbolication::{SymbolicationConfig, SymbolicationService},
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
-use faultkeep_domain::{
+use metric_blob::{LocalBlobConfig, LocalBlobStore};
+use metric_domain::{
     AcceptedEvent, DisplayName, EventId, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState,
     ProjectId, ProjectIdentity, ProjectIngestLimits, ScrubbedEventPayload, SecretBytes, Slug,
     Timestamp,
@@ -31,16 +31,16 @@ use faultkeep_domain::{
     finalization::derive_release_id,
     symbolication::{SymbolicationKind, SymbolicationRequest, SymbolicationStatus},
 };
-use faultkeep_mongo::{ArtifactQuota, DebugFileQuota, MongoProjectStore};
-use faultkeep_ports::{
+use metric_mongo::{ArtifactQuota, DebugFileQuota, MongoProjectStore};
+use metric_ports::{
     ArtifactStore, BlobStore, BlobStoreError, Clock, DebugFileStore, ProjectStore, RandomError,
     RandomSource, SymbolicationBackend,
 };
-use faultkeep_server::debug_http;
-use faultkeep_symbolication::{
+use metric_server::debug_http;
+use metric_symbolication::{
     ExternalSymbolicator, ExternalSymbolicatorConfig, PrivateSourceSigner,
 };
-use faultkeep_testkit::FixedClock;
+use metric_testkit::FixedClock;
 use mongodb::{Client, Database, bson::doc};
 use sha1::{Digest as _, Sha1};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -77,9 +77,9 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
             ..AuthConfig::default()
         },
     )?);
-    let organization_id = faultkeep_domain::OrganizationId::new(11)?;
+    let organization_id = metric_domain::OrganizationId::new(11)?;
     control
-        .insert_organization(faultkeep_domain::OrganizationIdentity {
+        .insert_organization(metric_domain::OrganizationIdentity {
             id: organization_id,
             slug: Slug::new("acme")?,
             display_name: DisplayName::new("Acme")?,
@@ -123,16 +123,16 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         .await?
         .expect("new database emits setup token");
     let bootstrap = identity
-        .bootstrap(faultkeep_application::auth::BootstrapRequest {
+        .bootstrap(metric_application::auth::BootstrapRequest {
             setup_secret: setup,
-            email: faultkeep_domain::auth::EmailAddress::parse("owner@example.com")?,
-            user_display_name: faultkeep_domain::auth::UserDisplayName::new("Owner")?,
-            password: faultkeep_application::auth::PasswordInput::new(
+            email: metric_domain::auth::EmailAddress::parse("owner@example.com")?,
+            user_display_name: metric_domain::auth::UserDisplayName::new("Owner")?,
+            password: metric_application::auth::PasswordInput::new(
                 "correct horse battery staple",
             )?,
             organization_slug: Slug::new("auth-org")?,
             organization_name: DisplayName::new("Auth Org")?,
-            request_id: faultkeep_domain::BoundedId::new("phase17-bootstrap")?,
+            request_id: metric_domain::BoundedId::new("phase17-bootstrap")?,
         })
         .await?;
     // Debug projects belong to the bootstrapped organization used by the real API token.
@@ -172,11 +172,11 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
                     Permission::ArtifactDelete,
                 ]),
                 expires_at: Timestamp::from_unix_millis(now.unix_millis() + 86_400_000)?,
-                request_id: faultkeep_domain::BoundedId::new("phase17-token")?,
+                request_id: metric_domain::BoundedId::new("phase17-token")?,
             },
         )
         .await?;
-    let root = std::env::temp_dir().join(format!("faultkeep-debug-e2e-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("metric-debug-e2e-{}", uuid::Uuid::new_v4()));
     let blobs: Arc<dyn BlobStore> = Arc::new(
         LocalBlobStore::new(
             &root,
@@ -227,7 +227,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
     let cli_root = repository_root().join("sdk-tests").join("sentry-cli");
-    let fixture = cli_root.join("fixtures").join("faultkeep.sym");
+    let fixture = cli_root.join("fixtures").join("metric.sym");
     for (package, executable) in [
         (
             "@sentry/cli",
@@ -314,7 +314,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         .lookup(
             ProjectId::new(7)?,
             Vec::new(),
-            Some("faultkeep-phase18@1.0.0"),
+            Some("metric-phase18@1.0.0"),
             Some("windows".into()),
         )
         .await?;
@@ -366,7 +366,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         .await?;
     assert_eq!(artifact_cross.status(), reqwest::StatusCode::UNAUTHORIZED);
 
-    let release_id = derive_release_id(bootstrap.organization_id, "faultkeep-phase18@1.0.0");
+    let release_id = derive_release_id(bootstrap.organization_id, "metric-phase18@1.0.0");
     let native_binding =
         ArtifactBinding::new(ProjectId::new(7)?, Some(release_id), Some("windows".into()))?;
     let foreign_binding =
@@ -379,7 +379,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
                 sha1: modern[0].bundle.sha1,
                 chunks: vec![modern[0].bundle.sha1],
                 project_slugs: vec!["foreign".into()],
-                release: Some("faultkeep-phase18@1.0.0".into()),
+                release: Some("metric-phase18@1.0.0".into()),
                 dist: Some("windows".into()),
             },
         )
@@ -419,7 +419,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
                 sha1: shared.sha1,
                 chunks: vec![shared.sha1],
                 project_slugs: vec!["native".into()],
-                release: Some("faultkeep-phase18@1.0.0".into()),
+                release: Some("metric-phase18@1.0.0".into()),
                 dist: Some("windows".into()),
             },
         )
@@ -449,7 +449,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
                 sha1: rescued.sha1,
                 chunks: vec![rescued.sha1],
                 project_slugs: vec!["native".into()],
-                release: Some("faultkeep-phase18@1.0.0".into()),
+                release: Some("metric-phase18@1.0.0".into()),
                 dist: Some("windows".into()),
             },
         )
@@ -461,7 +461,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         panic!("collected artifact was not republished")
     };
     assert_eq!(republished.generation, 1);
-    if std::env::var("FAULTKEEP_PHASE18_PERF").as_deref() == Ok("1") {
+    if std::env::var("METRIC_PHASE18_PERF").as_deref() == Ok("1") {
         let samples = 300_u64;
         let started = Instant::now();
         for _ in 0..samples {
@@ -485,7 +485,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
                     .lookup(
                         ProjectId::new(7)?,
                         Vec::new(),
-                        Some("faultkeep-phase18@1.0.0"),
+                        Some("metric-phase18@1.0.0"),
                         Some("windows".into()),
                     )
                     .await?
@@ -547,7 +547,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         .send()
         .await?;
     assert_eq!(cross.status(), reqwest::StatusCode::UNAUTHORIZED);
-    if std::env::var("FAULTKEEP_PHASE17_PERF").as_deref() == Ok("1") {
+    if std::env::var("METRIC_PHASE17_PERF").as_deref() == Ok("1") {
         let samples = 500_u64;
         let started = Instant::now();
         for _ in 0..samples {
@@ -604,7 +604,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
 }
 
 async fn symbolicate_uploaded_native(
-    faultkeep_address: std::net::SocketAddr,
+    metric_address: std::net::SocketAddr,
     signer: PrivateSourceSigner,
     debug_id: DebugId,
     now: Timestamp,
@@ -619,7 +619,7 @@ async fn symbolicate_uploaded_native(
         let request = String::from_utf8_lossy(&request[..count]);
         assert!(request.contains("revision=1"));
         assert!(request.contains(&expected_debug_id.to_string()));
-        let body = r#"{"status":"complete","stacktraces":[{"frames":[{"status":"symbolicated","original_index":0,"function":"FaultkeepSdkCompatibilityError","filename":"faultkeep.c","module":"faultkeep","lineno":42}]}],"missing_debug_ids":[]}"#;
+        let body = r#"{"status":"complete","stacktraces":[{"frames":[{"status":"symbolicated","original_index":0,"function":"MetricSdkCompatibilityError","filename":"metric.c","module":"metric","lineno":42}]}],"missing_debug_ids":[]}"#;
         stream
             .write_all(
                 format!(
@@ -634,7 +634,7 @@ async fn symbolicate_uploaded_native(
     let adapter = Arc::new(ExternalSymbolicator::new(
         ExternalSymbolicatorConfig {
             endpoint: Url::parse(&format!("http://{address}/symbolicate"))?,
-            callback_base_url: Url::parse(&format!("http://{faultkeep_address}/"))?,
+            callback_base_url: Url::parse(&format!("http://{metric_address}/"))?,
             request_timeout: Duration::from_secs(2),
             maximum_concurrency: 1,
             circuit_failure_threshold: 2,
@@ -650,7 +650,7 @@ async fn symbolicate_uploaded_native(
         policy_revision: 1,
         payload: ScrubbedEventPayload::new(
             format!(
-                r#"{{"platform":"native","stacktrace":{{"frames":[{{"instruction_addr":"0x10","package":"faultkeep","filename":"faultkeep.c"}}]}},"debug_meta":{{"images":[{{"type":"breakpad","debug_id":"{debug_id}","image_addr":"0x0","image_size":4096}}]}}}}"#
+                r#"{{"platform":"native","stacktrace":{{"frames":[{{"instruction_addr":"0x10","package":"metric","filename":"metric.c"}}]}},"debug_meta":{{"images":[{{"type":"breakpad","debug_id":"{debug_id}","image_addr":"0x0","image_size":4096}}]}}}}"#
             )
             .into_bytes(),
         ),
@@ -661,14 +661,14 @@ async fn symbolicate_uploaded_native(
     assert_eq!(output.status, SymbolicationStatus::Complete);
     assert_eq!(
         output.derived[0].frames[0].function.as_deref(),
-        Some("FaultkeepSdkCompatibilityError")
+        Some("MetricSdkCompatibilityError")
     );
     fake.await?;
     Ok(())
 }
 
 async fn symbolicate_uploaded_javascript(
-    faultkeep_address: std::net::SocketAddr,
+    metric_address: std::net::SocketAddr,
     signer: PrivateSourceSigner,
     debug_id: DebugId,
     now: Timestamp,
@@ -722,7 +722,7 @@ async fn symbolicate_uploaded_javascript(
     let adapter = Arc::new(ExternalSymbolicator::new(
         ExternalSymbolicatorConfig {
             endpoint: Url::parse(&format!("http://{address}/symbolicate"))?,
-            callback_base_url: Url::parse(&format!("http://{faultkeep_address}/"))?,
+            callback_base_url: Url::parse(&format!("http://{metric_address}/"))?,
             request_timeout: Duration::from_secs(2),
             maximum_concurrency: 1,
             circuit_failure_threshold: 2,
@@ -738,7 +738,7 @@ async fn symbolicate_uploaded_javascript(
         policy_revision: 1,
         payload: ScrubbedEventPayload::new(
             format!(
-                r#"{{"platform":"javascript","release":"faultkeep-phase18@1.0.0","dist":"windows","stacktrace":{{"frames":[{{"function":"fail","filename":"app.min.js","abs_path":"https://example.invalid/static/app.min.js","lineno":1,"colno":50,"in_app":true}}]}},"debug_meta":{{"images":[{{"type":"sourcemap","debug_id":"{debug_id}","code_file":"https://example.invalid/static/app.min.js"}}]}}}}"#
+                r#"{{"platform":"javascript","release":"metric-phase18@1.0.0","dist":"windows","stacktrace":{{"frames":[{{"function":"fail","filename":"app.min.js","abs_path":"https://example.invalid/static/app.min.js","lineno":1,"colno":50,"in_app":true}}]}},"debug_meta":{{"images":[{{"type":"sourcemap","debug_id":"{debug_id}","code_file":"https://example.invalid/static/app.min.js"}}]}}}}"#
             )
             .into_bytes(),
         ),
@@ -763,7 +763,7 @@ async fn exercise_recovery_and_cleanup(
     metadata: &Arc<dyn DebugFileStore>,
     blobs: &Arc<dyn BlobStore>,
     context: &AuthContext,
-    organization_id: faultkeep_domain::OrganizationId,
+    organization_id: metric_domain::OrganizationId,
     now: Timestamp,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let project_id = ProjectId::new(7)?;
@@ -864,7 +864,7 @@ async fn circuit_open_rps(project_id: ProjectId) -> Result<f64, Box<dyn Error + 
 
 fn upload_id(project_id: ProjectId, sha1: [u8; 20]) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep/debug-upload-id/v1");
+    hasher.update(b"metric/debug-upload-id/v1");
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(&sha1);
     let mut id = [0_u8; 16];
@@ -915,7 +915,7 @@ fn run_sourcemaps_cli(
             "--project",
             "native",
             "--release",
-            "faultkeep-phase18@1.0.0",
+            "metric-phase18@1.0.0",
             "--dist",
             "windows",
             "--url-prefix",
@@ -943,10 +943,10 @@ fn repository_root() -> PathBuf {
 }
 
 async fn test_database() -> Result<Database, Box<dyn Error + Send + Sync>> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI")
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI")
         .unwrap_or_else(|_| "mongodb://localhost:27017".to_owned());
     let client = Client::with_uri_str(uri).await?;
-    let name = format!("faultkeep_phase17_{}", uuid::Uuid::new_v4().simple());
+    let name = format!("metric_phase17_{}", uuid::Uuid::new_v4().simple());
     Ok(client.database(&name))
 }
 

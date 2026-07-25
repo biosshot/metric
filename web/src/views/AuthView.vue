@@ -102,7 +102,7 @@ async function setupInvitedPassword(): Promise<void> {
       <div class="brand-mark" aria-hidden="true">
         <LogoMark :size="30" />
       </div>
-      <p class="eyebrow">Faultkeep</p>
+      <p class="eyebrow">Metric</p>
       <h1>Understand failures.<br />Keep the signal.</h1>
       <p>
         A focused error investigation workspace for teams that need clear evidence, stable
@@ -134,7 +134,7 @@ async function setupInvitedPassword(): Promise<void> {
       <div v-if="successNotice" class="success-notice" role="status">{{ successNotice }}</div>
       <form v-if="mode === 'login'" @submit.prevent="login">
         <p class="eyebrow">Secure session</p>
-        <h2 id="auth-title">Sign in to Faultkeep</h2>
+        <h2 id="auth-title">Sign in to Metric</h2>
         <label>
           Email
           <input v-model.trim="email" type="email" autocomplete="username" required />

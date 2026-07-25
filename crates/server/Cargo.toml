@@ -1,5 +1,5 @@
 [package]
-name = "faultkeep-server"
+name = "metric-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,13 +13,13 @@ bytes.workspace = true
 chacha20poly1305.workspace = true
 clap.workspace = true
 dotenvy.workspace = true
-faultkeep-application = { path = "../application" }
-faultkeep-blob = { path = "../blob" }
-faultkeep-domain = { path = "../domain" }
-faultkeep-mongo = { path = "../mongo" }
-faultkeep-ports = { path = "../ports" }
-faultkeep-sentry-protocol = { path = "../sentry-protocol" }
-faultkeep-symbolication = { path = "../symbolication" }
+metric-application = { path = "../application" }
+metric-blob = { path = "../blob" }
+metric-domain = { path = "../domain" }
+metric-mongo = { path = "../mongo" }
+metric-ports = { path = "../ports" }
+metric-sentry-protocol = { path = "../sentry-protocol" }
+metric-symbolication = { path = "../symbolication" }
 figment.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
@@ -46,7 +46,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
-faultkeep-testkit = { path = "../testkit" }
+metric-testkit = { path = "../testkit" }
 flate2.workspace = true
 reqwest.workspace = true
 wait-timeout.workspace = true

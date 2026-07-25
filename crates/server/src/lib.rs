@@ -11,7 +11,7 @@ pub mod webhook;
 use std::{io, process::ExitCode};
 
 use config::{BlobBackend, Cli, ConfigError};
-use faultkeep_application::{
+use metric_application::{
     archive::{ArchiveConfig, ArchiveError, ArchiveService, ArchiveTask, start_archive_worker},
     artifacts::{
         ArtifactCleanupTask, ArtifactConfig, ArtifactError, ArtifactService, start_artifact_cleanup,
@@ -55,10 +55,10 @@ use faultkeep_application::{
     symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
-use faultkeep_domain::Timestamp;
-use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
-use faultkeep_ports::{
+use metric_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
+use metric_domain::Timestamp;
+use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
+use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
     LogSink, OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError,
     RandomSource, SignalStore, SpanSink,
@@ -143,7 +143,7 @@ struct RuntimeModules {
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
     artifact_service: Option<std::sync::Arc<ArtifactService>>,
-    private_source_signer: Option<faultkeep_symbolication::PrivateSourceSigner>,
+    private_source_signer: Option<metric_symbolication::PrivateSourceSigner>,
     debug_file_cleanup_task: Option<DebugFileCleanupTask>,
     artifact_cleanup_task: Option<ArtifactCleanupTask>,
 }
@@ -214,9 +214,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         .as_ref()
         .map(|key| {
             let mut derivation = Sha256::new();
-            derivation.update(b"faultkeep/private-symbol-source-key/v1");
+            derivation.update(b"metric/private-symbol-source-key/v1");
             derivation.update(key.expose());
-            faultkeep_symbolication::PrivateSourceSigner::new(derivation.finalize().to_vec(), None)
+            metric_symbolication::PrivateSourceSigner::new(derivation.finalize().to_vec(), None)
                 .map_err(|_| ServerError::Symbolicator)
         })
         .transpose()?;
@@ -276,9 +276,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 negative_ttl: config.ingest.project_cache.negative_ttl.get(),
             },
         )?);
-        let notification_store: std::sync::Arc<dyn faultkeep_ports::NotificationStore> =
+        let notification_store: std::sync::Arc<dyn metric_ports::NotificationStore> =
             std::sync::Arc::new(store.notification_store());
-        let notification_adapter: std::sync::Arc<dyn faultkeep_ports::WebhookDeliveryAdapter> =
+        let notification_adapter: std::sync::Arc<dyn metric_ports::WebhookDeliveryAdapter> =
             std::sync::Arc::new(
                 webhook::ReqwestWebhookAdapter::new(
                     webhook_secret_box,
@@ -312,7 +312,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             },
         )?);
         let notification_signal: std::sync::Arc<
-            dyn faultkeep_application::notifications::NotificationSignal,
+            dyn metric_application::notifications::NotificationSignal,
         > = notification_dispatcher.clone();
         let notification_task = notification_dispatcher.start(shutdown.signal())?;
         let project_resolver: std::sync::Arc<dyn ProjectResolver> = project_service.clone();
@@ -328,7 +328,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             retry_base: config.project_deletion.retry_base.get(),
             retry_max: config.project_deletion.retry_max.get(),
         };
-        let deletion_store: std::sync::Arc<dyn faultkeep_ports::ProjectDeletionStore> =
+        let deletion_store: std::sync::Arc<dyn metric_ports::ProjectDeletionStore> =
             std::sync::Arc::new(store.clone());
         let deletion_service = ProjectDeletionService::new(
             std::sync::Arc::clone(&deletion_store),
@@ -366,7 +366,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             startup_bootstrap_token(identity_service.ensure_bootstrap_token().await)?
         {
             eprintln!(
-                "FAULTKEEP_BOOTSTRAP_TOKEN={} (shown once; store it securely)",
+                "METRIC_BOOTSTRAP_TOKEN={} (shown once; store it securely)",
                 token.encode_hex()
             );
         }
@@ -396,10 +396,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             None
         };
         let issue_codec = IssueCodecConfig::default();
-        let issue_service = std::sync::Arc::new(faultkeep_application::issues::IssueService::new(
+        let issue_service = std::sync::Arc::new(metric_application::issues::IssueService::new(
             std::sync::Arc::new(store.issue_store(issue_codec)),
         ));
-        let investigation: std::sync::Arc<dyn faultkeep_ports::InvestigationStore> =
+        let investigation: std::sync::Arc<dyn metric_ports::InvestigationStore> =
             std::sync::Arc::new(store.investigation_store(event_codec, issue_codec));
         let search = std::sync::Arc::new(
             SearchService::new(
@@ -428,7 +428,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         )?);
         let signal_store: std::sync::Arc<dyn SignalStore> = std::sync::Arc::new(
-            store.signal_store_with_retention(faultkeep_mongo::SignalRetention {
+            store.signal_store_with_retention(metric_mongo::SignalRetention {
                 logs_days: config.retention.logs_days,
                 spans_days: config.retention.spans_days,
                 span_stats_hourly_days: config.retention.span_stats_hourly_days,
@@ -473,8 +473,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_blob_store(std::sync::Arc::clone(&blob_store))
             .with_signal_store(std::sync::Arc::clone(&signal_store)),
         );
-        let debug_metadata: std::sync::Arc<dyn faultkeep_ports::DebugFileStore> =
-            std::sync::Arc::new(store.debug_file_store(faultkeep_mongo::DebugFileQuota::default()));
+        let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =
+            std::sync::Arc::new(store.debug_file_store(metric_mongo::DebugFileQuota::default()));
         let debug_file_service = std::sync::Arc::new(DebugFileService::new(
             debug_metadata,
             std::sync::Arc::clone(&blob_store),
@@ -483,7 +483,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 max_file_bytes: config
                     .blob
                     .max_object_bytes
-                    .min(faultkeep_application::debug_files::SENTRY_CLI_MAX_FILE_BYTES),
+                    .min(metric_application::debug_files::SENTRY_CLI_MAX_FILE_BYTES),
                 ..DebugFileConfig::default()
             },
         )?);
@@ -494,8 +494,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             config.ingest.attachments.cleanup_interval.get(),
             shutdown.signal(),
         )?;
-        let artifact_metadata: std::sync::Arc<dyn faultkeep_ports::ArtifactStore> =
-            std::sync::Arc::new(store.artifact_store(faultkeep_mongo::ArtifactQuota {
+        let artifact_metadata: std::sync::Arc<dyn metric_ports::ArtifactStore> =
+            std::sync::Arc::new(store.artifact_store(metric_mongo::ArtifactQuota {
                 maximum_bytes_per_organization: config.artifacts.maximum_bytes_per_organization,
                 maximum_bundles_per_organization: config.artifacts.maximum_bundles_per_organization,
             }));
@@ -566,13 +566,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 ..FinalizerBatchConfig::default()
             },
         )?;
-        let symbolicator: std::sync::Arc<dyn faultkeep_application::processor::SymbolicationStage> =
+        let symbolicator: std::sync::Arc<dyn metric_application::processor::SymbolicationStage> =
             if let Some(endpoint) = config.symbolicator.endpoint.clone() {
                 let signer = private_source_signer
                     .clone()
                     .ok_or(ServerError::Symbolicator)?;
-                let backend = faultkeep_symbolication::ExternalSymbolicator::new(
-                    faultkeep_symbolication::ExternalSymbolicatorConfig {
+                let backend = metric_symbolication::ExternalSymbolicator::new(
+                    metric_symbolication::ExternalSymbolicatorConfig {
                         endpoint,
                         callback_base_url: config.symbolicator.callback_base_url.clone(),
                         request_timeout: config.symbolicator.request_timeout.get(),
@@ -729,7 +729,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             artifact_cleanup_task: None,
         }
     };
-    let mut ingest_service = faultkeep_application::ingest::IngestService::new(
+    let mut ingest_service = metric_application::ingest::IngestService::new(
         project_resolver,
         event_sink,
         std::sync::Arc::new(NoopOutcomeSink),
@@ -740,12 +740,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     )
     .with_blob_store(
         blob_store,
-        faultkeep_application::ingest::AttachmentIngestConfig {
+        metric_application::ingest::AttachmentIngestConfig {
             enabled: config.ingest.attachments.enabled,
             chunk_bytes: config.ingest.attachments.chunk_bytes,
         },
     )
-    .with_minidumps(faultkeep_application::ingest::MinidumpIngestConfig {
+    .with_minidumps(metric_application::ingest::MinidumpIngestConfig {
         enabled: config.native_crash.minidump.enabled,
         max_bytes: config.native_crash.minidump.max_bytes,
         chunk_bytes: config.native_crash.minidump.chunk_bytes,
@@ -884,8 +884,8 @@ struct UnavailableProjectResolver;
 impl ProjectResolver for UnavailableProjectResolver {
     fn resolve(
         &self,
-        _key: faultkeep_domain::DsnKey,
-    ) -> PortFuture<'_, Result<faultkeep_domain::ProjectSnapshot, ProjectResolveError>> {
+        _key: metric_domain::DsnKey,
+    ) -> PortFuture<'_, Result<metric_domain::ProjectSnapshot, ProjectResolveError>> {
         Box::pin(async { Err(ProjectResolveError::Unavailable) })
     }
 }
@@ -895,8 +895,8 @@ struct UnavailableEventSink;
 impl EventSink for UnavailableEventSink {
     fn persist(
         &self,
-        _event: faultkeep_domain::AcceptedEvent,
-    ) -> PortFuture<'_, Result<faultkeep_ports::DurableOutcome, EventSinkError>> {
+        _event: metric_domain::AcceptedEvent,
+    ) -> PortFuture<'_, Result<metric_ports::DurableOutcome, EventSinkError>> {
         Box::pin(async { Err(EventSinkError::Unavailable) })
     }
 }
@@ -904,7 +904,7 @@ impl EventSink for UnavailableEventSink {
 struct NoopOutcomeSink;
 
 impl OutcomeSink for NoopOutcomeSink {
-    fn record(&self, _outcome: faultkeep_ports::IngestOutcome) {}
+    fn record(&self, _outcome: metric_ports::IngestOutcome) {}
 }
 
 struct SystemClock;
@@ -929,8 +929,8 @@ impl RandomSource for SystemRandom {
 }
 
 fn startup_bootstrap_token(
-    result: Result<Option<faultkeep_domain::auth::PlainSecret>, AuthError>,
-) -> Result<Option<faultkeep_domain::auth::PlainSecret>, AuthError> {
+    result: Result<Option<metric_domain::auth::PlainSecret>, AuthError>,
+) -> Result<Option<metric_domain::auth::PlainSecret>, AuthError> {
     match result {
         Err(AuthError::BootstrapClosed) => Ok(None),
         result => result,
@@ -1003,7 +1003,7 @@ mod production_fence_tests {
 
     #[tokio::test]
     async fn production_composition_has_no_fake_project_or_durable_success() {
-        let key = faultkeep_domain::DsnKey::parse("0123456789abcdef0123456789abcdef").unwrap();
+        let key = metric_domain::DsnKey::parse("0123456789abcdef0123456789abcdef").unwrap();
         assert_eq!(
             UnavailableProjectResolver.resolve(key).await,
             Err(ProjectResolveError::Unavailable)

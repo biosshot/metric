@@ -8,7 +8,7 @@
     "cpu": "AMD Ryzen 5 5600H",
     "deployment_profile": "local developer workstation"
   },
-  "command": "cargo test --release -p faultkeep-mongo --test project_deletion performance_project_deletion_bounded_purge_rps -- --ignored --exact --nocapture",
+  "command": "cargo test --release -p metric-mongo --test project_deletion performance_project_deletion_bounded_purge_rps -- --ignored --exact --nocapture",
   "workload": {
     "deleted_project_documents": 20000,
     "purge_batch_documents": 1000,

@@ -1,5 +1,5 @@
 [package]
-name = "faultkeep-ports"
+name = "metric-ports"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-faultkeep-domain = { path = "../domain" }
+metric-domain = { path = "../domain" }
 thiserror.workspace = true
 
 [lints]

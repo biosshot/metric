@@ -7,7 +7,7 @@
   sharding and disk spool are not implemented.
 - MongoDB schema generation 7 bootstraps an empty database. There are no online
   migrations, rolling mixed-version upgrades or downgrade rewrites.
-- Archive objects cannot be searched, restored or rehydrated through Faultkeep.
+- Archive objects cannot be searched, restored or rehydrated through Metric.
 - External Symbolicator is optional and separately operated; ProGuard, IL2CPP,
   BCSymbolMap and Hermes-specific extended pipelines are outside version one.
 - Webhook delivery is at least once. Receivers must deduplicate the stable delivery

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     OrganizationId, ProjectId, Timestamp,
     api::ProjectView,
     auth::{AuthContext, Permission},
@@ -16,7 +16,7 @@ use faultkeep_domain::{
         DebugUploadState, validate_debug_name,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     BlobReadSession, BlobScanRequest, BlobStore, BlobStoreError, Clock, DebugFileStore,
     DebugFileStoreError,
 };
@@ -561,7 +561,7 @@ pub fn start_debug_file_cleanup(
 
 fn upload_id(project_id: ProjectId, sha1: [u8; 20]) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep/debug-upload-id/v1");
+    hasher.update(b"metric/debug-upload-id/v1");
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(&sha1);
     let mut id = [0_u8; 16];

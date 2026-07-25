@@ -3,13 +3,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
     ProjectKeyLabel, ProjectKeyState, SecretBytes, Slug, Timestamp,
 };
-use faultkeep_mongo::{MongoBootstrapError, MongoProjectStore, SCHEMA_GENERATION};
-use faultkeep_ports::{ProjectStore, ProjectStoreError};
+use metric_mongo::{MongoBootstrapError, MongoProjectStore, SCHEMA_GENERATION};
+use metric_ports::{ProjectStore, ProjectStoreError};
 use mongodb::{Client, Database, bson::doc};
 
 #[tokio::test]
@@ -73,7 +73,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 
     let marker = database
         .collection::<mongodb::bson::Document>("schema_meta")
-        .find_one(doc! { "_id": "faultkeep.schema" })
+        .find_one(doc! { "_id": "metric.schema" })
         .await?
         .unwrap();
     assert_eq!(marker.get_i32("generation")?, SCHEMA_GENERATION);
@@ -167,8 +167,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -176,7 +176,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     let name = format!(
-        "faultkeep_phase2_test_{}",
+        "metric_phase2_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     );
     Ok(client.database(&name))

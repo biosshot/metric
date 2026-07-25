@@ -12,7 +12,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use faultkeep_application::{
+use metric_application::{
     auth::{
         AuthConfig, BootstrapRequest, CreateApiTokenRequest, IdentityService, LoginRequest,
         PasswordConfig, PasswordInput,
@@ -33,8 +33,8 @@ use faultkeep_application::{
     symbolication::BaselineSymbolicationService,
     writer::{MongoWriter, MongoWriterConfig},
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
-use faultkeep_domain::{
+use metric_blob::{LocalBlobConfig, LocalBlobStore};
+use metric_domain::{
     AcceptedEvent, DisplayName, EventId, EventKey, IpScrubPolicy, ItemCapabilities, OrganizationId,
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ScrubbedEventPayload, SecretBytes, Slug, Timestamp,
@@ -54,13 +54,13 @@ use faultkeep_domain::{
         IssueRelease, IssueStatus, IssueTitle,
     },
 };
-use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoProjectStore};
-use faultkeep_ports::{
+use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoProjectStore};
+use metric_ports::{
     Clock, EventBacklog, EventStore, EventWriteStatus, InvestigationStore, IssueStore,
     ProjectResolver, ProjectStore, RandomError, RandomSource,
 };
-use faultkeep_server::{config::IngestConfig, http, ingest_http, native_http};
-use faultkeep_testkit::FakeOutcomeSink;
+use metric_server::{config::IngestConfig, http, ingest_http, native_http};
+use metric_testkit::FakeOutcomeSink;
 use mongodb::{
     Client, Database,
     bson::{Binary, doc, spec::BinarySubtype},
@@ -282,7 +282,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(now));
     let random: Arc<dyn RandomSource> = Arc::new(CounterRandom(AtomicU64::new(0)));
     let blob_directory =
-        std::env::temp_dir().join(format!("faultkeep-native-e2e-{}", uuid_like_suffix()));
+        std::env::temp_dir().join(format!("metric-native-e2e-{}", uuid_like_suffix()));
     let blob = LocalBlobStore::new(
         &blob_directory,
         LocalBlobConfig {
@@ -332,7 +332,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
             negative_ttl: Duration::from_secs(5),
         },
     )?);
-    let issue_service = Arc::new(faultkeep_application::issues::IssueService::new(Arc::new(
+    let issue_service = Arc::new(metric_application::issues::IssueService::new(Arc::new(
         control.issue_store(IssueCodecConfig::default()),
     )));
     let investigation: Arc<dyn InvestigationStore> = Arc::new(
@@ -464,7 +464,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     );
     let app = http::router(
         root.signal(),
-        faultkeep_application::observability::Metrics,
+        metric_application::observability::Metrics,
         ingest_http::router(ingest, ingest_config(), root.signal()),
     );
     assert_eq!(
@@ -576,7 +576,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         .await?;
     let capsule_app = http::router(
         capsule_shutdown.signal(),
-        faultkeep_application::observability::Metrics,
+        metric_application::observability::Metrics,
         native_http::router(
             Some(Arc::clone(&identity)),
             Some(Arc::clone(&native)),
@@ -662,7 +662,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     let capsule_bytes = axum::body::to_bytes(response.into_body(), 100 * 1024 * 1024)
         .await?
         .to_vec();
-    let validated = faultkeep_testkit::incident_capsule::validate(&capsule_bytes)?;
+    let validated = metric_testkit::incident_capsule::validate(&capsule_bytes)?;
     assert!(validated.entries.contains_key("issue.json"));
     assert!(
         validated
@@ -921,7 +921,7 @@ impl RandomSource for CounterRandom {
     }
 }
 
-fn sdk_request(project_id: ProjectId, key: faultkeep_domain::DsnKey) -> Request<Body> {
+fn sdk_request(project_id: ProjectId, key: metric_domain::DsnKey) -> Request<Body> {
     let attachment = r#"{"source":"native-e2e"}"#;
     let envelope = format!(
         "{{}}\n{{\"type\":\"event\",\"length\":{}}}\n{}\n{{\"type\":\"attachment\",\"length\":{},\"filename\":\"sdk-context.json\",\"content_type\":\"application/json\"}}\n{}",
@@ -961,15 +961,15 @@ fn ingest_config() -> IngestConfig {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
         .database("admin")
         .run_command(doc! { "ping": 1 })
         .await?;
-    Ok(client.database(&format!("faultkeep_phase12_{}", uuid_like_suffix())))
+    Ok(client.database(&format!("metric_phase12_{}", uuid_like_suffix())))
 }
 
 fn uuid_like_suffix() -> String {

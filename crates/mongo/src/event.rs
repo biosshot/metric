@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectAcceptanceState, ProjectId, ScrubbedEventPayload,
     Timestamp,
     blob::BlobKey,
@@ -9,7 +9,7 @@ use faultkeep_domain::{
         ProcessingStateChange,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     BacklogObservation, BlobReference, BlobReferenceStore, BlobStoreError, EventBacklog,
     EventBacklogError, EventPrepareError, EventStore, EventStoreError, EventWriteStatus,
     PortFuture, PreparedEvent, ProcessingProjectError, ProcessingProjectStore,
@@ -203,7 +203,7 @@ impl EventStore for MongoEventStore {
                 Err(EventStoreError::Unavailable) => "unavailable",
             };
             metrics::histogram!(
-                "faultkeep_mongodb_operation_duration_seconds",
+                "metric_mongodb_operation_duration_seconds",
                 "operation" => "event_insert_batch",
                 "outcome" => outcome
             )
@@ -890,7 +890,7 @@ fn event_index(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::ProjectId;
+    use metric_domain::ProjectId;
 
     fn event(payload: &[u8]) -> AcceptedEvent {
         let value: Value = serde_json::from_slice(payload).unwrap();

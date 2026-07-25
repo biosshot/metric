@@ -2,22 +2,22 @@ import http from "k6/http";
 import { check } from "k6";
 import { Counter } from "k6/metrics";
 
-const tcpErrors = new Counter("faultkeep_tcp_errors");
-const httpResponses = new Counter("faultkeep_http_responses");
-const http200 = new Counter("faultkeep_http_200");
-const http429 = new Counter("faultkeep_http_429");
-const http503 = new Counter("faultkeep_http_503");
-const httpOther = new Counter("faultkeep_http_other");
+const tcpErrors = new Counter("metric_tcp_errors");
+const httpResponses = new Counter("metric_http_responses");
+const http200 = new Counter("metric_http_200");
+const http429 = new Counter("metric_http_429");
+const http503 = new Counter("metric_http_503");
+const httpOther = new Counter("metric_http_other");
 
-const target = __ENV.FAULTKEEP_TARGET || "http://127.0.0.1:3101";
-const targetRps = Number(__ENV.FAULTKEEP_RPS || "1158");
-const duration = __ENV.FAULTKEEP_DURATION || "30s";
-const runId = (__ENV.FAULTKEEP_RUN_ID || "00000001").padStart(8, "0").slice(-8);
-const resultPath = __ENV.FAULTKEEP_RESULT || "performance/results/ingest-mongodb.json";
+const target = __ENV.METRIC_TARGET || "http://127.0.0.1:3101";
+const targetRps = Number(__ENV.METRIC_RPS || "1158");
+const duration = __ENV.METRIC_DURATION || "30s";
+const runId = (__ENV.METRIC_RUN_ID || "00000001").padStart(8, "0").slice(-8);
+const resultPath = __ENV.METRIC_RESULT || "performance/results/ingest-mongodb.json";
 const fixtureRevision =
-  __ENV.FAULTKEEP_FIXTURE_REVISION || "error-event-v1-mongodb";
+  __ENV.METRIC_FIXTURE_REVISION || "error-event-v1-mongodb";
 const durability =
-  __ENV.FAULTKEEP_DURABILITY || "MongoWriter unordered insert_many to MongoDB";
+  __ENV.METRIC_DURABILITY || "MongoWriter unordered insert_many to MongoDB";
 
 export const options = {
   scenarios: {
@@ -26,8 +26,8 @@ export const options = {
       rate: targetRps,
       timeUnit: "1s",
       duration,
-      preAllocatedVUs: Number(__ENV.FAULTKEEP_PREALLOCATED_VUS || "128"),
-      maxVUs: Number(__ENV.FAULTKEEP_MAX_VUS || "2048"),
+      preAllocatedVUs: Number(__ENV.METRIC_PREALLOCATED_VUS || "128"),
+      maxVUs: Number(__ENV.METRIC_MAX_VUS || "2048"),
     },
   },
   thresholds: {
@@ -68,7 +68,7 @@ export default function () {
     headers: {
       "Content-Type": "application/x-sentry-envelope",
       "X-Sentry-Auth":
-        "Sentry sentry_version=7,sentry_client=faultkeep-k6/1,sentry_key=0123456789abcdef0123456789abcdef",
+        "Sentry sentry_version=7,sentry_client=metric-k6/1,sentry_key=0123456789abcdef0123456789abcdef",
     },
     tags: { fixture: fixtureRevision },
   });
@@ -90,15 +90,15 @@ export function handleSummary(data) {
   const artifact = {
     schema_version: 1,
     metadata: {
-      commit: __ENV.FAULTKEEP_COMMIT || "working-tree",
+      commit: __ENV.METRIC_COMMIT || "working-tree",
       fixture_revision: fixtureRevision,
       target_rps: targetRps,
       duration,
       run_id: runId,
-      rust_toolchain: __ENV.FAULTKEEP_RUST || "unknown",
-      k6_version: __ENV.FAULTKEEP_K6 || "unknown",
-      hardware: __ENV.FAULTKEEP_HARDWARE || "unrecorded",
-      mongo: __ENV.FAULTKEEP_MONGO || "MongoDB 8.0.12 standalone",
+      rust_toolchain: __ENV.METRIC_RUST || "unknown",
+      k6_version: __ENV.METRIC_K6 || "unknown",
+      hardware: __ENV.METRIC_HARDWARE || "unrecorded",
+      mongo: __ENV.METRIC_MONGO || "MongoDB 8.0.12 standalone",
       durability,
     },
     metrics: {
@@ -114,12 +114,12 @@ export function handleSummary(data) {
       },
       dropped_iterations: data.metrics.dropped_iterations?.values?.count || 0,
       failures: {
-        tcp_errors: data.metrics.faultkeep_tcp_errors?.values?.count || 0,
-        http_responses: data.metrics.faultkeep_http_responses?.values?.count || 0,
-        status_200: data.metrics.faultkeep_http_200?.values?.count || 0,
-        status_429: data.metrics.faultkeep_http_429?.values?.count || 0,
-        status_503: data.metrics.faultkeep_http_503?.values?.count || 0,
-        status_other: data.metrics.faultkeep_http_other?.values?.count || 0,
+        tcp_errors: data.metrics.metric_tcp_errors?.values?.count || 0,
+        http_responses: data.metrics.metric_http_responses?.values?.count || 0,
+        status_200: data.metrics.metric_http_200?.values?.count || 0,
+        status_429: data.metrics.metric_http_429?.values?.count || 0,
+        status_503: data.metrics.metric_http_503?.values?.count || 0,
+        status_other: data.metrics.metric_http_other?.values?.count || 0,
       },
     },
   };

@@ -6,7 +6,7 @@ import threading
 import sentry_sdk
 
 
-class FaultkeepPythonSdkCompatibilityError(RuntimeError):
+class MetricPythonSdkCompatibilityError(RuntimeError):
     pass
 
 
@@ -29,7 +29,7 @@ try:
     sentry_sdk.init(
         dsn=sys.argv[1],
         environment="sdk-compatibility",
-        release="faultkeep-python-sdk-test@1.0.0",
+        release="metric-python-sdk-test@1.0.0",
         traces_sample_rate=0,
         send_default_pii=False,
         auto_session_tracking=False,
@@ -37,8 +37,8 @@ try:
         shutdown_timeout=5,
     )
     event_id = sentry_sdk.capture_exception(
-        FaultkeepPythonSdkCompatibilityError(
-            "Faultkeep real Python SDK compatibility event"
+        MetricPythonSdkCompatibilityError(
+            "Metric real Python SDK compatibility event"
         )
     )
     sentry_sdk.get_client().close(timeout=5)

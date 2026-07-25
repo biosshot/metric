@@ -12,7 +12,7 @@
             "abs_path": "webpack:///app.js",
             "lineno": 6,
             "colno": 9,
-            "context_line": "throw new Error(greet('Faultkeep'));"
+            "context_line": "throw new Error(greet('Metric'));"
           }
         ]
       }

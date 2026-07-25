@@ -35,13 +35,13 @@ pub use signals::{MongoSignalStore, SignalRetention};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
     ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Slug, Timestamp,
     api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
 };
-use faultkeep_ports::{PortFuture, ProjectStore, ProjectStoreError};
+use metric_ports::{PortFuture, ProjectStore, ProjectStoreError};
 use futures_util::TryStreamExt;
 use mongodb::{
     Client, Database, IndexModel,
@@ -52,7 +52,7 @@ use mongodb::{
 use thiserror::Error;
 
 pub const SCHEMA_GENERATION: i32 = 8;
-const SCHEMA_ID: &str = "faultkeep.schema";
+const SCHEMA_ID: &str = "metric.schema";
 const SCHEMA_MODULES: [&str; 13] = [
     "project_identity_v1",
     "event_storage_v1",
@@ -107,7 +107,7 @@ pub enum MongoBootstrapError {
     MissingSchemaMarker,
     #[error("configured database schema is incomplete or incompatible")]
     IncompatibleSchema,
-    #[error("configured database contains data but no Faultkeep schema")]
+    #[error("configured database contains data but no Metric schema")]
     NonEmptyUnmanagedDatabase,
 }
 
@@ -885,7 +885,7 @@ impl MongoProjectStore {
 
     async fn list_projects_inner(
         &self,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         limit: usize,
     ) -> Result<Vec<ProjectView>, ProjectStoreError> {
         if !(1..=100).contains(&limit) {
@@ -1060,14 +1060,14 @@ impl ProjectStore for MongoProjectStore {
                 Err(_) => "error",
             };
             metrics::histogram!(
-                "faultkeep_mongodb_operation_duration_seconds",
+                "metric_mongodb_operation_duration_seconds",
                 "operation" => "project_lookup",
                 "outcome" => outcome
             )
             .record(started.elapsed().as_secs_f64());
             if outcome == "error" {
                 metrics::counter!(
-                    "faultkeep_mongodb_operation_errors_total",
+                    "metric_mongodb_operation_errors_total",
                     "operation" => "project_lookup"
                 )
                 .increment(1);
@@ -1103,7 +1103,7 @@ impl ProjectStore for MongoProjectStore {
 
     fn list_projects(
         &self,
-        organization_id: faultkeep_domain::OrganizationId,
+        organization_id: metric_domain::OrganizationId,
         limit: usize,
     ) -> PortFuture<'_, Result<Vec<ProjectView>, ProjectStoreError>> {
         Box::pin(self.list_projects_inner(organization_id, limit))

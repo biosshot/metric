@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, OrganizationId, OrganizationIdentity, ProjectId, Slug, Timestamp,
     api::{ApiTokenView, AuditLogView, OrganizationMemberView},
     auth::{
@@ -15,7 +15,7 @@ use faultkeep_domain::{
         UserAccount, UserDisplayName, UserId, WebSession,
     },
 };
-use faultkeep_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, PortFuture};
+use metric_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, PortFuture};
 use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,

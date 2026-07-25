@@ -23,7 +23,7 @@ function run(command, args, options = {}) {
 }
 
 const mongodbUri =
-  process.env.FAULTKEEP_TEST_MONGODB_URI ??
+  process.env.METRIC_TEST_MONGODB_URI ??
   "mongodb://127.0.0.1:27017/?directConnection=true";
 const output = run(
   "cargo",
@@ -32,7 +32,7 @@ const output = run(
     "--locked",
     "--release",
     "-p",
-    "faultkeep-server",
+    "metric-server",
     "--test",
     "notifications_e2e",
     "performance_notification_transition_expansion_rps",
@@ -41,14 +41,14 @@ const output = run(
     "--exact",
     "--nocapture",
   ],
-  { env: { FAULTKEEP_TEST_MONGODB_URI: mongodbUri } },
+  { env: { METRIC_TEST_MONGODB_URI: mongodbUri } },
 );
 const match = output.match(
   /Phase20 Notification: transitions=(\d+),expansion_rps=([\d.]+),elapsed_ms=(\d+)/,
 );
 if (!match) throw new Error("benchmark output did not match the Phase 20 result schema");
 
-let mongoVersion = process.env.FAULTKEEP_MONGODB_VERSION ?? "8.0.12";
+let mongoVersion = process.env.METRIC_MONGODB_VERSION ?? "8.0.12";
 try {
   mongoVersion = run("mongosh", [
     mongodbUri,

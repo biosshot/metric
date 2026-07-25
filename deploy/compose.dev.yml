@@ -3,8 +3,8 @@ services:
     image: mongo:8.0.12
     command: ["mongod", "--bind_ip_all", "--setParameter", "enableTestCommands=1"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME: faultkeep
-      MONGO_INITDB_ROOT_PASSWORD: faultkeep-local-only
+      MONGO_INITDB_ROOT_USERNAME: metric
+      MONGO_INITDB_ROOT_PASSWORD: metric-local-only
     ports:
       - "27018:27017"
     healthcheck:

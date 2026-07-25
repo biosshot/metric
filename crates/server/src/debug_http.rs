@@ -10,18 +10,18 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use faultkeep_application::{
+use metric_application::{
     artifacts::{ArtifactError, ArtifactService, AssembleArtifact, AssembleArtifactState},
     auth::IdentityService,
     debug_files::{AssembleDebugFile, AssembleState, DebugFileError, DebugFileService},
 };
-use faultkeep_domain::{
+use metric_domain::{
     ProjectId,
     artifacts::ArtifactBundleId,
     auth::{AuthContext, Permission, PlainSecret},
     debug_files::{CodeId, DebugFileId, DebugId},
 };
-use faultkeep_symbolication::PrivateSourceSigner;
+use metric_symbolication::PrivateSourceSigner;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde_json::{Value, json};

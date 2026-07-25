@@ -2,8 +2,8 @@
 
 use std::{sync::Arc, time::Duration};
 
-use faultkeep_domain::{Timestamp, blob::BlobNamespace};
-use faultkeep_ports::{
+use metric_domain::{Timestamp, blob::BlobNamespace};
+use metric_ports::{
     BlobReference, BlobReferenceStore, BlobScanRequest, BlobStore, BlobStoreError, Clock,
 };
 use thiserror::Error;
@@ -175,12 +175,12 @@ fn map_storage(_: BlobStoreError) -> BlobCleanupError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
-    use faultkeep_domain::{
+    use metric_blob::{LocalBlobConfig, LocalBlobStore};
+    use metric_domain::{
         EventId, ProjectId,
         blob::{BlobKind, BlobObjectId},
     };
-    use faultkeep_ports::{BlobReferenceStore, PortFuture};
+    use metric_ports::{BlobReferenceStore, PortFuture};
 
     struct FixedClock(Timestamp);
 
@@ -203,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconciliation_preserves_parent_reference_and_deletes_only_orphan() {
-        let root = std::env::temp_dir().join(format!("faultkeep-cleanup-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("metric-cleanup-{}", uuid::Uuid::new_v4()));
         let blobs = LocalBlobStore::new(
             &root,
             LocalBlobConfig {
@@ -228,7 +228,7 @@ mod tests {
                 .unwrap();
             writer.write_chunk(b"blob".as_slice().into()).await.unwrap();
             writer
-                .commit(faultkeep_domain::blob::BlobKey::event_owned(
+                .commit(metric_domain::blob::BlobKey::event_owned(
                     project, event, object,
                 ))
                 .await
@@ -258,7 +258,7 @@ mod tests {
         );
         assert!(
             blobs
-                .open(&faultkeep_domain::blob::BlobKey::event_owned(
+                .open(&metric_domain::blob::BlobKey::event_owned(
                     project, event, retained
                 ))
                 .await
@@ -266,7 +266,7 @@ mod tests {
         );
         assert_eq!(
             blobs
-                .open(&faultkeep_domain::blob::BlobKey::event_owned(
+                .open(&metric_domain::blob::BlobKey::event_owned(
                     project, event, orphan
                 ))
                 .await

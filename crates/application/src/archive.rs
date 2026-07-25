@@ -5,12 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     Timestamp,
     archive::{ArchiveBatch, ArchiveBatchState, ArchiveEvent, EVENT_ARCHIVE_SCHEMA_VERSION},
     blob::{BlobKind, BlobNamespace},
 };
-use faultkeep_ports::{
+use metric_ports::{
     ArchiveClaimRequest, ArchiveCompleteRequest, ArchiveSourceCommitRequest, ArchiveStore,
     ArchiveStoreError, BlobScanRequest, BlobStore, BlobStoreError, Clock,
 };
@@ -126,10 +126,10 @@ impl ArchiveService {
             .await
             .map_err(map_store)?
         else {
-            metrics::gauge!("faultkeep_archive_pending_batch").set(0.0);
+            metrics::gauge!("metric_archive_pending_batch").set(0.0);
             return Ok(ArchiveRunReport::default());
         };
-        metrics::gauge!("faultkeep_archive_pending_batch").set(1.0);
+        metrics::gauge!("metric_archive_pending_batch").set(1.0);
         let claimed_events = batch.event_keys.len();
         let stored_bytes = match batch.state {
             ArchiveBatchState::Writing => self.publish(&batch, now).await?,
@@ -145,11 +145,11 @@ impl ArchiveService {
             })
             .await
             .map_err(map_store)?;
-        metrics::counter!("faultkeep_archive_runs_total", "outcome" => "ok").increment(1);
-        metrics::counter!("faultkeep_archive_events_total").increment(archived_events as u64);
-        metrics::histogram!("faultkeep_archive_run_duration_seconds")
+        metrics::counter!("metric_archive_runs_total", "outcome" => "ok").increment(1);
+        metrics::counter!("metric_archive_events_total").increment(archived_events as u64);
+        metrics::histogram!("metric_archive_run_duration_seconds")
             .record(started.elapsed().as_secs_f64());
-        metrics::gauge!("faultkeep_archive_pending_batch").set(0.0);
+        metrics::gauge!("metric_archive_pending_batch").set(0.0);
         Ok(ArchiveRunReport {
             claimed_events,
             archived_events,
@@ -197,14 +197,14 @@ impl ArchiveService {
             };
             cursor = Some(next);
         }
-        metrics::counter!("faultkeep_archive_orphan_objects_deleted_total").increment(deleted);
+        metrics::counter!("metric_archive_orphan_objects_deleted_total").increment(deleted);
         Ok(deleted)
     }
 
     async fn publish(
         &self,
         batch: &ArchiveBatch,
-        completed_at: faultkeep_domain::Timestamp,
+        completed_at: metric_domain::Timestamp,
     ) -> Result<u64, ArchiveError> {
         if batch.events.len() != batch.event_keys.len() || batch.events.is_empty() {
             return Err(ArchiveError::InvalidData);
@@ -241,7 +241,7 @@ impl ArchiveService {
             })
             .await
             .map_err(map_store)?;
-        metrics::histogram!("faultkeep_archive_segment_bytes").record(object.size as f64);
+        metrics::histogram!("metric_archive_segment_bytes").record(object.size as f64);
         Ok(object.size)
     }
 }
@@ -269,7 +269,7 @@ pub fn start_archive_worker(service: Arc<ArchiveService>, shutdown: ShutdownSign
                     _ = tick.tick() => {
                         if let Err(error) = service.run_once().await {
                             metrics::counter!(
-                                "faultkeep_archive_runs_total",
+                                "metric_archive_runs_total",
                                 "outcome" => error.code()
                             ).increment(1);
                             tracing::warn!(
@@ -280,7 +280,7 @@ pub fn start_archive_worker(service: Arc<ArchiveService>, shutdown: ShutdownSign
                         }
                         if let Err(error) = service.cleanup_orphans_once().await {
                             metrics::counter!(
-                                "faultkeep_archive_cleanup_runs_total",
+                                "metric_archive_cleanup_runs_total",
                                 "outcome" => error.code()
                             ).increment(1);
                             tracing::warn!(
@@ -302,7 +302,7 @@ pub fn encode_parquet(events: &[ArchiveEvent]) -> Result<Vec<u8>, ArchiveError> 
     }
     let schema = Arc::new(
         parse_message_type(
-            "message faultkeep_event_archive_v1 {
+            "message metric_event_archive_v1 {
                 REQUIRED FIXED_LEN_BYTE_ARRAY (20) event_key;
                 REQUIRED INT32 project_id;
                 REQUIRED INT64 received_at_unix_ms;
@@ -319,7 +319,7 @@ pub fn encode_parquet(events: &[ArchiveEvent]) -> Result<Vec<u8>, ArchiveError> 
                 ZstdLevel::try_new(3).map_err(|_| ArchiveError::InvalidConfiguration)?,
             ))
             .set_created_by(format!(
-                "faultkeep archive schema {EVENT_ARCHIVE_SCHEMA_VERSION}"
+                "metric archive schema {EVENT_ARCHIVE_SCHEMA_VERSION}"
             ))
             .build(),
     );
@@ -415,12 +415,12 @@ fn validate(config: ArchiveConfig) -> Result<(), ArchiveError> {
 }
 
 fn add_duration(
-    timestamp: faultkeep_domain::Timestamp,
+    timestamp: metric_domain::Timestamp,
     duration: Duration,
-) -> Result<faultkeep_domain::Timestamp, ArchiveError> {
+) -> Result<metric_domain::Timestamp, ArchiveError> {
     let millis =
         i64::try_from(duration.as_millis()).map_err(|_| ArchiveError::InvalidConfiguration)?;
-    faultkeep_domain::Timestamp::from_unix_millis(
+    metric_domain::Timestamp::from_unix_millis(
         timestamp
             .unix_millis()
             .checked_add(millis)
@@ -455,7 +455,7 @@ mod tests {
     };
 
     use bytes::Bytes;
-    use faultkeep_domain::{EventId, EventKey, ProjectId, Timestamp, grouping::IssueId};
+    use metric_domain::{EventId, EventKey, ProjectId, Timestamp, grouping::IssueId};
     use parquet::file::reader::{FileReader, SerializedFileReader};
 
     use super::*;

@@ -74,7 +74,7 @@ describe('StackTrace', () => {
     render(StackTrace, {
       props: {
         body: {
-          exception: { values: [{ type: 'FaultkeepRustSdkCompatibilityError' }] },
+          exception: { values: [{ type: 'MetricRustSdkCompatibilityError' }] },
           threads: {
             values: [
               {
@@ -83,7 +83,7 @@ describe('StackTrace', () => {
                   frames: [
                     {
                       filename: 'src/main.rs',
-                      function: 'faultkeep_sdk_compatibility_rust::main',
+                      function: 'metric_sdk_compatibility_rust::main',
                       lineno: 40,
                       in_app: true,
                     },
@@ -97,7 +97,7 @@ describe('StackTrace', () => {
     });
 
     expect(screen.getByRole('heading', { name: '1 frames' })).toBeVisible();
-    expect(screen.getByText('faultkeep_sdk_compatibility_rust::main')).toBeVisible();
+    expect(screen.getByText('metric_sdk_compatibility_rust::main')).toBeVisible();
     expect(screen.getByText('src/main.rs')).toBeVisible();
   });
 });

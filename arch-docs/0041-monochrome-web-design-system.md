@@ -6,7 +6,7 @@
 
 ## Context
 
-Faultkeep positions itself as a smaller, calmer and operationally simpler alternative
+Metric positions itself as a smaller, calmer and operationally simpler alternative
 to Sentry. The Web interface must express that product identity immediately rather
 than visually imitating Sentry or growing into a colorful general-purpose dashboard
 framework.
@@ -17,7 +17,7 @@ new post-MVP product screens establish more incompatible visual patterns.
 
 ## Decision
 
-Faultkeep Web uses a dark neutral design system:
+Metric Web uses a dark neutral design system:
 
 - black, white and neutral gray remain the foundation;
 - muted semantic accents may identify error, warning, success, information and
@@ -217,7 +217,7 @@ A phase with Web changes does not close until:
 
 ## Consequences
 
-- Faultkeep gains a distinct, recognizable visual identity aligned with its small and
+- Metric gains a distinct, recognizable visual identity aligned with its small and
   stable positioning.
 - Error and success states use restrained accents together with labels and icons,
   avoiding conventional saturated red and green shortcuts.

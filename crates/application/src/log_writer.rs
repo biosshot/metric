@@ -8,8 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::signals::LogRecord;
-use faultkeep_ports::{DurableOutcome, LogSink, PortFuture, SignalStore, SignalStoreError};
+use metric_domain::signals::LogRecord;
+use metric_ports::{DurableOutcome, LogSink, PortFuture, SignalStore, SignalStoreError};
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -321,14 +321,14 @@ async fn drain_writer(
 
 async fn flush_batch(store: &Arc<dyn SignalStore>, operation_timeout: Duration, mut batch: Batch) {
     let documents = batch.records.len();
-    metrics::histogram!("faultkeep_log_writer_batch_documents").record(documents as f64);
-    metrics::histogram!("faultkeep_log_writer_batch_bytes").record(batch.estimated_bytes as f64);
-    metrics::histogram!("faultkeep_log_writer_batch_wait_seconds")
+    metrics::histogram!("metric_log_writer_batch_documents").record(documents as f64);
+    metrics::histogram!("metric_log_writer_batch_bytes").record(batch.estimated_bytes as f64);
+    metrics::histogram!("metric_log_writer_batch_wait_seconds")
         .record(batch.opened_at.elapsed().as_secs_f64());
     let started = Instant::now();
     let records = std::mem::take(&mut batch.records);
     let result = timeout(operation_timeout, store.persist_logs(records)).await;
-    metrics::histogram!("faultkeep_log_writer_batch_latency_seconds")
+    metrics::histogram!("metric_log_writer_batch_latency_seconds")
         .record(started.elapsed().as_secs_f64());
     match result {
         Ok(Ok(outcomes)) if outcomes.len() == documents => {
@@ -360,18 +360,18 @@ fn reject_command(command: Command, error: SignalStoreError) {
 }
 
 fn record_outcome(outcome: &'static str) {
-    metrics::counter!("faultkeep_log_writer_records_total", "outcome" => outcome).increment(1);
+    metrics::counter!("metric_log_writer_records_total", "outcome" => outcome).increment(1);
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
-    use faultkeep_domain::{
+    use metric_domain::{
         ProjectId, Timestamp,
         signals::{LogId, LogSeverity, SignalBody, SignalPage, TraceView},
     };
-    use faultkeep_ports::{LogQuery, PerformanceQuery, SegmentQuery};
+    use metric_ports::{LogQuery, PerformanceQuery, SegmentQuery};
     use tokio::sync::Notify;
 
     use super::*;
@@ -409,7 +409,7 @@ mod tests {
 
         fn persist_spans(
             &self,
-            _records: Vec<faultkeep_domain::signals::SpanRecord>,
+            _records: Vec<metric_domain::signals::SpanRecord>,
         ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
             Box::pin(async { Ok(Vec::new()) })
         }
@@ -436,7 +436,7 @@ mod tests {
             _query: SegmentQuery,
         ) -> PortFuture<
             '_,
-            Result<SignalPage<faultkeep_domain::signals::SpanRecord>, SignalStoreError>,
+            Result<SignalPage<metric_domain::signals::SpanRecord>, SignalStoreError>,
         > {
             Box::pin(async { Err(SignalStoreError::NotFound) })
         }
@@ -444,7 +444,7 @@ mod tests {
         fn trace(
             &self,
             _project_ids: Vec<ProjectId>,
-            _trace_id: faultkeep_domain::signals::TraceId,
+            _trace_id: metric_domain::signals::TraceId,
             _maximum_spans: usize,
             _maximum_logs: usize,
         ) -> PortFuture<'_, Result<TraceView, SignalStoreError>> {
@@ -457,7 +457,7 @@ mod tests {
             _query: PerformanceQuery,
         ) -> PortFuture<
             '_,
-            Result<Vec<faultkeep_domain::signals::PerformanceBucket>, SignalStoreError>,
+            Result<Vec<metric_domain::signals::PerformanceBucket>, SignalStoreError>,
         > {
             Box::pin(async { Ok(Vec::new()) })
         }

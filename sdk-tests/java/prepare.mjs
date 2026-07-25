@@ -10,7 +10,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const dependencyDirectory = join(root, ".deps");
 const jar = join(dependencyDirectory, `sentry-${VERSION}.jar`);
 const classes = join(dependencyDirectory, "classes");
-const source = join(root, "FaultkeepSdkCompatibility.java");
+const source = join(root, "MetricSdkCompatibility.java");
 
 await mkdir(classes, { recursive: true });
 let bytes;

@@ -12,8 +12,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::post,
 };
-use faultkeep_application::notifications::{NotificationConfig, NotificationDispatcher};
-use faultkeep_domain::{
+use metric_application::notifications::{NotificationConfig, NotificationDispatcher};
+use metric_domain::{
     EventId, ProjectId, SecretBytes, Timestamp,
     grouping::{
         GroupingComponent, GroupingComponentKind, GroupingExplanation, GroupingKey,
@@ -25,19 +25,19 @@ use faultkeep_domain::{
         WebhookEndpoint,
     },
 };
-use faultkeep_mongo::{IssueCodecConfig, MongoProjectStore};
-use faultkeep_ports::{
+use metric_mongo::{IssueCodecConfig, MongoProjectStore};
+use metric_ports::{
     Clock, IssueStore, NotificationStore, PortFuture, WebhookDeliveryAdapter, WebhookDeliveryError,
     WebhookDeliveryReceipt,
 };
-use faultkeep_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
+use metric_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
 use hmac::{Hmac, Mac};
 use mongodb::{Client, Database, bson::doc};
 use sha2::Sha256;
 use tokio::sync::{mpsc, oneshot};
 
 #[tokio::test]
-#[ignore = "requires MongoDB 8.0.12 configured by FAULTKEEP_TEST_MONGODB_URI"]
+#[ignore = "requires MongoDB 8.0.12 configured by METRIC_TEST_MONGODB_URI"]
 async fn cumulative_issue_transition_reaches_signed_webhook_once() {
     let database = test_database().await.unwrap();
     let result = exercise(&database).await;
@@ -71,7 +71,7 @@ async fn measure_expansion(database: &Database) -> Result<(), Box<dyn Error>> {
             id: destination_id,
             project_id,
             endpoint: WebhookEndpoint::new("https://example.com/benchmark")?,
-            sealed_secret: faultkeep_domain::notifications::SealedWebhookSecret::new(vec![1; 32])?,
+            sealed_secret: metric_domain::notifications::SealedWebhookSecret::new(vec![1; 32])?,
             enabled: true,
             created_at: now,
             updated_at: now,
@@ -215,7 +215,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     assert_eq!(claim.attempt, 1);
 
     // Repeating the crash window after delivery upsert cannot create another job.
-    let transition = faultkeep_domain::notifications::IssueNotificationTransition {
+    let transition = metric_domain::notifications::IssueNotificationTransition {
         transition_id: claim.delivery.transition_id,
         project_id,
         issue_id: created.issue.issue_id,
@@ -243,14 +243,14 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     );
     let timestamp = captured
         .headers
-        .get("x-faultkeep-timestamp")
+        .get("x-metric-timestamp")
         .unwrap()
         .to_str()?;
     let expected = signature(signing_secret, &delivery_id, timestamp, &captured.body);
     assert_eq!(
         captured
             .headers
-            .get("x-faultkeep-signature")
+            .get("x-metric-signature")
             .unwrap()
             .to_str()?,
         format!("sha256={expected}")
@@ -368,7 +368,7 @@ struct NeverAdapter;
 impl WebhookDeliveryAdapter for NeverAdapter {
     fn deliver(
         &self,
-        _claim: faultkeep_domain::notifications::ClaimedNotificationDelivery,
+        _claim: metric_domain::notifications::ClaimedNotificationDelivery,
     ) -> PortFuture<'_, Result<WebhookDeliveryReceipt, WebhookDeliveryError>> {
         Box::pin(async { panic!("expansion benchmark must not deliver") })
     }
@@ -393,11 +393,11 @@ fn binary(bytes: impl AsRef<[u8]>) -> mongodb::bson::Binary {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI")
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI")
         .unwrap_or_else(|_| "mongodb://127.0.0.1:27018/?directConnection=true".to_owned());
     let client = Client::with_uri_str(uri).await?;
     Ok(client.database(&format!(
-        "faultkeep_notification_{}_{}",
+        "metric_notification_{}_{}",
         std::process::id(),
         uuid::Uuid::new_v4().simple()
     )))

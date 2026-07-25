@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use faultkeep_application::{
+use metric_application::{
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
 };
@@ -150,7 +150,7 @@ fn join_server(result: Result<io::Result<()>, tokio::task::JoinError>) -> io::Re
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use faultkeep_application::shutdown::ShutdownRoot;
+    use metric_application::shutdown::ShutdownRoot;
     use tower::ServiceExt;
 
     #[tokio::test]

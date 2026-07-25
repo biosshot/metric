@@ -78,7 +78,7 @@ async function logout(): Promise<void> {
       </button>
       <span class="mobile-header__brand">
         <LogoMark :size="18" />
-        <strong>Faultkeep</strong>
+        <strong>Metric</strong>
       </span>
     </header>
 
@@ -95,7 +95,7 @@ async function logout(): Promise<void> {
         <span class="brand-mark brand-mark--small" aria-hidden="true">
           <LogoMark :size="18" />
         </span>
-        <strong>faultkeep</strong>
+        <strong>Metric</strong>
       </div>
 
       <BaseSelect

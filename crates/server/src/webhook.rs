@@ -6,11 +6,11 @@ use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit,
     aead::{Aead, Payload},
 };
-use faultkeep_domain::{
+use metric_domain::{
     SecretBytes,
     notifications::{ClaimedNotificationDelivery, SealedWebhookSecret},
 };
-use faultkeep_ports::{
+use metric_ports::{
     PortFuture, WebhookDeliveryAdapter, WebhookDeliveryError, WebhookDeliveryReceipt,
 };
 use futures_util::StreamExt;
@@ -25,9 +25,9 @@ use url::Url;
 
 const SECRET_VERSION: u8 = 1;
 const SECRET_NONCE_BYTES: usize = 12;
-const SECRET_AAD: &[u8] = b"faultkeep/webhook-secret/v1";
-const SIGNATURE_HEADER: &str = "x-faultkeep-signature";
-const TIMESTAMP_HEADER: &str = "x-faultkeep-timestamp";
+const SECRET_AAD: &[u8] = b"metric/webhook-secret/v1";
+const SIGNATURE_HEADER: &str = "x-metric-signature";
+const TIMESTAMP_HEADER: &str = "x-metric-timestamp";
 
 #[derive(Debug, Clone, Copy)]
 pub struct WebhookAdapterConfig {
@@ -59,7 +59,7 @@ impl WebhookSecretBox {
     #[must_use]
     pub fn new(master: &SecretBytes) -> Self {
         let mut derivation = Sha256::new();
-        derivation.update(b"faultkeep/webhook-secret-key/v1");
+        derivation.update(b"metric/webhook-secret-key/v1");
         derivation.update(master.expose());
         let key = derivation.finalize();
         Self {

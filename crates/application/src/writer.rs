@@ -8,8 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::AcceptedEvent;
-use faultkeep_ports::{
+use metric_domain::AcceptedEvent;
+use metric_ports::{
     AcceptedEventHandoff, DurableOutcome, EventSink, EventSinkError, EventStore, EventStoreError,
     EventWriteStatus, PortFuture, PreparedEvent,
 };
@@ -311,13 +311,13 @@ async fn flush_batch<S: EventStore>(
     mut batch: Batch<S::Prepared>,
 ) {
     let documents = batch.events.len();
-    metrics::histogram!("faultkeep_mongo_writer_batch_documents").record(documents as f64);
-    metrics::histogram!("faultkeep_mongo_writer_batch_bytes").record(batch.encoded_bytes as f64);
-    metrics::histogram!("faultkeep_mongo_writer_batch_wait_seconds")
+    metrics::histogram!("metric_mongo_writer_batch_documents").record(documents as f64);
+    metrics::histogram!("metric_mongo_writer_batch_bytes").record(batch.encoded_bytes as f64);
+    metrics::histogram!("metric_mongo_writer_batch_wait_seconds")
         .record(batch.opened_at.elapsed().as_secs_f64());
     let started = Instant::now();
     let result = timeout(operation_timeout, store.insert_batch(&batch.events)).await;
-    metrics::histogram!("faultkeep_mongo_writer_batch_latency_seconds")
+    metrics::histogram!("metric_mongo_writer_batch_latency_seconds")
         .record(started.elapsed().as_secs_f64());
     match result {
         Ok(Ok(statuses)) if statuses.len() == documents => {
@@ -335,7 +335,7 @@ async fn flush_batch<S: EventStore>(
                             "rejected"
                         };
                         metrics::counter!(
-                            "faultkeep_mongo_writer_handoff_total",
+                            "metric_mongo_writer_handoff_total",
                             "outcome" => handoff_outcome
                         )
                         .increment(1);
@@ -374,7 +374,7 @@ fn reject_command<P>(command: Command<P>, error: EventSinkError) {
 }
 
 fn record_outcome(outcome: &'static str) {
-    metrics::counter!("faultkeep_mongo_writer_events_total", "outcome" => outcome).increment(1);
+    metrics::counter!("metric_mongo_writer_events_total", "outcome" => outcome).increment(1);
 }
 
 #[cfg(test)]
@@ -382,8 +382,8 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    use faultkeep_domain::{EventId, EventKey, ProjectId, ScrubbedEventPayload, Timestamp};
-    use faultkeep_ports::{EventPrepareError, EventStoreError};
+    use metric_domain::{EventId, EventKey, ProjectId, ScrubbedEventPayload, Timestamp};
+    use metric_ports::{EventPrepareError, EventStoreError};
     use tokio::sync::Notify;
 
     struct FakePrepared {

@@ -1,9 +1,9 @@
 // Run with mongosh. Output contains only aggregate measurements and safe metadata.
-const databaseName = process.env.FAULTKEEP_CAPACITY_DATABASE || "faultkeep";
-const sampleLimit = Number(process.env.FAULTKEEP_CAPACITY_SAMPLE || "1000");
-const acceptedRps = Number(process.env.FAULTKEEP_CAPACITY_RPS || "1158");
-const retentionDays = Number(process.env.FAULTKEEP_CAPACITY_RETENTION_DAYS || "30");
-const replicationFactor = Number(process.env.FAULTKEEP_CAPACITY_REPLICATION || "1");
+const databaseName = process.env.METRIC_CAPACITY_DATABASE || "metric";
+const sampleLimit = Number(process.env.METRIC_CAPACITY_SAMPLE || "1000");
+const acceptedRps = Number(process.env.METRIC_CAPACITY_RPS || "1158");
+const retentionDays = Number(process.env.METRIC_CAPACITY_RETENTION_DAYS || "30");
+const replicationFactor = Number(process.env.METRIC_CAPACITY_REPLICATION || "1");
 
 if (!/^[A-Za-z0-9_-]{1,64}$/.test(databaseName)) {
   throw new Error("capacity database name is invalid");
@@ -69,11 +69,11 @@ const buildInfo = database.runCommand({ buildInfo: 1 });
 const report = {
   schema_version: 1,
   metadata: {
-    scenario: "faultkeep-capacity-phase-22",
-    source_commit: process.env.FAULTKEEP_CAPACITY_COMMIT || "working-tree",
+    scenario: "metric-capacity-phase-22",
+    source_commit: process.env.METRIC_CAPACITY_COMMIT || "working-tree",
     generated_at: new Date().toISOString(),
-    rust_toolchain: process.env.FAULTKEEP_CAPACITY_RUST || "unrecorded",
-    hardware: process.env.FAULTKEEP_CAPACITY_HARDWARE || "unrecorded",
+    rust_toolchain: process.env.METRIC_CAPACITY_RUST || "unrecorded",
+    hardware: process.env.METRIC_CAPACITY_HARDWARE || "unrecorded",
     mongodb_version: buildInfo.version || "unknown",
     database: "<configured>",
     measurement: "bounded newest-first logical BSON sample plus collStats",

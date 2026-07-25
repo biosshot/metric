@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, time::Instant};
 
-use faultkeep_domain::{
+use metric_domain::{
     EventKey, OrganizationId, ProjectId, Timestamp,
     archive::ArchiveSegmentId,
     event::{EventLevel, EventPlatform},
@@ -10,7 +10,7 @@ use faultkeep_domain::{
     },
     grouping::IssueId,
 };
-use faultkeep_ports::{FinalizationStore, FinalizationStoreError, IssueStoreError, PortFuture};
+use metric_ports::{FinalizationStore, FinalizationStoreError, IssueStoreError, PortFuture};
 use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
@@ -302,7 +302,7 @@ impl MongoFinalizationStore {
             .min()
             .ok_or(FinalizationStoreError::InvalidData)?;
         if !exists && !self.reserve_release(project_id, day, limit).await? {
-            metrics::counter!("faultkeep_catalog_admission_total", "catalog" => "release", "outcome" => "limited").increment(1);
+            metrics::counter!("metric_catalog_admission_total", "catalog" => "release", "outcome" => "limited").increment(1);
             return Ok(());
         }
         let first = events
@@ -344,7 +344,7 @@ impl MongoFinalizationStore {
             .map_err(|_| FinalizationStoreError::Unavailable)?
             .is_some();
         if !exists && !self.reserve_environment(project_id, limit).await? {
-            metrics::counter!("faultkeep_catalog_admission_total", "catalog" => "environment", "outcome" => "limited").increment(1);
+            metrics::counter!("metric_catalog_admission_total", "catalog" => "environment", "outcome" => "limited").increment(1);
             return Ok(());
         }
         let first = events
@@ -565,7 +565,7 @@ impl FinalizationStore for MongoFinalizationStore {
                 Err(FinalizationStoreError::Unavailable) => "unavailable",
             };
             metrics::histogram!(
-                "faultkeep_mongodb_operation_duration_seconds",
+                "metric_mongodb_operation_duration_seconds",
                 "operation" => "finalize_batch",
                 "outcome" => outcome
             )

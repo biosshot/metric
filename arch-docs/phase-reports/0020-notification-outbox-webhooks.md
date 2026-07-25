@@ -96,7 +96,7 @@ durable-expansion regression sentinel, not an external webhook capacity promise.
 k6 was not used because Phase 20 has no public notification ingress and receiver
 latency is outside the durable expansion boundary.
 
-After the run, scoped Node/Cargo/Rust processes exited. No Faultkeep server, k6 or
+After the run, scoped Node/Cargo/Rust processes exited. No Metric server, k6 or
 notification test process remained; the user's MongoDB process was not stopped.
 
 ## Metrics, health and safe diagnostics

@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::Timestamp;
-use faultkeep_ports::{
+use metric_domain::Timestamp;
+use metric_ports::{
     Clock, MaintenanceCursor, MaintenanceDisposition, MaintenanceRequest, MaintenanceStore,
     MaintenanceStoreError, MaintenanceTask,
 };
@@ -138,7 +138,7 @@ impl Scheduler {
                     if state.running || state.next_due > now {
                         if state.running && state.next_due <= now {
                             metrics::counter!(
-                                "faultkeep_scheduler_runs_total",
+                                "metric_scheduler_runs_total",
                                 "task" => task.name(),
                                 "outcome" => "lease_busy"
                             )
@@ -181,7 +181,7 @@ impl Scheduler {
             .max(0) as f64
             / 1_000.0;
         metrics::histogram!(
-            "faultkeep_scheduler_task_lag_seconds",
+            "metric_scheduler_task_lag_seconds",
             "task" => task.name()
         )
         .record(lag);
@@ -199,7 +199,7 @@ impl Scheduler {
             .catch_unwind()
             .await;
         metrics::histogram!(
-            "faultkeep_scheduler_task_duration_seconds",
+            "metric_scheduler_task_duration_seconds",
             "task" => task.name()
         )
         .record(wall_started.elapsed().as_secs_f64());
@@ -217,18 +217,18 @@ impl Scheduler {
                     MaintenanceDisposition::Disabled => "disabled",
                 };
                 metrics::counter!(
-                    "faultkeep_scheduler_runs_total",
+                    "metric_scheduler_runs_total",
                     "task" => task.name(),
                     "outcome" => disposition
                 )
                 .increment(1);
                 metrics::histogram!(
-                    "faultkeep_scheduler_items_scanned",
+                    "metric_scheduler_items_scanned",
                     "task" => task.name()
                 )
                 .record(report.scanned as f64);
                 metrics::histogram!(
-                    "faultkeep_scheduler_items_changed",
+                    "metric_scheduler_items_changed",
                     "task" => task.name()
                 )
                 .record(report.changed as f64);
@@ -299,13 +299,13 @@ fn record_failure(
         .min(config.retry_max);
     state.next_due = add_duration(now, delay);
     metrics::counter!(
-        "faultkeep_scheduler_runs_total",
+        "metric_scheduler_runs_total",
         "task" => task.name(),
         "outcome" => outcome
     )
     .increment(1);
     metrics::histogram!(
-        "faultkeep_scheduler_retry_delay_seconds",
+        "metric_scheduler_retry_delay_seconds",
         "task" => task.name()
     )
     .record(delay.as_secs_f64());
@@ -348,7 +348,7 @@ mod tests {
         },
     };
 
-    use faultkeep_ports::{MaintenanceDisposition, MaintenanceResult, PortFuture};
+    use metric_ports::{MaintenanceDisposition, MaintenanceResult, PortFuture};
     use tokio::sync::Notify;
 
     use super::*;

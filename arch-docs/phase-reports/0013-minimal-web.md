@@ -57,7 +57,7 @@ npm run test:e2e
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --quiet
-cargo test -p faultkeep-server --test web_e2e \
+cargo test -p metric-server --test web_e2e \
   infrastructure_browser_login_session_csrf_and_project_isolation \
   -- --ignored --nocapture
 ```

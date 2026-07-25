@@ -1,5 +1,5 @@
 [package]
-name = "faultkeep-symbolication"
+name = "metric-symbolication"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,8 @@ repository.workspace = true
 
 [dependencies]
 base64.workspace = true
-faultkeep-domain = { path = "../domain" }
-faultkeep-ports = { path = "../ports" }
+metric-domain = { path = "../domain" }
+metric-ports = { path = "../ports" }
 futures-util.workspace = true
 hmac.workspace = true
 reqwest.workspace = true

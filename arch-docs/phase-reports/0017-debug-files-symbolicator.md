@@ -63,5 +63,5 @@ topology.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: pass.
 - `cargo test --workspace --all-targets`: pass.
 - real pinned Sentry CLI + MongoDB integration test: pass.
-- final scoped process check: no Faultkeep test server, Sentry CLI, Cargo, Rust
+- final scoped process check: no Metric test server, Sentry CLI, Cargo, Rust
   compiler, k6, or benchmark process remained.

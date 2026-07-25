@@ -1,14 +1,14 @@
 import http from "k6/http";
 import { check } from "k6";
 
-const target = __ENV.FAULTKEEP_TARGET || "http://127.0.0.1:3100";
-const targetRps = Number(__ENV.FAULTKEEP_RPS || "1000");
-const duration = __ENV.FAULTKEEP_DURATION || "30s";
-const mode = __ENV.FAULTKEEP_MODE || "arrival-rate";
-const constantVUs = Number(__ENV.FAULTKEEP_VUS || "64");
-const preAllocatedVUs = Number(__ENV.FAULTKEEP_PREALLOCATED_VUS || "64");
-const maxVUs = Number(__ENV.FAULTKEEP_MAX_VUS || "512");
-const resultPath = __ENV.FAULTKEEP_RESULT || "performance/results/ingest-fake.json";
+const target = __ENV.METRIC_TARGET || "http://127.0.0.1:3100";
+const targetRps = Number(__ENV.METRIC_RPS || "1000");
+const duration = __ENV.METRIC_DURATION || "30s";
+const mode = __ENV.METRIC_MODE || "arrival-rate";
+const constantVUs = Number(__ENV.METRIC_VUS || "64");
+const preAllocatedVUs = Number(__ENV.METRIC_PREALLOCATED_VUS || "64");
+const maxVUs = Number(__ENV.METRIC_MAX_VUS || "512");
+const resultPath = __ENV.METRIC_RESULT || "performance/results/ingest-fake.json";
 const fixtureRevision = "error-event-v1";
 
 export const options = {
@@ -74,7 +74,7 @@ export default function () {
     headers: {
       "Content-Type": "application/x-sentry-envelope",
       "X-Sentry-Auth":
-        "Sentry sentry_version=7,sentry_client=faultkeep-k6/1,sentry_key=0123456789abcdef0123456789abcdef",
+        "Sentry sentry_version=7,sentry_client=metric-k6/1,sentry_key=0123456789abcdef0123456789abcdef",
     },
     tags: { fixture: fixtureRevision },
   });
@@ -90,15 +90,15 @@ export function handleSummary(data) {
   const artifact = {
     schema_version: 1,
     metadata: {
-      commit: __ENV.FAULTKEEP_COMMIT || "working-tree",
+      commit: __ENV.METRIC_COMMIT || "working-tree",
       fixture_revision: fixtureRevision,
       target_rps: targetRps,
       mode,
       constant_vus: mode === "max-throughput" ? constantVUs : null,
       duration,
-      rust_toolchain: __ENV.FAULTKEEP_RUST || "unknown",
-      k6_version: __ENV.FAULTKEEP_K6 || "unknown",
-      hardware: __ENV.FAULTKEEP_HARDWARE || "unrecorded",
+      rust_toolchain: __ENV.METRIC_RUST || "unknown",
+      k6_version: __ENV.METRIC_K6 || "unknown",
+      hardware: __ENV.METRIC_HARDWARE || "unrecorded",
       command: "k6 run performance/k6/ingest-fake.js",
       durability: "deterministic benchmark fake; not MongoDB",
     },

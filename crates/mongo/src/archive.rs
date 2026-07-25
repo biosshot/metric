@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use faultkeep_domain::{
+use metric_domain::{
     EventKey, ProjectId, Timestamp,
     archive::{
         ArchiveBatch, ArchiveBatchState, ArchiveEvent, ArchiveSegmentId,
@@ -11,7 +11,7 @@ use faultkeep_domain::{
     blob::{BlobKey, BlobKind},
     grouping::IssueId,
 };
-use faultkeep_ports::{
+use metric_ports::{
     ArchiveClaimRequest, ArchiveCompleteRequest, ArchiveSourceCommitRequest, ArchiveStore,
     ArchiveStoreError, PortFuture,
 };

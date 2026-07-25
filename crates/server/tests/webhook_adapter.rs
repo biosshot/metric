@@ -6,7 +6,7 @@ use axum::{
     http::{Response, StatusCode, header},
     routing::post,
 };
-use faultkeep_domain::{
+use metric_domain::{
     ProjectId, SecretBytes, Timestamp,
     grouping::IssueId,
     issue::IssueTransitionId,
@@ -16,8 +16,8 @@ use faultkeep_domain::{
         NotificationPayload, WebhookEndpoint,
     },
 };
-use faultkeep_ports::{WebhookDeliveryAdapter, WebhookDeliveryError};
-use faultkeep_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
+use metric_ports::{WebhookDeliveryAdapter, WebhookDeliveryError};
+use metric_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
 use tokio::sync::oneshot;
 
 #[tokio::test]
@@ -110,7 +110,7 @@ async fn controlled_receiver_enforces_redirect_timeout_retry_after_and_response_
 
 fn claim(
     endpoint: String,
-    secret: faultkeep_domain::notifications::SealedWebhookSecret,
+    secret: metric_domain::notifications::SealedWebhookSecret,
 ) -> ClaimedNotificationDelivery {
     let project_id = ProjectId::new(1).unwrap();
     let destination_id = NotificationDestinationId::from_bytes([3; 16]);

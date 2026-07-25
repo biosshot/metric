@@ -39,7 +39,7 @@ const messages: Record<string, string> = {
   not_found: 'The requested object no longer exists.',
   conflict: 'The object changed. Refresh it before trying again.',
   rate_limited: 'Too many requests. Wait briefly and retry.',
-  temporarily_unavailable: 'A required Faultkeep component is unavailable.',
+  temporarily_unavailable: 'A required Metric component is unavailable.',
   search_syntax_invalid: 'The search expression is not valid.',
   search_field_not_indexed: 'That search field is not indexed.',
   search_limit_exceeded: 'The search is too complex. Remove some conditions.',
@@ -81,7 +81,7 @@ async function request<T>(
   headers.set('accept', 'application/json');
   if (init.body) headers.set('content-type', 'application/json');
   if (!options.public && session.organizationId) {
-    headers.set('x-faultkeep-organization-id', session.organizationId);
+    headers.set('x-metric-organization-id', session.organizationId);
   }
   if (!options.public && isMutation(method)) {
     if (!session.csrfToken) {
@@ -103,7 +103,7 @@ async function request<T>(
       0,
       'network_error',
       null,
-      'Cannot reach Faultkeep. Check the connection and server status.',
+      'Cannot reach Metric. Check the connection and server status.',
       true,
     );
   }
@@ -119,7 +119,7 @@ async function request<T>(
     const message =
       messages[code] ??
       body?.error?.message ??
-      `Faultkeep returned HTTP ${response.status} without a recognized error.`;
+      `Metric returned HTTP ${response.status} without a recognized error.`;
     throw new ApiError(
       response.status,
       code,

@@ -3,13 +3,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, SecretBytes, Timestamp,
     archive::ArchiveBatchState,
     blob::{BlobChecksum, BlobKind, BlobObject},
 };
-use faultkeep_mongo::{EventCodecConfig, MongoArchiveStore, MongoEventStore, MongoProjectStore};
-use faultkeep_ports::{
+use metric_mongo::{EventCodecConfig, MongoArchiveStore, MongoEventStore, MongoProjectStore};
+use metric_ports::{
     ArchiveClaimRequest, ArchiveCompleteRequest, ArchiveSourceCommitRequest, ArchiveStore,
     ArchiveStoreError, EventStore, EventWriteStatus,
 };
@@ -19,7 +19,7 @@ use mongodb::{
 };
 
 #[tokio::test]
-#[ignore = "requires a real MongoDB configured by FAULTKEEP_TEST_MONGODB_URI"]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
 async fn infrastructure_archive_manifest_crash_points_and_hot_delete_ordering() {
     let database = test_database().await.unwrap();
     let result = exercise(&database).await;
@@ -216,10 +216,10 @@ fn binary<const N: usize>(bytes: [u8; N]) -> Binary {
 }
 
 async fn test_database() -> Result<Database, Box<dyn Error>> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
         "mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    Ok(client.database(&format!("faultkeep_phase21_archive_{nonce}")))
+    Ok(client.database(&format!("metric_phase21_archive_{nonce}")))
 }

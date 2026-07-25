@@ -28,5 +28,5 @@
     "reserve_preserved": true,
     "leftover_scoped_processes": 0
   },
-  "command": "cargo test --release -p faultkeep-blob performance_local_blob_rps_mib_concurrency_disk_full_and_slow_io -- --ignored --nocapture"
+  "command": "cargo test --release -p metric-blob performance_local_blob_rps_mib_concurrency_disk_full_and_slow_io -- --ignored --nocapture"
 }

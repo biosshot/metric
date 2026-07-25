@@ -14,13 +14,13 @@ Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
   and Rust remain additional passing claims; seven non-required families remain
   honestly `untested`.
 - Added a non-root multi-stage container image with the Vue production build, pinned
-  Rust 1.88 builder, one Faultkeep `--role all` binary, local BlobStore volume and
+  Rust 1.88 builder, one Metric `--role all` binary, local BlobStore volume and
   healthcheck.
 - Added a static-valid all-in-one compose deployment with pinned MongoDB 8.0.12,
-  persistent Mongo/Blob volumes, runtime secrets, read-only Faultkeep root filesystem,
+  persistent Mongo/Blob volumes, runtime secrets, read-only Metric root filesystem,
   graceful stop and no bundled Symbolicator.
 - Added a PID-tracked Windows durable k6 runner. It uses only validated fresh
-  `faultkeep_phase22_*` databases, records TCP/HTTP status classes, compares every
+  `metric_phase22_*` databases, records TCP/HTTP status classes, compares every
   HTTP 200 with the durable Event count, stops its server in `finally` and removes
   only its fresh database.
 - Added a bounded read-only MongoDB capacity report using server-side `$bsonSize` and
@@ -56,12 +56,12 @@ Contract: `arch-docs/module-contracts/0022-release-hardening-phase-22.md`
 - Finalizer acknowledged-step crash recovery and the real pinned `sentry-cli`
   debug/source artifact contract pass.
 - Compose static validation and compatibility/capacity script syntax pass.
-- The real multi-stage image builds as `faultkeep:phase22-smoke` from commit
+- The real multi-stage image builds as `metric:phase22-smoke` from commit
   `96fc4b6`. Image manifest
   `sha256:9ec50b57c6c2111faf0fbd9108a180f6389161add279540890f724956ee0d100`
   passes embedded config and Web-bundle checks.
 - A real container smoke against an isolated MongoDB 8.0.12 container passes
-  `/live` and `/ready` with HTTP 200 while Faultkeep runs as non-root UID 999.
+  `/live` and `/ready` with HTTP 200 while Metric runs as non-root UID 999.
   Both smoke containers and their temporary network were removed.
 
 ## Performance evidence

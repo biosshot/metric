@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     ProjectId,
     symbolication::{
         BackendSymbolicationResult, BackendSymbolicationStatus, RawTraceOrigin, SymbolicatedFrame,
@@ -16,7 +16,7 @@ use faultkeep_domain::{
         SymbolicationRequest,
     },
 };
-use faultkeep_ports::{PortFuture, SymbolicationBackend, SymbolicationBackendError};
+use metric_ports::{PortFuture, SymbolicationBackend, SymbolicationBackendError};
 use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use reqwest::{Client, Url};
@@ -696,8 +696,8 @@ enum PrivateSourceKind {
 impl PrivateSourceKind {
     const fn domain(self) -> &'static [u8] {
         match self {
-            Self::DebugFile => b"faultkeep/symbolicator-debug-source/v1",
-            Self::ArtifactBundle => b"faultkeep/symbolicator-artifact-source/v1",
+            Self::DebugFile => b"metric/symbolicator-debug-source/v1",
+            Self::ArtifactBundle => b"metric/symbolicator-artifact-source/v1",
         }
     }
 }
@@ -746,7 +746,7 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{
+    use metric_domain::{
         event::NormalizedFrame,
         symbolication::{RawStacktrace, SymbolicationKind, SymbolicationModule},
     };
@@ -844,7 +844,7 @@ mod tests {
                     image_address: None,
                     image_size: None,
                 }],
-                release: Some("faultkeep-phase18@1.0.0".into()),
+                release: Some("metric-phase18@1.0.0".into()),
                 dist: Some("windows".into()),
             })
             .await

@@ -122,7 +122,7 @@ async function copy(value: string): Promise<void> {
       <div>
         <p class="eyebrow">{{ session.selectedProject?.display_name }}</p>
         <h1>Connect an SDK</h1>
-        <p>Use an official Sentry SDK and send Error Events to this Faultkeep project.</p>
+        <p>Use an official Sentry SDK and send Error Events to this Metric project.</p>
       </div>
     </header>
 
@@ -226,7 +226,7 @@ async function copy(value: string): Promise<void> {
       />
       <p class="info-note">
         <AppIcon name="info" :size="16" />
-        Faultkeep accepts Error Events, Structured Logs, Transactions, and Spans. Replays, profiles,
+        Metric accepts Error Events, Structured Logs, Transactions, and Spans. Replays, profiles,
         and metrics remain disabled and are reported through capabilities.
       </p>
     </section>

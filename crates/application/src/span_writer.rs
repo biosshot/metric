@@ -8,8 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::signals::SpanRecord;
-use faultkeep_ports::{DurableOutcome, PortFuture, SignalStore, SignalStoreError, SpanSink};
+use metric_domain::signals::SpanRecord;
+use metric_ports::{DurableOutcome, PortFuture, SignalStore, SignalStoreError, SpanSink};
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -325,14 +325,14 @@ async fn drain_writer(
 
 async fn flush_batch(store: &Arc<dyn SignalStore>, operation_timeout: Duration, mut batch: Batch) {
     let documents = batch.records.len();
-    metrics::histogram!("faultkeep_span_writer_batch_documents").record(documents as f64);
-    metrics::histogram!("faultkeep_span_writer_batch_bytes").record(batch.estimated_bytes as f64);
-    metrics::histogram!("faultkeep_span_writer_batch_wait_seconds")
+    metrics::histogram!("metric_span_writer_batch_documents").record(documents as f64);
+    metrics::histogram!("metric_span_writer_batch_bytes").record(batch.estimated_bytes as f64);
+    metrics::histogram!("metric_span_writer_batch_wait_seconds")
         .record(batch.opened_at.elapsed().as_secs_f64());
     let started = Instant::now();
     let records = std::mem::take(&mut batch.records);
     let result = timeout(operation_timeout, store.persist_spans(records)).await;
-    metrics::histogram!("faultkeep_span_writer_batch_latency_seconds")
+    metrics::histogram!("metric_span_writer_batch_latency_seconds")
         .record(started.elapsed().as_secs_f64());
     match result {
         Ok(Ok(outcomes)) if outcomes.len() == documents => {
@@ -364,21 +364,21 @@ fn reject_command(command: Command, error: SignalStoreError) {
 }
 
 fn record_outcome(outcome: &'static str) {
-    metrics::counter!("faultkeep_span_writer_records_total", "outcome" => outcome).increment(1);
+    metrics::counter!("metric_span_writer_records_total", "outcome" => outcome).increment(1);
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
-    use faultkeep_domain::{
+    use metric_domain::{
         ProjectId, Timestamp,
         signals::{
             LogId, LogRecord, PerformanceBucket, SignalBody, SignalPage, SpanId,
             SpanOperationClass, SpanRecordId, TraceId, TraceView,
         },
     };
-    use faultkeep_ports::{LogQuery, PerformanceQuery, SegmentQuery};
+    use metric_ports::{LogQuery, PerformanceQuery, SegmentQuery};
     use tokio::sync::Notify;
 
     use super::*;

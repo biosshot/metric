@@ -1,6 +1,6 @@
 # Configuration
 
-Faultkeep loads one immutable typed configuration at startup:
+Metric loads one immutable typed configuration at startup:
 
 ```text
 CLI override -> APP__SECTION__FIELD -> TOML -> documented default
@@ -9,7 +9,7 @@ CLI override -> APP__SECTION__FIELD -> TOML -> documented default
 An env file is loaded only when explicitly named:
 
 ```powershell
-faultkeep-server --config config/faultkeep.example.toml --env-file .env.local
+metric-server --config config/metric.example.toml --env-file .env.local
 ```
 
 Existing process environment variables override values from that file. Unknown TOML
@@ -22,7 +22,7 @@ MongoDB URI, scrub HMAC material and S3 credentials use secret references:
 uri = { env = "MONGODB_URI" }
 
 [projects]
-scrub_hmac_key = { file = "C:/faultkeep/secrets/scrub-hmac.txt" }
+scrub_hmac_key = { file = "C:/metric/secrets/scrub-hmac.txt" }
 ```
 
 Literal secrets require explicit development mode and produce a warning. Effective

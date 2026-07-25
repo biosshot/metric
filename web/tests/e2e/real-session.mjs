@@ -17,7 +17,7 @@ try {
         response.request().method() === 'PATCH'
           ? ` request=${response.request().postData() ?? '<empty>'}`
           : '';
-      logError(`Faultkeep API ${response.status()} ${response.url()}: ${body}${requestBody}`);
+      logError(`Metric API ${response.status()} ${response.url()}: ${body}${requestBody}`);
     }
   });
   await page.goto(baseUrl);
@@ -27,7 +27,7 @@ try {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByRole('heading', { name: 'Create your first project' }).waitFor();
 
-  if ((await page.evaluate(() => globalThis.document.cookie)).includes('faultkeep_session')) {
+  if ((await page.evaluate(() => globalThis.document.cookie)).includes('metric_session')) {
     throw new Error('HttpOnly session cookie became visible to JavaScript');
   }
 

@@ -23,7 +23,7 @@ target
 # Local performance runs; reviewed baselines are committed separately.
 performance/results/*.json
 
-# Faultkeep Web local artifacts
+# Metric Web local artifacts
 web/node_modules/
 web/dist/
 web/coverage/
@@ -37,4 +37,4 @@ sdk-tests/*/obj/
 sdk-tests/*/__pycache__/
 .env.local
 .env.*.local
-faultkeep-data/
+metric-data/

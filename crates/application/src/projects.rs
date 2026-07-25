@@ -9,13 +9,13 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
     ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, Slug,
     api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
 };
-use faultkeep_ports::{
+use metric_ports::{
     Clock, PortFuture, ProjectResolveError, ProjectResolver, ProjectStore, ProjectStoreError,
     RandomSource,
 };
@@ -580,8 +580,8 @@ impl CacheState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{ScrubPolicy, SecretBytes, Timestamp};
-    use faultkeep_ports::{ProjectStoreError, RandomError};
+    use metric_domain::{ScrubPolicy, SecretBytes, Timestamp};
+    use metric_ports::{ProjectStoreError, RandomError};
     use std::sync::atomic::{AtomicI64, AtomicUsize};
 
     struct LookupStore {

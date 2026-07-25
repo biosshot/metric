@@ -244,7 +244,7 @@ const createProject = useMutation({
           </div>
         </div>
         <ol>
-          <li><span>1</span>Faultkeep creates the project and its first DSN key.</li>
+          <li><span>1</span>Metric creates the project and its first DSN key.</li>
           <li><span>2</span>The new project becomes the active investigation context.</li>
           <li><span>3</span>You receive exact Sentry SDK configuration instructions.</li>
         </ol>

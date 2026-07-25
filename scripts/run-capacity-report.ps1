@@ -1,7 +1,7 @@
 param(
     [string]$MongoUri = 'mongodb://127.0.0.1:27017/?retryWrites=false',
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')]
-    [string]$Database = 'faultkeep',
+    [string]$Database = 'metric',
     [ValidateRange(1, 10000)]
     [int]$Sample = 1000,
     [ValidateRange(1, 1000000)]
@@ -25,25 +25,25 @@ if (-not (Test-Path -LiteralPath $parent)) {
 }
 
 $previous = @{
-    Database = $env:FAULTKEEP_CAPACITY_DATABASE
-    Sample = $env:FAULTKEEP_CAPACITY_SAMPLE
-    Rps = $env:FAULTKEEP_CAPACITY_RPS
-    Retention = $env:FAULTKEEP_CAPACITY_RETENTION_DAYS
-    Replication = $env:FAULTKEEP_CAPACITY_REPLICATION
-    Commit = $env:FAULTKEEP_CAPACITY_COMMIT
-    Rust = $env:FAULTKEEP_CAPACITY_RUST
-    Hardware = $env:FAULTKEEP_CAPACITY_HARDWARE
+    Database = $env:METRIC_CAPACITY_DATABASE
+    Sample = $env:METRIC_CAPACITY_SAMPLE
+    Rps = $env:METRIC_CAPACITY_RPS
+    Retention = $env:METRIC_CAPACITY_RETENTION_DAYS
+    Replication = $env:METRIC_CAPACITY_REPLICATION
+    Commit = $env:METRIC_CAPACITY_COMMIT
+    Rust = $env:METRIC_CAPACITY_RUST
+    Hardware = $env:METRIC_CAPACITY_HARDWARE
 }
 $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name).Trim()
 $ram = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
-$env:FAULTKEEP_CAPACITY_DATABASE = $Database
-$env:FAULTKEEP_CAPACITY_SAMPLE = [string]$Sample
-$env:FAULTKEEP_CAPACITY_RPS = [string]$AcceptedRps
-$env:FAULTKEEP_CAPACITY_RETENTION_DAYS = [string]$RetentionDays
-$env:FAULTKEEP_CAPACITY_REPLICATION = [string]$ReplicationFactor
-$env:FAULTKEEP_CAPACITY_COMMIT = (git rev-parse HEAD).Trim()
-$env:FAULTKEEP_CAPACITY_RUST = (rustc --version).Trim()
-$env:FAULTKEEP_CAPACITY_HARDWARE = "$cpu; $ram GiB RAM; Windows"
+$env:METRIC_CAPACITY_DATABASE = $Database
+$env:METRIC_CAPACITY_SAMPLE = [string]$Sample
+$env:METRIC_CAPACITY_RPS = [string]$AcceptedRps
+$env:METRIC_CAPACITY_RETENTION_DAYS = [string]$RetentionDays
+$env:METRIC_CAPACITY_REPLICATION = [string]$ReplicationFactor
+$env:METRIC_CAPACITY_COMMIT = (git rev-parse HEAD).Trim()
+$env:METRIC_CAPACITY_RUST = (rustc --version).Trim()
+$env:METRIC_CAPACITY_HARDWARE = "$cpu; $ram GiB RAM; Windows"
 
 try {
     $json = & mongosh $MongoUri --quiet --file scripts/capacity-report.js
@@ -54,12 +54,12 @@ try {
     Write-Output $Output
 }
 finally {
-    $env:FAULTKEEP_CAPACITY_DATABASE = $previous.Database
-    $env:FAULTKEEP_CAPACITY_SAMPLE = $previous.Sample
-    $env:FAULTKEEP_CAPACITY_RPS = $previous.Rps
-    $env:FAULTKEEP_CAPACITY_RETENTION_DAYS = $previous.Retention
-    $env:FAULTKEEP_CAPACITY_REPLICATION = $previous.Replication
-    $env:FAULTKEEP_CAPACITY_COMMIT = $previous.Commit
-    $env:FAULTKEEP_CAPACITY_RUST = $previous.Rust
-    $env:FAULTKEEP_CAPACITY_HARDWARE = $previous.Hardware
+    $env:METRIC_CAPACITY_DATABASE = $previous.Database
+    $env:METRIC_CAPACITY_SAMPLE = $previous.Sample
+    $env:METRIC_CAPACITY_RPS = $previous.Rps
+    $env:METRIC_CAPACITY_RETENTION_DAYS = $previous.Retention
+    $env:METRIC_CAPACITY_REPLICATION = $previous.Replication
+    $env:METRIC_CAPACITY_COMMIT = $previous.Commit
+    $env:METRIC_CAPACITY_RUST = $previous.Rust
+    $env:METRIC_CAPACITY_HARDWARE = $previous.Hardware
 }

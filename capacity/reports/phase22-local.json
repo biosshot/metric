@@ -1,7 +1,7 @@
 {
     "schema_version":  1,
     "metadata":  {
-                     "scenario":  "faultkeep-capacity-phase-22",
+                     "scenario":  "metric-capacity-phase-22",
                      "source_commit":  "a149b558e29f34b0316d3daffb197ee9528362fe",
                      "generated_at":  "2026-07-24T14:10:25.918Z",
                      "rust_toolchain":  "rustc 1.88.0 (6b00bc388 2025-06-23)",

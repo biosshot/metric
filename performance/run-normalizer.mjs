@@ -22,7 +22,7 @@ const output = run("cargo", [
   "--locked",
   "--release",
   "-p",
-  "faultkeep-application",
+  "metric-application",
   "performance_normalizer_adr0037_corpus_rps",
   "--",
   "--ignored",
@@ -37,7 +37,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "normalizer-adr0037-phase-5",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

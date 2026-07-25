@@ -1,5 +1,5 @@
 [package]
-name = "faultkeep-application"
+name = "metric-application"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,8 @@ repository.workspace = true
 argon2.workspace = true
 blake3.workspace = true
 bytes.workspace = true
-faultkeep-domain = { path = "../domain" }
-faultkeep-ports = { path = "../ports" }
+metric-domain = { path = "../domain" }
+metric-ports = { path = "../ports" }
 flate2.workspace = true
 futures-util.workspace = true
 hex.workspace = true
@@ -32,7 +32,7 @@ url.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
-faultkeep-blob = { path = "../blob" }
+metric-blob = { path = "../blob" }
 serde_json.workspace = true
 
 [lints]

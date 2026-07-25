@@ -3,15 +3,15 @@ import io.sentry.protocol.SentryId;
 import java.util.Timer;
 import java.util.TimerTask;
 
-public final class FaultkeepSdkCompatibility {
-  private FaultkeepSdkCompatibility() {}
+public final class MetricSdkCompatibility {
+  private MetricSdkCompatibility() {}
 
   public static void main(String[] args) {
     if (args.length != 1) {
-      System.err.println("usage: FaultkeepSdkCompatibility <dsn>");
+      System.err.println("usage: MetricSdkCompatibility <dsn>");
       System.exit(2);
     }
-    Timer watchdog = new Timer("faultkeep-java-sdk-watchdog", true);
+    Timer watchdog = new Timer("metric-java-sdk-watchdog", true);
     watchdog.schedule(
         new TimerTask() {
           @Override
@@ -26,7 +26,7 @@ public final class FaultkeepSdkCompatibility {
           options -> {
             options.setDsn(args[0]);
             options.setEnvironment("sdk-compatibility");
-            options.setRelease("faultkeep-java-sdk-test@1.0.0");
+            options.setRelease("metric-java-sdk-test@1.0.0");
             options.setTracesSampleRate(0.0);
             options.setEnableAutoSessionTracking(false);
             options.setEnableShutdownHook(false);
@@ -34,8 +34,8 @@ public final class FaultkeepSdkCompatibility {
           });
       SentryId eventId =
           Sentry.captureException(
-              new FaultkeepJavaSdkCompatibilityException(
-                  "Faultkeep real Java SDK compatibility event"));
+              new MetricJavaSdkCompatibilityException(
+                  "Metric real Java SDK compatibility event"));
       Sentry.flush(8_000L);
       Sentry.close();
       System.out.printf("{\"event_id\":\"%s\",\"flushed\":true}%n", eventId);
@@ -44,8 +44,8 @@ public final class FaultkeepSdkCompatibility {
     }
   }
 
-  private static final class FaultkeepJavaSdkCompatibilityException extends RuntimeException {
-    private FaultkeepJavaSdkCompatibilityException(String message) {
+  private static final class MetricJavaSdkCompatibilityException extends RuntimeException {
+    private MetricJavaSdkCompatibilityException(String message) {
       super(message);
     }
   }

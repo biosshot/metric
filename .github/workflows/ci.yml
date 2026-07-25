@@ -81,13 +81,13 @@ jobs:
         run: node sdk-tests/java/prepare.mjs
       - name: Verify real .NET SDK
         run: |
-          dotnet restore --locked-mode sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
-          dotnet format --verify-no-changes --no-restore sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
-          dotnet build --configuration Release --no-restore sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+          dotnet restore --locked-mode sdk-tests/dotnet/MetricSdkCompatibility.csproj
+          dotnet format --verify-no-changes --no-restore sdk-tests/dotnet/MetricSdkCompatibility.csproj
+          dotnet build --configuration Release --no-restore sdk-tests/dotnet/MetricSdkCompatibility.csproj
       - name: Verify real Rust SDK
         run: cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
       - name: Run real SDK gates
-        run: cargo test -p faultkeep-server --test sdk_compatibility_e2e -- --ignored --nocapture
+        run: cargo test -p metric-server --test sdk_compatibility_e2e -- --ignored --nocapture
       - name: Verify pinned Sentry CLI versions
         working-directory: sdk-tests/sentry-cli
         run: |
@@ -98,4 +98,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --tag faultkeep:ci .
+      - run: docker build --tag metric:ci .

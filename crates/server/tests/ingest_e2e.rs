@@ -5,19 +5,19 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use faultkeep_application::{
+use metric_application::{
     ingest::{AttachmentIngestConfig, IngestService, MinidumpIngestConfig},
     observability::Metrics,
     shutdown::ShutdownRoot,
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
-use faultkeep_domain::{
+use metric_blob::{LocalBlobConfig, LocalBlobStore};
+use metric_domain::{
     DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
 };
-use faultkeep_ports::{BlobScanRequest, BlobStore, DurableOutcome, EventSinkError};
-use faultkeep_server::{config::IngestConfig, http, ingest_http};
-use faultkeep_testkit::{
+use metric_ports::{BlobScanRequest, BlobStore, DurableOutcome, EventSinkError};
+use metric_server::{config::IngestConfig, http, ingest_http};
+use metric_testkit::{
     FakeEventSink, FakeOutcomeSink, FakeProjectResolver, FixedClock, FixedRandom,
 };
 use flate2::{
@@ -107,7 +107,7 @@ async fn test_app_with_blob(
     writable_bytes: u64,
 ) -> (Router, LocalBlobStore, PathBuf) {
     let directory =
-        std::env::temp_dir().join(format!("faultkeep-ingest-blob-{}", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("metric-ingest-blob-{}", uuid::Uuid::new_v4()));
     let blob = LocalBlobStore::new(
         &directory,
         LocalBlobConfig {
@@ -243,7 +243,7 @@ async fn safe_attachment_is_blob_first_and_only_scrubbed_metadata_enters_event()
             .any(|window| window == b"attachment-secret")
     );
     let key =
-        faultkeep_domain::blob::BlobKey::new(metadata[0]["blob_key"].as_str().unwrap().to_owned())
+        metric_domain::blob::BlobKey::new(metadata[0]["blob_key"].as_str().unwrap().to_owned())
             .unwrap();
     let mut reader = blob.open(&key).await.unwrap();
     let bytes = reader.read_chunk(1024).await.unwrap().unwrap();
@@ -276,7 +276,7 @@ async fn blob_and_event_failure_matrix_never_accepts_a_missing_attachment() {
     assert!(failed_sink.events().is_empty());
     let page = blob
         .scan(BlobScanRequest {
-            namespace: faultkeep_domain::blob::BlobNamespace::EventOwned,
+            namespace: metric_domain::blob::BlobNamespace::EventOwned,
             older_than: Timestamp::from_unix_millis(2_000_000_000_000).unwrap(),
             cursor: None,
             limit: 10,
@@ -296,18 +296,18 @@ async fn raw_and_multipart_minidump_corpus_streams_to_synthetic_events() {
     let root = ShutdownRoot::new();
     let dump = minimal_minidump();
     let multipart = [
-        b"--faultkeep-boundary\r\n".as_slice(),
+        b"--metric-boundary\r\n".as_slice(),
         b"Content-Disposition: form-data; name=\"upload_file_minidump\"; filename=\"crash.dmp\"\r\n",
         b"Content-Type: application/octet-stream\r\n\r\n",
         &dump,
-        b"\r\n--faultkeep-boundary--\r\n",
+        b"\r\n--metric-boundary--\r\n",
     ]
     .concat();
     for (body, content_type) in [
         (dump.clone(), "application/octet-stream".to_owned()),
         (
             multipart,
-            "multipart/form-data; boundary=\"faultkeep-boundary\"".to_owned(),
+            "multipart/form-data; boundary=\"metric-boundary\"".to_owned(),
         ),
     ] {
         let sink = FakeEventSink::accepting();
@@ -328,7 +328,7 @@ async fn raw_and_multipart_minidump_corpus_streams_to_synthetic_events() {
         assert_eq!(payload["platform"], "native");
         assert_eq!(payload["level"], "fatal");
         assert_eq!(payload["native_crash"]["kind"], "minidump");
-        let key = faultkeep_domain::blob::BlobKey::new(
+        let key = metric_domain::blob::BlobKey::new(
             payload["native_crash"]["blob_key"]
                 .as_str()
                 .unwrap()

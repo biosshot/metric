@@ -69,11 +69,11 @@ is a regression baseline, not a production capacity promise.
 - `cargo fmt --all -- --check`: pass.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: pass.
 - `cargo test --workspace`: pass.
-- `cargo run -p faultkeep-server --bin faultkeep-server -- --check-config`: pass.
+- `cargo run -p metric-server --bin metric-server -- --check-config`: pass.
 - Web Prettier, ESLint, Vitest (10 tests), type-check, and production build: pass.
 - Node SDK Prettier and ESLint: pass.
 - Real `@sentry/node` compatibility test: pass.
 - Real local Mongo cumulative attachment/authorization test: pass.
 - One Phase 16 performance test: pass.
-- Final scoped process check: no Faultkeep test server, SDK sender, benchmark, or k6
+- Final scoped process check: no Metric test server, SDK sender, benchmark, or k6
   process remained.

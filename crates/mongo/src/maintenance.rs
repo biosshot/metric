@@ -2,8 +2,8 @@
 
 use std::time::{Duration, Instant};
 
-use faultkeep_domain::Timestamp;
-use faultkeep_ports::{
+use metric_domain::Timestamp;
+use metric_ports::{
     MaintenanceCursor, MaintenanceDisposition, MaintenanceRequest, MaintenanceResult,
     MaintenanceStore, MaintenanceStoreError, MaintenanceTask, PortFuture,
 };
@@ -83,9 +83,9 @@ impl MongoMaintenanceStore {
                 .saturating_sub(next_attempt.timestamp_millis())
                 .max(0) as f64
                 / 1_000.0;
-            metrics::gauge!("faultkeep_maintenance_due_retry_lag_seconds").set(lag);
+            metrics::gauge!("metric_maintenance_due_retry_lag_seconds").set(lag);
         } else {
-            metrics::gauge!("faultkeep_maintenance_due_retry_lag_seconds").set(0.0);
+            metrics::gauge!("metric_maintenance_due_retry_lag_seconds").set(0.0);
         }
         Ok(MaintenanceResult {
             scanned: usize::from(due.is_some()),
@@ -483,7 +483,7 @@ impl MaintenanceStore for MongoMaintenanceStore {
                 Err(MaintenanceStoreError::Unavailable) => "unavailable",
             };
             metrics::histogram!(
-                "faultkeep_mongodb_operation_duration_seconds",
+                "metric_mongodb_operation_duration_seconds",
                 "operation" => task.name(),
                 "outcome" => outcome
             )

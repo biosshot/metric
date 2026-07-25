@@ -20,7 +20,7 @@ transition. Neither the Event API nor search reads Parquet objects in this phase
 
 - Logical keys are validated domain values. Event archives use deterministic
   `projects/{project}/archives/events/YYYY/MM/DD/{segment}.parquet` keys.
-- S3 writes first target a unique `faultkeep-temporary/` key. Objects larger than one
+- S3 writes first target a unique `metric-temporary/` key. Objects larger than one
   configured part use multipart upload.
 - Every part is bounded in memory and retryable. An interrupted part may be repeated;
   an incomplete multipart upload is aborted best-effort.
@@ -80,11 +80,11 @@ An ignored environment-driven test runs the same conformance against a dedicated
 AWS S3 or compatible service bucket:
 
 ```text
-FAULTKEEP_S3_TEST_ENDPOINT
-FAULTKEEP_S3_TEST_REGION
-FAULTKEEP_S3_TEST_BUCKET
-FAULTKEEP_S3_TEST_ACCESS_KEY_ID
-FAULTKEEP_S3_TEST_SECRET_ACCESS_KEY
+METRIC_S3_TEST_ENDPOINT
+METRIC_S3_TEST_REGION
+METRIC_S3_TEST_BUCKET
+METRIC_S3_TEST_ACCESS_KEY_ID
+METRIC_S3_TEST_SECRET_ACCESS_KEY
 ```
 
 The bucket must be disposable and isolated because the test writes and removes its

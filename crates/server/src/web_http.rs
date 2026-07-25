@@ -14,7 +14,7 @@ use axum::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
-const WEB_ROOT_ENV: &str = "FAULTKEEP_WEB_DIR";
+const WEB_ROOT_ENV: &str = "METRIC_WEB_DIR";
 
 /// Serves only known Web routes. Unknown API paths keep their normal 404 response
 /// instead of being rewritten to the SPA entry point.
@@ -25,7 +25,7 @@ pub fn router() -> Router {
 
 /// Serves the Web client from an explicit asset root.
 ///
-/// Production normally selects the same root through `FAULTKEEP_WEB_DIR`.
+/// Production normally selects the same root through `METRIC_WEB_DIR`.
 pub fn router_with_root(root: impl AsRef<Path>) -> Router {
     let root = root.as_ref();
     let index = ServeFile::new(root.join("index.html"));
@@ -83,12 +83,12 @@ mod tests {
     #[tokio::test]
     async fn serves_known_spa_routes_with_security_headers() {
         let root = std::env::temp_dir().join(format!(
-            "faultkeep-web-http-{}-{}",
+            "metric-web-http-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("index.html"), "<main>Faultkeep Web</main>").unwrap();
+        std::fs::write(root.join("index.html"), "<main>Metric Web</main>").unwrap();
 
         for path in [
             "/issues/001122",
@@ -114,7 +114,7 @@ mod tests {
                 "nosniff"
             );
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
-            assert_eq!(body, "<main>Faultkeep Web</main>");
+            assert_eq!(body, "<main>Metric Web</main>");
         }
 
         std::fs::remove_dir_all(root).unwrap();
@@ -122,7 +122,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_rewrite_unknown_api_routes() {
-        let response = router_with_root(std::env::temp_dir().join("faultkeep-web-missing"))
+        let response = router_with_root(std::env::temp_dir().join("metric-web-missing"))
             .oneshot(
                 Request::builder()
                     .uri("/api/v1/not-a-route")

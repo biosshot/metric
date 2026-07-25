@@ -8,20 +8,20 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_application::{
+use metric_application::{
     auth::{AuthConfig, BootstrapRequest, IdentityService, PasswordConfig, PasswordInput},
     native_api::NativeApiService,
     projects::{ProjectCacheConfig, ProjectService},
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
 };
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, IpScrubPolicy, SecretBytes, Slug, Timestamp,
     auth::{EmailAddress, RequestCorrelationId, UserDisplayName},
 };
-use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoProjectStore};
-use faultkeep_ports::{Clock, InvestigationStore, RandomError, RandomSource};
-use faultkeep_server::{http, native_http, web_http};
+use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoProjectStore};
+use metric_ports::{Clock, InvestigationStore, RandomError, RandomSource};
+use metric_server::{http, native_http, web_http};
 use mongodb::{Client, Database};
 use tokio::net::TcpListener;
 
@@ -99,7 +99,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let native = Arc::new(NativeApiService::new(
         Arc::clone(&identity),
         Arc::clone(&projects),
-        Arc::new(faultkeep_application::issues::IssueService::new(Arc::new(
+        Arc::new(metric_application::issues::IssueService::new(Arc::new(
             control.issue_store(IssueCodecConfig::default()),
         ))),
         investigation,
@@ -109,7 +109,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let root = ShutdownRoot::new();
     let app = http::router(
         root.signal(),
-        faultkeep_application::observability::Metrics,
+        metric_application::observability::Metrics,
         native_http::router(
             Some(identity),
             Some(Arc::clone(&native)),
@@ -174,8 +174,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -183,7 +183,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(mongodb::bson::doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase13_{}_{}",
+        "metric_phase13_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, IpScrubPolicy, ItemCapabilities, OrganizationId, ProjectAcceptanceState,
     ProjectId, ProjectIdentity, ProjectIngestLimits, SecretBytes, Slug, Timestamp,
     auth::{
@@ -11,8 +11,8 @@ use faultkeep_domain::{
         UserDisplayName, UserId, WebSession,
     },
 };
-use faultkeep_mongo::MongoProjectStore;
-use faultkeep_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, ProjectStore};
+use metric_mongo::MongoProjectStore;
+use metric_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, ProjectStore};
 use mongodb::{Client, Database, bson::doc};
 
 #[tokio::test]
@@ -356,8 +356,8 @@ fn timestamp(value: i64) -> Timestamp {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -365,7 +365,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase11_test_{}",
+        "metric_phase11_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }

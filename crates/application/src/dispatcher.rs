@@ -10,8 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::{AcceptedEvent, EventKey, processing::PendingEvent};
-use faultkeep_ports::{AcceptedEventHandoff, Clock, EventBacklog, EventBacklogError, WorkHandler};
+use metric_domain::{AcceptedEvent, EventKey, processing::PendingEvent};
+use metric_ports::{AcceptedEventHandoff, Clock, EventBacklog, EventBacklogError, WorkHandler};
 use futures_util::FutureExt;
 use thiserror::Error;
 use tokio::{
@@ -96,8 +96,8 @@ impl BacklogGuard {
 
     fn observe(
         &self,
-        observation: faultkeep_ports::BacklogObservation,
-        now: faultkeep_domain::Timestamp,
+        observation: metric_ports::BacklogObservation,
+        now: metric_domain::Timestamp,
     ) {
         let age = observation
             .oldest_pending_at
@@ -128,38 +128,38 @@ impl BacklogGuard {
         if critical != was_critical {
             self.critical.store(critical, Ordering::Release);
             metrics::counter!(
-                "faultkeep_backlog_guard_transitions_total",
+                "metric_backlog_guard_transitions_total",
                 "state" => if critical { "critical" } else { "recovered" }
             )
             .increment(1);
         }
-        metrics::gauge!("faultkeep_backlog_guard_critical").set(if critical { 1.0 } else { 0.0 });
+        metrics::gauge!("metric_backlog_guard_critical").set(if critical { 1.0 } else { 0.0 });
     }
 }
 
 pub struct BacklogGuardedEventSink {
-    inner: Arc<dyn faultkeep_ports::EventSink>,
+    inner: Arc<dyn metric_ports::EventSink>,
     guard: BacklogGuard,
 }
 
 impl BacklogGuardedEventSink {
     #[must_use]
-    pub fn new(inner: Arc<dyn faultkeep_ports::EventSink>, guard: BacklogGuard) -> Self {
+    pub fn new(inner: Arc<dyn metric_ports::EventSink>, guard: BacklogGuard) -> Self {
         Self { inner, guard }
     }
 }
 
-impl faultkeep_ports::EventSink for BacklogGuardedEventSink {
+impl metric_ports::EventSink for BacklogGuardedEventSink {
     fn persist(
         &self,
         event: AcceptedEvent,
-    ) -> faultkeep_ports::PortFuture<
+    ) -> metric_ports::PortFuture<
         '_,
-        Result<faultkeep_ports::DurableOutcome, faultkeep_ports::EventSinkError>,
+        Result<metric_ports::DurableOutcome, metric_ports::EventSinkError>,
     > {
         if self.guard.is_critical() {
-            metrics::counter!("faultkeep_backlog_guard_rejections_total").increment(1);
-            return Box::pin(async { Err(faultkeep_ports::EventSinkError::Unavailable) });
+            metrics::counter!("metric_backlog_guard_rejections_total").increment(1);
+            return Box::pin(async { Err(metric_ports::EventSinkError::Unavailable) });
         }
         self.inner.persist(event)
     }
@@ -258,8 +258,8 @@ impl Dispatcher {
     }
 
     fn record_depth(&self) {
-        metrics::gauge!("faultkeep_dispatcher_queue_depth").set(self.queued_depth() as f64);
-        metrics::gauge!("faultkeep_dispatcher_scheduled_keys").set(self.scheduled_keys() as f64);
+        metrics::gauge!("metric_dispatcher_queue_depth").set(self.queued_depth() as f64);
+        metrics::gauge!("metric_dispatcher_scheduled_keys").set(self.scheduled_keys() as f64);
     }
 }
 
@@ -379,10 +379,10 @@ fn complete_work(dispatcher: &Dispatcher, completed: Option<Result<(EventKey, bo
             } else {
                 "handler_failed"
             };
-            metrics::counter!("faultkeep_dispatcher_work_total", "outcome" => outcome).increment(1);
+            metrics::counter!("metric_dispatcher_work_total", "outcome" => outcome).increment(1);
         }
         Some(Err(_)) => {
-            metrics::counter!("faultkeep_dispatcher_work_total", "outcome" => "cancelled")
+            metrics::counter!("metric_dispatcher_work_total", "outcome" => "cancelled")
                 .increment(1);
         }
         None => {}
@@ -412,7 +412,7 @@ async fn refill_once(
         source.load_due(clock.now(), wanted, &excluded),
     )
     .await;
-    metrics::histogram!("faultkeep_dispatcher_refill_duration_seconds")
+    metrics::histogram!("metric_dispatcher_refill_duration_seconds")
         .record(started.elapsed().as_secs_f64());
     let events = match loaded {
         Ok(Ok(events)) => events,
@@ -449,11 +449,11 @@ async fn observe_backlog(
 ) {
     let count_limit = guard.max_pending_events.unwrap_or(1_000_000).max(1);
     let Ok(Ok(observation)) = timeout(source_timeout, source.observe(count_limit)).await else {
-        metrics::counter!("faultkeep_dispatcher_observation_total", "outcome" => "unavailable")
+        metrics::counter!("metric_dispatcher_observation_total", "outcome" => "unavailable")
             .increment(1);
         return;
     };
-    metrics::gauge!("faultkeep_dispatcher_pending_estimate").set(observation.pending_count as f64);
+    metrics::gauge!("metric_dispatcher_pending_estimate").set(observation.pending_count as f64);
     let age_seconds = observation.oldest_pending_at.map_or(0.0, |oldest| {
         clock
             .now()
@@ -462,9 +462,9 @@ async fn observe_backlog(
             .max(0) as f64
             / 1_000.0
     });
-    metrics::gauge!("faultkeep_dispatcher_oldest_pending_age_seconds").set(age_seconds);
+    metrics::gauge!("metric_dispatcher_oldest_pending_age_seconds").set(age_seconds);
     guard.observe(observation, clock.now());
-    metrics::counter!("faultkeep_dispatcher_observation_total", "outcome" => "ok").increment(1);
+    metrics::counter!("metric_dispatcher_observation_total", "outcome" => "ok").increment(1);
 }
 
 async fn drain_dispatcher(
@@ -493,7 +493,7 @@ async fn drain_dispatcher(
             Err(_) => {
                 running.abort_all();
                 while running.join_next().await.is_some() {}
-                metrics::counter!("faultkeep_dispatcher_shutdown_total", "outcome" => "deadline")
+                metrics::counter!("metric_dispatcher_shutdown_total", "outcome" => "deadline")
                     .increment(1);
                 dispatcher.record_depth();
                 return;
@@ -504,7 +504,7 @@ async fn drain_dispatcher(
 
 fn record_admission(source: &'static str, outcome: &'static str) {
     metrics::counter!(
-        "faultkeep_dispatcher_admission_total",
+        "metric_dispatcher_admission_total",
         "source" => source,
         "outcome" => outcome
     )
@@ -512,8 +512,8 @@ fn record_admission(source: &'static str, outcome: &'static str) {
 }
 
 fn record_refill(outcome: &'static str, count: usize) {
-    metrics::counter!("faultkeep_dispatcher_refill_total", "outcome" => outcome).increment(1);
-    metrics::histogram!("faultkeep_dispatcher_refill_events").record(count as f64);
+    metrics::counter!("metric_dispatcher_refill_total", "outcome" => outcome).increment(1);
+    metrics::histogram!("metric_dispatcher_refill_events").record(count as f64);
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -526,8 +526,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
-    use faultkeep_domain::{EventId, ProjectId, ScrubbedEventPayload, Timestamp};
-    use faultkeep_ports::{
+    use metric_domain::{EventId, ProjectId, ScrubbedEventPayload, Timestamp};
+    use metric_ports::{
         BacklogObservation, DurableOutcome, EventSink, EventSinkError, PortFuture,
     };
     use tokio::sync::Notify;

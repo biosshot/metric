@@ -12,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "Faultkeep DSN argument is required")
+		fmt.Fprintln(os.Stderr, "Metric DSN argument is required")
 		os.Exit(2)
 	}
 	deadline := time.AfterFunc(15*time.Second, func() {
@@ -24,7 +24,7 @@ func main() {
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:              os.Args[1],
 		Environment:      "sdk-compatibility",
-		Release:          "faultkeep-go-sdk-test@1.0.0",
+		Release:          "metric-go-sdk-test@1.0.0",
 		EnableTracing:    false,
 		TracesSampleRate: 0,
 		SendDefaultPII:   false,
@@ -33,10 +33,10 @@ func main() {
 		os.Exit(2)
 	}
 	sentry.ConfigureScope(func(scope *sentry.Scope) {
-		scope.SetTag("faultkeep.sdk_test", "go")
+		scope.SetTag("metric.sdk_test", "go")
 	})
 
-	eventID := sentry.CaptureException(errors.New("Faultkeep real Go SDK compatibility event"))
+	eventID := sentry.CaptureException(errors.New("Metric real Go SDK compatibility event"))
 	flushed := sentry.Flush(8 * time.Second)
 	if !flushed || eventID == nil {
 		fmt.Fprintln(os.Stderr, "the real Go SDK did not flush the captured Event")

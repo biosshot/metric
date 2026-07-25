@@ -1,15 +1,15 @@
 use std::error::Error;
 use std::time::Instant;
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DisplayName, EventId, EventKey, IpScrubPolicy, ItemCapabilities, OrganizationId,
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ScrubbedEventPayload, SecretBytes, Slug, Timestamp,
 };
-use faultkeep_mongo::{
+use metric_mongo::{
     EventCodecConfig, MongoBootstrapError, MongoEventStore, MongoProjectStore, decode_pending_event,
 };
-use faultkeep_ports::{
+use metric_ports::{
     EventBacklog, EventStore, EventStoreError, EventWriteStatus, PreparedEvent, ProjectStore,
 };
 use mongodb::{Client, Database, bson::doc};
@@ -304,8 +304,8 @@ fn refill_event(index: u32) -> AcceptedEvent {
 }
 
 async fn test_database() -> Result<(Client, Database), mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -313,7 +313,7 @@ async fn test_database() -> Result<(Client, Database), mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     let database = client.database(&format!(
-        "faultkeep_phase3_event_test_{}",
+        "metric_phase3_event_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     ));
     Ok((client, database))

@@ -1,19 +1,19 @@
 use std::{error::Error, fmt, process, thread, time::Duration};
 
 #[derive(Debug)]
-struct FaultkeepRustSdkCompatibilityError;
+struct MetricRustSdkCompatibilityError;
 
-impl fmt::Display for FaultkeepRustSdkCompatibilityError {
+impl fmt::Display for MetricRustSdkCompatibilityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Faultkeep real Rust SDK compatibility event")
+        formatter.write_str("Metric real Rust SDK compatibility event")
     }
 }
 
-impl Error for FaultkeepRustSdkCompatibilityError {}
+impl Error for MetricRustSdkCompatibilityError {}
 
 fn main() {
     let Some(dsn) = std::env::args().nth(1) else {
-        eprintln!("Faultkeep DSN argument is required");
+        eprintln!("Metric DSN argument is required");
         process::exit(2);
     };
     thread::spawn(|| {
@@ -23,9 +23,9 @@ fn main() {
     });
 
     let guard = sentry::init(sentry::ClientOptions {
-        dsn: Some(dsn.parse().expect("Faultkeep DSN must be valid")),
+        dsn: Some(dsn.parse().expect("Metric DSN must be valid")),
         environment: Some("sdk-compatibility".into()),
-        release: Some("faultkeep-rust-sdk-test@1.0.0".into()),
+        release: Some("metric-rust-sdk-test@1.0.0".into()),
         traces_sample_rate: 0.0,
         send_default_pii: false,
         auto_session_tracking: false,
@@ -34,10 +34,10 @@ fn main() {
         ..Default::default()
     });
     sentry::configure_scope(|scope| {
-        scope.set_tag("faultkeep.sdk_test", "rust");
+        scope.set_tag("metric.sdk_test", "rust");
     });
 
-    let event_id = sentry::capture_error(&FaultkeepRustSdkCompatibilityError);
+    let event_id = sentry::capture_error(&MetricRustSdkCompatibilityError);
     let flushed = guard.close(Some(Duration::from_secs(8)));
     drop(guard);
     if !flushed {

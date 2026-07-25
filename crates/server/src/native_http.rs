@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use faultkeep_application::{
+use metric_application::{
     auth::{
         BootstrapRequest, CreateApiTokenRequest, IdentityService, InviteUserRequest, LoginRequest,
         PasswordInput,
@@ -31,7 +31,7 @@ use faultkeep_application::{
     projects::CreateProject,
     search::SearchError,
 };
-use faultkeep_domain::{
+use metric_domain::{
     BoundedId, DisplayName, DsnKey, EventId, IpScrubPolicy, ItemCapabilities, ProjectId,
     ProjectIngestLimits, ProjectKeyLabel, Slug, Timestamp,
     api::{
@@ -54,8 +54,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-const SESSION_COOKIE: &str = "faultkeep_session";
-const ORGANIZATION_HEADER: &str = "x-faultkeep-organization-id";
+const SESSION_COOKIE: &str = "metric_session";
+const ORGANIZATION_HEADER: &str = "x-metric-organization-id";
 const CSRF_HEADER: &str = "x-csrf-token";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -189,9 +189,9 @@ impl IntoResponse for HttpApiError {
             .into_response();
         response
             .headers_mut()
-            .insert("x-faultkeep-error-code", HeaderValue::from_static(code));
+            .insert("x-metric-error-code", HeaderValue::from_static(code));
         response.headers_mut().insert(
-            "x-faultkeep-error-message",
+            "x-metric-error-message",
             HeaderValue::from_static(message),
         );
         response
@@ -522,12 +522,12 @@ async fn native_error_context(request: Request, next: Next) -> Response {
     let (mut parts, _) = response.into_parts();
     let code = parts
         .headers
-        .remove("x-faultkeep-error-code")
+        .remove("x-metric-error-code")
         .and_then(|value| value.to_str().ok().map(str::to_owned))
         .unwrap_or_else(|| "invalid_request".to_owned());
     let message = parts
         .headers
-        .remove("x-faultkeep-error-message")
+        .remove("x-metric-error-message")
         .and_then(|value| value.to_str().ok().map(str::to_owned))
         .unwrap_or_else(|| "request is invalid".to_owned());
     parts.headers.insert(
@@ -624,14 +624,14 @@ enum LoginOrganizationId {
 }
 
 impl LoginOrganizationId {
-    fn parse(self) -> Result<faultkeep_domain::OrganizationId, HttpApiError> {
+    fn parse(self) -> Result<metric_domain::OrganizationId, HttpApiError> {
         let value = match self {
             Self::Decimal(value) => value
                 .parse::<u64>()
                 .map_err(|_| HttpApiError::InvalidRequest)?,
             Self::LegacyNumber(value) => value,
         };
-        faultkeep_domain::OrganizationId::new(value).map_err(|_| HttpApiError::InvalidRequest)
+        metric_domain::OrganizationId::new(value).map_err(|_| HttpApiError::InvalidRequest)
     }
 }
 
@@ -1839,7 +1839,7 @@ async fn authenticate(
         .get(ORGANIZATION_HEADER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .and_then(|value| faultkeep_domain::OrganizationId::new(value).ok())
+        .and_then(|value| metric_domain::OrganizationId::new(value).ok())
         .ok_or(HttpApiError::InvalidCredentials)?;
     let csrf = headers
         .get(CSRF_HEADER)
@@ -1856,7 +1856,7 @@ async fn authenticate(
             if state_changing
                 && matches!(
                     error,
-                    faultkeep_application::auth::AuthError::InvalidCredential
+                    metric_application::auth::AuthError::InvalidCredential
                 )
             {
                 HttpApiError::CsrfFailed
@@ -1941,7 +1941,7 @@ fn session_cookie(secret: &PlainSecret, secure: bool, clear: bool) -> String {
 
 fn network_digest(peer: Option<SocketAddr>) -> SecretDigest {
     let mut hasher = Sha256::new();
-    hasher.update(b"faultkeep/login-network/v1");
+    hasher.update(b"metric/login-network/v1");
     match peer.map(|value| value.ip()) {
         Some(std::net::IpAddr::V4(value)) => hasher.update(value.octets()),
         Some(std::net::IpAddr::V6(value)) => hasher.update(value.octets()),
@@ -2090,8 +2090,8 @@ const fn default_event_bytes() -> u32 {
     1024 * 1024
 }
 
-fn map_auth(error: faultkeep_application::auth::AuthError) -> NativeApiError {
-    use faultkeep_application::auth::AuthError;
+fn map_auth(error: metric_application::auth::AuthError) -> NativeApiError {
+    use metric_application::auth::AuthError;
     match error {
         AuthError::Forbidden => NativeApiError::Forbidden,
         AuthError::InvalidCredentials | AuthError::InvalidCredential => {
@@ -2188,11 +2188,11 @@ fn deletion_status_value(status: &ProjectDeletionStatus) -> Result<Value, HttpAp
 
 fn project_state(project: &ProjectView) -> &'static str {
     match project.state {
-        faultkeep_domain::ProjectAcceptanceState::Active => "active",
-        faultkeep_domain::ProjectAcceptanceState::Disabled => "disabled",
-        faultkeep_domain::ProjectAcceptanceState::PendingDelete => "pending_delete",
-        faultkeep_domain::ProjectAcceptanceState::Purging => "purging",
-        faultkeep_domain::ProjectAcceptanceState::Deleted => "deleted",
+        metric_domain::ProjectAcceptanceState::Active => "active",
+        metric_domain::ProjectAcceptanceState::Disabled => "disabled",
+        metric_domain::ProjectAcceptanceState::PendingDelete => "pending_delete",
+        metric_domain::ProjectAcceptanceState::Purging => "purging",
+        metric_domain::ProjectAcceptanceState::Deleted => "deleted",
     }
 }
 
@@ -2225,9 +2225,9 @@ fn project_key_value(key: &ProjectKeyView) -> Result<Value, HttpApiError> {
         "dsn_key": key.key.to_string(),
         "project_id": key.project_id.get().to_string(),
         "state": match key.state {
-            faultkeep_domain::ProjectKeyState::Active => "active",
-            faultkeep_domain::ProjectKeyState::Disabled => "disabled",
-            faultkeep_domain::ProjectKeyState::SuspendedByDeletion => "suspended_by_deletion",
+            metric_domain::ProjectKeyState::Active => "active",
+            metric_domain::ProjectKeyState::Disabled => "disabled",
+            metric_domain::ProjectKeyState::SuspendedByDeletion => "suspended_by_deletion",
         },
         "label": key.label.as_str(),
         "created_at": timestamp_string(key.created_at)?,
@@ -2400,10 +2400,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let project = ProjectView {
             id: ProjectId::new(7).unwrap(),
-            organization_id: faultkeep_domain::OrganizationId::new(9).unwrap(),
+            organization_id: metric_domain::OrganizationId::new(9).unwrap(),
             slug: Slug::new("backend").unwrap(),
             display_name: DisplayName::new("Backend").unwrap(),
-            state: faultkeep_domain::ProjectAcceptanceState::Active,
+            state: metric_domain::ProjectAcceptanceState::Active,
             policy_revision: 2,
             ip_policy: IpScrubPolicy::Hmac,
             items: ItemCapabilities {
@@ -2430,7 +2430,7 @@ mod tests {
         headers.insert(
             header::COOKIE,
             HeaderValue::from_static(
-                "other=x; faultkeep_session=0101010101010101010101010101010101010101010101010101010101010101",
+                "other=x; metric_session=0101010101010101010101010101010101010101010101010101010101010101",
             ),
         );
         assert!(session_secret(&headers).is_some());

@@ -22,7 +22,7 @@ const output = run("cargo", [
   "--locked",
   "--release",
   "-p",
-  "faultkeep-mongo",
+  "metric-mongo",
   "--test",
   "event_store",
   "performance_dispatcher_mongodb_refill_rps",
@@ -39,7 +39,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "dispatcher-mongodb-refill-phase-4",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

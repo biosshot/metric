@@ -1212,191 +1212,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
-name = "faultkeep-application"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "blake3",
- "bytes",
- "faultkeep-blob",
- "faultkeep-domain",
- "faultkeep-ports",
- "flate2",
- "futures-util",
- "hex",
- "hmac 0.12.1",
- "metrics",
- "parquet",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "sha2 0.10.9",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
- "uuid",
- "zip",
-]
-
-[[package]]
-name = "faultkeep-blob"
-version = "0.1.0"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-sdk-s3",
- "aws-sigv4",
- "aws-smithy-async",
- "aws-smithy-checksums",
- "aws-smithy-eventstream",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-smithy-xml",
- "aws-types",
- "axum",
- "blake3",
- "faultkeep-domain",
- "faultkeep-ports",
- "futures-util",
- "hex",
- "serde",
- "serde_json",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "faultkeep-domain"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "blake3",
- "hex",
- "humantime",
- "thiserror",
-]
-
-[[package]]
-name = "faultkeep-mongo"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "faultkeep-domain",
- "faultkeep-ports",
- "futures-util",
- "hex",
- "metrics",
- "mongodb",
- "serde_json",
- "thiserror",
- "time",
- "tokio",
- "zstd",
-]
-
-[[package]]
-name = "faultkeep-ports"
-version = "0.1.0"
-dependencies = [
- "faultkeep-domain",
- "thiserror",
-]
-
-[[package]]
-name = "faultkeep-sentry-protocol"
-version = "0.1.0"
-dependencies = [
- "faultkeep-domain",
- "serde",
- "serde_json",
- "thiserror",
- "url",
-]
-
-[[package]]
-name = "faultkeep-server"
-version = "0.1.0"
-dependencies = [
- "async-compression",
- "axum",
- "blake3",
- "bytes",
- "chacha20poly1305",
- "clap",
- "dotenvy",
- "faultkeep-application",
- "faultkeep-blob",
- "faultkeep-domain",
- "faultkeep-mongo",
- "faultkeep-ports",
- "faultkeep-sentry-protocol",
- "faultkeep-symbolication",
- "faultkeep-testkit",
- "figment",
- "flate2",
- "futures-util",
- "getrandom 0.3.4",
- "hex",
- "hmac 0.12.1",
- "humantime",
- "mongodb",
- "reqwest",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "sha2 0.10.9",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "wait-timeout",
-]
-
-[[package]]
-name = "faultkeep-symbolication"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "faultkeep-domain",
- "faultkeep-ports",
- "futures-util",
- "hmac 0.12.1",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
-name = "faultkeep-testkit"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "faultkeep-application",
- "faultkeep-domain",
- "faultkeep-ports",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "zip",
-]
-
-[[package]]
 name = "figment"
 version = "0.10.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2343,6 +2158,191 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "metric-application"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "blake3",
+ "bytes",
+ "flate2",
+ "futures-util",
+ "hex",
+ "hmac 0.12.1",
+ "metric-blob",
+ "metric-domain",
+ "metric-ports",
+ "metrics",
+ "parquet",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "metric-blob"
+version = "0.1.0"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sdk-s3",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-checksums",
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "axum",
+ "blake3",
+ "futures-util",
+ "hex",
+ "metric-domain",
+ "metric-ports",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "metric-domain"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "hex",
+ "humantime",
+ "thiserror",
+]
+
+[[package]]
+name = "metric-mongo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "futures-util",
+ "hex",
+ "metric-domain",
+ "metric-ports",
+ "metrics",
+ "mongodb",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "zstd",
+]
+
+[[package]]
+name = "metric-ports"
+version = "0.1.0"
+dependencies = [
+ "metric-domain",
+ "thiserror",
+]
+
+[[package]]
+name = "metric-sentry-protocol"
+version = "0.1.0"
+dependencies = [
+ "metric-domain",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "metric-server"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "axum",
+ "blake3",
+ "bytes",
+ "chacha20poly1305",
+ "clap",
+ "dotenvy",
+ "figment",
+ "flate2",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac 0.12.1",
+ "humantime",
+ "metric-application",
+ "metric-blob",
+ "metric-domain",
+ "metric-mongo",
+ "metric-ports",
+ "metric-sentry-protocol",
+ "metric-symbolication",
+ "metric-testkit",
+ "mongodb",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wait-timeout",
+]
+
+[[package]]
+name = "metric-symbolication"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "hmac 0.12.1",
+ "metric-domain",
+ "metric-ports",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "metric-testkit"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "metric-application",
+ "metric-domain",
+ "metric-ports",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "zip",
+]
 
 [[package]]
 name = "metrics"

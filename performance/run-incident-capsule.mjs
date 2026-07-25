@@ -23,7 +23,7 @@ function run(command, args, options = {}) {
 }
 
 const output = run("cargo", [
-  "test", "--locked", "--release", "-p", "faultkeep-application",
+  "test", "--locked", "--release", "-p", "metric-application",
   "incident_capsule::tests::performance_incident_capsule_streaming_rps",
   "--", "--ignored", "--exact", "--nocapture",
 ]);

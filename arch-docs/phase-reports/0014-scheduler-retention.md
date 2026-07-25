@@ -110,10 +110,10 @@ cargo fmt --all -- --check
 cargo dep-graph --locked
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --quiet
-cargo test -p faultkeep-mongo --test maintenance_store \
+cargo test -p metric-mongo --test maintenance_store \
   infrastructure_retention_pending_safety_reconciliation_and_bounded_plans \
   -- --ignored --nocapture
-cargo test -p faultkeep-server --test web_e2e \
+cargo test -p metric-server --test web_e2e \
   infrastructure_browser_login_session_csrf_and_project_isolation \
   -- --ignored --nocapture
 

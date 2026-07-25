@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DisplayName, EventId, IpScrubPolicy, ItemCapabilities, OrganizationId,
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ScrubbedEventPayload, SecretBytes, Slug, Timestamp,
@@ -19,11 +19,11 @@ use faultkeep_domain::{
     },
     issue::{IssueCulprit, IssueGroupingDetail, IssueOccurrence, IssueRelease, IssueTitle},
 };
-use faultkeep_mongo::{
+use metric_mongo::{
     EventCodecConfig, IssueCodecConfig, MongoEventStore, MongoFinalizationStore, MongoProjectStore,
     decode_finalized_event,
 };
-use faultkeep_ports::{EventStore, EventWriteStatus, FinalizationStore, ProjectStore};
+use metric_ports::{EventStore, EventWriteStatus, FinalizationStore, ProjectStore};
 use mongodb::{
     Client, Database,
     bson::{Bson, Document, doc},
@@ -257,7 +257,7 @@ async fn exercise_crash_boundaries(database: &Database) -> Result<(), Box<dyn Er
             .await;
         assert_eq!(
             failed,
-            Err(faultkeep_ports::FinalizationStoreError::Unavailable),
+            Err(metric_ports::FinalizationStoreError::Unavailable),
             "failure boundary before {collection} did not stop the batch"
         );
         replace_validator(database, collection, validator).await?;
@@ -449,7 +449,7 @@ fn finalized(
         ],
         payload: ProcessedEventPayload::new(
             serde_json::to_vec(&serde_json::json!({
-                "_faultkeep": { "symbolication": { "status": "not_required" } },
+                "_metric": { "symbolication": { "status": "not_required" } },
                 "environment": environment,
                 "message": "pending finalization",
                 "platform": "rust",
@@ -515,7 +515,7 @@ fn binary<const N: usize>(bytes: [u8; N]) -> mongodb::bson::Binary {
     }
 }
 
-fn stats_explain(issue_id: faultkeep_domain::grouping::IssueId) -> Document {
+fn stats_explain(issue_id: metric_domain::grouping::IssueId) -> Document {
     doc! { "explain": { "find": "issue_stats_hourly", "filter": {
         "project_id": 7_i32,
         "issue_id": binary(issue_id.as_bytes()),
@@ -584,8 +584,8 @@ async fn replace_validator(
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -593,7 +593,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase9_finalizer_test_{}",
+        "metric_phase9_finalizer_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }

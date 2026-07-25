@@ -13,7 +13,7 @@ use argon2::{
         PasswordHash as ParsedPasswordHash, PasswordHasher, PasswordVerifier, SaltString,
     },
 };
-use faultkeep_domain::{
+use metric_domain::{
     DisplayName, OrganizationId, OrganizationIdentity, ProjectId, Slug, Timestamp,
     api::{ApiTokenView, AuditLogView, OrganizationMemberView},
     auth::{
@@ -25,7 +25,7 @@ use faultkeep_domain::{
     },
     issue::{ActorKind, ActorRef},
 };
-use faultkeep_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, Clock, RandomSource};
+use metric_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, Clock, RandomSource};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -361,7 +361,7 @@ impl IdentityService {
             .check(account_key, request.client_network_digest, now)
         {
             metrics::counter!(
-                "faultkeep_auth_login_total",
+                "metric_auth_login_total",
                 "outcome" => "rate_limited"
             )
             .increment(1);
@@ -388,7 +388,7 @@ impl IdentityService {
         let valid_user = user.filter(|user| password_valid && user.disabled_at.is_none());
         let Some(user) = valid_user else {
             metrics::counter!(
-                "faultkeep_auth_login_total",
+                "metric_auth_login_total",
                 "outcome" => "invalid"
             )
             .increment(1);
@@ -432,7 +432,7 @@ impl IdentityService {
         .await?;
         self.login_limiter.success(account_key);
         metrics::counter!(
-            "faultkeep_auth_login_total",
+            "metric_auth_login_total",
             "outcome" => "ok"
         )
         .increment(1);
@@ -948,7 +948,7 @@ impl IdentityService {
         context: &AuthContext,
         request_id: RequestCorrelationId,
         project_id: ProjectId,
-        issue_id: faultkeep_domain::grouping::IssueId,
+        issue_id: metric_domain::grouping::IssueId,
         selected_event_count: usize,
         result_size_class: &'static str,
     ) -> Result<(), AuthError> {
@@ -1239,7 +1239,7 @@ impl IdentityService {
 
     async fn call<T>(
         &self,
-        future: faultkeep_ports::PortFuture<'_, Result<T, AuthStoreError>>,
+        future: metric_ports::PortFuture<'_, Result<T, AuthStoreError>>,
     ) -> Result<T, AuthError> {
         timeout(self.config.store_timeout, future)
             .await
@@ -1280,7 +1280,7 @@ impl PasswordEngine {
         let params = argon_params(config)?;
         let salt = SaltString::encode_b64(&[0x42; 16]).map_err(|_| AuthError::Unavailable)?;
         let encoded = Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-            .hash_password(b"faultkeep-dummy-password", &salt)
+            .hash_password(b"metric-dummy-password", &salt)
             .map_err(|_| AuthError::Unavailable)?
             .to_string();
         Ok(Self {
@@ -1600,11 +1600,11 @@ fn derived_id(digest: &SecretDigest, offset: usize) -> Result<CredentialId, Auth
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{
+    use metric_domain::{
         BoundedId, ProjectAcceptanceState,
         auth::{AuthValueError, SetupToken},
     };
-    use faultkeep_ports::{PortFuture, RandomError};
+    use metric_ports::{PortFuture, RandomError};
     use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
     struct TestClock(AtomicI64);

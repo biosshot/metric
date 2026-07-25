@@ -2,18 +2,18 @@
 
 use std::{future::pending, sync::Arc, time::SystemTime};
 
-use faultkeep_application::{
+use metric_application::{
     ingest::IngestService, observability::Metrics, shutdown::ShutdownRoot,
 };
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
 };
-use faultkeep_ports::{
+use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, OutcomeSink, PortFuture,
     ProjectResolveError, ProjectResolver, RandomError, RandomSource,
 };
-use faultkeep_server::{config::IngestConfig, http, ingest_http};
+use metric_server::{config::IngestConfig, http, ingest_http};
 use tokio::net::TcpListener;
 
 const KEY: &str = "0123456789abcdef0123456789abcdef";
@@ -74,7 +74,7 @@ impl RandomSource for BenchRandom {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let address =
-        std::env::var("FAULTKEEP_BENCH_ADDRESS").unwrap_or_else(|_| "127.0.0.1:3100".to_owned());
+        std::env::var("METRIC_BENCH_ADDRESS").unwrap_or_else(|_| "127.0.0.1:3100".to_owned());
     let root = ShutdownRoot::new();
     let config = benchmark_config();
     let snapshot = ProjectSnapshot {

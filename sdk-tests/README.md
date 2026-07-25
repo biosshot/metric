@@ -2,8 +2,8 @@
 
 This directory owns isolated, version-pinned compatibility harnesses for official
 Sentry SDKs. Each SDK family has its own package/runtime dependencies and must send
-through Faultkeep's public Sentry-compatible HTTP surface. SDK packages are never
-linked into the Faultkeep server or Vue Web application.
+through Metric's public Sentry-compatible HTTP surface. SDK packages are never
+linked into the Metric server or Vue Web application.
 
 `../compatibility/sentry-sdk-matrix.toml` is the single retained machine-readable
 result matrix. A row is marked `pass` only after the referenced real-process or
@@ -14,7 +14,7 @@ immutable captured-fixture gate passes. Validate the inventory and evidence with
 
 - Pin the exact official SDK version and commit its lockfile.
 - Use safe synthetic Events without credentials or production data.
-- Start Faultkeep on an ephemeral local port and terminate every SDK/server process.
+- Start Metric on an ephemeral local port and terminate every SDK/server process.
 - Assert the SDK-reported Event ID and the accepted domain Event payload.
 - Record the exact runtime and SDK version in the test output or assertion.
 - Keep performance and compatibility tests separate.
@@ -32,11 +32,11 @@ npm ci
 Run the real SDK gate from the repository root:
 
 ```text
-cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+cargo test -p metric-server --test sdk_compatibility_e2e \
   real_node_sdk_sends_an_error_event_without_blob -- --ignored --nocapture
 ```
 
-The test starts the real Faultkeep HTTP router on an ephemeral port, invokes the
+The test starts the real Metric HTTP router on an ephemeral port, invokes the
 official `@sentry/node` process with a real DSN, waits for `captureException` and
 `flush`, and verifies the accepted Event ID, exception, release, environment and
 exact SDK metadata. The base Error Event also proves that no BlobStore object is
@@ -44,11 +44,11 @@ created when the SDK does not attach one. A separate
 `real_node_sdk_sends_an_attachment_event` gate verifies blob-first attachment
 metadata and the exact bytes read back from BlobStore.
 
-Run the pinned SDK against an already running Faultkeep instance to verify Structured
+Run the pinned SDK against an already running Metric instance to verify Structured
 Logs and a transaction with one child Span:
 
 ```powershell
-$env:FAULTKEEP_DSN = "http://<dsn-key>@localhost:4001/<project-id>"
+$env:METRIC_DSN = "http://<dsn-key>@localhost:4001/<project-id>"
 node sdk-tests/node/send-signals.mjs
 ```
 
@@ -68,7 +68,7 @@ npx playwright install chromium
 
 Run `real_browser_sdk_sends_an_error_event` from the same Rust E2E target. The harness
 serves the bundled official `@sentry/browser` 10.66.0 client from the ephemeral
-Faultkeep router, launches the pinned Playwright Chromium, sends through a real DSN,
+Metric router, launches the pinned Playwright Chromium, sends through a real DSN,
 waits for `flush`, and verifies the accepted Error Event and absence of attachment
 blobs. The browser and server are closed before the test returns.
 
@@ -79,7 +79,7 @@ dependencies. Install and run the real-process gate:
 
 ```text
 python -m pip install -r sdk-tests/python/requirements.lock.txt
-cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+cargo test -p metric-server --test sdk_compatibility_e2e \
   real_python_sdk_sends_an_error_event -- --ignored --exact --nocapture
 ```
 
@@ -93,7 +93,7 @@ pinned SHA-256 and compiles the sender with Java 25:
 
 ```text
 node sdk-tests/java/prepare.mjs
-cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+cargo test -p metric-server --test sdk_compatibility_e2e \
   real_java_sdk_sends_an_error_event -- --ignored --exact --nocapture
 ```
 
@@ -102,10 +102,10 @@ cargo test -p faultkeep-server --test sdk_compatibility_e2e \
 The isolated .NET 9 project pins `Sentry` 6.7.0 and commits NuGet lock data:
 
 ```text
-dotnet restore --locked-mode sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+dotnet restore --locked-mode sdk-tests/dotnet/MetricSdkCompatibility.csproj
 dotnet build --configuration Release --no-restore \
-  sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
-cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+  sdk-tests/dotnet/MetricSdkCompatibility.csproj
+cargo test -p metric-server --test sdk_compatibility_e2e \
   real_dotnet_sdk_sends_an_error_event -- --ignored --exact --nocapture
 ```
 
@@ -122,7 +122,7 @@ cd sdk-tests/go
 go mod verify
 go test ./...
 cd ../..
-cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+cargo test -p metric-server --test sdk_compatibility_e2e \
   real_go_sdk_sends_an_error_event -- --ignored --exact --nocapture
 ```
 
@@ -135,11 +135,11 @@ and run the real-process gate from the repository root:
 
 ```text
 cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
-cargo test -p faultkeep-server --test sdk_compatibility_e2e \
+cargo test -p metric-server --test sdk_compatibility_e2e \
   real_rust_sdk_sends_an_error_event -- --ignored --exact --nocapture
 ```
 
-The official SDK uses a hyphenated UUID in the envelope header. Faultkeep accepts
+The official SDK uses a hyphenated UUID in the envelope header. Metric accepts
 that wire representation at the protocol adapter and retains its compact 32-hex
 domain identifier. Both Go and Rust gates verify metadata, exception content, Event
 identity and the absence of blob objects for a base Error Event.
@@ -148,16 +148,16 @@ identity and the absence of blob objects for a base Error Event.
 
 `sentry-cli/` pins current 3.x (`3.6.2`) and retained 2.x (`2.58.6`) contracts.
 Install with `npm ci`, verify both binaries with `npm run versions`, then point a
-real upload at Faultkeep:
+real upload at Metric:
 
 ```powershell
 $env:SENTRY_URL = "http://127.0.0.1:4001/"
 $env:SENTRY_AUTH_TOKEN = "<personal token with debug_file:write>"
 $env:SENTRY_ORG = "<organization slug>"
 $env:SENTRY_PROJECT = "<project slug>"
-npx sentry-cli debug-files upload fixtures/faultkeep.sym
+npx sentry-cli debug-files upload fixtures/metric.sym
 ```
 
 `symbolicator/26.6.0-native-contract.json` pins the external native HTTP schema
 used by the adapter test. The external process remains separately deployed and is
-never bundled into Faultkeep.
+never bundled into Metric.

@@ -12,7 +12,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use faultkeep_application::{
+use metric_application::{
     dispatcher::{Dispatcher, DispatcherConfig},
     finalizer::{Finalizer, FinalizerConfig},
     ingest::IngestService,
@@ -27,7 +27,7 @@ use faultkeep_application::{
     symbolication::BaselineSymbolicationService,
     writer::{MongoWriter, MongoWriterConfig},
 };
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DisplayName, DsnKey, EventId, EventKey, IpScrubPolicy, ItemCapabilities,
     OrganizationId, OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity,
     ProjectIngestLimits, ProjectKeyIdentity, ProjectKeyLabel, ProjectKeyState, SecretBytes, Slug,
@@ -36,15 +36,15 @@ use faultkeep_domain::{
     processing::{PendingEvent, ProcessingErrorCode},
     symbolication::SymbolicationResult,
 };
-use faultkeep_mongo::{
+use metric_mongo::{
     EventCodecConfig, IssueCodecConfig, MongoProjectStore, decode_pending_event,
 };
-use faultkeep_ports::{
+use metric_ports::{
     AcceptedEventHandoff, DurableOutcome, EventBacklog, EventPrepareError, EventSink, EventStore,
     EventStoreError, EventWriteStatus, PortFuture, ProjectResolver, ProjectStore, WorkHandler,
 };
-use faultkeep_server::{config::IngestConfig, http, ingest_http};
-use faultkeep_testkit::{FakeOutcomeSink, FixedClock, FixedRandom};
+use metric_server::{config::IngestConfig, http, ingest_http};
+use metric_testkit::{FakeOutcomeSink, FixedClock, FixedRandom};
 use mongodb::{Client, Database, bson::doc};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -67,7 +67,7 @@ impl AcceptedEventHandoff for CapturingHandoff {
 }
 
 struct CountingStore {
-    inner: faultkeep_mongo::MongoEventStore,
+    inner: metric_mongo::MongoEventStore,
     batch_sizes: Mutex<Vec<usize>>,
 }
 
@@ -101,7 +101,7 @@ impl SymbolicationStage for RetryOnceSymbolicator {
 }
 
 impl WorkHandler for CompletingWorkHandler {
-    fn handle(&self, event: faultkeep_domain::processing::PendingEvent) -> PortFuture<'_, ()> {
+    fn handle(&self, event: metric_domain::processing::PendingEvent) -> PortFuture<'_, ()> {
         Box::pin(async move {
             let key = event.key();
             self.handled.lock().unwrap().push(key);
@@ -123,7 +123,7 @@ impl WorkHandler for CompletingWorkHandler {
 }
 
 impl EventStore for CountingStore {
-    type Prepared = faultkeep_mongo::MongoPreparedEvent;
+    type Prepared = metric_mongo::MongoPreparedEvent;
 
     fn prepare(&self, event: AcceptedEvent) -> Result<Self::Prepared, EventPrepareError> {
         self.inner.prepare(event)
@@ -369,7 +369,7 @@ fn processor_performance_event(index: u32) -> AcceptedEvent {
         event_id: EventId::from_bytes(u128::from(index + 1_000_000).to_be_bytes()),
         received_at: Timestamp::from_unix_millis(5_000 + i64::from(index)).unwrap(),
         policy_revision: 1,
-        payload: faultkeep_domain::ScrubbedEventPayload::new(
+        payload: metric_domain::ScrubbedEventPayload::new(
             format!(
                 r#"{{"event_id":"{}","platform":"rust","level":"error","message":"shared processor recovery fixture"}}"#,
                 hex::encode(u128::from(index + 1_000_000).to_be_bytes())
@@ -393,7 +393,7 @@ fn performance_event(index: u32) -> AcceptedEvent {
         event_id: EventId::from_bytes(u128::from(index).to_be_bytes()),
         received_at: Timestamp::from_unix_millis(2_000 + i64::from(index)).unwrap(),
         policy_revision: 1,
-        payload: faultkeep_domain::ScrubbedEventPayload::new(
+        payload: metric_domain::ScrubbedEventPayload::new(
             format!(
                 r#"{{"event_id":"{}","platform":"rust","level":"error","message":"{message}"}}"#,
                 hex::encode(u128::from(index).to_be_bytes())
@@ -516,7 +516,7 @@ async fn exercise_processor_e2e(database: &Database) -> Result<(), Box<dyn Error
     control.bootstrap_or_validate().await?;
     seed(&control).await?;
     let root = ShutdownRoot::new();
-    let clock: Arc<dyn faultkeep_ports::Clock> =
+    let clock: Arc<dyn metric_ports::Clock> =
         Arc::new(FixedClock(Timestamp::from_unix_millis(2_000)?));
     let projects = Arc::new(ProjectService::new(
         Arc::new(control.clone()),
@@ -664,7 +664,7 @@ async fn exercise_processor_recovery(database: &Database) -> Result<(), Box<dyn 
     let event_store = Arc::new(control.event_store(codec));
     let retry_event = performance_event(100);
     let mut invalid_event = performance_event(101);
-    invalid_event.payload = faultkeep_domain::ScrubbedEventPayload::new(
+    invalid_event.payload = metric_domain::ScrubbedEventPayload::new(
         format!(
             r#"{{"event_id":"{}","platform":"rust","release":"{}","message":"invalid identity bound"}}"#,
             invalid_event.event_id,
@@ -762,8 +762,8 @@ async fn exercise_processor_recovery(database: &Database) -> Result<(), Box<dyn 
 
 fn processor_for_test(
     control: &MongoProjectStore,
-    event_store: Arc<faultkeep_mongo::MongoEventStore>,
-    clock: Arc<dyn faultkeep_ports::Clock>,
+    event_store: Arc<metric_mongo::MongoEventStore>,
+    clock: Arc<dyn metric_ports::Clock>,
     symbolicator: Arc<dyn SymbolicationStage>,
     codec: EventCodecConfig,
 ) -> Result<Processor, Box<dyn Error>> {
@@ -883,8 +883,8 @@ async fn seed(store: &MongoProjectStore) -> Result<(), Box<dyn Error>> {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -892,7 +892,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase3_e2e_{}",
+        "metric_phase3_e2e_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }

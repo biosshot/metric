@@ -30,7 +30,7 @@ Contract: `arch-docs/module-contracts/0021-s3-cold-archive-phase-21.md`
   an authorization credential.
 - Composed the archive worker into the all role with readiness, cancellation and
   graceful-shutdown tracking. Archival is disabled by default and requires MongoDB.
-- Advanced the empty-database schema generation from 6 to 7. Faultkeep still has no
+- Advanced the empty-database schema generation from 6 to 7. Metric still has no
   migration framework and does not alter an existing generation-6 database.
 
 The AWS SDK packages are pinned to compatible versions because unconstrained
@@ -97,7 +97,7 @@ the required explicit RPS and byte throughput.
 The single performance test exited. The temporary MinIO instance was forcibly
 stopped in `finally`; its binary, data, temporary directory and generated `mc`
 configuration were removed. Final scoped process inspection found no Cargo, rustc,
-Faultkeep server, MinIO, `mc`, or k6 process. The user's MongoDB process was not
+Metric server, MinIO, `mc`, or k6 process. The user's MongoDB process was not
 stopped.
 
 ## Known limits and deferred work

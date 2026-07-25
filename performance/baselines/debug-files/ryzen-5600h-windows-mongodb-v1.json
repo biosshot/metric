@@ -26,5 +26,5 @@
     "exact_id_delete": "pass",
     "leftover_scoped_processes": 0
   },
-  "command": "$env:FAULTKEEP_PHASE17_PERF='1'; cargo test -p faultkeep-server --test debug_files_e2e -- --ignored --nocapture"
+  "command": "$env:METRIC_PHASE17_PERF='1'; cargo test -p metric-server --test debug_files_e2e -- --ignored --nocapture"
 }

@@ -10,7 +10,7 @@ the event. Making every event-to-issue update and counter increment exact across
 multiple MongoDB documents would require transactions or an additional idempotency
 ledger in the hottest write path.
 
-Faultkeep is an error tracker rather than a financial ledger. A rare one-time counter
+Metric is an error tracker rather than a financial ledger. A rare one-time counter
 drift after a process crash is acceptable when the underlying event, grouping result,
 and user-controlled issue state remain correct.
 

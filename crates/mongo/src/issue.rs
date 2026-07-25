@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, num::NonZeroU64, time::Instant};
 
-use faultkeep_domain::{
+use metric_domain::{
     EventId, ProjectId, Timestamp,
     grouping::{
         GroupingComponent, GroupingComponentKind, GroupingExplanation, GroupingKey,
@@ -14,7 +14,7 @@ use faultkeep_domain::{
         notification_transition_id, regression_activity_id,
     },
 };
-use faultkeep_ports::{IssueStore, IssueStoreError, PortFuture};
+use metric_ports::{IssueStore, IssueStoreError, PortFuture};
 use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
@@ -961,7 +961,7 @@ async fn insert_activity_best_effort(database: &Database, document: Document) {
         && !duplicate_write(&error)
     {
         metrics::counter!(
-            "faultkeep_mongodb_operation_errors_total",
+            "metric_mongodb_operation_errors_total",
             "operation" => "issue_activity_insert"
         )
         .increment(1);
@@ -981,7 +981,7 @@ fn record_operation<T>(
         Err(IssueStoreError::Unavailable) => "unavailable",
     };
     metrics::histogram!(
-        "faultkeep_mongodb_operation_duration_seconds",
+        "metric_mongodb_operation_duration_seconds",
         "operation" => operation,
         "outcome" => outcome
     )
@@ -1293,7 +1293,7 @@ async fn validate_indexes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::grouping::{GroupingExplanation, derive_issue_id};
+    use metric_domain::grouping::{GroupingExplanation, derive_issue_id};
 
     fn occurrence(release: Option<&str>) -> IssueOccurrence {
         let project_id = ProjectId::new(7).unwrap();

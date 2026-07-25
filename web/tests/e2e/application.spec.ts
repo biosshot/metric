@@ -122,11 +122,11 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     const body = request.postDataJSON() as { email: string };
     state.role = body.email.startsWith('viewer') ? 'viewer' : 'owner';
     return json({ csrf_token: 'c'.repeat(64), expires_at: '2026-08-23T09:00:00Z' }, 200, {
-      'set-cookie': `faultkeep_session=${'d'.repeat(64)}; Path=/api/v1; HttpOnly; SameSite=Lax`,
+      'set-cookie': `metric_session=${'d'.repeat(64)}; Path=/api/v1; HttpOnly; SameSite=Lax`,
     });
   }
   if (path === '/api/v1/auth/me') {
-    state.sessionCookieSeen = request.headers().cookie?.includes('faultkeep_session=') ?? false;
+    state.sessionCookieSeen = request.headers().cookie?.includes('metric_session=') ?? false;
     return json({
       actor: 'web_session',
       user_id: state.role === 'viewer' ? '9' : '8',
@@ -153,7 +153,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   if (path === '/api/v1/projects' && request.method() === 'POST') {
     state.projectCreationSeen =
       request.headers()['x-csrf-token'] === 'c'.repeat(64) &&
-      request.headers()['x-faultkeep-organization-id'] === '7';
+      request.headers()['x-metric-organization-id'] === '7';
     state.createdProjectBody = request.postDataJSON() as Record<string, unknown>;
     state.noProjects = false;
     return json({ project_id: project.id, dsn_key: 'e'.repeat(32) }, 201);
@@ -213,7 +213,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   if (path.endsWith('/lifecycle')) {
     state.csrfSeen =
       request.headers()['x-csrf-token'] === 'c'.repeat(64) &&
-      request.headers()['x-faultkeep-organization-id'] === '7';
+      request.headers()['x-metric-organization-id'] === '7';
     issue.status =
       (request.postDataJSON() as { action: 'resolve' | 'ignore' | 'reopen' }).action === 'resolve'
         ? 'resolved'
@@ -269,7 +269,7 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();
   expect(state.sessionCookieSeen).toBe(true);
-  expect(await page.evaluate(() => document.cookie)).not.toContain('faultkeep_session');
+  expect(await page.evaluate(() => document.cookie)).not.toContain('metric_session');
 
   await page.getByRole('link', { name: /TypeError/ }).click();
   await expect(page.getByRole('heading', { name: 'TypeError: cannot read session' })).toBeVisible();
@@ -295,7 +295,7 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   expect(state.policyRevisionSeen).toBe(true);
 
   await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page.getByRole('heading', { name: 'Sign in to Faultkeep' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to Metric' })).toBeVisible();
   expect(state.logoutCsrfSeen).toBe(true);
 });
 
@@ -355,7 +355,7 @@ test('viewer sees read-only controls and no hidden write action', async ({ page 
     requestedProjects: [],
   };
   await installApi(page, state);
-  await page.addInitScript(() => localStorage.setItem('faultkeep.project', '666'));
+  await page.addInitScript(() => localStorage.setItem('metric.project', '666'));
   await login(page, 'viewer@example.com');
   await page.getByRole('link', { name: /TypeError/ }).click();
 
@@ -459,7 +459,7 @@ test('capture Phase 23 desktop and narrow route reference renders', async ({
   browserName,
 }) => {
   test.skip(
-    browserName !== 'chromium' || process.env.FAULTKEEP_CAPTURE_PHASE23 !== '1',
+    browserName !== 'chromium' || process.env.METRIC_CAPTURE_PHASE23 !== '1',
     'Reference renders are regenerated explicitly with Chromium.',
   );
   const state: ApiState = {
@@ -487,7 +487,7 @@ test('capture Phase 23 desktop and narrow route reference renders', async ({
   }
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Sign in to Faultkeep' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to Metric' })).toBeVisible();
   await capture('auth');
 
   await page.setViewportSize({ width: 1440, height: 1000 });

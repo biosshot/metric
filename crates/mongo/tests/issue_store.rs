@@ -1,6 +1,6 @@
 use std::{error::Error, num::NonZeroU64, time::Instant};
 
-use faultkeep_domain::{
+use metric_domain::{
     EventId, ProjectId, SecretBytes, Timestamp,
     grouping::{
         GroupingComponent, GroupingComponentKind, GroupingExplanation, GroupingKey,
@@ -12,8 +12,8 @@ use faultkeep_domain::{
         IssueTitle,
     },
 };
-use faultkeep_mongo::{IssueCodecConfig, MongoIssueStore, MongoProjectStore};
-use faultkeep_ports::{IssueStore, IssueStoreError};
+use metric_mongo::{IssueCodecConfig, MongoIssueStore, MongoProjectStore};
+use metric_ports::{IssueStore, IssueStoreError};
 use mongodb::{Client, Database, bson::doc};
 
 #[tokio::test]
@@ -410,8 +410,8 @@ async fn assert_plan_uses(
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
-        "mongodb://faultkeep:faultkeep-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+        "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     client
@@ -419,7 +419,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase8_issue_test_{}",
+        "metric_phase8_issue_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }

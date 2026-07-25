@@ -14,11 +14,11 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     Timestamp,
     blob::{BlobChecksum, BlobKey, BlobKind, BlobObject},
 };
-use faultkeep_ports::{
+use metric_ports::{
     BlobCapacity, BlobReadSession, BlobScanPage, BlobScanRequest, BlobStore, BlobStoreError,
     BlobWriteSession, PortFuture,
 };
@@ -631,13 +631,13 @@ fn absolute(path: &Path) -> Result<PathBuf, BlobStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{EventId, ProjectId, blob::BlobObjectId};
+    use metric_domain::{EventId, ProjectId, blob::BlobObjectId};
 
     struct TestDirectory(PathBuf);
 
     impl TestDirectory {
         fn new() -> Self {
-            Self(std::env::temp_dir().join(format!("faultkeep-blob-{}", uuid::Uuid::new_v4())))
+            Self(std::env::temp_dir().join(format!("metric-blob-{}", uuid::Uuid::new_v4())))
         }
     }
 

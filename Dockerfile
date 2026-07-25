@@ -10,26 +10,26 @@ WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY tools/ tools/
-RUN cargo build --locked --release --bin faultkeep-server
+RUN cargo build --locked --release --bin metric-server
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system faultkeep \
-    && useradd --system --gid faultkeep --home-dir /nonexistent --shell /usr/sbin/nologin faultkeep \
-    && mkdir -p /opt/faultkeep/web /var/lib/faultkeep/blobs /etc/faultkeep \
-    && chown -R faultkeep:faultkeep /var/lib/faultkeep
+    && groupadd --system metric \
+    && useradd --system --gid metric --home-dir /nonexistent --shell /usr/sbin/nologin metric \
+    && mkdir -p /opt/metric/web /var/lib/metric/blobs /etc/metric \
+    && chown -R metric:metric /var/lib/metric
 
-COPY --from=rust-builder /source/target/release/faultkeep-server /usr/local/bin/faultkeep-server
-COPY --from=web-builder /source/web/dist/ /opt/faultkeep/web/
-COPY deploy/faultkeep.container.toml /etc/faultkeep/faultkeep.toml
+COPY --from=rust-builder /source/target/release/metric-server /usr/local/bin/metric-server
+COPY --from=web-builder /source/web/dist/ /opt/metric/web/
+COPY deploy/metric.container.toml /etc/metric/metric.toml
 
-ENV FAULTKEEP_WEB_DIR=/opt/faultkeep/web
-USER faultkeep:faultkeep
-WORKDIR /var/lib/faultkeep
+ENV METRIC_WEB_DIR=/opt/metric/web
+USER metric:metric
+WORKDIR /var/lib/metric
 EXPOSE 4001
 HEALTHCHECK --interval=10s --timeout=2s --start-period=20s --retries=6 \
   CMD ["curl", "--fail", "--silent", "http://127.0.0.1:4001/live"]
-ENTRYPOINT ["faultkeep-server"]
-CMD ["--config", "/etc/faultkeep/faultkeep.toml"]
+ENTRYPOINT ["metric-server"]
+CMD ["--config", "/etc/metric/metric.toml"]

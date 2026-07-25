@@ -3,7 +3,7 @@ import { argv, exit, stderr, stdout } from 'node:process';
 
 const [dsn] = argv.slice(2);
 if (!dsn) {
-  throw new Error('Faultkeep DSN argument is required');
+  throw new Error('Metric DSN argument is required');
 }
 
 const hardDeadline = setTimeout(() => {
@@ -17,13 +17,13 @@ const hardDeadline = setTimeout(() => {
       dsn,
       tracesSampleRate: 0,
       environment: 'sdk-compatibility',
-      release: 'faultkeep-node-sdk-test@1.0.0',
+      release: 'metric-node-sdk-test@1.0.0',
       sendDefaultPii: false,
     });
-    Sentry.setTag('faultkeep.sdk_test', 'node');
+    Sentry.setTag('metric.sdk_test', 'node');
 
-    const error = new Error('Faultkeep real Node SDK compatibility event');
-    error.name = 'FaultkeepSdkCompatibilityError';
+    const error = new Error('Metric real Node SDK compatibility event');
+    error.name = 'MetricSdkCompatibilityError';
     const eventId = Sentry.captureException(error);
     const flushed = await Sentry.flush(8_000);
     await Sentry.close(2_000);

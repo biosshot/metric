@@ -210,7 +210,7 @@ impl DebugFileId {
     #[must_use]
     pub fn derive(project_id: ProjectId, checksum: [u8; 32]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"faultkeep/debug-file-id/v1");
+        hasher.update(b"metric/debug-file-id/v1");
         hasher.update(&project_id.get().to_be_bytes());
         hasher.update(&checksum);
         let mut id = [0_u8; 16];

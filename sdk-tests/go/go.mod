@@ -1,4 +1,4 @@
-module faultkeep/sdk-compatibility-go
+module metric/sdk-compatibility-go
 
 go 1.25.0
 

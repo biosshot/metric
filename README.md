@@ -1,6 +1,6 @@
-# faultkeep
+# metric
 
-Faultkeep provides Sentry-compatible Error Event ingestion, durable processing,
+Metric provides Sentry-compatible Error Event ingestion, durable processing,
 native investigation APIs, and a minimal Vue Web interface. The authoritative
 identity boundary uses Argon2id passwords, opaque Web sessions with CSRF, scoped
 personal API tokens, organization roles/permissions, final-owner protection, and
@@ -30,17 +30,17 @@ Real official SDK compatibility harnesses and the versioned result matrix live i
 cd sdk-tests/node
 npm ci
 cd ../..
-cargo test -p faultkeep-server --test sdk_compatibility_e2e real_node_sdk_sends_an_error_event -- --ignored --nocapture
+cargo test -p metric-server --test sdk_compatibility_e2e real_node_sdk_sends_an_error_event -- --ignored --nocapture
 ```
 
 ## Web development
 
 The Phase 13 Vue 3 client lives in `web/` and consumes only `/api/v1`. Run
-`npm install` once, then `npm run dev` in that directory while Faultkeep listens
+`npm install` once, then `npm run dev` in that directory while Metric listens
 on `127.0.0.1:4001`.
 
 `npm run build` creates `web/dist`, which the Rust server serves on the supported
-Web routes. `FAULTKEEP_WEB_DIR` can point to an alternative production asset
+Web routes. `METRIC_WEB_DIR` can point to an alternative production asset
 directory.
 
 Web checks are `npm run format:check`, `npm run lint`, `npm test`,
@@ -49,17 +49,17 @@ Web checks are `npm run format:check`, `npm run lint`, `npm test`,
 Validate configuration without starting the server:
 
 ```text
-cargo run -p faultkeep-server --bin faultkeep-server -- --config config/faultkeep.example.toml --check-config
+cargo run -p metric-server --bin metric-server -- --config config/metric.example.toml --check-config
 ```
 
 For local development, copy `.env.local.example` to `.env.local`, replace the
 placeholder secret, and pass it explicitly:
 
 ```text
-cargo run -p faultkeep-server --bin faultkeep-server -- --env-file .env.local --config config/faultkeep.example.toml
+cargo run -p metric-server --bin metric-server -- --env-file .env.local --config config/metric.example.toml
 ```
 
-Faultkeep never searches for dotenv files implicitly. The named file must be a
+Metric never searches for dotenv files implicitly. The named file must be a
 regular file no larger than 256 KiB and must parse completely. Existing process
 environment variables take precedence over values in the file; `APP__...`
 values then override matching TOML settings. Effective configuration and errors
@@ -70,13 +70,13 @@ configuration can be printed with `--print-effective-config`; secret values are
 always redacted.
 
 On the first MongoDB-backed startup, the server prints one
-`FAULTKEEP_BOOTSTRAP_TOKEN`. It is shown only when its digest is first persisted;
+`METRIC_BOOTSTRAP_TOKEN`. It is shown only when its digest is first persisted;
 store the plaintext securely. The Web first-setup form consumes it once.
 Insecure session cookies require both `auth.secure_cookie = false` and
 the explicit local-only `development.allow_insecure_cookies = true`.
 
 Phase 14 maintenance uses the typed `[retention]` and `[scheduler]` sections in
-`config/faultkeep.example.toml`. New processed Events use those durations
+`config/metric.example.toml`. New processed Events use those durations
 immediately. Existing processed Events and hourly statistics are adjusted gradually
 in bounded keyset pages; pending Events never receive retention expiry. The
 all-in-one server starts Scheduler before becoming ready and stops it through the
@@ -91,7 +91,7 @@ the grace period. Purge uses bounded batches and a final reconciliation pass;
 audit records remain retained.
 
 Phase 15 advances the initial MongoDB schema generation to 3 by adding
-`project_deletions` and the tombstone shape. Faultkeep still has no migration
+`project_deletions` and the tombstone shape. Metric still has no migration
 framework: an existing generation-2 development database is rejected rather
 than modified implicitly. Select a fresh database name or explicitly recreate
 development data.
@@ -113,7 +113,7 @@ key; multipart writes retry interrupted parts and abort unfinished uploads.
 
 Cold Event archival remains disabled by default. Enable `[archive].enabled = true`
 only with MongoDB configured. Eligible terminal Events are encoded as bounded
-Parquet/Zstd project/day segments. Faultkeep records and verifies a complete manifest
+Parquet/Zstd project/day segments. Metric records and verifies a complete manifest
 before assigning hot expiry, so a failed archive attempt leaves the source Event
 queryable. This phase does not add archive search or restore. Enabling it advances
 the development schema generation to 7; no online migration is attempted.

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use faultkeep_domain::{
+use metric_domain::{
     DsnKey, EventId, EventKey, ProjectId, ProjectKeyLabel, ProjectKeyState, Timestamp,
     api::{
         ActivityAnchor, ApiTokenView, EnvironmentAnchor, EventAnchor, EventView, IssueListQuery,
@@ -21,7 +21,7 @@ use faultkeep_domain::{
         TraceView,
     },
 };
-use faultkeep_ports::{
+use metric_ports::{
     BlobReadSession, BlobStore, BlobStoreError, Clock, InvestigationStore, InvestigationStoreError,
     LogQuery, PerformanceQuery, SegmentQuery, SignalStore, SignalStoreError,
 };
@@ -640,7 +640,7 @@ impl NativeApiService {
         issue_id: IssueId,
         cursor: Option<&str>,
         limit: Option<usize>,
-    ) -> Result<NativePage<faultkeep_domain::api::IssueActivityView>, NativeApiError> {
+    ) -> Result<NativePage<metric_domain::api::IssueActivityView>, NativeApiError> {
         self.authorize(context, project_id, Permission::IssueRead)
             .await?;
         let digest = cursor_digest(
@@ -801,7 +801,7 @@ impl NativeApiService {
         project_id: ProjectId,
         cursor: Option<&str>,
         limit: Option<usize>,
-    ) -> Result<NativePage<faultkeep_domain::api::ReleaseView>, NativeApiError> {
+    ) -> Result<NativePage<metric_domain::api::ReleaseView>, NativeApiError> {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
         let digest = cursor_digest(project_id, "releases:newest", CursorKind::Release);
@@ -837,7 +837,7 @@ impl NativeApiService {
         project_id: ProjectId,
         cursor: Option<&str>,
         limit: Option<usize>,
-    ) -> Result<NativePage<faultkeep_domain::api::EnvironmentView>, NativeApiError> {
+    ) -> Result<NativePage<metric_domain::api::EnvironmentView>, NativeApiError> {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
         let digest = cursor_digest(project_id, "environments:newest", CursorKind::Environment);
@@ -976,7 +976,7 @@ impl NativeApiService {
             .load_project_view(project_id)
             .await
             .map_err(map_project_error)?;
-        if project.state == faultkeep_domain::ProjectAcceptanceState::Active {
+        if project.state == metric_domain::ProjectAcceptanceState::Active {
             Ok(())
         } else {
             Err(NativeApiError::Conflict)
@@ -1121,7 +1121,7 @@ fn millis_to_ns(value: Timestamp) -> Result<i64, NativeApiError> {
 
 fn signal_cursor_digest(project_id: ProjectId, normalized: &str, kind: u8) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep/signal-api-cursor/v1");
+    hasher.update(b"metric/signal-api-cursor/v1");
     hasher.update(&[kind]);
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(normalized.as_bytes());
@@ -1181,10 +1181,10 @@ fn status_name(status: Option<IssueStatus>) -> &'static str {
 fn decode_issue_anchor(
     value: &str,
     digest: [u8; 16],
-) -> Result<faultkeep_domain::api::IssueAnchor, NativeApiError> {
+) -> Result<metric_domain::api::IssueAnchor, NativeApiError> {
     let (last_seen, id) =
         decode_cursor(value, CursorKind::Issue, 16, digest).map_err(map_cursor_error)?;
-    Ok(faultkeep_domain::api::IssueAnchor {
+    Ok(metric_domain::api::IssueAnchor {
         last_seen,
         issue_id: IssueId::from_bytes(id.try_into().map_err(|_| NativeApiError::InvalidCursor)?),
     })
@@ -1205,7 +1205,7 @@ fn decode_activity_anchor(value: &str, digest: [u8; 16]) -> Result<ActivityAncho
         decode_cursor(value, CursorKind::Activity, 16, digest).map_err(map_cursor_error)?;
     Ok(ActivityAnchor {
         at,
-        id: faultkeep_domain::issue::IssueActivityId::from_bytes(
+        id: metric_domain::issue::IssueActivityId::from_bytes(
             id.try_into().map_err(|_| NativeApiError::InvalidCursor)?,
         ),
     })
@@ -1216,7 +1216,7 @@ fn decode_release_anchor(value: &str, digest: [u8; 16]) -> Result<ReleaseAnchor,
         decode_cursor(value, CursorKind::Release, 16, digest).map_err(map_cursor_error)?;
     Ok(ReleaseAnchor {
         last_seen,
-        id: faultkeep_domain::finalization::ReleaseId::from_bytes(
+        id: metric_domain::finalization::ReleaseId::from_bytes(
             id.try_into().map_err(|_| NativeApiError::InvalidCursor)?,
         ),
     })
@@ -1230,7 +1230,7 @@ fn decode_environment_anchor(
         decode_cursor(value, CursorKind::Environment, 16, digest).map_err(map_cursor_error)?;
     Ok(EnvironmentAnchor {
         last_seen,
-        id: faultkeep_domain::finalization::EnvironmentId::from_bytes(
+        id: metric_domain::finalization::EnvironmentId::from_bytes(
             id.try_into().map_err(|_| NativeApiError::InvalidCursor)?,
         ),
     })

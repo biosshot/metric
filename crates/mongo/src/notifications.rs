@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     EventId, ProjectId, Timestamp,
     grouping::IssueId,
     issue::{IssueNotificationKind, IssueTitle, IssueTransitionId},
@@ -15,7 +15,7 @@ use faultkeep_domain::{
         SealedWebhookSecret, WebhookEndpoint,
     },
 };
-use faultkeep_ports::{NotificationStore, NotificationStoreError, PortFuture};
+use metric_ports::{NotificationStore, NotificationStoreError, PortFuture};
 use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,

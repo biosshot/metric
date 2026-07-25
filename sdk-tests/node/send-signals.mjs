@@ -3,7 +3,7 @@ import { argv, stdout } from 'node:process';
 
 const [dsn] = argv.slice(2);
 if (!dsn) {
-  throw new Error('Faultkeep DSN argument is required');
+  throw new Error('Metric DSN argument is required');
 }
 
 // Инициализация Sentry
@@ -12,7 +12,7 @@ Sentry.init({
   enableLogs: true,
   tracesSampleRate: 1.0,
   environment: 'sdk-compatibility',
-  release: 'faultkeep-node-signals@1.1.0',
+  release: 'metric-node-signals@1.1.0',
 });
 
 // Главный спан запроса
@@ -115,4 +115,4 @@ if (!flushed) {
   throw new Error('Sentry SDK did not flush signals before the deadline');
 }
 
-stdout.write('Faultkeep Node complex Traces, Breadcrumbs, and Errors were flushed\n');
+stdout.write('Metric Node complex Traces, Breadcrumbs, and Errors were flushed\n');

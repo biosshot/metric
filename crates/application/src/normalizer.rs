@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, PrimitiveError, Timestamp,
     event::{
         CanonicalValue, EventLevel, EventPlatform, NormalizationDiagnostic,
@@ -1195,7 +1195,7 @@ fn canonical_to_value(value: &CanonicalValue) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faultkeep_domain::{EventId, ProjectId, ScrubbedEventPayload};
+    use metric_domain::{EventId, ProjectId, ScrubbedEventPayload};
 
     fn accepted(json: &str) -> AcceptedEvent {
         AcceptedEvent {

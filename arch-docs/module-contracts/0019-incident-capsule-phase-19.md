@@ -1,7 +1,7 @@
 # Module contract 0019: Incident Capsule (Phase 19)
 
 - Status: Accepted for implementation
-- Owner: `faultkeep-application::incident_capsule`
+- Owner: `metric-application::incident_capsule`
 - Architecture: ADR-0034, ADR-0035, ADR-0038, ADR-0039
 
 ## Responsibility
@@ -92,11 +92,11 @@ message, tag, filename, checksum or generated archive bytes.
 
 Metrics use closed outcome labels only:
 
-- `faultkeep_incident_capsule_exports_total{outcome}`;
-- `faultkeep_incident_capsule_selected_events`;
-- `faultkeep_incident_capsule_uncompressed_bytes`;
-- `faultkeep_incident_capsule_generation_seconds`;
-- `faultkeep_incident_capsule_stream_disconnects_total`.
+- `metric_incident_capsule_exports_total{outcome}`;
+- `metric_incident_capsule_selected_events`;
+- `metric_incident_capsule_uncompressed_bytes`;
+- `metric_incident_capsule_generation_seconds`;
+- `metric_incident_capsule_stream_disconnects_total`.
 
 Safe logs may contain request ID, organization/project/Issue identifiers, counts,
 size class and stable error code. They must not contain exported content.

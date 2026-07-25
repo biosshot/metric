@@ -6,20 +6,20 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use faultkeep_application::{
+use metric_application::{
     ingest::{AttachmentIngestConfig, IngestService},
     observability::Metrics,
     shutdown::ShutdownRoot,
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
-use faultkeep_domain::{
+use metric_blob::{LocalBlobConfig, LocalBlobStore};
+use metric_domain::{
     DsnKey, EventId, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
     blob::BlobKey,
 };
-use faultkeep_ports::BlobStore;
-use faultkeep_server::{config::IngestConfig, http, ingest_http};
-use faultkeep_testkit::{
+use metric_ports::BlobStore;
+use metric_server::{config::IngestConfig, http, ingest_http};
+use metric_testkit::{
     FakeEventSink, FakeOutcomeSink, FakeProjectResolver, FixedClock, FixedRandom,
 };
 use serde::Deserialize;
@@ -155,15 +155,15 @@ async fn exercise_real_node_sdk(
             &payload,
             "sentry.javascript.node",
             NODE_SDK_VERSION,
-            "faultkeep-node-sdk-test@1.0.0",
+            "metric-node-sdk-test@1.0.0",
         )?;
 
         match fixture {
             NodeFixture::ErrorOnly => {
                 verify_exception(
                     &payload,
-                    "FaultkeepSdkCompatibilityError",
-                    "Faultkeep real Node SDK compatibility event",
+                    "MetricSdkCompatibilityError",
+                    "Metric real Node SDK compatibility event",
                 )?;
                 if payload.get("attachments").is_some() || harness.blob.capacity().used_bytes != 0 {
                     return Err("base Node Error Event unexpectedly created a blob".into());
@@ -172,8 +172,8 @@ async fn exercise_real_node_sdk(
             NodeFixture::Attachment => {
                 verify_exception(
                     &payload,
-                    "FaultkeepSdkAttachmentCompatibilityError",
-                    "Faultkeep real Node SDK attachment compatibility event",
+                    "MetricSdkAttachmentCompatibilityError",
+                    "Metric real Node SDK attachment compatibility event",
                 )?;
                 verify_attachment(&payload, &harness.blob).await?;
             }
@@ -254,12 +254,12 @@ async fn exercise_real_browser_sdk() -> Result<(), Box<dyn Error>> {
             &payload,
             "sentry.javascript.browser",
             BROWSER_SDK_VERSION,
-            "faultkeep-browser-sdk-test@1.0.0",
+            "metric-browser-sdk-test@1.0.0",
         )?;
         verify_exception(
             &payload,
-            "FaultkeepBrowserSdkCompatibilityError",
-            "Faultkeep real Browser SDK compatibility event",
+            "MetricBrowserSdkCompatibilityError",
+            "Metric real Browser SDK compatibility event",
         )?;
         if payload.get("attachments").is_some() || harness.blob.capacity().used_bytes != 0 {
             return Err("base Browser Error Event unexpectedly created a blob".into());
@@ -290,14 +290,14 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
             .current_dir(&workspace)
             .arg("-cp")
             .arg(java_classpath)
-            .args(["FaultkeepSdkCompatibility", &dsn])
+            .args(["MetricSdkCompatibility", &dsn])
             .output(),
         ExternalFixture::Dotnet => Command::new("dotnet")
             .current_dir(&workspace)
             .args([
                 "run",
                 "--project",
-                "sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj",
+                "sdk-tests/dotnet/MetricSdkCompatibility.csproj",
                 "--configuration",
                 "Release",
                 "--no-build",
@@ -350,45 +350,45 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
                     &payload,
                     "sentry.python",
                     PYTHON_SDK_VERSION,
-                    "faultkeep-python-sdk-test@1.0.0",
+                    "metric-python-sdk-test@1.0.0",
                 )?;
-                verify_exception_value(&payload, "Faultkeep real Python SDK compatibility event")?;
+                verify_exception_value(&payload, "Metric real Python SDK compatibility event")?;
             }
             ExternalFixture::Java => {
                 verify_sdk(
                     &payload,
                     "sentry.java",
                     JAVA_SDK_VERSION,
-                    "faultkeep-java-sdk-test@1.0.0",
+                    "metric-java-sdk-test@1.0.0",
                 )?;
-                verify_exception_value(&payload, "Faultkeep real Java SDK compatibility event")?;
+                verify_exception_value(&payload, "Metric real Java SDK compatibility event")?;
             }
             ExternalFixture::Dotnet => {
                 verify_sdk(
                     &payload,
                     "sentry.dotnet",
                     DOTNET_SDK_VERSION,
-                    "faultkeep-dotnet-sdk-test@1.0.0",
+                    "metric-dotnet-sdk-test@1.0.0",
                 )?;
-                verify_exception_value(&payload, "Faultkeep real .NET SDK compatibility event")?;
+                verify_exception_value(&payload, "Metric real .NET SDK compatibility event")?;
             }
             ExternalFixture::Go => {
                 verify_sdk(
                     &payload,
                     "sentry.go",
                     GO_SDK_VERSION,
-                    "faultkeep-go-sdk-test@1.0.0",
+                    "metric-go-sdk-test@1.0.0",
                 )?;
-                verify_exception_value(&payload, "Faultkeep real Go SDK compatibility event")?;
+                verify_exception_value(&payload, "Metric real Go SDK compatibility event")?;
             }
             ExternalFixture::Rust => {
                 verify_sdk(
                     &payload,
                     "sentry.rust",
                     RUST_SDK_VERSION,
-                    "faultkeep-rust-sdk-test@1.0.0",
+                    "metric-rust-sdk-test@1.0.0",
                 )?;
-                verify_exception_value(&payload, "Faultkeep real Rust SDK compatibility event")?;
+                verify_exception_value(&payload, "Metric real Rust SDK compatibility event")?;
             }
         }
         if payload.get("attachments").is_some() || harness.blob.capacity().used_bytes != 0 {
@@ -481,7 +481,7 @@ fn one_event(
     runtime: &str,
     stderr: &[u8],
     outcomes: &FakeOutcomeSink,
-) -> Result<faultkeep_domain::AcceptedEvent, Box<dyn Error>> {
+) -> Result<metric_domain::AcceptedEvent, Box<dyn Error>> {
     let events = sink.events();
     if events.len() != 1 {
         return Err(format!(
@@ -565,7 +565,7 @@ async fn verify_attachment(payload: &Value, blob: &LocalBlobStore) -> Result<(),
         .and_then(Value::as_array)
         .and_then(|items| items.first())
         .ok_or("real Node SDK attachment metadata is missing")?;
-    if attachment.get("filename").and_then(Value::as_str) != Some("faultkeep-context.json")
+    if attachment.get("filename").and_then(Value::as_str) != Some("metric-context.json")
         || attachment.get("content_type").and_then(Value::as_str) != Some("application/json")
     {
         return Err("real Node SDK attachment metadata is incompatible".into());
@@ -612,7 +612,7 @@ async fn test_app(
         attachments: Default::default(),
     };
     let directory =
-        std::env::temp_dir().join(format!("faultkeep-sdk-blob-{}", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("metric-sdk-blob-{}", uuid::Uuid::new_v4()));
     let blob = LocalBlobStore::new(
         &directory,
         LocalBlobConfig {

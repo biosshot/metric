@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::shutdown::ShutdownSignal;
-use faultkeep_domain::{
+use metric_domain::{
     OrganizationId, ProjectId, Timestamp,
     artifacts::{
         ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactCandidate, ArtifactDebugIdToken,
@@ -20,7 +20,7 @@ use faultkeep_domain::{
     debug_files::DebugId,
     finalization::derive_release_id,
 };
-use faultkeep_ports::{
+use metric_ports::{
     ArtifactStore, ArtifactStoreError, BlobReadSession, BlobStore, BlobStoreError, Clock,
     RandomSource,
 };

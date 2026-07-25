@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::SystemTime};
 
-use faultkeep_application::{
+use metric_application::{
     ingest::IngestService,
     log_writer::{LogWriter, LogWriterConfig},
     observability::Metrics,
@@ -11,16 +11,16 @@ use faultkeep_application::{
     span_writer::{SpanWriter, SpanWriterConfig},
     writer::{MongoWriter, MongoWriterConfig},
 };
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
 };
-use faultkeep_mongo::{EventCodecConfig, MongoProjectStore};
-use faultkeep_ports::{
+use metric_mongo::{EventCodecConfig, MongoProjectStore};
+use metric_ports::{
     AcceptedEventHandoff, Clock, IngestOutcome, OutcomeSink, PortFuture, ProjectResolveError,
     ProjectResolver, RandomError, RandomSource,
 };
-use faultkeep_server::{config::IngestConfig, http, ingest_http};
+use metric_server::{config::IngestConfig, http, ingest_http};
 use mongodb::{Client, bson::doc};
 use tokio::net::TcpListener;
 
@@ -78,10 +78,10 @@ impl RandomSource for BenchRandom {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let uri = std::env::var("FAULTKEEP_BENCH_MONGODB_URI")?;
-    let database_name = std::env::var("FAULTKEEP_BENCH_DATABASE")?;
+    let uri = std::env::var("METRIC_BENCH_MONGODB_URI")?;
+    let database_name = std::env::var("METRIC_BENCH_DATABASE")?;
     let address =
-        std::env::var("FAULTKEEP_BENCH_ADDRESS").unwrap_or_else(|_| "127.0.0.1:3101".to_owned());
+        std::env::var("METRIC_BENCH_ADDRESS").unwrap_or_else(|_| "127.0.0.1:3101".to_owned());
     let client = Client::with_uri_str(&uri).await?;
     client
         .database("admin")
@@ -95,8 +95,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = ShutdownRoot::new();
     let config = benchmark_config();
     let event_store = Arc::new(control.event_store(EventCodecConfig::default()));
-    let signal_store: Arc<dyn faultkeep_ports::SignalStore> = Arc::new(
-        control.signal_store_with_retention(faultkeep_mongo::SignalRetention {
+    let signal_store: Arc<dyn metric_ports::SignalStore> = Arc::new(
+        control.signal_store_with_retention(metric_mongo::SignalRetention {
             logs_days: 30,
             spans_days: 30,
             span_stats_hourly_days: 90,
@@ -179,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         true,
     );
     let listener = TcpListener::bind(&address).await?;
-    let scheduler_task = if std::env::var("FAULTKEEP_BENCH_MAINTENANCE").as_deref() == Ok("1") {
+    let scheduler_task = if std::env::var("METRIC_BENCH_MAINTENANCE").as_deref() == Ok("1") {
         let (_, task) = Scheduler::start(
             Arc::new(control.maintenance_store()),
             clock,

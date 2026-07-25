@@ -1,4 +1,4 @@
-name: faultkeep
+name: metric
 
 services:
   mongodb:
@@ -6,8 +6,8 @@ services:
     restart: unless-stopped
     command: ["mongod", "--bind_ip_all"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME: faultkeep
-      MONGO_INITDB_ROOT_PASSWORD: ${FAULTKEEP_MONGO_PASSWORD:?set in release.env}
+      MONGO_INITDB_ROOT_USERNAME: metric
+      MONGO_INITDB_ROOT_PASSWORD: ${METRIC_MONGO_PASSWORD:?set in release.env}
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -17,9 +17,9 @@ services:
           "mongosh",
           "--quiet",
           "--username",
-          "faultkeep",
+          "metric",
           "--password",
-          "${FAULTKEEP_MONGO_PASSWORD}",
+          "${METRIC_MONGO_PASSWORD}",
           "--authenticationDatabase",
           "admin",
           "--eval",
@@ -29,7 +29,7 @@ services:
       timeout: 3s
       retries: 30
 
-  faultkeep:
+  metric:
     build:
       context: ..
       dockerfile: Dockerfile
@@ -38,13 +38,13 @@ services:
       mongodb:
         condition: service_healthy
     environment:
-      MONGODB_URI: mongodb://faultkeep:${FAULTKEEP_MONGO_PASSWORD}@mongodb:27017/?authSource=admin
-      SCRUB_HMAC_KEY: ${FAULTKEEP_SCRUB_HMAC_KEY:?64 lowercase hex characters}
-      FAULTKEEP_WEB_DIR: /opt/faultkeep/web
+      MONGODB_URI: mongodb://metric:${METRIC_MONGO_PASSWORD}@mongodb:27017/?authSource=admin
+      SCRUB_HMAC_KEY: ${METRIC_SCRUB_HMAC_KEY:?64 lowercase hex characters}
+      METRIC_WEB_DIR: /opt/metric/web
     ports:
-      - "${FAULTKEEP_HTTP_PORT:-4001}:4001"
+      - "${METRIC_HTTP_PORT:-4001}:4001"
     volumes:
-      - blob-data:/var/lib/faultkeep/blobs
+      - blob-data:/var/lib/metric/blobs
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777

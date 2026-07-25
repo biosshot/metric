@@ -9,7 +9,7 @@ Generate a read-only aggregate report from a local MongoDB database:
 ```powershell
 ./scripts/run-capacity-report.ps1 `
   -MongoUri 'mongodb://127.0.0.1:27017/?retryWrites=false' `
-  -Database faultkeep `
+  -Database metric `
   -AcceptedRps 1158 `
   -RetentionDays 30 `
   -ReplicationFactor 1
@@ -39,7 +39,7 @@ Run a short local durable regression profile with:
 The runner records achieved RPS, p95/p99, dropped iterations, TCP failures and HTTP
 `200`/`429`/`503`/other counts. It verifies that every HTTP 200 has exactly one
 durable Event, stops its benchmark process in `finally`, and drops only a validated
-`faultkeep_phase22_*` database.
+`metric_phase22_*` database.
 
 The actual release gate requires controlled-hardware 5,000/s for 60 minutes,
 20,000/s for 5 minutes, backlog recovery above 1.5 times arrival, restart, retention

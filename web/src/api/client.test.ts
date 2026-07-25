@@ -15,7 +15,7 @@ describe('native API client', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Headers;
     expect(init.credentials).toBe('include');
-    expect(headers.get('x-faultkeep-organization-id')).toBe('7');
+    expect(headers.get('x-metric-organization-id')).toBe('7');
     expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
   });
 
@@ -68,7 +68,7 @@ describe('native API client', () => {
 
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe('/api/v1/organization');
-    expect((init.headers as Headers).get('x-faultkeep-organization-id')).toBe('7');
+    expect((init.headers as Headers).get('x-metric-organization-id')).toBe('7');
     expect((init.headers as Headers).get('x-csrf-token')).toBeNull();
   });
 
@@ -139,7 +139,7 @@ describe('native API client', () => {
     const headers = init.headers as Headers;
     expect(path).toBe('/api/v1/projects');
     expect(init.method).toBe('POST');
-    expect(headers.get('x-faultkeep-organization-id')).toBe('7');
+    expect(headers.get('x-metric-organization-id')).toBe('7');
     expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
     expect(JSON.parse(String(init.body))).toMatchObject({
       display_name: 'Payments API',
@@ -231,7 +231,7 @@ describe('native API client', () => {
     await expect(api.status()).rejects.toMatchObject({
       status: 502,
       code: 'http_502',
-      message: 'Faultkeep returned HTTP 502 without a recognized error.',
+      message: 'Metric returned HTTP 502 without a recognized error.',
     });
   });
 });

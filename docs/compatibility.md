@@ -1,6 +1,6 @@
 # Compatibility
 
-Faultkeep version one claims Sentry compatibility only for the Error Event path and
+Metric version one claims Sentry compatibility only for the Error Event path and
 only for exact rows marked `pass` in
 `compatibility/sentry-sdk-matrix.toml`.
 

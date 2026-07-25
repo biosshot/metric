@@ -11,9 +11,9 @@ pub enum Metric {
 impl Metric {
     const fn name(self) -> &'static str {
         match self {
-            Self::HttpRequests => "faultkeep_http_requests_total",
-            Self::IngestRequests => "faultkeep_ingest_requests_total",
-            Self::Shutdowns => "faultkeep_shutdown_total",
+            Self::HttpRequests => "metric_http_requests_total",
+            Self::IngestRequests => "metric_ingest_requests_total",
+            Self::Shutdowns => "metric_shutdown_total",
         }
     }
 }
@@ -68,7 +68,7 @@ impl Metrics {
     }
 
     pub fn project_cache(self, result: ProjectCacheResult) {
-        metrics::counter!("faultkeep_project_cache_lookups_total", "result" => result.label())
+        metrics::counter!("metric_project_cache_lookups_total", "result" => result.label())
             .increment(1);
     }
 }

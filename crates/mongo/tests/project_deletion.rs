@@ -1,6 +1,6 @@
 use std::{error::Error, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DisplayName, DsnKey, EventId, IpScrubPolicy, ItemCapabilities, OrganizationId,
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ProjectKeyIdentity, ProjectKeyLabel, ProjectKeyState, ScrubbedEventPayload, SecretBytes, Slug,
@@ -8,8 +8,8 @@ use faultkeep_domain::{
     auth::UserId,
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionRequest},
 };
-use faultkeep_mongo::{EventCodecConfig, MongoProjectStore};
-use faultkeep_ports::{EventStore, ProjectDeletionStore, ProjectPurgeRequest, ProjectStore};
+use metric_mongo::{EventCodecConfig, MongoProjectStore};
+use metric_ports::{EventStore, ProjectDeletionStore, ProjectPurgeRequest, ProjectStore};
 use mongodb::{
     Client, Database,
     bson::{Binary, DateTime, doc, spec::BinarySubtype},
@@ -389,7 +389,7 @@ fn generic_binary(bytes: &[u8]) -> Binary {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
         "mongodb://127.0.0.1:27017/?serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
@@ -398,7 +398,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase15_test_{}",
+        "metric_phase15_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }

@@ -21,7 +21,7 @@
   scans.
 - Attachment/minidump bytes, debug files, Artifact Bundles, source archives,
   credentials, compact BSON keys and internal BlobStore keys are excluded.
-- An independent `faultkeep-testkit` reader accepts unknown safe manifest fields
+- An independent `metric-testkit` reader accepts unknown safe manifest fields
   and rejects unsupported versions, traversal, duplicate/corrupt archives,
   checksum mismatches, truncation and compression bombs.
 - Backpressure, client disconnect, shutdown and the complete 30-second generation
@@ -57,7 +57,7 @@ maxima.
 - retained release benchmark on Ryzen 5 5600H / Windows / Rust 1.88:
   300 samples, 642 complete Capsule responses/s and 2.05 compressed MiB/s.
 - regression comparator at 20 percent budget: pass.
-- scoped Cargo, Rust test, Faultkeep and k6 process check: clean.
+- scoped Cargo, Rust test, Metric and k6 process check: clean.
 
 ## Safe observability
 

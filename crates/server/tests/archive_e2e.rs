@@ -4,14 +4,14 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use faultkeep_application::archive::{ArchiveConfig, ArchiveService};
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore};
-use faultkeep_domain::{
+use metric_application::archive::{ArchiveConfig, ArchiveService};
+use metric_blob::{LocalBlobConfig, LocalBlobStore};
+use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, SecretBytes, Timestamp,
     blob::BlobKey,
 };
-use faultkeep_mongo::{EventCodecConfig, MongoEventStore, MongoProjectStore};
-use faultkeep_ports::{BlobStore, Clock, EventStore, EventWriteStatus};
+use metric_mongo::{EventCodecConfig, MongoEventStore, MongoProjectStore};
+use metric_ports::{BlobStore, Clock, EventStore, EventWriteStatus};
 use mongodb::{
     Client, Database,
     bson::{Binary, Document, doc, spec::BinarySubtype},
@@ -26,10 +26,10 @@ impl Clock for FixedClock {
 }
 
 #[tokio::test]
-#[ignore = "requires a real MongoDB configured by FAULTKEEP_TEST_MONGODB_URI"]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
 async fn cumulative_event_to_archive_object_manifest_then_hot_retention() {
     let database = test_database().await.unwrap();
-    let root = std::env::temp_dir().join(format!("faultkeep-archive-e2e-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("metric-archive-e2e-{}", uuid::Uuid::new_v4()));
     let result = exercise(&database, &root).await;
     let cleanup_database = database.drop().await;
     let cleanup_blobs = std::fs::remove_dir_all(&root);
@@ -146,10 +146,10 @@ fn binary<const N: usize>(bytes: [u8; N]) -> Binary {
 }
 
 async fn test_database() -> Result<Database, Box<dyn Error>> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
         "mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000".to_owned()
     });
     let client = Client::with_uri_str(uri).await?;
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    Ok(client.database(&format!("faultkeep_phase21_archive_e2e_{nonce}")))
+    Ok(client.database(&format!("metric_phase21_archive_e2e_{nonce}")))
 }

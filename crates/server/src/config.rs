@@ -1,7 +1,7 @@
 use std::{env, fmt, fs, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, ValueEnum};
-use faultkeep_domain::{BoundedDuration, ByteSize};
+use metric_domain::{BoundedDuration, ByteSize};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
@@ -31,7 +31,7 @@ type ArtifactLogicalBytes = ByteSize<{ 4_u64 * 1024 * 1024 * 1024 }>;
 type ArtifactQuotaBytes = ByteSize<{ 1024_u64 * 1024 * 1024 * 1024 * 1024 }>;
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "faultkeep", version, about = "Faultkeep all-in-one server")]
+#[command(name = "metric", version, about = "Metric all-in-one server")]
 pub struct Cli {
     /// TOML configuration file.
     #[arg(long)]
@@ -876,7 +876,7 @@ impl Default for RawBlobConfig {
     fn default() -> Self {
         Self {
             backend: BlobBackend::Local,
-            root: PathBuf::from("./faultkeep-data/blobs"),
+            root: PathBuf::from("./metric-data/blobs"),
             capacity: "1 GiB".to_owned(),
             reserve: "128 MiB".to_owned(),
             max_object_bytes: "100 MiB".to_owned(),
@@ -903,7 +903,7 @@ impl Default for RawS3BlobSettings {
         Self {
             endpoint: None,
             region: "us-east-1".to_owned(),
-            bucket: "faultkeep".to_owned(),
+            bucket: "metric".to_owned(),
             access_key_id: None,
             secret_access_key: None,
             session_token: None,
@@ -969,7 +969,7 @@ impl Default for RawMongoConfig {
     fn default() -> Self {
         Self {
             uri: None,
-            database: "faultkeep".to_owned(),
+            database: "metric".to_owned(),
             bootstrap_timeout: "10s".to_owned(),
         }
     }
@@ -1854,7 +1854,7 @@ impl AppConfig {
                 let mut bytes = [0_u8; 32];
                 hex::decode_to_slice(value.expose(), &mut bytes)
                     .map_err(|_| ConfigError::InvalidScrubHmacKey)?;
-                Ok::<_, ConfigError>(faultkeep_domain::SecretBytes::new(bytes))
+                Ok::<_, ConfigError>(metric_domain::SecretBytes::new(bytes))
             })
             .transpose()?;
         Ok(ResolvedSecrets {
@@ -2515,7 +2515,7 @@ impl TryFrom<RawAuthSettings> for AuthSettings {
 
 pub struct ResolvedSecrets {
     pub mongodb_uri: Option<SecretValue>,
-    pub scrub_hmac_key: Option<faultkeep_domain::SecretBytes>,
+    pub scrub_hmac_key: Option<metric_domain::SecretBytes>,
     pub s3_access_key_id: Option<SecretValue>,
     pub s3_secret_access_key: Option<SecretValue>,
     pub s3_session_token: Option<SecretValue>,
@@ -2537,7 +2537,7 @@ mod tests {
 
     #[test]
     fn defaults_are_bounded_and_role_is_all() {
-        let cli = Cli::parse_from(["faultkeep", "--check-config"]);
+        let cli = Cli::parse_from(["metric", "--check-config"]);
         let config = load(&cli).unwrap();
         assert_eq!(config.role, Role::All);
         assert_eq!(config.server.shutdown_grace.get().as_secs(), 10);
@@ -2932,7 +2932,7 @@ mod tests {
     #[test]
     fn config_path_is_not_silently_ignored() {
         let cli = Cli::parse_from([
-            "faultkeep",
+            "metric",
             "--config",
             "definitely-missing-config.toml",
             "--check-config",
@@ -2943,7 +2943,7 @@ mod tests {
     #[test]
     fn explicit_env_file_is_loaded_and_process_environment_wins() {
         let path = temporary_path("environment");
-        let name = format!("FAULTKEEP_ENV_FILE_TEST_{}", uuid::Uuid::new_v4().simple());
+        let name = format!("METRIC_ENV_FILE_TEST_{}", uuid::Uuid::new_v4().simple());
         let existing_path = env::var("PATH").expect("test process has PATH");
         fs::write(
             &path,
@@ -2951,7 +2951,7 @@ mod tests {
         )
         .unwrap();
         let cli = Cli::parse_from([
-            "faultkeep",
+            "metric",
             "--env-file",
             path.to_str().unwrap(),
             "--check-config",
@@ -2967,7 +2967,7 @@ mod tests {
     #[test]
     fn env_file_is_explicit_bounded_and_fail_closed() {
         let missing = Cli::parse_from([
-            "faultkeep",
+            "metric",
             "--env-file",
             "definitely-missing.env",
             "--check-config",
@@ -2980,7 +2980,7 @@ mod tests {
         let invalid_path = temporary_path("invalid-environment");
         fs::write(&invalid_path, "BROKEN='unterminated\n").unwrap();
         let invalid = Cli::parse_from([
-            "faultkeep",
+            "metric",
             "--env-file",
             invalid_path.to_str().unwrap(),
             "--check-config",
@@ -2998,7 +2998,7 @@ mod tests {
         )
         .unwrap();
         let oversized = Cli::parse_from([
-            "faultkeep",
+            "metric",
             "--env-file",
             oversized_path.to_str().unwrap(),
             "--check-config",
@@ -3022,7 +3022,7 @@ mod tests {
 
     fn temporary_path(label: &str) -> PathBuf {
         env::temp_dir().join(format!(
-            "faultkeep-{label}-{}-{}",
+            "metric-{label}-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ))
@@ -3033,7 +3033,7 @@ mod tests {
         let path = temporary_path("unknown");
         fs::write(&path, "unknown_field = true\n").unwrap();
         let cli = Cli::parse_from([
-            "faultkeep",
+            "metric",
             "--config",
             path.to_str().unwrap(),
             "--check-config",

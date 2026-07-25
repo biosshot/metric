@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroU64, sync::Arc};
 
-use faultkeep_domain::{
+use metric_domain::{
     event::{NormalizedEvent, NormalizedEventBody, NormalizedFrame},
     grouping::{GroupingResult, verify_issue_id},
     issue::{
@@ -11,7 +11,7 @@ use faultkeep_domain::{
         MAX_ISSUE_CULPRIT_BYTES, MAX_ISSUE_TITLE_BYTES,
     },
 };
-use faultkeep_ports::{IssueStore, IssueStoreError};
+use metric_ports::{IssueStore, IssueStoreError};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -72,7 +72,7 @@ impl IssueService {
 
     pub async fn search_titles(
         &self,
-        project_id: faultkeep_domain::ProjectId,
+        project_id: metric_domain::ProjectId,
         query: IssueSearchQuery,
     ) -> Result<Vec<IssueSearchResult>, IssueServiceError> {
         self.store
@@ -83,9 +83,9 @@ impl IssueService {
 
     pub async fn load(
         &self,
-        project_id: faultkeep_domain::ProjectId,
-        issue_id: faultkeep_domain::grouping::IssueId,
-    ) -> Result<faultkeep_domain::issue::IssueSnapshot, IssueServiceError> {
+        project_id: metric_domain::ProjectId,
+        issue_id: metric_domain::grouping::IssueId,
+    ) -> Result<metric_domain::issue::IssueSnapshot, IssueServiceError> {
         self.store
             .load(project_id, issue_id)
             .await
@@ -111,7 +111,7 @@ pub fn prepare_issue_occurrence(
             .body
             .release
             .as_deref()
-            .map(faultkeep_domain::issue::IssueRelease::new)
+            .map(metric_domain::issue::IssueRelease::new)
             .transpose()
             .map_err(map_value_error)?,
         title: build_title(&event.body)?,
@@ -228,13 +228,13 @@ const fn map_store_error(error: IssueStoreError) -> IssueServiceError {
 mod tests {
     use std::{collections::BTreeMap, sync::Mutex};
 
-    use faultkeep_domain::{
+    use metric_domain::{
         EventId, ProjectId, Timestamp,
         event::{EventLevel, EventPlatform, NormalizedException},
         grouping::group,
         issue::{IssueCommand, IssueCommandResult, IssueMutationKind, IssueSnapshot, IssueStatus},
     };
-    use faultkeep_ports::{IssueStore, PortFuture};
+    use metric_ports::{IssueStore, PortFuture};
 
     use super::*;
 
@@ -267,7 +267,7 @@ mod tests {
         fn load(
             &self,
             _project_id: ProjectId,
-            _issue_id: faultkeep_domain::grouping::IssueId,
+            _issue_id: metric_domain::grouping::IssueId,
         ) -> PortFuture<'_, Result<IssueSnapshot, IssueStoreError>> {
             Box::pin(async { Err(IssueStoreError::NotFound) })
         }

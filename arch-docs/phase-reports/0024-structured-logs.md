@@ -78,7 +78,7 @@ Reviewed baselines:
 
 The mixed profile used MongoDB local standalone on the Ryzen 5 5600H Windows
 development machine. It is a regression sentinel, not a production sizing claim.
-The runner dropped its fresh `faultkeep_phase24_*` database and no benchmark server,
+The runner dropped its fresh `metric_phase24_*` database and no benchmark server,
 k6, Cargo or Rust compiler process remained.
 
 ## Exit gate

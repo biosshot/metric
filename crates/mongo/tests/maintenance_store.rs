@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DisplayName, EventId, EventKey, IpScrubPolicy, ItemCapabilities, OrganizationId,
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ScrubbedEventPayload, SecretBytes, Slug, Timestamp,
@@ -14,11 +14,11 @@ use faultkeep_domain::{
     },
     issue::{IssueCulprit, IssueGroupingDetail, IssueOccurrence, IssueTitle},
 };
-use faultkeep_mongo::{
+use metric_mongo::{
     EventCodecConfig, IssueCodecConfig, MongoEventStore, MongoIssueStore, MongoMaintenanceStore,
     MongoProjectStore,
 };
-use faultkeep_ports::{
+use metric_ports::{
     EventStore, EventWriteStatus, IssueStore, MaintenanceDisposition, MaintenanceRequest,
     MaintenanceStore, MaintenanceTask, ProjectStore,
 };
@@ -28,7 +28,7 @@ use mongodb::{
 };
 
 #[tokio::test]
-#[ignore = "requires a real MongoDB configured by FAULTKEEP_TEST_MONGODB_URI"]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
 async fn infrastructure_retention_pending_safety_reconciliation_and_bounded_plans() {
     let database = test_database().await.unwrap();
     let result = exercise(&database).await;
@@ -372,7 +372,7 @@ fn binary<const N: usize>(bytes: [u8; N]) -> Binary {
 }
 
 async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("FAULTKEEP_TEST_MONGODB_URI").unwrap_or_else(|_| {
+    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
         "mongodb://127.0.0.1:27017/?retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000"
             .to_owned()
     });
@@ -382,7 +382,7 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         .run_command(doc! { "ping": 1 })
         .await?;
     Ok(client.database(&format!(
-        "faultkeep_phase14_maintenance_test_{}",
+        "metric_phase14_maintenance_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }

@@ -4,7 +4,7 @@ import { URL } from "node:url";
 
 const [pageUrl, dsn] = argv.slice(2);
 if (!pageUrl || !dsn) {
-  throw new Error("Faultkeep page URL and DSN arguments are required");
+  throw new Error("Metric page URL and DSN arguments are required");
 }
 
 let browser;
@@ -32,13 +32,13 @@ async function run() {
   url.searchParams.set("dsn", dsn);
   await page.goto(url.toString(), { waitUntil: "load", timeout: 10_000 });
   await page.waitForFunction(
-    () => window.__faultkeepSdkResult?.complete === true,
+    () => window.__metricSdkResult?.complete === true,
     null,
     {
       timeout: 12_000,
     },
   );
-  const result = await page.evaluate(() => window.__faultkeepSdkResult);
+  const result = await page.evaluate(() => window.__metricSdkResult);
   if (result.error) {
     throw new Error(result.error);
   }

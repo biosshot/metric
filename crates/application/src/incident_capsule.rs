@@ -9,14 +9,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     EventId, EventKey, ProjectId, Timestamp,
     api::{EventView, IssueActivityKind, IssueActivityView, IssueStatBucket},
     auth::{AuthContext, Permission, RequestCorrelationId},
     grouping::{GroupingComponentKind, IssueId},
     issue::{ActorKind, ActorRef, IssueSnapshot, IssueStatus},
 };
-use faultkeep_ports::{Clock, InvestigationStore, InvestigationStoreError};
+use metric_ports::{Clock, InvestigationStore, InvestigationStoreError};
 use futures_util::{StreamExt, stream};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -293,9 +293,9 @@ impl IncidentCapsuleService {
         }
         observe_generation("ready", started);
 
-        metrics::histogram!("faultkeep_incident_capsule_selected_events")
+        metrics::histogram!("metric_incident_capsule_selected_events")
             .record(prepared.selected_event_count as f64);
-        metrics::histogram!("faultkeep_incident_capsule_uncompressed_bytes")
+        metrics::histogram!("metric_incident_capsule_uncompressed_bytes")
             .record(prepared.uncompressed_bytes as f64);
 
         let (sender, receiver) = mpsc::channel(self.config.stream_buffer_chunks);
@@ -412,7 +412,7 @@ impl IncidentCapsuleService {
         ));
         entries.push(CapsuleEntry::text(
             "README.txt",
-            b"Faultkeep Incident Capsule version 1\n\
+            b"Metric Incident Capsule version 1\n\
               \n\
               This archive contains scrubbed investigation DTOs for one Issue.\n\
               It contains no attachment bytes, debug files, source bundles, credentials,\n\
@@ -540,9 +540,9 @@ impl IncidentCapsuleService {
 }
 
 fn observe_generation(outcome: &'static str, started: Instant) {
-    metrics::counter!("faultkeep_incident_capsule_exports_total", "outcome" => outcome)
+    metrics::counter!("metric_incident_capsule_exports_total", "outcome" => outcome)
         .increment(1);
-    metrics::histogram!("faultkeep_incident_capsule_generation_seconds")
+    metrics::histogram!("metric_incident_capsule_generation_seconds")
         .record(started.elapsed().as_secs_f64());
 }
 
@@ -841,7 +841,7 @@ fn allowlisted_event_body(payload: Value) -> Result<Value, IncidentCapsuleError>
     if let Some(value) = source.remove("breadcrumbs") {
         output.insert("breadcrumbs".to_owned(), value);
     }
-    if let Some(Value::Object(mut diagnostics)) = source.remove("_faultkeep") {
+    if let Some(Value::Object(mut diagnostics)) = source.remove("_metric") {
         let mut allowed = Map::new();
         if let Some(value) = diagnostics.remove("normalization") {
             allowed.insert("normalization".to_owned(), value);
@@ -1020,7 +1020,7 @@ fn map_stream_write_error(error: io::Error) -> IncidentCapsuleError {
     } else if error.kind() == io::ErrorKind::TimedOut {
         IncidentCapsuleError::GenerationTimeout
     } else if error.kind() == io::ErrorKind::BrokenPipe {
-        metrics::counter!("faultkeep_incident_capsule_stream_disconnects_total").increment(1);
+        metrics::counter!("metric_incident_capsule_stream_disconnects_total").increment(1);
         IncidentCapsuleError::Cancelled
     } else {
         IncidentCapsuleError::Unavailable
@@ -1141,7 +1141,7 @@ mod tests {
 
     #[test]
     fn export_requires_issue_event_and_incident_permissions_together() {
-        use faultkeep_domain::{
+        use metric_domain::{
             OrganizationId,
             auth::{Actor, CredentialId, OrganizationRole, PermissionSet, UserId},
         };
@@ -1184,7 +1184,7 @@ mod tests {
         let value = allowlisted_event_body(json!({
             "message": "safe",
             "new_storage_field": "must not leak",
-            "_faultkeep": {
+            "_metric": {
                 "normalization": [],
                 "symbolication": {"status": "complete"},
                 "attachments": [{"blob_key": "event/secret"}],
@@ -1299,7 +1299,7 @@ mod tests {
             }
             entries.extend([
                 CapsuleEntry::json("diagnostics/capabilities.json", capabilities_value()),
-                CapsuleEntry::text("README.txt", b"Faultkeep Incident Capsule v1\n"),
+                CapsuleEntry::text("README.txt", b"Metric Incident Capsule v1\n"),
                 CapsuleEntry::json(
                     "manifest.json",
                     json!({"format": "incident-capsule", "version": 1}),

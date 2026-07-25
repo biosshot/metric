@@ -50,7 +50,7 @@ Phase 22 defines no new public application error code.
 - Processes started by a runner are tracked by PID and stopped in `finally`, including
   failure and threshold-exit paths. User-owned MongoDB is never stopped.
 - Generated databases are removed only when their validated names use the dedicated
-  `faultkeep_phase22_` prefix.
+  `metric_phase22_` prefix.
 
 ## Compatibility claim
 
@@ -66,7 +66,7 @@ and feedback remain advertised as disabled.
 
 ## Packaging contract
 
-The image contains one `--role all` Faultkeep binary and built Vue assets, runs as an
+The image contains one `--role all` Metric binary and built Vue assets, runs as an
 unprivileged user, uses an explicit local BlobStore volume, exposes only the
 application listener, and receives MongoDB/HMAC secrets at runtime. MongoDB remains
 a separate service. External Symbolicator is optional configuration and no

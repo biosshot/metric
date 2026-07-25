@@ -6,7 +6,7 @@ shutdown_grace = "30s"
 
 [mongodb]
 uri = { env = "MONGODB_URI" }
-database = "faultkeep"
+database = "metric"
 bootstrap_timeout = "30s"
 
 [projects]
@@ -14,11 +14,11 @@ scrub_hmac_key = { env = "SCRUB_HMAC_KEY" }
 
 [blob]
 backend = "local"
-root = "/var/lib/faultkeep/blobs"
+root = "/var/lib/metric/blobs"
 capacity = "1 GiB"
 reserve = "128 MiB"
 max_object_bytes = "100 MiB"
 
 [symbolicator]
 # Optional: set APP__SYMBOLICATOR__ENDPOINT in the environment.
-callback_base_url = "http://faultkeep:4001/"
+callback_base_url = "http://metric:4001/"

@@ -10,11 +10,11 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, MetadataDirective},
 };
-use faultkeep_domain::{
+use metric_domain::{
     Timestamp,
     blob::{BlobChecksum, BlobKey, BlobKind, BlobObject},
 };
-use faultkeep_ports::{
+use metric_ports::{
     BlobCapacity, BlobReadSession, BlobScanPage, BlobScanRequest, BlobStore, BlobStoreError,
     BlobWriteSession, PortFuture,
 };
@@ -23,9 +23,9 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 const MINIMUM_PART_BYTES: usize = 5 * 1024 * 1024;
 const MAXIMUM_PART_BYTES: usize = 64 * 1024 * 1024;
 const MAXIMUM_PARTS: usize = 10_000;
-const CHECKSUM_METADATA: &str = "faultkeep-blake3";
-const KIND_METADATA: &str = "faultkeep-kind";
-const CREATED_METADATA: &str = "faultkeep-created-ms";
+const CHECKSUM_METADATA: &str = "metric-blake3";
+const KIND_METADATA: &str = "metric-kind";
+const CREATED_METADATA: &str = "metric-created-ms";
 
 #[derive(Clone)]
 pub struct S3BlobConfig {
@@ -95,7 +95,7 @@ impl S3BlobStore {
             config.secret_access_key.into_string(),
             config.session_token.map(|token| token.into_string()),
             None,
-            "faultkeep-config",
+            "metric-config",
         );
         let mut builder = aws_sdk_s3::config::Builder::new()
             .behavior_version(BehaviorVersion::latest())
@@ -226,7 +226,7 @@ impl BlobStore for S3BlobStore {
         let store = self.clone();
         Box::pin(async move {
             Ok(Box::new(S3WriteSession {
-                temporary_key: format!("faultkeep-temporary/{}", uuid::Uuid::new_v4()).into(),
+                temporary_key: format!("metric-temporary/{}", uuid::Uuid::new_v4()).into(),
                 store,
                 kind,
                 created_at,
@@ -693,7 +693,7 @@ mod tests {
         let config = S3BlobConfig {
             endpoint: Some("http://127.0.0.1:9000".into()),
             region: "us-east-1".into(),
-            bucket: "faultkeep-test".into(),
+            bucket: "metric-test".into(),
             access_key_id: "AKIA_PHASE21_VALUE".into(),
             secret_access_key: "phase21-private-value".into(),
             session_token: Some("phase21-session-value".into()),

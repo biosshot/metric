@@ -2,13 +2,13 @@
 
 use std::{sync::Arc, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     EventId, EventKey, ProjectId, Timestamp,
     api::{EventAnchor, EventView, SearchStorageAnchor, SearchStorageBranch, SearchStorageQuery},
     finalization::SearchToken,
     grouping::IssueId,
 };
-use faultkeep_ports::{Clock, InvestigationStore, InvestigationStoreError};
+use metric_ports::{Clock, InvestigationStore, InvestigationStoreError};
 use serde_json::Value;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -794,7 +794,7 @@ pub enum CursorKind {
 #[must_use]
 pub fn cursor_digest(project_id: ProjectId, normalized: &str, kind: CursorKind) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"faultkeep/api-cursor/v1");
+    hasher.update(b"metric/api-cursor/v1");
     hasher.update(&[kind as u8]);
     hasher.update(&project_id.get().to_be_bytes());
     hasher.update(&(normalized.len() as u64).to_be_bytes());
@@ -905,7 +905,7 @@ mod tests {
         let cursor = encode_cursor(CursorKind::Event, timestamp, &key.as_bytes(), digest);
         assert_eq!(
             cursor,
-            "01020000018bcfe5687b140000000709090909090909090909090909090909778b94dab477ece581f179cc6b2303b8"
+            "01020000018bcfe5687b140000000709090909090909090909090909090909bb4fa713fd15d704be738ca462b32ab2"
         );
         assert_eq!(
             decode_event_cursor(&cursor, digest).unwrap(),

@@ -12,8 +12,8 @@ SCRUB_HMAC_KEY=<64 lowercase hexadecimal characters>
 Validate and start:
 
 ```powershell
-cargo run -p faultkeep-server -- --config config/faultkeep.example.toml --env-file .env.local --check-config
-cargo run -p faultkeep-server -- --config config/faultkeep.example.toml --env-file .env.local
+cargo run -p metric-server -- --config config/metric.example.toml --env-file .env.local --check-config
+cargo run -p metric-server -- --config config/metric.example.toml --env-file .env.local
 ```
 
 Open `http://127.0.0.1:4001/`. `/live` reports process liveness and `/ready` reports
@@ -45,7 +45,7 @@ Do not add `-v` unless permanent MongoDB and BlobStore data should be deleted.
 
 No Symbolicator image is bundled. Configure a separately operated compatible service
 with `APP__SYMBOLICATOR__ENDPOINT` and set an externally reachable
-`APP__SYMBOLICATOR__CALLBACK_BASE_URL`. Faultkeep remains ready for ordinary Error
+`APP__SYMBOLICATOR__CALLBACK_BASE_URL`. Metric remains ready for ordinary Error
 Event ingest when this optional component is degraded; symbolication-specific
 capabilities report the failure.
 
@@ -63,10 +63,10 @@ restart.
 
 ## Data safety
 
-Faultkeep does not claim an application-consistent backup/restore command. Backend
+Metric does not claim an application-consistent backup/restore command. Backend
 snapshots taken independently are not guaranteed to form one consistent restore.
 Use backend-native tooling, retain MongoDB and BlobStore together, test restoration
-in isolation, and do not describe that procedure as a Faultkeep transactional
+in isolation, and do not describe that procedure as a Metric transactional
 backup.
 
 Schema generation 7 supports empty-database bootstrap only. An older generation is

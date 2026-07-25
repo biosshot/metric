@@ -13,13 +13,13 @@ use axum::{
     http::{HeaderMap, Method, Request, Response, StatusCode},
     routing::any,
 };
-use faultkeep_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
-use faultkeep_domain::{
+use metric_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
+use metric_domain::{
     EventId, ProjectId, Timestamp,
     archive::ArchiveSegmentId,
     blob::{BlobKey, BlobKind, BlobObjectId},
 };
-use faultkeep_ports::{BlobScanRequest, BlobStore, BlobStoreError};
+use metric_ports::{BlobScanRequest, BlobStore, BlobStoreError};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 #[derive(Default)]
@@ -101,7 +101,7 @@ async fn handle_bucket(
     let truncated = keys.len() > maximum;
     keys.truncate(maximum);
     let mut xml = format!(
-        "<ListBucketResult><Name>faultkeep-test</Name><Prefix>{prefix}</Prefix><IsTruncated>{truncated}</IsTruncated>"
+        "<ListBucketResult><Name>metric-test</Name><Prefix>{prefix}</Prefix><IsTruncated>{truncated}</IsTruncated>"
     );
     for key in keys {
         let size = objects.get(&key).map_or(0, |object| object.bytes.len());
@@ -141,7 +141,7 @@ async fn handle_object(
             response(
                 StatusCode::OK,
                 format!(
-                    "<InitiateMultipartUploadResult><Bucket>faultkeep-test</Bucket><Key>{key}</Key><UploadId>{upload_id}</UploadId></InitiateMultipartUploadResult>"
+                    "<InitiateMultipartUploadResult><Bucket>metric-test</Bucket><Key>{key}</Key><UploadId>{upload_id}</UploadId></InitiateMultipartUploadResult>"
                 ),
             )
         }
@@ -194,7 +194,7 @@ async fn handle_object(
             response(
                 StatusCode::OK,
                 format!(
-                    "<CompleteMultipartUploadResult><Location>local</Location><Bucket>faultkeep-test</Bucket><Key>{}</Key><ETag>\"complete\"</ETag></CompleteMultipartUploadResult>",
+                    "<CompleteMultipartUploadResult><Location>local</Location><Bucket>metric-test</Bucket><Key>{}</Key><ETag>\"complete\"</ETag></CompleteMultipartUploadResult>",
                     upload.key
                 ),
             )
@@ -369,7 +369,7 @@ async fn shared_conformance(store: Arc<dyn BlobStore>) {
     archive.commit(archive_key).await.unwrap();
     let page = store
         .scan(BlobScanRequest {
-            namespace: faultkeep_domain::blob::BlobNamespace::EventOwned,
+            namespace: metric_domain::blob::BlobNamespace::EventOwned,
             older_than: Timestamp::from_unix_millis(2_000_000_000_000).unwrap(),
             cursor: None,
             limit: 100,
@@ -385,7 +385,7 @@ async fn shared_conformance(store: Arc<dyn BlobStore>) {
 #[tokio::test]
 async fn local_and_s3_emulator_share_blobstore_conformance() {
     let root = std::env::temp_dir().join(format!(
-        "faultkeep-blob-conformance-{}",
+        "metric-blob-conformance-{}",
         uuid::Uuid::new_v4()
     ));
     let local: Arc<dyn BlobStore> = Arc::new(
@@ -408,7 +408,7 @@ async fn local_and_s3_emulator_share_blobstore_conformance() {
         S3BlobStore::new(S3BlobConfig {
             endpoint: Some(emulator.endpoint.clone().into()),
             region: "us-east-1".into(),
-            bucket: "faultkeep-test".into(),
+            bucket: "metric-test".into(),
             access_key_id: "test-access".into(),
             secret_access_key: "test-secret".into(),
             session_token: None,
@@ -428,7 +428,7 @@ async fn s3_emulator_retries_multipart_and_maps_missing_and_permission_failures(
     let store = S3BlobStore::new(S3BlobConfig {
         endpoint: Some(emulator.endpoint.clone().into()),
         region: "us-east-1".into(),
-        bucket: "faultkeep-test".into(),
+        bucket: "metric-test".into(),
         access_key_id: "test-access".into(),
         secret_access_key: "test-secret".into(),
         session_token: None,
@@ -457,17 +457,17 @@ async fn s3_emulator_retries_multipart_and_maps_missing_and_permission_failures(
 }
 
 #[tokio::test]
-#[ignore = "selected real-compatible matrix; requires FAULTKEEP_S3_TEST_* credentials"]
+#[ignore = "selected real-compatible matrix; requires METRIC_S3_TEST_* credentials"]
 async fn selected_real_compatible_service_matrix() {
-    let endpoint = std::env::var("FAULTKEEP_S3_TEST_ENDPOINT").ok();
+    let endpoint = std::env::var("METRIC_S3_TEST_ENDPOINT").ok();
     let region =
-        std::env::var("FAULTKEEP_S3_TEST_REGION").unwrap_or_else(|_| "us-east-1".to_owned());
-    let bucket = std::env::var("FAULTKEEP_S3_TEST_BUCKET")
-        .expect("FAULTKEEP_S3_TEST_BUCKET is required for the selected matrix");
-    let access_key_id = std::env::var("FAULTKEEP_S3_TEST_ACCESS_KEY_ID")
-        .expect("FAULTKEEP_S3_TEST_ACCESS_KEY_ID is required for the selected matrix");
-    let secret_access_key = std::env::var("FAULTKEEP_S3_TEST_SECRET_ACCESS_KEY")
-        .expect("FAULTKEEP_S3_TEST_SECRET_ACCESS_KEY is required for the selected matrix");
+        std::env::var("METRIC_S3_TEST_REGION").unwrap_or_else(|_| "us-east-1".to_owned());
+    let bucket = std::env::var("METRIC_S3_TEST_BUCKET")
+        .expect("METRIC_S3_TEST_BUCKET is required for the selected matrix");
+    let access_key_id = std::env::var("METRIC_S3_TEST_ACCESS_KEY_ID")
+        .expect("METRIC_S3_TEST_ACCESS_KEY_ID is required for the selected matrix");
+    let secret_access_key = std::env::var("METRIC_S3_TEST_SECRET_ACCESS_KEY")
+        .expect("METRIC_S3_TEST_SECRET_ACCESS_KEY is required for the selected matrix");
     let store: Arc<dyn BlobStore> = Arc::new(
         S3BlobStore::new(S3BlobConfig {
             endpoint: endpoint.map(Into::into),
@@ -475,7 +475,7 @@ async fn selected_real_compatible_service_matrix() {
             bucket: bucket.into(),
             access_key_id: access_key_id.into(),
             secret_access_key: secret_access_key.into(),
-            session_token: std::env::var("FAULTKEEP_S3_TEST_SESSION_TOKEN")
+            session_token: std::env::var("METRIC_S3_TEST_SESSION_TOKEN")
                 .ok()
                 .map(Into::into),
             force_path_style: true,

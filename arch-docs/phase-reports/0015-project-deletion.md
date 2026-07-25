@@ -118,10 +118,10 @@ cargo fmt --all -- --check
 cargo dep-graph --locked
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --quiet
-cargo test -p faultkeep-mongo --test project_deletion \
+cargo test -p metric-mongo --test project_deletion \
   infrastructure_project_deletion_cancel_restart_rescan_and_tombstone \
   -- --ignored --exact --nocapture
-cargo test --release -p faultkeep-mongo --test project_deletion \
+cargo test --release -p metric-mongo --test project_deletion \
   performance_project_deletion_bounded_purge_rps \
   -- --ignored --exact --nocapture
 
@@ -142,7 +142,7 @@ Results:
 - Playwright passed 12 scenarios across Chromium and Firefox;
 - production Web bundle is 61.54 KiB gzip JavaScript and 4.71 KiB gzip CSS;
 - one and only one performance test was run in this pass;
-- no Cargo, rustc, k6, Faultkeep server, Playwright, or Vite process started by
+- no Cargo, rustc, k6, Metric server, Playwright, or Vite process started by
   the pass remained after verification; the pre-existing local MongoDB service
   was not stopped.
 

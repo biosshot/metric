@@ -10,7 +10,7 @@ node performance/compare-debug-files.mjs <baseline.json> <candidate.json>
 
 The comparator rejects a regression greater than 20% in any retained RPS metric.
 The short local profile is a regression signal, not a server-capacity claim.
-Capture at most one candidate per pass by setting `FAULTKEEP_PHASE17_PERF=1` before
+Capture at most one candidate per pass by setting `METRIC_PHASE17_PERF=1` before
 running the ignored `debug_files_e2e` test; without that opt-in the compatibility
 and recovery assertions run without a load profile.
 
@@ -29,12 +29,12 @@ target/release/ingest-bench
 Run k6 from the repository root:
 
 ```text
-k6 run -e FAULTKEEP_RPS=2500 -e FAULTKEEP_DURATION=15s -e FAULTKEEP_RESULT=performance/results/ingest-fake-2500.json performance/k6/ingest-fake.js
+k6 run -e METRIC_RPS=2500 -e METRIC_DURATION=15s -e METRIC_RESULT=performance/results/ingest-fake-2500.json performance/k6/ingest-fake.js
 ```
 
 Every run writes a JSON artifact under `performance/results`. Set commit, toolchain,
-k6 version and hardware through `FAULTKEEP_COMMIT`, `FAULTKEEP_RUST`,
-`FAULTKEEP_K6`, and `FAULTKEEP_HARDWARE`. Reviewed reference results are copied to
+k6 version and hardware through `METRIC_COMMIT`, `METRIC_RUST`,
+`METRIC_K6`, and `METRIC_HARDWARE`. Reviewed reference results are copied to
 `performance/baselines/ingest-fake`; baseline changes require an explanation in the
 Phase report. Short local runs find regressions, while the 5,000/s steady and
 20,000/s burst gates run on controlled hardware.
@@ -47,8 +47,8 @@ RPS/p95 regression greater than the percentage budget:
 node performance/compare-k6.mjs performance/baselines/ingest-fake/ryzen-5600h-windows-k6-v1.json performance/results/ingest-fake-2500.json 10
 ```
 
-For a saturation probe, set `FAULTKEEP_MODE=max-throughput` and
-`FAULTKEEP_VUS=64`. Saturation results document a limit; they do not replace the
+For a saturation probe, set `METRIC_MODE=max-throughput` and
+`METRIC_VUS=64`. Saturation results document a limit; they do not replace the
 fixed-arrival-rate regression baseline.
 
 ## Phase 2 project resolver
@@ -89,8 +89,8 @@ explicit benchmark database settings, then run the retained fixed-arrival k6 cas
 
 ```text
 cargo build --locked --release --bin durable-ingest-bench
-FAULTKEEP_BENCH_MONGODB_URI=<uri> FAULTKEEP_BENCH_DATABASE=<fresh-db> target/release/durable-ingest-bench
-k6 run -e FAULTKEEP_RPS=5000 -e FAULTKEEP_DURATION=15s -e FAULTKEEP_RESULT=performance/results/ingest-mongodb-5000.json performance/k6/ingest-mongodb.js
+METRIC_BENCH_MONGODB_URI=<uri> METRIC_BENCH_DATABASE=<fresh-db> target/release/durable-ingest-bench
+k6 run -e METRIC_RPS=5000 -e METRIC_DURATION=15s -e METRIC_RESULT=performance/results/ingest-mongodb-5000.json performance/k6/ingest-mongodb.js
 ```
 
 `ingest-mongodb.js` uses a unique Event ID per iteration. Compare the k6 iteration
@@ -304,15 +304,15 @@ Run exactly one fixed-arrival test per local pass:
 
 ```text
 cargo build --locked --release --bin durable-ingest-bench
-$env:FAULTKEEP_BENCH_MAINTENANCE = "1"
-$env:FAULTKEEP_BENCH_MONGODB_URI = "mongodb://127.0.0.1:27017/?retryWrites=false"
-$env:FAULTKEEP_BENCH_DATABASE = "faultkeep_phase14_bench_<fresh-id>"
+$env:METRIC_BENCH_MAINTENANCE = "1"
+$env:METRIC_BENCH_MONGODB_URI = "mongodb://127.0.0.1:27017/?retryWrites=false"
+$env:METRIC_BENCH_DATABASE = "metric_phase14_bench_<fresh-id>"
 target\release\durable-ingest-bench.exe
 
-k6 run -e FAULTKEEP_RPS=1158 -e FAULTKEEP_DURATION=15s `
-  -e FAULTKEEP_FIXTURE_REVISION=error-event-v1-mongodb-maintenance `
-  -e FAULTKEEP_DURABILITY="MongoWriter plus concurrent Phase 14 Scheduler" `
-  -e FAULTKEEP_RESULT=performance/results/phase14-maintenance-ingest.json `
+k6 run -e METRIC_RPS=1158 -e METRIC_DURATION=15s `
+  -e METRIC_FIXTURE_REVISION=error-event-v1-mongodb-maintenance `
+  -e METRIC_DURABILITY="MongoWriter plus concurrent Phase 14 Scheduler" `
+  -e METRIC_RESULT=performance/results/phase14-maintenance-ingest.json `
   performance/k6/ingest-mongodb.js
 ```
 
@@ -340,7 +340,7 @@ node performance/compare-artifact-bundles.mjs performance/baselines/artifact-bun
 ```
 
 The runner has a hard timeout and each real CLI child has its own kill timeout. After
-the run, verify that no scoped `sentry-cli`, Cargo test, Faultkeep server, or k6
+the run, verify that no scoped `sentry-cli`, Cargo test, Metric server, or k6
 process remains. The local Windows result is a regression sentinel, not a
 server-tuned capacity claim; k6 is not used because this profile isolates MongoDB
 lookup plans rather than browser or ingest HTTP stability.
@@ -363,7 +363,7 @@ node performance/compare-incident-capsule.mjs performance/baselines/incident-cap
 
 The local regression sentinel requires at least 20 complete Capsule responses per
 second. The runner has a hard timeout and force-kills its Cargo child on expiry.
-After the run, verify that no Cargo, Rust test, Faultkeep server or k6 process
+After the run, verify that no Cargo, Rust test, Metric server or k6 process
 remains. k6 is not used because this benchmark has no persistent HTTP server and
 the Web UI is not in the Phase 19 export timing path.
 
@@ -387,7 +387,7 @@ Webhook receiver latency is intentionally excluded because it is external and
 unbounded; delivery correctness, signing, retry and timeout behavior use a controlled
 receiver test. k6 is not used because there is no public notification HTTP ingress.
 The runner has a hard timeout. After every run, verify that no Cargo, Rust test,
-Faultkeep server or k6 process remains.
+Metric server or k6 process remains.
 
 ## Phase 21 cold Event archive writer
 
@@ -411,13 +411,13 @@ then rejects archive, input-throughput, or foreground-throughput regressions bey
 the supplied budget. k6 is not used because Phase 21 has no public archive HTTP path;
 using it would measure unrelated ingestion. The runner has a hard timeout and kills
 its Cargo child on expiry. After every run, verify that no Cargo, Rust test,
-Faultkeep server, MinIO or k6 process remains.
+Metric server, MinIO or k6 process remains.
 
 ## Phase 22 release load and saturation
 
 `run-release-load.ps1` is the Windows durable-load wrapper for the cumulative release
 path. It accepts only the ADR-0037 average, steady and burst rates, creates a
-validated fresh `faultkeep_phase22_*` database, starts one tracked benchmark server,
+validated fresh `metric_phase22_*` database, starts one tracked benchmark server,
 runs k6, and compares `status_200` with the durable Event count before cleanup.
 
 ```powershell
@@ -457,7 +457,7 @@ The local gate is 20,000 Log RPS, average batch occupancy of at least 100 docume
 and zero acknowledged loss. This is an in-memory writer boundary benchmark; the
 second profile supplies real HTTP and MongoDB evidence.
 
-The Windows runner creates a validated fresh `faultkeep_phase24_*` database, starts
+The Windows runner creates a validated fresh `metric_phase24_*` database, starts
 one PID-tracked benchmark server on port 3124, runs concurrent Log and Error k6
 scenarios, verifies HTTP 200 counts against `logs` and `error_events`, then stops the
 server and drops only the fresh database:

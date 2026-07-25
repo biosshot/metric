@@ -19,7 +19,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/faultkeep/faultkeep"
+repository = "https://github.com/metric/metric"
 
 [workspace.dependencies]
 async-compression = { version = "0.4.27", features = ["gzip", "tokio", "zlib"] }

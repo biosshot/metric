@@ -18,7 +18,7 @@ function run(command, args) {
 }
 
 const output = run("cargo", [
-  "test", "--locked", "--release", "-p", "faultkeep-domain",
+  "test", "--locked", "--release", "-p", "metric-domain",
   "performance_grouper_revision_1_rps", "--", "--ignored", "--nocapture",
 ]);
 const metrics = output.match(/Grouper Phase 7: rps=(\d+),events=(\d+),corpus_component_bytes=(\d+)/);
@@ -28,7 +28,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "grouper-revision-1-phase-7",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

@@ -18,7 +18,7 @@ function run(command, args) {
 }
 
 const output = run("cargo", [
-  "test", "--locked", "--release", "-p", "faultkeep-server", "--test", "durable_ingest_e2e",
+  "test", "--locked", "--release", "-p", "metric-server", "--test", "durable_ingest_e2e",
   "performance_processor_recovery_rps", "--", "--ignored", "--exact", "--nocapture",
 ]);
 const metrics = output.match(
@@ -30,7 +30,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "processor-recovery-phase-10",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

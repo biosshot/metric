@@ -21,8 +21,8 @@ describe('session restoration', () => {
   beforeEach(() => {
     vi.stubGlobal('localStorage', memoryStorage());
     vi.stubGlobal('sessionStorage', memoryStorage());
-    localStorage.setItem('faultkeep.organization', '7');
-    localStorage.setItem('faultkeep.csrf', 'a'.repeat(64));
+    localStorage.setItem('metric.organization', '7');
+    localStorage.setItem('metric.csrf', 'a'.repeat(64));
     setActivePinia(createPinia());
   });
 
@@ -56,7 +56,7 @@ describe('session restoration', () => {
   });
 
   it('does not restore an unusable cookie session when CSRF state is missing', async () => {
-    localStorage.removeItem('faultkeep.csrf');
+    localStorage.removeItem('metric.csrf');
     setActivePinia(createPinia());
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -71,14 +71,14 @@ describe('session restoration', () => {
   });
 
   it('migrates the legacy per-tab CSRF token to persistent origin storage', () => {
-    localStorage.removeItem('faultkeep.csrf');
-    sessionStorage.setItem('faultkeep.csrf', 'b'.repeat(64));
+    localStorage.removeItem('metric.csrf');
+    sessionStorage.setItem('metric.csrf', 'b'.repeat(64));
     setActivePinia(createPinia());
 
     const session = useSessionStore();
 
     expect(session.csrfToken).toBe('b'.repeat(64));
-    expect(localStorage.getItem('faultkeep.csrf')).toBe('b'.repeat(64));
-    expect(sessionStorage.getItem('faultkeep.csrf')).toBeNull();
+    expect(localStorage.getItem('metric.csrf')).toBe('b'.repeat(64));
+    expect(sessionStorage.getItem('metric.csrf')).toBeNull();
   });
 });

@@ -22,7 +22,7 @@ const output = run("cargo", [
   "--locked",
   "--release",
   "-p",
-  "faultkeep-server",
+  "metric-server",
   "--test",
   "durable_ingest_e2e",
   "performance_mongo_writer_rps_latency_and_occupancy",
@@ -41,7 +41,7 @@ const artifact = {
   schema_version: 1,
   metadata: {
     scenario: "mongo-writer-phase-3",
-    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/faultkeep", "rev-parse", "HEAD"]).trim(),
+    source_commit: run("git", ["-c", "safe.directory=D:/MyProject/rust/metric", "rev-parse", "HEAD"]).trim(),
     generated_at: new Date().toISOString(),
     rust_toolchain: run("rustc", ["--version"]).trim(),
     hardware: `${cpus()[0]?.model ?? "unknown CPU"}; ${(totalmem() / 2 ** 30).toFixed(1)} GiB RAM; ${platform()}`,

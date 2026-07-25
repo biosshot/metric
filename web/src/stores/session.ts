@@ -3,9 +3,9 @@ import { defineStore } from 'pinia';
 import { ApiError, api, configureSession } from '../api/client';
 import type { Identity, Project } from '../api/types';
 
-const ORG_KEY = 'faultkeep.organization';
-const CSRF_KEY = 'faultkeep.csrf';
-const PROJECT_KEY = 'faultkeep.project';
+const ORG_KEY = 'metric.organization';
+const CSRF_KEY = 'metric.csrf';
+const PROJECT_KEY = 'metric.project';
 
 export const useSessionStore = defineStore('session', () => {
   const legacyTabCsrf = sessionStorage.getItem(CSRF_KEY);

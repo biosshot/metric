@@ -45,11 +45,11 @@ function Invoke-Compatibility {
         Pop-Location
     }
     Invoke-Checked 'real Node SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_node_sdk_sends_an_error_event_without_blob -- --ignored --exact --nocapture
     }
     Invoke-Checked 'real Node SDK attachment Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_node_sdk_sends_an_attachment_event -- --ignored --exact --nocapture
     }
 
@@ -64,7 +64,7 @@ function Invoke-Compatibility {
         Pop-Location
     }
     Invoke-Checked 'real Browser SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_browser_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
@@ -72,29 +72,29 @@ function Invoke-Compatibility {
         python -m pip install -r sdk-tests/python/requirements.lock.txt
     }
     Invoke-Checked 'real Python SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_python_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
     Invoke-Checked 'Java SDK prepare' { node sdk-tests/java/prepare.mjs }
     Invoke-Checked 'real Java SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_java_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
     Invoke-Checked '.NET SDK restore' {
-        dotnet restore --locked-mode sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+        dotnet restore --locked-mode sdk-tests/dotnet/MetricSdkCompatibility.csproj
     }
     Invoke-Checked '.NET SDK format' {
         dotnet format --verify-no-changes --no-restore `
-            sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+            sdk-tests/dotnet/MetricSdkCompatibility.csproj
     }
     Invoke-Checked '.NET SDK build' {
         dotnet build --configuration Release --no-restore `
-            sdk-tests/dotnet/FaultkeepSdkCompatibility.csproj
+            sdk-tests/dotnet/MetricSdkCompatibility.csproj
     }
     Invoke-Checked 'real .NET SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_dotnet_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
@@ -113,7 +113,7 @@ function Invoke-Compatibility {
         Pop-Location
     }
     Invoke-Checked 'real Go SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_go_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
@@ -121,7 +121,7 @@ function Invoke-Compatibility {
         cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
     }
     Invoke-Checked 'real Rust SDK Error Event' {
-        cargo test -p faultkeep-server --test sdk_compatibility_e2e `
+        cargo test -p metric-server --test sdk_compatibility_e2e `
             real_rust_sdk_sends_an_error_event -- --ignored --exact --nocapture
     }
 
@@ -156,8 +156,8 @@ try {
             Invoke-Checked 'complete SDK family release gate' {
                 python scripts/validate-compatibility.py --require-all
             }
-            if (-not $env:FAULTKEEP_TEST_MONGODB_URI) {
-                throw 'FAULTKEEP_TEST_MONGODB_URI is required for full verification'
+            if (-not $env:METRIC_TEST_MONGODB_URI) {
+                throw 'METRIC_TEST_MONGODB_URI is required for full verification'
             }
             Invoke-Contracts
             Invoke-Compatibility

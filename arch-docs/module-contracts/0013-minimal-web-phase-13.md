@@ -9,13 +9,13 @@ contract from ADR-0036. It has no MongoDB dependency, server-side application
 service import, Sentry-compatible `/api/0` dependency, or private bypass.
 
 The Rust server serves the production build from `web/dist` (or the explicit
-`FAULTKEEP_WEB_DIR`) on known SPA routes only. Unknown API paths are not
+`METRIC_WEB_DIR`) on known SPA routes only. Unknown API paths are not
 rewritten to `index.html`.
 
 ## Session and mutation rules
 
 - The HttpOnly session cookie remains owned by the server.
-- The current organization is sent through `x-faultkeep-organization-id`.
+- The current organization is sent through `x-metric-organization-id`.
 - The login response CSRF token is retained in origin-scoped `localStorage` for
   the lifetime of the HttpOnly session cookie. This allows a browser restart or
   a new same-origin tab to keep performing protected mutations without exposing

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use faultkeep_domain::{DsnKey, EventId, ProjectId};
+use metric_domain::{DsnKey, EventId, ProjectId};
 use serde::Deserialize;
 use thiserror::Error;
 use url::Url;

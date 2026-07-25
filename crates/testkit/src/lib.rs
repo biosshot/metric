@@ -7,11 +7,11 @@ use std::{
     time::Duration,
 };
 
-use faultkeep_domain::{
+use metric_domain::{
     AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
-use faultkeep_ports::{
+use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, OutcomeSink, PortFuture,
     ProjectResolveError, ProjectResolver, RandomError, RandomSource, SymbolicationBackend,
     SymbolicationBackendError,
@@ -200,8 +200,8 @@ impl SymbolicationBackend for ScriptedSymbolicationBackend {
 
 #[cfg(test)]
 mod tests {
-    use faultkeep_domain::{ProjectId, symbolication::*};
-    use faultkeep_ports::SymbolicationBackend;
+    use metric_domain::{ProjectId, symbolication::*};
+    use metric_ports::SymbolicationBackend;
 
     use super::ScriptedSymbolicationBackend;
 
@@ -239,10 +239,10 @@ mod tests {
     #[ignore = "recorded only on declared benchmark hardware"]
     fn performance_empty_foundation_has_no_module_workers() {
         assert_eq!(
-            std::mem::size_of::<faultkeep_application::observability::Metrics>(),
+            std::mem::size_of::<metric_application::observability::Metrics>(),
             0
         );
-        let shutdown = faultkeep_application::shutdown::ShutdownRoot::new();
+        let shutdown = metric_application::shutdown::ShutdownRoot::new();
         assert!(!shutdown.is_started());
     }
 }

@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use faultkeep_domain::{
+use metric_domain::{
     event::{CanonicalValue, NormalizedEvent},
     finalization::{
         FinalizationPolicy, FinalizeBatch, FinalizeEvent, FinalizeResult,
@@ -12,7 +12,7 @@ use faultkeep_domain::{
     issue::IssueOccurrence,
     symbolication::{RawTraceOrigin, SymbolicatedFrame, SymbolicationResult},
 };
-use faultkeep_ports::{FinalizationStore, FinalizationStoreError};
+use metric_ports::{FinalizationStore, FinalizationStoreError};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
@@ -234,7 +234,7 @@ fn processed_payload(
         .map(|diagnostic| Value::String(diagnostic.as_str().to_owned()))
         .collect::<Vec<_>>();
     root.insert(
-        "_faultkeep".to_owned(),
+        "_metric".to_owned(),
         json!({
             "normalization": normalization,
             "symbolication": {
@@ -317,14 +317,14 @@ const fn map_store_error(error: FinalizationStoreError) -> FinalizerError {
 mod tests {
     use std::sync::Mutex;
 
-    use faultkeep_domain::{
+    use metric_domain::{
         EventId, EventKey, ProjectId, Timestamp,
         event::{EventLevel, EventPlatform, NormalizedEventBody},
         finalization::FinalizeResult,
         grouping::group,
         symbolication::{SymbolicationDisposition, SymbolicationKind, SymbolicationStatus},
     };
-    use faultkeep_ports::PortFuture;
+    use metric_ports::PortFuture;
 
     use super::*;
     use crate::issues::prepare_issue_occurrence;
@@ -363,7 +363,7 @@ mod tests {
                 occurred_at: Timestamp::from_unix_millis(1_000).unwrap(),
                 platform: EventPlatform::Rust,
                 level: EventLevel::Error,
-                logger: Some("faultkeep".into()),
+                logger: Some("metric".into()),
                 message: Some("failure".into()),
                 transaction: None,
                 release: Some("backend@1.0".into()),
@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(prepared.search_tokens.len(), 3);
         let body: Value = serde_json::from_slice(prepared.payload.as_bytes()).unwrap();
         assert_eq!(
-            body["_faultkeep"]["symbolication"]["status"],
+            body["_metric"]["symbolication"]["status"],
             "not_required"
         );
         let result = finalizer.finalize(vec![prepared]).await.unwrap();
