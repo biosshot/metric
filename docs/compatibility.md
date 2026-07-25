@@ -29,7 +29,8 @@ python scripts/validate-compatibility.py --require-all
 The second command is the final release gate and intentionally fails while any
 required family remains untested.
 
-Transactions, spans, sessions, profiles, replays, check-ins, metrics, logs and
-feedback are disabled. Native minidump, debug-file, Artifact Bundle, attachment,
+Sessions, profiles, replays, check-ins, StatsD metrics and feedback are disabled.
+Structured logs, transactions and spans are ingested through Sentry Envelopes.
+Native minidump, debug-file, Artifact Bundle, attachment,
 Incident Capsule, webhook and cold-archive capabilities are separate contracts and
 are advertised by `/api/v1/capabilities`.

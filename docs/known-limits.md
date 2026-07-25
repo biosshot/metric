@@ -1,8 +1,8 @@
 # Version-one known limits
 
 - Only SDK rows marked `pass` in the compatibility matrix are supported claims.
-- Transactions, spans, sessions, profiles, replays, check-ins, metrics/logs and
-  feedback are disabled.
+- Sessions, profiles, replays, check-ins, StatsD metrics and user feedback are
+  disabled.
 - The runtime is one `--role all` process. Split roles, NATS, distributed claims,
   sharding and disk spool are not implemented.
 - MongoDB schema generation 7 bootstraps an empty database. There are no online
