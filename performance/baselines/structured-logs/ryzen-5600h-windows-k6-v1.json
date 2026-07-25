@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "phase-24-structured-logs-mixed-http",
+    "commit": "cf4fe2192969340dd1ee4cfc4e39b186fea47ab3-dirty",
+    "fixture_revision": "phase24-node-log-container-v2-mixed-error-v1",
+    "log_target_rps": 1000,
+    "error_target_rps": 250,
+    "duration": "10s",
+    "run_id": "66141832",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "k6_version": "k6.exe v2.1.0 (commit/83a87a41e2, go1.26.4, windows/amd64)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics; 15.9 GiB RAM; Windows",
+    "mongo": "MongoDB local standalone; direct connection",
+    "durability": "dedicated LogWriter and Event MongoWriter using unordered insert_many"
+  },
+  "metrics": {
+    "log_requests": 10001,
+    "log_achieved_rps": 998.0020300724426,
+    "log_status_200": 10001,
+    "error_requests": 2500,
+    "error_achieved_rps": 249.47555996211443,
+    "error_status_200": 2500,
+    "log_latency_ms": {
+      "average": 13.631719188081197,
+      "p95": 23.6371,
+      "p99": 24.9429,
+      "maximum": 28.0877
+    },
+    "error_latency_ms": {
+      "average": 12.142786439999993,
+      "p95": 22.23626,
+      "p99": 22.839827,
+      "maximum": 28.0877
+    },
+    "dropped_iterations": 0,
+    "failures": {
+      "tcp_errors": 0,
+      "http_responses": 12501,
+      "status_200": 12501,
+      "status_429": 0,
+      "status_503": 0,
+      "status_other": 0
+    }
+  }
+}

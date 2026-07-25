@@ -11,6 +11,7 @@ pub mod finalizer;
 pub mod incident_capsule;
 pub mod ingest;
 pub mod issues;
+pub mod log_writer;
 pub mod native_api;
 pub mod normalizer;
 pub mod notifications;

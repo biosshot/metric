@@ -1273,8 +1273,21 @@ pub enum SignalStoreError {
     Conflict,
     #[error("signal data is invalid")]
     InvalidData,
+    #[error("signal lane capacity is exhausted")]
+    Capacity,
     #[error("signal storage is temporarily unavailable")]
     Unavailable,
+}
+
+/// Dedicated durable Log admission boundary.
+///
+/// Implementations may buffer and micro-batch records, but a successful response
+/// means that every returned record is already durable.
+pub trait LogSink: Send + Sync + 'static {
+    fn persist_logs(
+        &self,
+        records: Vec<LogRecord>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
 }
 
 /// Signal-specific durable and query boundary. Raw MongoDB filters never cross it.

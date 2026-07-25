@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "phase-24-log-writer",
+    "source_commit": "cf4fe2192969340dd1ee4cfc4e39b186fea47ab3-dirty",
+    "generated_at": "2026-07-25T07:52:33.792Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics; 15.9 GiB RAM; win32"
+  },
+  "metrics": {
+    "rps": 31965,
+    "records": 20000,
+    "batches": 118,
+    "average_batch_occupancy": 169.49,
+    "concurrency": 512,
+    "elapsed_ms": 625,
+    "minimum_rps": 20000,
+    "minimum_average_batch_occupancy": 100,
+    "acknowledged_loss": 0
+  }
+}

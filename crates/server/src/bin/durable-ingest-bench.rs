@@ -4,6 +4,7 @@ use std::{sync::Arc, time::SystemTime};
 
 use faultkeep_application::{
     ingest::IngestService,
+    log_writer::{LogWriter, LogWriterConfig},
     observability::Metrics,
     scheduler::{Scheduler, SchedulerConfig},
     shutdown::ShutdownRoot,
@@ -93,11 +94,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = ShutdownRoot::new();
     let config = benchmark_config();
     let event_store = Arc::new(control.event_store(EventCodecConfig::default()));
+    let signal_store: Arc<dyn faultkeep_ports::SignalStore> = Arc::new(
+        control.signal_store_with_retention(faultkeep_mongo::SignalRetention {
+            logs_days: 30,
+            spans_days: 30,
+            span_stats_hourly_days: 90,
+        }),
+    );
     let clock: Arc<dyn Clock> = Arc::new(BenchClock);
     let (writer, writer_task) = MongoWriter::start(
         Arc::clone(&event_store),
         Arc::new(DiscardHandoff),
         MongoWriterConfig {
+            channel_capacity: config.max_waiting_for_storage,
+            max_wait: config.batch.max_wait.get(),
+            max_documents: config.batch.max_documents,
+            max_bytes: config.batch.max_bytes,
+            operation_timeout: config.request_timeout.get(),
+            shutdown_drain: std::time::Duration::from_secs(10),
+        },
+        root.signal(),
+    )?;
+    let (log_writer, log_writer_task) = LogWriter::start(
+        Arc::clone(&signal_store),
+        LogWriterConfig {
             channel_capacity: config.max_waiting_for_storage,
             max_wait: config.batch.max_wait.get(),
             max_documents: config.batch.max_documents,
@@ -126,15 +146,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,
     };
-    let service = Arc::new(IngestService::new(
-        Arc::new(BenchResolver(snapshot)),
-        writer,
-        Arc::new(NoopOutcomeSink),
-        Arc::clone(&clock),
-        Arc::new(BenchRandom),
-        config.max_waiting_for_storage,
-        root.signal(),
-    ));
+    let service = Arc::new(
+        IngestService::new(
+            Arc::new(BenchResolver(snapshot)),
+            writer,
+            Arc::new(NoopOutcomeSink),
+            Arc::clone(&clock),
+            Arc::new(BenchRandom),
+            config.max_waiting_for_storage,
+            root.signal(),
+        )
+        .with_signal_store(signal_store)
+        .with_log_sink(log_writer),
+    );
     let app = http::router_with_readiness(
         root.signal(),
         Metrics,
@@ -188,11 +212,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         task.wait().await;
     }
     writer_task.wait().await;
-    let count = database
-        .collection::<mongodb::bson::Document>("error_events")
-        .count_documents(doc! {})
-        .await?;
-    println!("durable benchmark Event count: {count}");
+    log_writer_task.wait().await;
+    for collection in ["error_events", "logs"] {
+        let count = database
+            .collection::<mongodb::bson::Document>(collection)
+            .count_documents(doc! {})
+            .await?;
+        println!("durable benchmark {collection} count: {count}");
+    }
     Ok(())
 }
 

@@ -442,3 +442,36 @@ ceiling and fails the arrival-rate and latency gates.
 Phase 22 remains blocked until controlled hardware passes 5,000/s for 60 minutes,
 20,000/s for 5 minutes, backlog recovery/restart and the long soak. Run at most two
 performance profiles per local implementation pass.
+
+## Phase 24 Structured Logs
+
+Phase 24 retains exactly two local regression profiles. The first isolates the
+bounded Log writer, including batch occupancy and acknowledgement completion:
+
+```text
+node performance/run-log-writer.mjs
+node performance/compare-log-writer.mjs performance/baselines/log-writer/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 20
+```
+
+The local gate is 20,000 Log RPS, average batch occupancy of at least 100 documents,
+and zero acknowledged loss. This is an in-memory writer boundary benchmark; the
+second profile supplies real HTTP and MongoDB evidence.
+
+The Windows runner creates a validated fresh `faultkeep_phase24_*` database, starts
+one PID-tracked benchmark server on port 3124, runs concurrent Log and Error k6
+scenarios, verifies HTTP 200 counts against `logs` and `error_events`, then stops the
+server and drops only the fresh database:
+
+```powershell
+./performance/run-structured-log-load.ps1 `
+  -LogRps 1000 -ErrorRps 250 -Duration 10s
+
+node performance/compare-structured-logs.mjs `
+  performance/baselines/structured-logs/ryzen-5600h-windows-k6-v1.json `
+  performance/results/<candidate>.json 20
+```
+
+The artifact retains Log/Error RPS and p95/p99 plus TCP, total HTTP, 200, 429, 503,
+other-status and dropped-iteration counters. Run no more than these two profiles in
+one Phase 24 pass. The short Windows baseline is a regression sentinel, not a
+production-capacity claim.

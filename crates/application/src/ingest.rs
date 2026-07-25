@@ -14,7 +14,7 @@ use faultkeep_domain::{
 };
 use faultkeep_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
-    IngestOutcome, IngestOutcomeKind, OutcomeSink, ProjectResolveError, ProjectResolver,
+    IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink, ProjectResolveError, ProjectResolver,
     RandomSource, SignalStore, SignalStoreError,
 };
 use hmac::{Hmac, Mac};
@@ -229,7 +229,7 @@ pub struct IngestService {
     attachment_config: AttachmentIngestConfig,
     minidump_config: MinidumpIngestConfig,
     signal_store: Option<Arc<dyn SignalStore>>,
-    log_permits: Arc<Semaphore>,
+    log_sink: Option<Arc<dyn LogSink>>,
     span_permits: Arc<Semaphore>,
 }
 
@@ -256,7 +256,7 @@ impl IngestService {
             attachment_config: AttachmentIngestConfig::default(),
             minidump_config: MinidumpIngestConfig::default(),
             signal_store: None,
-            log_permits: Arc::new(Semaphore::new(max_waiting_for_storage.max(1))),
+            log_sink: None,
             span_permits: Arc::new(Semaphore::new(max_waiting_for_storage.max(1))),
         }
     }
@@ -264,6 +264,12 @@ impl IngestService {
     #[must_use]
     pub fn with_signal_store(mut self, signal_store: Arc<dyn SignalStore>) -> Self {
         self.signal_store = Some(signal_store);
+        self
+    }
+
+    #[must_use]
+    pub fn with_log_sink(mut self, log_sink: Arc<dyn LogSink>) -> Self {
+        self.log_sink = Some(log_sink);
         self
     }
 
@@ -470,19 +476,13 @@ impl IngestService {
             disabled_categories.dedup();
             return Ok(disabled_categories);
         }
-        let store = self
-            .signal_store
-            .as_ref()
-            .ok_or_else(|| IngestError::unavailable("signal_storage_unavailable"))?;
         if !logs.is_empty() {
-            let _permit = self
-                .log_permits
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| IngestError::rate_limited("log_lane_capacity"))?;
+            let sink = self
+                .log_sink
+                .as_ref()
+                .ok_or_else(|| IngestError::unavailable("log_storage_unavailable"))?;
             let quantity = u64::try_from(logs.len()).unwrap_or(u64::MAX);
-            store
-                .persist_logs(logs)
+            sink.persist_logs(logs)
                 .await
                 .map_err(map_signal_store_error)?;
             self.outcome_sink.record(IngestOutcome {
@@ -492,6 +492,10 @@ impl IngestService {
             });
         }
         if !spans.is_empty() {
+            let store = self
+                .signal_store
+                .as_ref()
+                .ok_or_else(|| IngestError::unavailable("signal_storage_unavailable"))?;
             let _permit = self
                 .span_permits
                 .clone()
@@ -1505,6 +1509,7 @@ fn map_signal_store_error(error: SignalStoreError) -> IngestError {
         SignalStoreError::Conflict | SignalStoreError::InvalidData => {
             IngestError::invalid("signal_conflict")
         }
+        SignalStoreError::Capacity => IngestError::rate_limited("log_lane_capacity"),
         SignalStoreError::NotFound | SignalStoreError::Unavailable => {
             IngestError::unavailable("signal_storage_unavailable")
         }

@@ -13,11 +13,48 @@ use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
+    error::ErrorKind,
     options::IndexOptions,
 };
 
+const DUPLICATE_KEY_CODE: i32 = 11000;
 const MAX_QUERY_LIMIT: usize = 200;
 const MAX_STATS_SAMPLES: i32 = 2_048;
+
+#[derive(Debug, Clone, Copy)]
+enum LogWriteStatus {
+    Inserted,
+    Duplicate,
+    Rejected,
+}
+
+fn classify_log_insert_many(
+    error: &ErrorKind,
+    count: usize,
+) -> Result<Vec<LogWriteStatus>, SignalStoreError> {
+    let ErrorKind::InsertMany(failure) = error else {
+        return Err(SignalStoreError::Unavailable);
+    };
+    if failure.write_concern_error.is_some() {
+        return Err(SignalStoreError::Unavailable);
+    }
+    let errors = failure
+        .write_errors
+        .as_ref()
+        .ok_or(SignalStoreError::Unavailable)?;
+    let mut statuses = vec![LogWriteStatus::Inserted; count];
+    for error in errors {
+        let status = statuses
+            .get_mut(error.index)
+            .ok_or(SignalStoreError::Unavailable)?;
+        *status = if error.code == DUPLICATE_KEY_CODE {
+            LogWriteStatus::Duplicate
+        } else {
+            LogWriteStatus::Rejected
+        };
+    }
+    Ok(statuses)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SignalRetention {
@@ -63,34 +100,22 @@ impl MongoSignalStore {
         }
     }
 
-    async fn insert_log(&self, record: &LogRecord) -> Result<DurableOutcome, SignalStoreError> {
-        let document = encode_log(record, self.retention.logs_days)?;
-        match self
+    async fn verify_log_duplicate(&self, record: &LogRecord) -> Result<(), SignalStoreError> {
+        let existing = self
             .database
             .collection::<Document>("logs")
-            .insert_one(document)
+            .find_one(doc! { "_id": binary(record.id.as_bytes()) })
+            .projection(doc! { "p": 1, "o": 1, "m": 1 })
             .await
+            .map_err(unavailable)?
+            .ok_or(SignalStoreError::Conflict)?;
+        if existing.get_i32("p") == Ok(record.project_id.get())
+            && existing.get_i64("o") == Ok(record.occurred_at_ns)
+            && existing.get_str("m") == Ok(record.message.as_ref())
         {
-            Ok(_) => Ok(DurableOutcome::Accepted),
-            Err(error) if is_duplicate(&error) => {
-                let existing = self
-                    .database
-                    .collection::<Document>("logs")
-                    .find_one(doc! { "_id": binary(record.id.as_bytes()) })
-                    .projection(doc! { "p": 1, "o": 1, "m": 1 })
-                    .await
-                    .map_err(unavailable)?
-                    .ok_or(SignalStoreError::Conflict)?;
-                if existing.get_i32("p") == Ok(record.project_id.get())
-                    && existing.get_i64("o") == Ok(record.occurred_at_ns)
-                    && existing.get_str("m") == Ok(record.message.as_ref())
-                {
-                    Ok(DurableOutcome::Duplicate)
-                } else {
-                    Err(SignalStoreError::Conflict)
-                }
-            }
-            Err(_) => Err(SignalStoreError::Unavailable),
+            Ok(())
+        } else {
+            Err(SignalStoreError::Conflict)
         }
     }
 
@@ -453,10 +478,41 @@ impl SignalStore for MongoSignalStore {
         records: Vec<LogRecord>,
     ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
         Box::pin(async move {
-            let mut outcomes = Vec::with_capacity(records.len());
-            for record in &records {
-                outcomes.push(self.insert_log(record).await?);
+            if records.is_empty() {
+                return Ok(Vec::new());
             }
+            let documents = records
+                .iter()
+                .map(|record| encode_log(record, self.retention.logs_days))
+                .collect::<Result<Vec<_>, _>>()?;
+            let started = std::time::Instant::now();
+            let result = self
+                .database
+                .collection::<Document>("logs")
+                .insert_many(documents.iter())
+                .ordered(false)
+                .await;
+            let statuses = match result {
+                Ok(_) => vec![LogWriteStatus::Inserted; records.len()],
+                Err(error) => classify_log_insert_many(error.kind.as_ref(), records.len())?,
+            };
+            let mut outcomes = Vec::with_capacity(records.len());
+            for (record, status) in records.iter().zip(statuses) {
+                match status {
+                    LogWriteStatus::Inserted => outcomes.push(DurableOutcome::Accepted),
+                    LogWriteStatus::Duplicate => {
+                        self.verify_log_duplicate(record).await?;
+                        outcomes.push(DurableOutcome::Duplicate);
+                    }
+                    LogWriteStatus::Rejected => return Err(SignalStoreError::Unavailable),
+                }
+            }
+            metrics::histogram!(
+                "faultkeep_mongodb_operation_duration_seconds",
+                "operation" => "log_insert_batch",
+                "outcome" => "durable"
+            )
+            .record(started.elapsed().as_secs_f64());
             Ok(outcomes)
         })
     }

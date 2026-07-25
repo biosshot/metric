@@ -36,7 +36,7 @@ Status as of 2026-07-24:
 | Phase | Capability | Status |
 | ---: | --- | --- |
 | 23 | Dark Web redesign | Complete |
-| 24 | Structured Logs | Implemented |
+| 24 | Structured Logs | Complete |
 | 25 | Transactions, Spans and Traces | Implemented |
 | 26 | Performance Insights | Implemented |
 
@@ -365,6 +365,21 @@ The Envelope endpoint is shared, and these phases add protocol fixtures, functio
 tests and saved real-SDK smoke programs instead. This amendment does not permit a
 background server, SDK or test process to remain after a test run. Performance
 baselines may be added later when separate measured regressions justify them.
+
+On 2026-07-25 the owner reopened the Phase 24 performance evidence after identifying
+that Logs were using a semaphore followed by sequential `insert_one` calls rather
+than the accepted bounded micro-batch lane. Phase 24 is therefore exempted from the
+earlier no-load amendment and closes with exactly two retained local regression
+profiles:
+
+1. an in-process Log writer RPS/batch-occupancy run;
+2. one short mixed HTTP k6 run against real MongoDB with concurrent Logs and Errors,
+   explicit TCP/HTTP/200/429/503 counters and acknowledged-versus-durable counts.
+
+These short Windows profiles replace the original sustained, burst, retention and
+search-under-ingest requirements for Phase 24 closure on the current development
+machine. They are regression sentinels, not production-capacity claims. The earlier
+amendment remains in force for Phases 25-26 until their owner-directed closure pass.
 
 ### Phase 27 — Unified Explore query surface
 

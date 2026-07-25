@@ -36,6 +36,7 @@ use faultkeep_application::{
     incident_capsule::{
         IncidentCapsuleAccess, IncidentCapsuleConfig, IncidentCapsuleError, IncidentCapsuleService,
     },
+    log_writer::{LogWriter, LogWriterConfig, LogWriterStartError, LogWriterTask},
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
     notifications::{
@@ -58,8 +59,8 @@ use faultkeep_domain::Timestamp;
 use faultkeep_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use faultkeep_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
-    OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource,
-    SignalStore,
+    LogSink, OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError,
+    RandomSource, SignalStore,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -84,6 +85,8 @@ pub enum ServerError {
     MongoBootstrapTimeout,
     #[error(transparent)]
     Writer(#[from] MongoWriterStartError),
+    #[error(transparent)]
+    LogWriter(#[from] LogWriterStartError),
     #[error(transparent)]
     Dispatcher(#[from] DispatcherStartError),
     #[error(transparent)]
@@ -120,7 +123,9 @@ struct RuntimeModules {
     project_resolver: std::sync::Arc<dyn ProjectResolver>,
     event_sink: std::sync::Arc<dyn EventSink>,
     signal_store: Option<std::sync::Arc<dyn SignalStore>>,
+    log_sink: Option<std::sync::Arc<dyn LogSink>>,
     writer_task: Option<MongoWriterTask>,
+    log_writer_task: Option<LogWriterTask>,
     dispatcher_task: Option<DispatcherTask>,
     scheduler_task: Option<SchedulerTask>,
     archive_task: Option<ArchiveTask>,
@@ -215,7 +220,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         project_resolver,
         event_sink,
         signal_store,
+        log_sink,
         writer_task,
+        log_writer_task,
         dispatcher_task,
         scheduler_task,
         archive_task,
@@ -422,6 +429,19 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 span_stats_hourly_days: config.retention.span_stats_hourly_days,
             }),
         );
+        let (log_writer, log_writer_task) = LogWriter::start(
+            std::sync::Arc::clone(&signal_store),
+            LogWriterConfig {
+                channel_capacity: config.ingest.max_waiting_for_storage,
+                max_wait: config.ingest.batch.max_wait.get(),
+                max_documents: config.ingest.batch.max_documents,
+                max_bytes: config.ingest.batch.max_bytes,
+                operation_timeout: config.ingest.request_timeout.get(),
+                shutdown_drain: config.server.shutdown_grace.get(),
+            },
+            shutdown.signal(),
+        )?;
+        let log_sink: std::sync::Arc<dyn LogSink> = log_writer;
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
@@ -643,7 +663,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             project_resolver,
             event_sink,
             signal_store: Some(signal_store),
+            log_sink: Some(log_sink),
             writer_task: Some(writer_task),
+            log_writer_task: Some(log_writer_task),
             dispatcher_task: Some(dispatcher_task),
             scheduler_task: Some(scheduler_task),
             archive_task,
@@ -666,7 +688,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             project_resolver: std::sync::Arc::new(UnavailableProjectResolver),
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             signal_store: None,
+            log_sink: None,
             writer_task: None,
+            log_writer_task: None,
             dispatcher_task: None,
             scheduler_task: None,
             archive_task: None,
@@ -710,8 +734,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(signal_store) = signal_store {
         ingest_service = ingest_service.with_signal_store(signal_store);
     }
+    if let Some(log_sink) = log_sink {
+        ingest_service = ingest_service.with_log_sink(log_sink);
+    }
     let ingest = std::sync::Arc::new(ingest_service);
     let required_ready = writer_task.is_some()
+        && log_writer_task.is_some()
         && dispatcher_task.is_some()
         && scheduler_task.is_some()
         && notification_task.is_some()
@@ -808,6 +836,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = log_writer_task {
         task.wait().await;
     }
     if let Some(task) = dispatcher_task {

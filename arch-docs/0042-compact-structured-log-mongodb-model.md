@@ -29,6 +29,10 @@ would add a write and recovery index without protecting acknowledged data.
 The accepted implementation therefore writes one terminal idempotent Log document and
 acknowledges only after that insert is durable. A crash before the insert has no
 acknowledgement; a lost response is safely retried using the deterministic identity.
+Terminal documents enter a dedicated bounded Log writer and are combined into
+unordered MongoDB `insert_many` operations. Synchronous terminal durability removes
+the pending/finalization state; it does not remove the independent lane or
+micro-batching requirement.
 The `q` pending fields, pending recovery index and `LogProcessor` finalization steps
 described below are superseded for Phase 24. They remain a possible later design only
 if Log processing gains an asynchronous dependency that cannot execute before

@@ -1253,9 +1253,9 @@ fn map_signal_error(error: SignalStoreError) -> NativeApiError {
     match error {
         SignalStoreError::NotFound => NativeApiError::NotFound,
         SignalStoreError::Conflict => NativeApiError::Conflict,
-        SignalStoreError::InvalidData | SignalStoreError::Unavailable => {
-            NativeApiError::Unavailable
-        }
+        SignalStoreError::InvalidData
+        | SignalStoreError::Capacity
+        | SignalStoreError::Unavailable => NativeApiError::Unavailable,
     }
 }
 
