@@ -1,5 +1,8 @@
 import * as Sentry from '@sentry/node';
 import { argv, exit, stderr, stdout } from 'node:process';
+import { URL } from 'node:url';
+
+/* global AbortSignal, fetch */
 
 const [dsn] = argv.slice(2);
 if (!dsn) {
@@ -11,8 +14,32 @@ const hardDeadline = setTimeout(() => {
   exit(2);
 }, 15_000);
 
+async function requireFaultkeepReady(dsn) {
+  const readyUrl = new URL(dsn);
+  readyUrl.username = '';
+  readyUrl.password = '';
+  readyUrl.pathname = '/ready';
+  readyUrl.search = '';
+  readyUrl.hash = '';
+
+  let response;
+  try {
+    response = await fetch(readyUrl, {
+      signal: AbortSignal.timeout(3_000),
+    });
+  } catch (error) {
+    throw new Error(`Faultkeep is not reachable at ${readyUrl.origin}`, {
+      cause: error,
+    });
+  }
+  if (!response.ok) {
+    throw new Error(`Faultkeep readiness failed with HTTP ${response.status} at ${readyUrl.href}`);
+  }
+}
+
 (async function main() {
   try {
+    await requireFaultkeepReady(dsn);
     Sentry.init({
       dsn,
       tracesSampleRate: 0,
