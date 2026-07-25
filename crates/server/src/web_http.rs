@@ -45,7 +45,9 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/project/setup", index.clone())
         .route_service("/project/settings", index.clone())
         .route_service("/system", index)
+        .route_service("/favicon.svg", ServeFile::new(root.join("favicon.svg")))
         .nest_service("/assets", ServeDir::new(root.join("assets")))
+        .nest_service("/fonts", ServeDir::new(root.join("fonts")))
         .layer(middleware::from_fn(security_headers))
 }
 
@@ -115,6 +117,37 @@ mod tests {
             );
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
             assert_eq!(body, "<main>Metric Web</main>");
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn serves_favicon_and_self_hosted_fonts() {
+        let root = std::env::temp_dir().join(format!(
+            "metric-web-fonts-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::create_dir_all(root.join("fonts")).unwrap();
+        std::fs::write(root.join("index.html"), "<main>Metric Web</main>").unwrap();
+        std::fs::write(root.join("favicon.svg"), "<svg/>").unwrap();
+        std::fs::write(
+            root.join("fonts").join("jetbrains-mono-latin-wght-normal.woff2"),
+            [0u8; 8],
+        )
+        .unwrap();
+
+        for path in [
+            "/favicon.svg",
+            "/fonts/jetbrains-mono-latin-wght-normal.woff2",
+        ] {
+            let response = router_with_root(&root)
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
         }
 
         std::fs::remove_dir_all(root).unwrap();

@@ -103,8 +103,15 @@ vision deficiency. A badge containing only a differently colored dot is prohibit
 
 ## Typography and icons
 
-- Use the operating-system UI font stack; no remote Web font is downloaded.
-- Code, identifiers, stack traces and raw payloads use the system monospace stack.
+- The interface typeface is JetBrains Mono Variable, self-hosted from
+  `web/public/fonts/` (woff2 subsets, SIL OFL 1.1 with the license text beside
+  the files). No remote Web font is downloaded at runtime.
+- Font subsets are split by `unicode-range` (latin, latin-ext, Cyrillic,
+  Cyrillic-ext, Greek, Vietnamese); the browser fetches only the subsets a page
+  actually renders. Multilingual UI text, including Cyrillic, must render from
+  the bundled subsets without a system-font fallback.
+- Code, identifiers, stack traces and raw payloads use the same bundled
+  monospace through `--font-mono`.
 - Use font weight sparingly; hierarchy starts with spacing and size.
 - Icons use named, tree-shaken imports from `@lucide/vue` with a consistent stroke.
 - Icon fonts, remote icon services and runtime icon requests are prohibited.
