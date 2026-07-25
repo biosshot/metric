@@ -1,3 +1,5 @@
+ 
+
 # Metric
 
 <p>
@@ -5,7 +7,8 @@
 </p>
 
 **Sentry-compatible error tracking, rewritten in Rust. One binary, one database,
-~5,000 durable events per second — measured on a laptop.**
+~5,000 durable events per second — measured on hardware matching Sentry's own
+minimum requirements.**
 
 Metric accepts events from the official Sentry SDKs you already use, scrubs PII
 before storage, groups them into issues, and gives you a fast investigation UI —
@@ -49,14 +52,15 @@ the data-residency questions, or the ~70-container ops burden.
 
 ## Metric vs. self-hosted Sentry
 
+
 |                           | **Metric**                                                                                    | **Self-hosted Sentry**                                                                                                                                         |
-| ------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core technology           | Single **Rust** binary (Tokio, zero-copy parsing)                                            | Python/Django + Relay + Snuba + Kafka consumers                                                                                                                      |
-| Moving parts              | `metric-server` + MongoDB — **2 containers**, or a bare binary                             | **70+ containers** in the default install¹: Kafka, ClickHouse, PostgreSQL, Redis, Snuba, workers, cron, Relay, Symbolicator, vroom, plus init/migration jobs |
-| Minimum hardware          | Measured on a**6-core Ryzen 5 laptop** with 16 GiB RAM shared with Windows and Docker Desktop | [Official minimum](https://develop.sentry.dev/self-hosted/): 4 CPU, **16 GB RAM + 16 GB swap**, 20 GB disk; 32 GB RAM recommended                               |
-| Time to first event       | One image + one TOML file + one bootstrap token                                                     | `install.sh` pulls gigabytes of images for 70+ containers, runs migrations, typically 30–60 minutes                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core technology           | Single **Rust** binary (Tokio, zero-copy parsing)                                            | Python/Django + Relay + Snuba + Kafka consumers                                                                                                                |
+| Moving parts              | `metric-server` + MongoDB - **2 containers**, or a bare binary                               | **70+ containers** in the default install¹: Kafka, ClickHouse, PostgreSQL, Redis, Snuba, workers, cron, Relay, Symbolicator, vroom, plus init/migration jobs |
+| Minimum hardware          | Benchmarked on hardware matching Sentry's official minimum class - 6-core CPU, 16 GiB RAM | [Official minimum](https://develop.sentry.dev/self-hosted/): 4 CPU, **16 GB RAM + 16 GB swap**, 20 GB disk; 32 GB RAM recommended                              |
+| Time to first event       | One image + one TOML file + one bootstrap token                                               | `install.sh` pulls gigabytes of images for 70+ containers, runs migrations, typically 30–60 minutes                                                           |
 | Durable ingest throughput | **4,983 events/s** measured, every event verified durable, zero acknowledged loss             | **~1–5 events/s** sustained (~300–400k/day) on the official minimum hardware, 10–20 events/s in short bursts²                                              |
-| Hot-state footprint       | ~103 storage bytes + ~130 index bytes per event (measured, MongoDB WiredTiger)                      | Postgres + ClickHouse + Kafka retention combined                                                                                                                     |
+| Hot-state footprint       | ~103 storage bytes + ~130 index bytes per event (measured, MongoDB WiredTiger)                | Postgres + ClickHouse + Kafka retention combined                                                                                                               |
 
 ¹ Counted from a default self-hosted deployment; not every container is a distinct
 long-running service — many are one-shot setup, migration and bootstrap jobs.
@@ -71,20 +75,22 @@ below comes from a committed, reproducible benchmark artifact.
 
 ## Measured performance
 
-All numbers were recorded on an **AMD Ryzen 5 5600H (6C/12T), 16 GiB RAM, Windows
-laptop** with a colocated load generator and a standalone MongoDB 8 — deliberately
-modest hardware. Raw artifacts live in [`performance/baselines/`](performance/baselines/).
+All numbers were recorded on hardware corresponding to **Sentry's official
+minimum requirements** — an AMD Ryzen 5 5600H (6C/12T) with 16 GiB RAM, running
+a colocated load generator and a standalone MongoDB 8. Raw artifacts live in
+[`performance/baselines/`](performance/baselines/).
 
-| Workload                               | Result                             | Latency                  | Loss                               |
-| -------------------------------------- | ---------------------------------- | ------------------------ | ---------------------------------- |
+
+| Workload                               | Result                       | Latency                  | Loss                               |
+| ---------------------------------------- | ------------------------------ | -------------------------- | ------------------------------------ |
 | Durable error ingest, 5,000 rps target | **4,983 events/s**           | p95 27.7 ms, p99 31.3 ms | 0 errors, 100% durability verified |
 | Saturation run, 20,000 rps target      | **7,307 durable events/s**   | p95 296.8 ms             | 0 acknowledged loss                |
 | Capacity envelope (100M events/day)    | **1,158 events/s** sustained | p95 24.9 ms              | 0 errors                           |
-| HTTP ingest path (parsing/auth/limits) | 2,500 req/s                        | **p99 0.62 ms**    | 0 errors                           |
+| HTTP ingest path (parsing/auth/limits) | 2,500 req/s                  | **p99 0.62 ms**          | 0 errors                           |
 | Normalizer (scrub + canonicalize)      | **77,840 events/s** weighted | —                       | —                                 |
 | Span batch writer                      | **32,639 spans/s**           | —                       | 0 acknowledged loss                |
 | Backlog recovery                       | **1.56×** arrival rate      | —                       | —                                 |
-| Timeline query API                     | 511 qps                            | **p95 2.49 ms**    | —                                 |
+| Timeline query API                     | 511 qps                      | **p95 2.49 ms**          | —                                 |
 
 Reproduce the headline number yourself:
 
@@ -159,13 +165,36 @@ On first startup the server prints a one-time `METRIC_BOOTSTRAP_TOKEN` for the
 Web setup form. Full reference: [`docs/configuration.md`](docs/configuration.md),
 [`docs/operations.md`](docs/operations.md).
 
-## Honest limits
+## Honest limits — today
 
-Metric is not a feature-complete Sentry clone. Sessions, profiles, replays,
-check-ins, StatsD metrics and user feedback are disabled. The runtime is a single
-`--role all` process: no split roles, sharding or online schema migrations, and
-the supplied compose file is a simple single-MongoDB deployment, not HA. The full
-list: [`docs/known-limits.md`](docs/known-limits.md).
+Metric is **not yet** a feature-complete Sentry clone — but it is built to become
+one, and then some. The stated goal of the project is to match Sentry feature for
+feature and surpass it in capability quality, operational reliability and raw
+performance. The performance headroom above shows the foundation is already
+there; the remaining gaps are a roadmap, not a ceiling.
+
+What is still missing today: sessions, profiles, replays, check-ins, StatsD
+metrics and user feedback are disabled. The runtime is a single `--role all`
+process: no split roles, sharding or online schema migrations, and the supplied
+compose file is a simple single-MongoDB deployment, not HA. Each of these is a
+planned increment, tracked in [`arch-docs/`](arch-docs/). The full current list:
+[`docs/known-limits.md`](docs/known-limits.md).
+
+## Support the project
+
+Metric is developed in the open. If it saves you a Sentry invoice — or a weekend
+of babysitting 70+ containers — you can support development with a USDT
+donation:
+
+
+| Network           | USDT address                                       |
+| ------------------- | ---------------------------------------------------- |
+| TON               | `UQBo1KI8Llrp9D7xSF3o0RzMHsM3UesueXRnSTyLPDkOG7-Q` |
+| Tron (TRC-20)     | `TYiGUA56h1r19FEDzKRn33w511yTqZwy4V`               |
+| Ethereum (ERC-20) | `0x040835b43916307b4014322439a18cb33B26913F`       |
+
+Every donation goes directly toward closing the roadmap above: more supported
+signal types, more SDK families, more performance headroom.
 
 ## Development
 
