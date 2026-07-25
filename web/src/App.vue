@@ -7,6 +7,7 @@ import BaseSelect, { type SelectOption } from './components/BaseSelect.vue';
 import EmptyState from './components/EmptyState.vue';
 import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
 import LoadingPanel from './components/LoadingPanel.vue';
+import LogoMark from './components/LogoMark.vue';
 import { useSessionStore } from './stores/session';
 import AuthView from './views/AuthView.vue';
 
@@ -76,7 +77,7 @@ async function logout(): Promise<void> {
         <AppIcon :name="navigationOpen ? 'close' : 'menu'" :size="20" />
       </button>
       <span class="mobile-header__brand">
-        <AppIcon name="bug" :size="18" />
+        <LogoMark :size="18" />
         <strong>Faultkeep</strong>
       </span>
     </header>
@@ -92,7 +93,7 @@ async function logout(): Promise<void> {
     <aside class="sidebar" :class="{ 'sidebar--open': navigationOpen }">
       <div class="sidebar__brand">
         <span class="brand-mark brand-mark--small" aria-hidden="true">
-          <AppIcon name="bug" :size="18" />
+          <LogoMark :size="18" />
         </span>
         <strong>faultkeep</strong>
       </div>

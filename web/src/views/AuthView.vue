@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
+import LogoMark from '../components/LogoMark.vue';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -99,7 +100,7 @@ async function setupInvitedPassword(): Promise<void> {
   <main id="main-content" class="auth-layout">
     <section class="auth-brand">
       <div class="brand-mark" aria-hidden="true">
-        <AppIcon name="bug" :size="30" />
+        <LogoMark :size="30" />
       </div>
       <p class="eyebrow">Faultkeep</p>
       <h1>Understand failures.<br />Keep the signal.</h1>
