@@ -33,7 +33,7 @@ need to evaluate project settings.
 
 The initial retention classes are:
 
-- raw `events`: 30 days by default;
+- raw `error_events`: 30 days by default;
 - `issue_stats_hourly`: 400 days by default;
 - `issues`: no automatic retention deletion;
 - `releases` and `environments`: no automatic retention deletion;
@@ -83,8 +83,9 @@ the Event receives segment `z` and TTL date `x`, and `h` is removed.
 
 ### Initial MongoDB layout
 
-The first version keeps raw events in one regular `events` collection and uses the
-`x` TTL index. It does not use MongoDB time-series collections because events
+The current schema keeps raw Error Events in one regular `error_events` collection
+and uses the `x` TTL index. It does not use MongoDB time-series collections because
+Error Events
 are mutable during processing and require regular identity, update, and indexing
 behavior.
 

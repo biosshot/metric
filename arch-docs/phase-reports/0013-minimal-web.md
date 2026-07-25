@@ -92,6 +92,9 @@ health owner or metric namespace.
 
 ## Known limits and deferred work
 
+The list below records the Phase 13 boundary at the time of that report; it is not the
+current capability inventory.
+
 - The onboarding form creates the first accessible project. Additional project
   creation remains available through the typed Phase 12 API but is not a Phase 13
   administration screen.
@@ -104,5 +107,5 @@ health owner or metric namespace.
 - Web hosting is not split from the Rust application: the supported deployment
   remains the all-in-one server serving the production bundle.
 
-Phase 14 may now start with Scheduler, retention, counters and narrow
-reconciliation. No Phase 14 module was introduced by this corrective work.
+At Phase 13 closure, Phase 14 was the next allowed step with Scheduler, retention,
+counters and narrow reconciliation. Later phase reports record its completion.

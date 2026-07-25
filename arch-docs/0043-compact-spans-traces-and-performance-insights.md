@@ -27,11 +27,12 @@ retention and bounded Trace investigation.
 4. There is initially no `traces` or `trace_summaries` collection.
 5. A Trace is a bounded authorized view assembled from records sharing a Trace ID.
 6. One terminal Span is one individually addressable MongoDB document.
-7. A transaction Envelope item is durably accepted as one pending root record and is
-   expanded idempotently by `SpanProcessor`.
+7. A transaction Envelope item is normalized into a bounded terminal root/child set
+   before acknowledgement and written idempotently by the dedicated Span writer.
 8. High-resolution start time and duration use signed BSON `int64` nanoseconds.
-9. Arbitrary attributes remain in an optional versioned residual body.
-10. Only bounded accepted exact dimensions receive search tokens.
+9. Arbitrary attributes remain in a required versioned bounded accepted body.
+10. Generation 8 promotes only fixed query fields and has no arbitrary-attribute
+    search-token index.
 11. Performance aggregates live in rebuildable `span_stats_hourly`.
 12. Per-segment Insight flags are optional derived enrichment on the root Span.
 13. Initial automatic Insights operate within one transaction/segment and its accepted
@@ -48,10 +49,10 @@ processor dependency.
 The accepted implementation writes terminal child/root Span records directly and
 acknowledges only after every insert succeeds. Deterministic project/Trace/Span
 identities make a retry complete a partially written expansion without duplicates; an
-identity conflict fails closed. The pending `q` state, recovery index and separate
-`SpanProcessor` finalization described below are superseded for Phase 25. Derived
-hourly aggregates remain best effort after Span durability and are repaired by the
-bounded rebuild operation.
+identity conflict fails closed. The earlier proposed pending `q` state, recovery index
+and separate `SpanProcessor` finalization are superseded and intentionally absent from
+the accepted model below. Derived hourly aggregates remain best effort after Span
+durability and are repaired by the bounded rebuild operation.
 
 ## Collections
 
@@ -86,11 +87,14 @@ struct SpanRecord {
     parent_span_id: Option<SpanId>,
     is_segment: bool,
     operation_class: SpanOperationClass,
-    status: SpanStatus,
-    name: SpanName,
-    search_tokens: BoundedSearchTokens,
-    insight_flags: InsightFlags,
-    residual: Option<SpanBody>,
+    operation: Box<str>,
+    status: Box<str>,
+    name: Box<str>,
+    environment: Option<Box<str>>,
+    release: Option<Box<str>>,
+    service: Option<Box<str>>,
+    insight_flags: u32,
+    body: SpanBody,
 }
 ```
 
@@ -142,9 +146,7 @@ The conceptual processed document is:
   o,   // start as Unix nanoseconds, BSON int64
   d,   // duration nanoseconds, BSON int64
 
-  x,   // hot TTL time, only when eligible
-  h,   // archive due time, only while awaiting archive
-  z,   // archive segment ID, only after archive commit
+  x,   // hot TTL time, BSON date
 
   g,   // 16-byte Trace ID
   n,   // 8-byte Span ID
@@ -152,14 +154,14 @@ The conceptual processed document is:
 
   t,   // segment/root marker, present only when true
   c,   // normalized operation-class code
-  v,   // non-default normalized status code, optional
+  w,   // bounded original operation string
+  v,   // bounded normalized/original status string
   m,   // normalized display name
-
-  k,   // bounded exact-search tokens, optional
-  i,   // Performance Insight bitset, optional
-  s,   // non-default PII policy revision, optional
-  q,   // pending/retry/permanent-failure state, absent after success
-  b    // optional versioned residual body
+  e,   // environment, optional
+  u,   // release, optional
+  j,   // service, optional
+  i,   // Performance Insight bitset, BSON int64
+  b    // required versioned bounded accepted Span body
 }
 ```
 
@@ -176,8 +178,8 @@ Trace waterfalls require finer precision than BSON Date milliseconds:
 - `o` stores checked Unix nanoseconds as BSON `int64`;
 - `d` stores checked non-negative duration nanoseconds as BSON `int64`;
 - end time is `o.checked_add(d)`;
-- `r`, `x` and `h` remain BSON dates because they serve operational ordering,
-  retention and archive scheduling.
+- `r` and `x` remain BSON dates because they serve operational ordering and
+  retention.
 
 Admission rejects timestamps/durations outside accepted ranges before arithmetic or
 allocation. Clock-drift correction preserves bounded source metadata in `b` and cannot
@@ -204,15 +206,14 @@ enum SpanOperationClass {
 }
 ```
 
-The original bounded `span.op` remains in `b` and may receive an exact token in `k`.
-Numeric codes are never reused. New classes require schema/fixture review; arbitrary
-SDK operation strings do not become new enum values.
+The original bounded `span.op` is projected to `w` and also remains in the accepted
+body. Numeric `c` codes are never reused. New classes require schema/fixture review;
+arbitrary SDK operation strings do not become new enum values.
 
 ## Status
 
-`v` stores an append-only normalized Sentry Span status code. The physical default
-and distinction between unset, unknown and success are fixed by exact supported SDK
-fixtures. Unknown input is not silently changed to success.
+`v` stores the bounded status string and is required, using an empty string when the
+accepted input has no status. Unknown input is not silently changed to success.
 
 Original accepted status metadata may remain in `b` where the compatibility contract
 requires preservation.
@@ -220,40 +221,22 @@ requires preservation.
 ## Name
 
 `m` contains the bounded normalized transaction/span display name used by Trace and
-performance views. It is not duplicated inside `b`.
+performance views. The complete accepted item remains in `b`, so the projection is a
+deliberate bounded duplication.
 
 Normalization, source-specific transaction-name rules, PII handling, maximum bytes,
 empty-name behavior and truncation/rejection semantics are part of the Phase 25
 contract.
 
-## Exact-search tokens
+## Query projections and arbitrary attributes
 
-`k` follows ADR-0023 and ADR-0042:
+Generation 8 promotes operation class `c`, original operation `w`, name `m`,
+environment `e`, release `u` and service `j`. It does not store `k` exact-search
+tokens and does not create an arbitrary-attribute multikey index. Other attributes
+remain only in `b`.
 
-- tokens are domain-separated by Span attribute/dimension;
-- original key/type/value remains in `b`;
-- a token result is verified after body decode;
-- token count and bytes are bounded before write;
-- arbitrary attributes are not automatically indexed.
-
-Initial candidates include:
-
-```text
-environment
-release
-service.name
-span.op
-transaction name
-http.request.method
-http.response.status_code
-db.system
-db.operation.name
-server.address
-```
-
-The final built-in list and optional per-project allowlist are accepted only after
-index/storage measurements. Arrays, nested values and high-cardinality values do not
-silently multiply index entries.
+Adding indexed arbitrary attributes requires a later schema-generation, storage and
+query-cost decision.
 
 ## Residual Span body
 
@@ -265,8 +248,8 @@ byte 1: body codec
 remaining bytes: encoded residual body
 ```
 
-Initial codecs are canonical JSON and adaptive Zstandard using the same fail-closed
-decoded-size principles as ADR-0022/ADR-0042.
+Generation 8 uses body format `1`, codec `0` and bounded accepted JSON. Span-body
+compression is not enabled.
 
 `b` may contain:
 
@@ -277,70 +260,32 @@ decoded-size principles as ADR-0022/ADR-0042.
 - bounded Span links;
 - sampling/dynamic-sampling context accepted from Sentry SDKs;
 - profile/reference metadata;
-- protocol fields preserved for forward compatibility;
-- Phase 26 Insight explanations.
+- protocol fields preserved for forward compatibility.
 
-`b` does not duplicate:
+`b` contains the complete bounded scrubbed accepted Span/Transaction item and is
+required. Top-level query/display projections are deliberately duplicated and their
+cost is pinned by BSON fixtures.
 
-- project, Trace, Span or parent IDs;
-- start/duration;
-- normalized operation class/status/name;
-- retention/archive/processing state.
+## Terminal normalization and child expansion
 
-If no residual data remains, a terminal Span omits `b`.
-
-## Pending standalone Span
-
-A standalone Span is durably accepted as:
-
-```javascript
-{
-  _id,
-  p,
-  r,
-  o,
-  g,
-  n,
-  q: {
-    s, // pending/retry or permanently failed
-    a, // attempts
-    n, // next attempt time
-    c  // optional numeric failure code
-  },
-  b // scrubbed accepted source payload
-}
-```
-
-The typed RAM lane avoids an immediate reread. The dispatcher reloads `b` after
-restart or when foreground lane admission was unavailable.
-
-## Pending Transaction and child expansion
-
-A supported Sentry transaction item is accepted as one pending root record. Its `b`
-contains the scrubbed accepted root and bounded child array. The transaction's root
-Trace/Span identity determines `_id`, and `t` identifies the record as a segment.
-
-Before durable acknowledgement, ingest enforces:
+Before entering the Span writer, ingest enforces:
 
 - compressed and decoded item bytes;
 - maximum children per transaction;
 - maximum aggregate expanded child bytes;
 - per-Span attribute/link/measurement limits;
-- maximum total attributes/tokens implied by expansion.
+- maximum total expanded child/body bytes implied by expansion.
 
-`SpanProcessor`:
+Ingest validates and scrubs the root and children, calculates deterministic
+`SpanRecordId` values, builds terminal residual bodies and computes bounded
+per-segment Insight enrichment. The dedicated bounded Span writer combines terminal
+records by `max_wait`, `max_documents` and `max_bytes`, then issues unordered MongoDB
+`insert_many`.
 
-1. validates and normalizes the root and children;
-2. calculates deterministic child `SpanRecordId` values;
-3. bulk-inserts/upserts terminal child Span documents with identity verification;
-4. computes accepted per-segment Phase 26 enrichment when enabled;
-5. updates rebuildable aggregate work according to its separate policy;
-6. replaces the pending root body with terminal residual data;
-7. sets retention/archive state and removes `q`.
-
-If the process fails after only some children are inserted, retry derives the same
-identities, verifies existing children and inserts the missing set. A standalone Span
-that duplicates a child follows the same identity rule.
+A request succeeds only after every submitted root/child record is durable. If a
+connection fails after only some children are inserted, the SDK retry derives the
+same identities, verifies existing children and inserts the missing set. A standalone
+Span that duplicates a child follows the same identity rule.
 
 The implementation publishes deterministic conflict semantics when two deliveries
 with the same natural identity contain different normalized content. It never
@@ -352,17 +297,17 @@ Spans use a dedicated bounded lane and policy:
 
 ```text
 queue documents
-queue bytes
+derived byte ceiling from bounded record size
 max_wait
 max_documents
 max_bytes
-max_in_flight_batches
-foreground/backlog scheduling weight
+one in-flight batch per writer task
+operation timeout
 ```
 
-Values are configurable within accepted bounds and fixed by Phase 25 load tests. Span
-load cannot borrow Error/Log lane capacity, Error Symbolicator reservations or Blob
-processing reservations.
+Values use validated ingest batch bounds in generation 8 and the Span writer has its
+own channel/task. Span load cannot borrow Error/Log channel capacity, Error
+Symbolicator reservations or Blob processing reservations.
 
 One terminal Span remains one document. Bulk operations combine writes, not logical
 Span ownership.
@@ -385,29 +330,10 @@ All Trace queries include an authorized bounded set of project IDs and Trace ID.
 
 with a partial filter for `t = true`, so child Spans do not occupy the index.
 
-### Exact dimensions
-
-The multikey token index:
-
-```javascript
-{ p: 1, k: 1, o: -1 }
-```
-
-is enabled only when its bounded feature and benchmark pass. Operation-class indexing
-is added only for a measured accepted query shape.
-
-### Pending recovery
-
-```javascript
-{ "q.n": 1, _id: 1 }
-```
-
-with a partial pending/retry filter.
-
 ### Retention
 
-Retention/archive uses `x`, `h` and `z` under the accepted Scheduler/archive protocol.
-Span archive output has its own project/day schema and namespace.
+Retention uses `x` and the `span_expiry` TTL index. There is no Span cold-archive
+state or index in generation 8.
 
 No wildcard index is created.
 
@@ -480,34 +406,29 @@ Phase 26 adds rebuildable hourly aggregates. A conceptual bucket is:
   p,   // project
   h,   // UTC hour
   t,   // accepted dimension/rollup type
-  k,   // bounded dimension identity
-  v,   // bounded display value where required
-  c,   // count
+  k,   // bounded transaction/root name
+  v,   // service, optional
+  e,   // environment, optional
+  u,   // release, optional
+  c,   // normalized operation-class code
+  g,   // representative Trace ID
+  n,   // count
   f,   // failure count
   s,   // summed duration nanoseconds
-  d,   // versioned bounded duration histogram/sketch
+  d,   // at most 2,048 most-recent duration samples
   x    // retention deadline
 }
 ```
 
 Exact compact names/codecs are fixed by the Phase 26 storage fixtures.
 
-Accepted rollups are finite and configuration-bounded, initially selected from:
+Generation 8 creates one deterministic bucket for the combined bounded dimensions
+project, UTC hour, root name, service, environment, release and operation class. It
+does not create buckets for arbitrary user attributes.
 
-- project total;
-- environment;
-- release;
-- transaction name;
-- service;
-- operation class;
-- service plus operation class.
-
-No bucket is automatically created per arbitrary user attribute or arbitrary
-dimension combination.
-
-The duration distribution format has versioned merge/golden fixtures and supports the
-published percentile set. Approximation/extrapolation semantics are visible in API
-metadata.
+Percentiles use nearest rank over the most recent at most 2,048 samples in `d`.
+Approximation/sample-limit semantics are visible in API metadata. These samples are
+investigative, not a mergeable billing-grade histogram.
 
 ## Aggregate consistency
 
@@ -518,7 +439,6 @@ around a crash depending on finalization order. Phase 26:
 
 - chooses and documents one ordering;
 - publishes the resulting approximation semantics;
-- records aggregate version/watermark where required;
 - provides bounded range rebuild/reconciliation;
 - keeps aggregate work behind foreground Span durability;
 - never rejects or corrupts a durable Span because a derived bucket failed.
@@ -549,10 +469,10 @@ For child Spans:
 
 These are explicit deterministic rules, not ML.
 
-## Insight flags and explanations
+## Insight flags
 
-`i` is an optional append-only bitset on a root/segment Span. Initial candidate flags
-include:
+`i` is a required append-only bitset on every terminal Span; zero means that no rule
+matched. Initial flags include:
 
 ```text
 slow segment
@@ -567,14 +487,11 @@ failed downstream operation
 
 Exact bit assignments receive permanent golden fixtures and are never reused.
 
-When a flag is present, a bounded explanation may be stored in the root residual
-body, for example type, count, representative operation and total duration. `i` is
-absent when there is no accepted Insight.
-
-Newly processed transaction items can derive segment-local Insights before root
-finalization because their accepted children are available together. Phase 26 may
-provide a bounded versioned backfill for retained roots. It does not wait for or
-repeatedly rescan an unbounded global distributed Trace.
+Generation 8 stores only the flags; Web/API render stable rule labels from them.
+There is no separate persisted Insight-explanation object or automatic historical
+backfill. Newly processed transaction items derive segment-local Insights while
+their accepted children are available together. The implementation does not wait for
+or repeatedly rescan an unbounded global distributed Trace.
 
 Cross-service/global Trace Insights require a later accepted trace-finalization design
 and are deliberately deferred.
@@ -589,7 +506,10 @@ Phase 25 provides:
 - orphan/partial diagnostics;
 - links among Span, Error and Log records;
 - Span detail with decoded attributes/measurements;
-- project/environment/release/time filters supported by accepted projections/tokens.
+- project/environment/time filters supported by fixed projections;
+- release is stored in `u`; the generation-8 segment query currently targets `v`
+  (status) and is an explicit ADR-0044 production blocker until corrected and
+  regression-tested.
 
 Phase 26 provides:
 
@@ -600,19 +520,14 @@ Phase 26 provides:
 - representative Trace links;
 - explicit approximation/partial-data indicators.
 
-Phase 27 Unified Explore later supplies the common query AST. Phase 25/26 do not
-expose arbitrary MongoDB fields, aggregations, regex or unbounded group-by.
+The deferred Unified Explore backlog item may later supply a common query AST.
+Phases 25/26 do not expose arbitrary MongoDB fields, aggregations, regex or unbounded
+group-by.
 
-## Retention, archive and deletion
+## Retention and deletion
 
 Spans and hourly aggregates have independent configurable retention. Project deletion
-registers both namespaces. Archive uses Span-specific project/day segments:
-
-```text
-archive/spans/<project>/<day>/...
-```
-
-Hot expiry is assigned only after a complete accepted archive manifest/object.
+registers both namespaces. Span cold archive is not implemented in generation 8.
 Trace views naturally become partial as constituent retention periods expire.
 
 ## Test and performance gates
@@ -625,31 +540,34 @@ Phase 25 fixtures cover:
 - every operation/status code;
 - missing parent, orphan and cycle inputs;
 - duplicate and conflicting natural identities;
-- transaction child expansion crash points;
+- transaction child expansion and deterministic identity;
 - maximum bounded transaction;
-- compressed/uncompressed/absent residual body;
-- pending/retry/permanent-failure and archive states.
+- required uncompressed versioned body;
+- partial batch insert, ambiguous-response retry and identity conflict.
 
 Phase 25 publishes:
 
 - BSON and every index byte contribution;
 - expansion CPU/memory;
-- steady/burst Span ingest;
-- mixed Error/Log/Span isolation;
-- backlog/restart recovery;
-- small/large/partial Trace read latency and memory;
-- distributed real-SDK E2E across at least two services;
-- Error and Log regression results.
+- retained in-process Span-writer throughput and batch occupancy;
+- restart and ambiguous-response retry recovery;
+- bounded small/large/partial Trace functional behavior;
+- saved real-SDK smoke flow.
+
+ADR-0044 Phase 27 owns sustained/burst mixed ingest, production-shaped Trace-read,
+dependency-failure and soak evidence that was exempted from the Phase 25 closure.
 
 Phase 26 fixtures/gates cover:
 
 - bucket identity and merge;
-- histogram/sketch accuracy and compatibility;
+- bounded recent-sample percentile behavior;
 - cardinality attacks;
 - crash approximation/rebuild;
 - deterministic Insight rules;
-- performance queries during ingest;
 - aggregate/Insight work remaining behind foreground durability.
+
+ADR-0044 owns performance queries under ingest and production-shaped aggregate
+rebuild/interference measurements.
 
 ## Consequences
 

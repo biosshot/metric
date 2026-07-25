@@ -31,18 +31,23 @@ not an inter-role protocol.
 
 ## Current execution status
 
-Status as of 2026-07-24:
+Status as of 2026-07-25:
 
 | Phase | Capability | Status |
 | ---: | --- | --- |
 | 23 | Dark Web redesign | Complete |
 | 24 | Structured Logs | Complete |
-| 25 | Transactions, Spans and Traces | Implemented |
-| 26 | Performance Insights | Implemented |
+| 25 | Transactions, Spans and Traces | Complete |
+| 26 | Performance Insights | Complete |
+| 27 | Production readiness program (ADR-0044) | Current |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
+
+ADR-0044 pauses the product ordering below after Phase 26. `Unified Explore` and every
+later product item remain deferred, unnumbered backlog until the production launch
+gate passes.
 
 ## Accepted direction
 
@@ -50,12 +55,16 @@ evidence is published in the corresponding reports under `arch-docs/phase-report
    Databases and collections are never created per project.
 2. Error Events, Logs, Spans, metric buckets, Profiles and Replays do not share one
    physical collection.
-3. Shared code is reused through accepted enums, generic bounded components and
-   ports. Hot-path dispatch does not require `dyn`.
+3. Shared code is reused through typed records and ports. Generation 8 uses
+   `Arc<dyn LogSink>`, `Arc<dyn SpanSink>` and `Arc<dyn SignalStore>` at
+   application/composition boundaries; bounded writer loops and Mongo codecs remain
+   signal-specific. ADR-0044 measures this before any speculative dispatch rewrite.
 4. Each high-volume signal owns a bounded RAM lane and micro-batcher. A Log flood
    cannot consume the Error queue.
-5. The durable MongoDB record remains the fallback when a RAM lane is full.
-   Dispatchers recover pending records from their owning collection.
+5. Signals with asynchronous post-acknowledgement work use a durable pending record
+   as their fallback and recovery source. Terminal Logs and Spans instead return
+   success only after their bounded writer has durably stored the complete batch;
+   lane saturation or dependency failure produces an explicit retryable response.
 6. Micro-batching combines MongoDB operations, not logical records. One Log and one
    Span remain individually addressable records.
 7. Transactions are root Spans and live in `spans`; there is no separate
@@ -71,14 +80,14 @@ evidence is published in the corresponding reports under `arch-docs/phase-report
 12. AI analysis and automatic fixes are deliberately deferred.
 13. MCP remains a later adapter over accepted application services; it does not
     define domain or storage contracts.
-14. Every existing and future Web surface follows the ADR-0041 monochrome minimal
-    design system.
+14. Every existing and future Web surface follows the ADR-0041 dark-neutral minimal
+    design system with only its approved muted semantic/syntax accents.
 
 ## Naming the current Event collection
 
-The current `events` collection contains occurrences of errors, while `issues`
-contains their groups. Once other signal types exist, the physical name `events`
-becomes ambiguous.
+Before Phase 24, the `events` collection contained occurrences of errors, while
+`issues` contained their groups. Once other signal types existed, the physical name
+`events` became ambiguous.
 
 Phase 24 performs a deliberate breaking physical rename to:
 
@@ -106,8 +115,8 @@ Collections are created only when their owning phase is enabled:
 | `error_events` | individual Error Events and processing state | insert, then bounded finalization |
 | `issues` | Error groups and lifecycle | aggregate updates |
 | `issue_stats_hourly` | rebuildable Error aggregates | bucket updates |
-| `logs` | structured Logs | append and terminal normalization |
-| `spans` | root transactions and child Spans | append and terminal normalization |
+| `logs` | structured Logs | bounded terminal batch insert |
+| `spans` | root transactions and child Spans | bounded terminal batch insert |
 | `span_stats_hourly` | rebuildable performance aggregates | bucket updates |
 | `metric_buckets` | counters, gauges and distributions | bounded bucket merge |
 | `profiles` | searchable Profile metadata and Blob references | append/finalize |
@@ -130,40 +139,38 @@ This map is not permission to pre-create unused collections or adapters.
 
 ## Shared vertical extension contract
 
-### Accepted record
+### Accepted signal records
 
-The protocol/application boundary grows through an exhaustive enum:
+The Error path continues to use `AcceptedEvent`. The shared Envelope parser carries
+non-Error JSON through an exhaustive accepted kind:
 
 ```rust
-enum AcceptedRecord {
-    Error(AcceptedError),
-    Log(AcceptedLog),
-    Span(AcceptedSpan),
-    MetricBucket(AcceptedMetricBucket),
-    Profile(AcceptedProfile),
-    Replay(AcceptedReplay),
-    Session(AcceptedSession),
-    CheckIn(AcceptedCheckIn),
-    Feedback(AcceptedFeedback),
+enum PendingSignalKind {
+    Log,
+    Transaction,
+    Span,
 }
 ```
 
-Variants are added only in their owning phase. Disabled known Envelope items continue
-to use the accepted partial-discard behavior until their complete vertical phase
-passes.
+Ingest validates/scrubs each enabled kind into typed `LogRecord` or `SpanRecord`
+values before calling its typed sink. Future kinds are added only in their owning
+selected backlog phase. Disabled known Envelope items continue to use the accepted
+partial-discard behavior.
 
 ### Routing and lanes
 
-The shared router performs an exhaustive `match` and sends an accepted record to its
-typed lane. A lane owns:
+The shared ingest service performs an exhaustive `match` and sends typed records to
+the independent Log or Span sink. A lane owns:
 
-- queue capacity;
-- maximum queued bytes;
+- channel document capacity and a derived byte ceiling from bounded record size;
 - micro-batch `max_wait`, `max_documents` and `max_bytes`;
-- maximum in-flight batches;
+- one in-flight batch per current writer task;
 - retry and permanent-failure policy;
-- foreground versus backlog scheduling weight;
 - metrics and readiness contribution.
+
+Foreground/backlog scheduling weight applies only to a future signal that actually
+accepts asynchronous durable pending work; terminal Log/Span writers have no backlog
+queue.
 
 The lane implementation may be generic and monomorphized. Signal-specific policies
 are static typed configuration, not a generic runtime workflow engine.
@@ -175,8 +182,9 @@ typed:
 
 ```text
 ErrorProcessor   -> normalize, symbolicate, group, finalize Issue
-LogProcessor     -> normalize searchable fields, finalize
-SpanProcessor    -> normalize trace fields, derive buckets, finalize
+LogWriter        -> batch prevalidated terminal Log records durably
+SpanWriter       -> batch prevalidated terminal Span records durably
+MongoSignalStore -> best-effort rebuildable bucket update after a new root Span
 ProfileProcessor -> validate metadata, commit Blob reference, finalize
 ReplayProcessor  -> validate segment/session metadata, commit Blob reference
 ```
@@ -186,10 +194,10 @@ hot loop merely to claim reuse.
 
 ### Storage
 
-The MongoDB adapter owns typed collection handles and codecs. A top-level enum router
-may partition a mixed accepted batch by variant and issue one bounded write per
-collection. Application services never construct collection names or MongoDB query
-documents.
+The MongoDB adapter owns signal-specific codecs and collection/query implementations.
+Log and Span writer tasks call their typed sink ports independently; there is no
+mixed-signal MongoDB batch. Application services never construct collection names or
+MongoDB query documents.
 
 The first implementation uses ordinary MongoDB collections. A future benchmark may
 justify MongoDB time-series storage for `logs`, `spans` or `uptime_results`; that
@@ -222,14 +230,16 @@ Every new signal phase must explicitly provide:
 5. queue, byte and concurrency budgets;
 6. durable identity and idempotency rule;
 7. MongoDB codec, validator, indexes and byte-budget fixtures;
-8. retry, permanent-failure and backlog recovery behavior;
+8. retry, ambiguous-response and permanent-failure behavior, plus durable backlog
+   recovery only when the signal actually has asynchronous work;
 9. retention, quota, deletion and archive registration;
 10. search fields and query cost limits;
 11. API authorization and cursor pagination;
 12. minimal useful Web investigation flow;
 13. real SDK E2E row and capability advertisement;
 14. unit/property/fuzz tests selected by risk;
-15. load, burst, backlog recovery, restart and dependency-failure results;
+15. load, burst, restart and dependency-failure results, plus backlog recovery for
+   asynchronous signals;
 16. confirmation that Error ingest and investigation baselines did not regress.
 17. ADR-0041 visual, accessibility and built-asset-size gates for every Web change.
 
@@ -260,8 +270,9 @@ storage or application behavior.
 
 Exit gate:
 
-- all existing routes pass visual review in dark monochrome;
-- no purple, red, green, amber, gradient or color-only state remains;
+- all existing routes pass visual review with the ADR-0041 dark-neutral base;
+- no saturated decorative palette, gradient or color-only state remains; approved
+  muted semantic/syntax accents stay subordinate to labels, icons and luminance;
 - keyboard navigation, visible focus, accepted contrast and reduced motion pass;
 - grayscale screenshot/print review preserves every semantic state;
 - production CSS/JS asset sizes and their delta are published;
@@ -273,23 +284,26 @@ Exit gate:
 
 This phase creates the reusable typed-lane extension while delivering a complete
 user-visible feature. There is no separate horizontal framework phase. ADR-0042
-defines the accepted compact `logs` BSON model, pending/final lifecycle, indexes and
-query limits.
+defines the accepted compact `logs` BSON model, synchronous terminal durability,
+indexes and query limits.
 
 Implement:
 
 - accepted Sentry SDK Log Envelope fixtures and capability flag;
-- `AcceptedRecord::Log`, `LogProcessor` and a dedicated bounded Log lane;
-- ADR-0042 typed `logs` codec, validator, indexes and pending-recovery query;
+- `PendingSignalKind::Log` -> `LogRecord`, a dedicated bounded `LogWriter` and Log
+  lane;
+- ADR-0042 typed `logs` codec, validator and indexes;
 - compact severity, timestamps, message/body, environment, release, SDK and bounded
   attributes;
 - optional trace/span correlation when supplied by the SDK;
-- configurable Log retention and per-project byte/rate quotas;
-- exact attribute filters, bounded message search, time/level/service filters and
+- configurable Log retention, project item enablement and shared bounded
+  request/rate limits;
+- bounded message search, time/level/environment/release/service/Trace filters and
   cursor pagination;
-- Logs list/detail Web views, histogram and links to correlated Error/Trace data;
-- client-report accounting for rejected or rate-limited Logs;
-- archive/deletion registration using Log-specific segments.
+- Logs list/detail Web views, current-page severity distribution and links to
+  correlated Error/Trace data;
+- ingest outcome accounting for accepted, disabled, capacity and storage failures;
+- project-deletion registration.
 
 Phase 24 also performs the breaking `events` to `error_events` physical rename defined
 above.
@@ -297,12 +311,14 @@ above.
 Exit gate:
 
 - official SDK fixtures preserve supported structured values and correlation IDs;
-- one accepted Log becomes one durable record and survives restart/backlog recovery;
+- one accepted Log becomes one terminal durable record; retrying the same formed
+  writer record is idempotent, external SDK redelivery is explicitly at least once,
+  and restart loses no acknowledged Log;
 - a saturated Log lane neither consumes Error queue capacity nor delays Error
   acknowledgement beyond the published regression budget;
-- BSON, index and compressed-storage cost is published for representative small,
-  medium and attribute-heavy Logs;
-- sustained, burst, retention and search-under-ingest baselines pass;
+- BSON and index cost is pinned for representative Logs;
+- the amended retained writer/mixed regression profiles below pass; production
+  sustained/soak/search evidence moves to ADR-0044;
 - the browser can send, find, filter and inspect a real SDK Log.
 
 ### Phase 25 — Transactions, Spans and basic Trace investigation
@@ -316,14 +332,15 @@ Implement:
 - supported Sentry transaction and standalone span Envelope items;
 - bounded binary trace/span identifiers and validation;
 - transaction normalization into a root `SpanRecord`;
-- `AcceptedRecord::Span`, dedicated Span lane, `SpanProcessor` and `spans`;
+- `PendingSignalKind::{Transaction, Span}` -> `SpanRecord`, dedicated bounded
+  `SpanWriter` and `spans`;
 - parent-child relationships, operation, status, duration, service, environment,
   release and bounded attributes;
 - trace sampling metadata accepted from Sentry SDKs without implementing
   OpenTelemetry;
 - trace-by-ID retrieval and deterministic parent/child assembly;
 - a minimal Trace Web view with Errors and Logs linked by trace/span IDs;
-- independent retention, quotas, archive and deletion.
+- independent hot retention and project-deletion registration.
 
 Exit gate:
 
@@ -331,8 +348,10 @@ Exit gate:
 - duplicate delivery does not create duplicate durable Span identities;
 - one trace can be reconstructed with bounded queries and response size;
 - Span saturation cannot starve Error or Log lanes;
-- SDK distributed-tracing E2E covers at least two processes/services;
-- ingest, storage, trace-read and backlog recovery baselines pass.
+- the saved official-SDK smoke covers a local transaction, child Span and correlated
+  Log; multi-process distributed SDK verification moves to ADR-0044;
+- ingest/storage functional gates and the retained Span-writer regression pass;
+  production Trace-read, mixed-load and restart evidence moves to ADR-0044.
 
 ### Phase 26 — Performance aggregates and Insights
 
@@ -346,8 +365,7 @@ Implement:
 - transaction/service/operation summaries;
 - bounded detection of slow HTTP/database/cache/queue operations;
 - initially explicit rules for N+1 and repeated slow operations;
-- Web performance views and links back to representative traces;
-- Web Vitals only for SDK payloads with accepted measurements.
+- Web performance views and links back to representative traces.
 
 Exit gate:
 
@@ -355,7 +373,8 @@ Exit gate:
 - high-cardinality attributes cannot create unbounded bucket keys;
 - percentile and extrapolation semantics are documented and golden-tested;
 - aggregate work remains behind foreground signal processing;
-- representative performance queries meet their published latency budgets.
+- representative performance queries are functionally bounded; production-shaped
+  latency evidence moves to ADR-0044.
 
 ### Phase 24-26 performance-gate amendment
 
@@ -381,7 +400,13 @@ search-under-ingest requirements for Phase 24 closure on the current development
 machine. They are regression sentinels, not production-capacity claims. The earlier
 amendment remains in force for Phases 25-26 until their owner-directed closure pass.
 
-### Phase 27 — Unified Explore query surface
+## Deferred product backlog after production readiness
+
+The following items preserve their accepted scope but no longer own phase numbers.
+ADR-0044 is the sole current Phase 27. When product work resumes, the owner selects
+and numbers backlog items from measured user value and production evidence.
+
+### Backlog item — Unified Explore query surface
 
 Implement one bounded query language and native API over accepted datasets:
 
@@ -413,7 +438,7 @@ Exit gate:
 - dataset addition does not require changing existing dataset codecs;
 - search-under-ingest and adversarial-cardinality suites pass.
 
-### Phase 28 — Saved queries and Dashboards
+### Backlog item — Saved queries and Dashboards
 
 Implement:
 
@@ -432,7 +457,7 @@ Exit gate:
 - malformed or deleted fields fail visibly;
 - dashboard load does not violate ingest/query resource reservations.
 
-### Phase 29 — Issue and query Alert rules
+### Backlog item — Issue and query Alert rules
 
 Extend the existing notification outbox rather than adding delivery to processors.
 
@@ -454,9 +479,9 @@ Exit gate:
 - alert bursts respect per-project and global delivery budgets;
 - E2E covers Event/Log/Span -> rule -> outbox -> webhook.
 
-## Stage J: Error workflow and release intelligence
+## Deferred backlog group: Error workflow and release intelligence
 
-### Phase 30 — Issue collaboration
+### Backlog item — Issue collaboration
 
 Implement:
 
@@ -478,13 +503,15 @@ Exit gate:
 - Issue feed does not introduce per-row assignee queries;
 - browser E2E covers assignment, comment, mention and notification.
 
-### Phase 31 — Grouping controls and inbound filters
+### Backlog item — Grouping controls and inbound filters
+
+The completed Error pipeline already accepts bounded SDK fingerprints, applies the
+`{{ default }}` placeholder semantics, versions the grouping strategy and exposes a
+stored grouping explanation. This backlog item does not reimplement those features.
 
 Implement:
 
-- user-provided SDK fingerprints;
 - accepted server-side fingerprint and stacktrace rules;
-- explanation of grouping inputs/version;
 - explicit Issue merge;
 - bounded selected-Event split;
 - project inbound filters for accepted messages, exception types, releases,
@@ -501,7 +528,7 @@ Exit gate:
 - rule changes do not silently rewrite historical Issues;
 - grouping throughput remains within the accepted Error regression budget.
 
-### Phase 32 — Releases, deploys, commits and source ownership
+### Backlog item — Releases, deploys, commits and source ownership
 
 Extend the existing release/artifact support with:
 
@@ -521,7 +548,7 @@ Exit gate:
 - suspect-commit calculation publishes its limitations;
 - real `sentry-cli` release/deploy E2E passes.
 
-### Phase 33 — Sessions and Release Health
+### Backlog item — Sessions and Release Health
 
 Implement:
 
@@ -539,7 +566,7 @@ Exit gate:
 - user cardinality is bounded/approximated according to a documented algorithm;
 - Error-to-session crash correlation works without delaying Error finalization.
 
-### Phase 34 — User Feedback
+### Backlog item — User Feedback
 
 Implement:
 
@@ -557,9 +584,9 @@ Exit gate:
 - spam/rate/body limits apply before durable side effects;
 - real browser SDK/widget E2E passes.
 
-## Stage K: reliability monitoring
+## Deferred backlog group: reliability monitoring
 
-### Phase 35 — Cron Monitoring
+### Backlog item — Cron Monitoring
 
 Implement:
 
@@ -577,7 +604,7 @@ Exit gate:
 - a check-in flood cannot starve Error/Log lanes;
 - SDK Cron E2E covers success, error, timeout and missed.
 
-### Phase 36 — Uptime Monitoring
+### Backlog item — Uptime Monitoring
 
 Implement:
 
@@ -595,9 +622,9 @@ Exit gate:
 - scheduler overload delays checks visibly without affecting ingest readiness;
 - result retention and alert deduplication pass restart tests.
 
-## Stage L: metrics and high-volume Blob products
+## Deferred backlog group: metrics and high-volume Blob products
 
-### Phase 37 — Metrics
+### Backlog item — Metrics
 
 Implement:
 
@@ -618,7 +645,7 @@ Exit gate:
 - bucket merge contention and recovery baselines pass;
 - Metrics do not share the Span or Log queue.
 
-### Phase 38 — Profiling
+### Backlog item — Profiling
 
 Implement:
 
@@ -638,7 +665,7 @@ Exit gate:
 - profile processing cannot consume Symbolicator capacity reserved for Errors;
 - representative native/runtime SDK E2E and storage/load results pass.
 
-### Phase 39 — Session Replay
+### Backlog item — Session Replay
 
 Implement:
 
@@ -658,9 +685,9 @@ Exit gate:
 - Replay bandwidth cannot consume Error/Log admission reservations;
 - real browser E2E records, uploads, retrieves and plays a bounded session.
 
-## Stage M: organization workflow and ecosystem
+## Deferred backlog group: organization workflow and ecosystem
 
-### Phase 40 — Teams and advanced authorization
+### Backlog item — Teams and advanced authorization
 
 Implement:
 
@@ -681,7 +708,7 @@ Exit gate:
 - identity changes invalidate affected sessions/tokens as specified;
 - assignment and notification fan-out remain bounded.
 
-### Phase 41 — Source, chat and issue-tracker integrations
+### Backlog item — Source, chat and issue-tracker integrations
 
 Implement through provider ports and separate accepted provider sub-phases:
 
@@ -699,7 +726,7 @@ Exit gate:
 - retries and rate limits are bounded per installation;
 - uninstall/revocation removes credentials and stops delivery deterministically.
 
-### Phase 42 — Log/Trace drains and export
+### Backlog item — Log/Trace drains and export
 
 Implement:
 
@@ -717,7 +744,7 @@ Exit gate:
 - redaction is applied before outbound persistence/delivery;
 - restart resumes from a durable checkpoint with documented duplicate semantics.
 
-### Phase 43 — MCP adapter
+### Backlog item — MCP adapter
 
 Implement MCP only over existing application services:
 
@@ -737,9 +764,9 @@ Exit gate:
 
 AI diagnosis, code generation and automatic pull requests remain outside this plan.
 
-## Stage N: compatibility breadth and operational evolution
+## Deferred backlog group: compatibility breadth and operational evolution
 
-### Phase 44 — Extended SDK and platform pipelines
+### Backlog item — Extended SDK and platform pipelines
 
 Expand only through exact compatibility rows and bounded provider sub-phases:
 
@@ -753,7 +780,7 @@ Expand only through exact compatibility rows and bounded provider sub-phases:
 Each format owns its parser corpus, security limits, artifacts, E2E and performance
 gate. Protocol similarity is not advertised as compatibility.
 
-### Phase 45 — Online schema evolution, backup and reconciliation
+### Backlog item — Online schema evolution, backup and reconciliation
 
 Before rolling mixed-version deployment:
 
@@ -770,7 +797,7 @@ Exit gate:
 - no migration requires unbounded memory or a single unbounded collection lock;
 - reconciliation is idempotent and rate-limited behind foreground work.
 
-### Phase 46 — Optional distributed roles and horizontal scale
+### Backlog item — Optional distributed roles and horizontal scale
 
 This phase is triggered by measured single-process limits, not product completeness.
 
@@ -795,56 +822,60 @@ Exit gate:
 
 ## Dependency order and optionality
 
-The required dependency chain is:
+The completed chain and current gate are:
 
 ```text
 23 Dark monochrome Web
 -> 24 Logs
 -> 25 Spans/Traces
 -> 26 Performance
--> 27 Explore
--> 28 Dashboards
--> 29 Alerts
+-> 27 Production readiness
 ```
 
-After Phase 29:
+After ADR-0044 passes, the deferred backlog keeps only capability dependencies, not
+old phase-number ordering:
 
-- Phases 30-34 extend Error workflow and release context;
-- Phases 35-36 share Scheduler but are otherwise independent;
-- Phase 37 extends Explore/Dashboards/Alerts;
-- Phases 38-39 depend on BlobStore and correlation contracts;
-- Phases 40-43 extend organization/application adapters;
-- Phases 44-46 are capability- or operations-driven.
+- saved queries and Dashboards depend on Unified Explore;
+- query Alerts depend on a bounded query surface and the existing outbox;
+- Sessions/Feedback extend release and Error investigation independently;
+- Cron and Uptime share Scheduler but are otherwise independent;
+- Metrics may later extend Explore, Dashboards and Alerts;
+- Profiling and Replay depend on BlobStore and correlation contracts;
+- MCP and provider integrations remain removable application adapters;
+- online migrations and distributed roles are operations-driven and require separate
+  acceptance evidence.
 
-A phase may move earlier only if all of its accepted dependencies already exist and
-the move does not introduce a placeholder abstraction into an earlier hot path.
+A backlog item receives a new phase number only if all of its accepted dependencies
+already exist and the move does not introduce a placeholder abstraction into an
+earlier hot path.
 Profiling and Replay may be disabled indefinitely without weakening Error, Log or
 Trace correctness.
 
 ## Cumulative post-MVP E2E ladder
 
-Every completed phase keeps earlier rungs in CI:
+Every completed product slice keeps earlier rungs in CI. The labels below describe
+capabilities, not current or future phase numbers:
 
 ```text
-13. SDK Log -> logs -> Logs Web
-14. SDK Error + Log -> shared trace correlation
-15. two-service SDK trace -> spans -> Trace Web
-16. spans -> derived performance bucket -> Insights
-17. Explore -> table/timeseries across accepted datasets
-18. Dashboard -> bounded Explore queries
-19. signal -> Alert rule -> outbox -> webhook
-20. Issue -> assignment/comment/subscription
-21. release/deploy/commit -> suspect/source ownership
-22. Error -> Session -> Release Health
-23. browser Feedback -> attachment -> Issue
-24. SDK Check-in -> Monitor outcome -> Alert
-25. Scheduler -> Uptime result -> Alert
-26. SDK Metric -> bucket -> Explore/Dashboard/Alert
-27. SDK Profile -> Blob -> symbolication -> flamegraph
-28. browser Replay -> Blob segments -> player -> Error
-29. provider webhook/API -> integration action
-30. Log/Trace -> durable drain -> destination
-31. MCP -> authorized application query -> bounded result
+SDK Log -> logs -> Logs Web
+SDK Error + Log -> shared trace correlation
+two-service SDK trace -> spans -> Trace Web
+spans -> derived performance bucket -> Insights
+future Explore -> table/timeseries across accepted datasets
+future Dashboard -> bounded Explore queries
+future signal -> Alert rule -> outbox -> webhook
+future Issue -> assignment/comment/subscription
+future release/deploy/commit -> suspect/source ownership
+future Error -> Session -> Release Health
+future browser Feedback -> attachment -> Issue
+future SDK Check-in -> Monitor outcome -> Alert
+future Scheduler -> Uptime result -> Alert
+future SDK Metric -> bucket -> Explore/Dashboard/Alert
+future SDK Profile -> Blob -> symbolication -> flamegraph
+future browser Replay -> Blob segments -> player -> Error
+future provider webhook/API -> integration action
+future Log/Trace -> durable drain -> destination
+future MCP -> authorized application query -> bounded result
 ```
 
 ## Completion meaning
