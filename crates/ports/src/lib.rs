@@ -1290,6 +1290,18 @@ pub trait LogSink: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
 }
 
+/// Dedicated durable Span admission boundary.
+///
+/// Transactions are normalized into one or more terminal Span records before this
+/// boundary. Implementations may buffer and micro-batch records, but a successful
+/// response means that every returned record is already durable.
+pub trait SpanSink: Send + Sync + 'static {
+    fn persist_spans(
+        &self,
+        records: Vec<SpanRecord>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+}
+
 /// Signal-specific durable and query boundary. Raw MongoDB filters never cross it.
 pub trait SignalStore: Send + Sync + 'static {
     fn persist_logs(

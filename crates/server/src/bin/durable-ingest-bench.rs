@@ -8,6 +8,7 @@ use faultkeep_application::{
     observability::Metrics,
     scheduler::{Scheduler, SchedulerConfig},
     shutdown::ShutdownRoot,
+    span_writer::{SpanWriter, SpanWriterConfig},
     writer::{MongoWriter, MongoWriterConfig},
 };
 use faultkeep_domain::{
@@ -127,6 +128,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         root.signal(),
     )?;
+    let (span_writer, span_writer_task) = SpanWriter::start(
+        Arc::clone(&signal_store),
+        SpanWriterConfig {
+            channel_capacity: config.max_waiting_for_storage,
+            max_wait: config.batch.max_wait.get(),
+            max_documents: config.batch.max_documents,
+            max_bytes: config.batch.max_bytes,
+            operation_timeout: config.request_timeout.get(),
+            shutdown_drain: std::time::Duration::from_secs(10),
+        },
+        root.signal(),
+    )?;
     let snapshot = ProjectSnapshot {
         project_id: ProjectId::new(42).expect("constant project is valid"),
         state: ProjectAcceptanceState::Active,
@@ -156,8 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.max_waiting_for_storage,
             root.signal(),
         )
-        .with_signal_store(signal_store)
-        .with_log_sink(log_writer),
+        .with_log_sink(log_writer)
+        .with_span_sink(span_writer),
     );
     let app = http::router_with_readiness(
         root.signal(),
@@ -213,7 +226,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     writer_task.wait().await;
     log_writer_task.wait().await;
-    for collection in ["error_events", "logs"] {
+    span_writer_task.wait().await;
+    for collection in ["error_events", "logs", "spans"] {
         let count = database
             .collection::<mongodb::bson::Document>(collection)
             .count_documents(doc! {})

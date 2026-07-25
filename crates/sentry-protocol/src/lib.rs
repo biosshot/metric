@@ -35,7 +35,11 @@ pub struct DsnAuth {
 pub struct ParsedEnvelope {
     pub event_id: Option<EventId>,
     pub dsn: Option<DsnAuth>,
+    /// The single Error item that owns dependent attachment items. "Primary" is an
+    /// Envelope relationship, not a claim that Errors are the only telemetry signal.
     pub primary: Option<RawEvent>,
+    /// Independently durable telemetry items: Logs, Transactions and standalone
+    /// Spans. Errors are excluded only because they occupy the dependency-root role.
     pub signals: Vec<RawSignal>,
     pub attachments: Vec<RawAttachment>,
     pub discarded: Vec<DiscardedItem>,

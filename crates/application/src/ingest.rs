@@ -15,7 +15,7 @@ use faultkeep_domain::{
 use faultkeep_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
     IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink, ProjectResolveError, ProjectResolver,
-    RandomSource, SignalStore, SignalStoreError,
+    RandomSource, SignalStoreError, SpanSink,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Map, Value};
@@ -109,7 +109,9 @@ pub struct IngestRequest {
     pub auth_keys: Vec<DsnKey>,
     pub dsn_project_id: Option<ProjectId>,
     pub envelope_event_id: Option<EventId>,
+    /// Error dependency root for attachments; this is an Envelope role.
     pub primary: Option<PrimaryEvent>,
+    /// Independent Log/Transaction/Span items, not an exhaustive signal taxonomy.
     pub signals: Vec<PendingSignal>,
     pub attachments: Vec<PendingAttachment>,
     pub discarded: Vec<DiscardedItem>,
@@ -228,9 +230,8 @@ pub struct IngestService {
     blob_store: Option<Arc<dyn BlobStore>>,
     attachment_config: AttachmentIngestConfig,
     minidump_config: MinidumpIngestConfig,
-    signal_store: Option<Arc<dyn SignalStore>>,
     log_sink: Option<Arc<dyn LogSink>>,
-    span_permits: Arc<Semaphore>,
+    span_sink: Option<Arc<dyn SpanSink>>,
 }
 
 impl IngestService {
@@ -255,15 +256,14 @@ impl IngestService {
             blob_store: None,
             attachment_config: AttachmentIngestConfig::default(),
             minidump_config: MinidumpIngestConfig::default(),
-            signal_store: None,
             log_sink: None,
-            span_permits: Arc::new(Semaphore::new(max_waiting_for_storage.max(1))),
+            span_sink: None,
         }
     }
 
     #[must_use]
-    pub fn with_signal_store(mut self, signal_store: Arc<dyn SignalStore>) -> Self {
-        self.signal_store = Some(signal_store);
+    pub fn with_span_sink(mut self, span_sink: Arc<dyn SpanSink>) -> Self {
+        self.span_sink = Some(span_sink);
         self
     }
 
@@ -492,20 +492,14 @@ impl IngestService {
             });
         }
         if !spans.is_empty() {
-            let store = self
-                .signal_store
+            let sink = self
+                .span_sink
                 .as_ref()
-                .ok_or_else(|| IngestError::unavailable("signal_storage_unavailable"))?;
-            let _permit = self
-                .span_permits
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| IngestError::rate_limited("span_lane_capacity"))?;
+                .ok_or_else(|| IngestError::unavailable("span_storage_unavailable"))?;
             let quantity = u64::try_from(spans.len()).unwrap_or(u64::MAX);
-            store
-                .persist_spans(spans)
+            sink.persist_spans(spans)
                 .await
-                .map_err(map_signal_store_error)?;
+                .map_err(map_span_sink_error)?;
             self.outcome_sink.record(IngestOutcome {
                 kind: IngestOutcomeKind::Accepted,
                 reason: "span",
@@ -1512,6 +1506,18 @@ fn map_signal_store_error(error: SignalStoreError) -> IngestError {
         SignalStoreError::Capacity => IngestError::rate_limited("log_lane_capacity"),
         SignalStoreError::NotFound | SignalStoreError::Unavailable => {
             IngestError::unavailable("signal_storage_unavailable")
+        }
+    }
+}
+
+fn map_span_sink_error(error: SignalStoreError) -> IngestError {
+    match error {
+        SignalStoreError::Conflict | SignalStoreError::InvalidData => {
+            IngestError::invalid("invalid_span")
+        }
+        SignalStoreError::Capacity => IngestError::rate_limited("span_lane_capacity"),
+        SignalStoreError::NotFound | SignalStoreError::Unavailable => {
+            IngestError::unavailable("span_storage_unavailable")
         }
     }
 }

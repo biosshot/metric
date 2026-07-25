@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "phase-25-span-writer",
+    "source_commit": "a3d136cc0d17f702f363616a9230a1d6c5527cb3-dirty",
+    "generated_at": "2026-07-25T08:24:07.164Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32"
+  },
+  "metrics": {
+    "rps": 32639,
+    "records": 20000,
+    "batches": 118,
+    "average_batch_occupancy": 169.49,
+    "concurrency": 512,
+    "elapsed_ms": 612,
+    "minimum_rps": 20000,
+    "minimum_average_batch_occupancy": 100,
+    "acknowledged_loss": 0
+  }
+}

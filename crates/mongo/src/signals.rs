@@ -22,16 +22,16 @@ const MAX_QUERY_LIMIT: usize = 200;
 const MAX_STATS_SAMPLES: i32 = 2_048;
 
 #[derive(Debug, Clone, Copy)]
-enum LogWriteStatus {
+enum SignalWriteStatus {
     Inserted,
     Duplicate,
     Rejected,
 }
 
-fn classify_log_insert_many(
+fn classify_signal_insert_many(
     error: &ErrorKind,
     count: usize,
-) -> Result<Vec<LogWriteStatus>, SignalStoreError> {
+) -> Result<Vec<SignalWriteStatus>, SignalStoreError> {
     let ErrorKind::InsertMany(failure) = error else {
         return Err(SignalStoreError::Unavailable);
     };
@@ -42,15 +42,15 @@ fn classify_log_insert_many(
         .write_errors
         .as_ref()
         .ok_or(SignalStoreError::Unavailable)?;
-    let mut statuses = vec![LogWriteStatus::Inserted; count];
+    let mut statuses = vec![SignalWriteStatus::Inserted; count];
     for error in errors {
         let status = statuses
             .get_mut(error.index)
             .ok_or(SignalStoreError::Unavailable)?;
         *status = if error.code == DUPLICATE_KEY_CODE {
-            LogWriteStatus::Duplicate
+            SignalWriteStatus::Duplicate
         } else {
-            LogWriteStatus::Rejected
+            SignalWriteStatus::Rejected
         };
     }
     Ok(statuses)
@@ -119,41 +119,22 @@ impl MongoSignalStore {
         }
     }
 
-    async fn insert_span(&self, record: &SpanRecord) -> Result<DurableOutcome, SignalStoreError> {
-        let document = encode_span(record, self.retention.spans_days)?;
-        match self
+    async fn verify_span_duplicate(&self, record: &SpanRecord) -> Result<(), SignalStoreError> {
+        let existing = self
             .database
             .collection::<Document>("spans")
-            .insert_one(document)
+            .find_one(doc! { "_id": binary(record.id.as_bytes()) })
+            .projection(doc! { "p": 1, "g": 1, "n": 1 })
             .await
+            .map_err(unavailable)?
+            .ok_or(SignalStoreError::Conflict)?;
+        if existing.get_i32("p") == Ok(record.project_id.get())
+            && fixed_binary::<16>(&existing, "g") == Ok(record.trace_id.as_bytes())
+            && fixed_binary::<8>(&existing, "n") == Ok(record.span_id.as_bytes())
         {
-            Ok(_) => {
-                if record.is_segment {
-                    // Aggregates are rebuildable derived state. A durable Span remains
-                    // accepted even if the best-effort rollup is temporarily unavailable.
-                    let _ = self.apply_stat(record).await;
-                }
-                Ok(DurableOutcome::Accepted)
-            }
-            Err(error) if is_duplicate(&error) => {
-                let existing = self
-                    .database
-                    .collection::<Document>("spans")
-                    .find_one(doc! { "_id": binary(record.id.as_bytes()) })
-                    .projection(doc! { "p": 1, "g": 1, "n": 1 })
-                    .await
-                    .map_err(unavailable)?
-                    .ok_or(SignalStoreError::Conflict)?;
-                if existing.get_i32("p") == Ok(record.project_id.get())
-                    && fixed_binary::<16>(&existing, "g") == Ok(record.trace_id.as_bytes())
-                    && fixed_binary::<8>(&existing, "n") == Ok(record.span_id.as_bytes())
-                {
-                    Ok(DurableOutcome::Duplicate)
-                } else {
-                    Err(SignalStoreError::Conflict)
-                }
-            }
-            Err(_) => Err(SignalStoreError::Unavailable),
+            Ok(())
+        } else {
+            Err(SignalStoreError::Conflict)
         }
     }
 
@@ -493,18 +474,18 @@ impl SignalStore for MongoSignalStore {
                 .ordered(false)
                 .await;
             let statuses = match result {
-                Ok(_) => vec![LogWriteStatus::Inserted; records.len()],
-                Err(error) => classify_log_insert_many(error.kind.as_ref(), records.len())?,
+                Ok(_) => vec![SignalWriteStatus::Inserted; records.len()],
+                Err(error) => classify_signal_insert_many(error.kind.as_ref(), records.len())?,
             };
             let mut outcomes = Vec::with_capacity(records.len());
             for (record, status) in records.iter().zip(statuses) {
                 match status {
-                    LogWriteStatus::Inserted => outcomes.push(DurableOutcome::Accepted),
-                    LogWriteStatus::Duplicate => {
+                    SignalWriteStatus::Inserted => outcomes.push(DurableOutcome::Accepted),
+                    SignalWriteStatus::Duplicate => {
                         self.verify_log_duplicate(record).await?;
                         outcomes.push(DurableOutcome::Duplicate);
                     }
-                    LogWriteStatus::Rejected => return Err(SignalStoreError::Unavailable),
+                    SignalWriteStatus::Rejected => return Err(SignalStoreError::Unavailable),
                 }
             }
             metrics::histogram!(
@@ -522,10 +503,48 @@ impl SignalStore for MongoSignalStore {
         records: Vec<SpanRecord>,
     ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
         Box::pin(async move {
-            let mut outcomes = Vec::with_capacity(records.len());
-            for record in &records {
-                outcomes.push(self.insert_span(record).await?);
+            if records.is_empty() {
+                return Ok(Vec::new());
             }
+            let documents = records
+                .iter()
+                .map(|record| encode_span(record, self.retention.spans_days))
+                .collect::<Result<Vec<_>, _>>()?;
+            let started = std::time::Instant::now();
+            let result = self
+                .database
+                .collection::<Document>("spans")
+                .insert_many(documents.iter())
+                .ordered(false)
+                .await;
+            let statuses = match result {
+                Ok(_) => vec![SignalWriteStatus::Inserted; records.len()],
+                Err(error) => classify_signal_insert_many(error.kind.as_ref(), records.len())?,
+            };
+            let mut outcomes = Vec::with_capacity(records.len());
+            for (record, status) in records.iter().zip(statuses) {
+                match status {
+                    SignalWriteStatus::Inserted => {
+                        outcomes.push(DurableOutcome::Accepted);
+                        if record.is_segment {
+                            // Aggregates are rebuildable derived state. A durable Span remains
+                            // accepted even if the best-effort rollup is temporarily unavailable.
+                            let _ = self.apply_stat(record).await;
+                        }
+                    }
+                    SignalWriteStatus::Duplicate => {
+                        self.verify_span_duplicate(record).await?;
+                        outcomes.push(DurableOutcome::Duplicate);
+                    }
+                    SignalWriteStatus::Rejected => return Err(SignalStoreError::Unavailable),
+                }
+            }
+            metrics::histogram!(
+                "faultkeep_mongodb_operation_duration_seconds",
+                "operation" => "span_insert_batch",
+                "outcome" => "durable"
+            )
+            .record(started.elapsed().as_secs_f64());
             Ok(outcomes)
         })
     }
@@ -881,10 +900,6 @@ fn unavailable(_: mongodb::error::Error) -> SignalStoreError {
 
 fn invalid<T>(_: T) -> SignalStoreError {
     SignalStoreError::InvalidData
-}
-
-fn is_duplicate(error: &mongodb::error::Error) -> bool {
-    error.contains_label("DuplicateKey") || error.to_string().contains("E11000")
 }
 
 fn regex_contains(value: &str) -> String {
