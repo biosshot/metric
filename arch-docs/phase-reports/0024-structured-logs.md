@@ -18,8 +18,9 @@
   documents, estimated bytes, operation timeout and graceful shutdown drain.
 - Full Log lane capacity fails immediately as `log_lane_capacity`/HTTP 429. It cannot
   consume the Error writer channel.
-- MongoDB writes each bounded Log batch with unordered `insert_many`; deterministic
-  duplicates are verified against the existing identity projection.
+- MongoDB writes each bounded Log batch with unordered `insert_many`; reuse of the
+  same formed Log identity is verified against the existing projection. A separate
+  SDK redelivery remains explicitly at least once.
 - MongoDB owns the validator, project/time and Trace indexes, and configurable Log
   TTL (`retention.logs_days`).
 - Native API list/detail routes provide bounded time windows, signed cursor
@@ -86,11 +87,11 @@ k6, Cargo or Rust compiler process remained.
 | Requirement | Evidence | Result |
 | --- | --- | --- |
 | Official SDK structured values and correlation | Node v2 fixture and saved real-SDK smoke | Pass |
-| One accepted Log is one durable record and retry-safe | terminal document, deterministic identity, duplicate verification | Pass |
+| One accepted Log is one durable record | terminal document and duplicate/conflict verification for the same formed writer record; separate SDK redelivery is at least once | Pass |
 | Log saturation cannot consume Error lane | independent bounded writers; mixed HTTP profile keeps Error p95 at 22.24 ms | Pass |
 | BSON/index cost is bounded | compact codec fixtures below 512 bytes and named bounded indexes | Pass |
 | Performance baseline | owner-amended two-profile evidence above | Pass |
 | Browser investigation | Logs list/detail/filter/correlation and SDK setup flow | Pass |
 
-Phase 24 is complete. Phase 25 remains the owner of a dedicated Span writer and Span
-pipeline performance closure.
+Phase 24 is complete. At its closure, Phase 25 remained the owner of a dedicated Span
+writer and Span pipeline performance closure; Phase 25 subsequently completed.

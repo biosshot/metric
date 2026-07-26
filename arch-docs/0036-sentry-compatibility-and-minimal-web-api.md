@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Current scope: the Error compatibility rules remain active; ADR-0040/0042/0043
+  subsequently enabled Logs, Transactions and Spans, and ADR-0044 owns the current
+  production-readiness gate
 
 ## Context
 
@@ -32,9 +35,10 @@ categories remain parsed and handled through ADR-0018's capability/partial-accep
 contract so an SDK using a shared Envelope transport does not require a custom fork.
 
 Feature-specific compatibility is advertised only after its module's contract suite
-passes. Native minidumps, debug-file upload, and Artifact Bundles have their own
-accepted endpoint decisions; transactions, spans, sessions, profiles, replays,
-check-ins, StatsD/metrics, logs, and feedback remain disabled until explicitly added.
+passes. Native minidumps, debug-file upload, Artifact Bundles, Logs, Transactions and
+Spans now have their own accepted endpoint decisions and executable evidence.
+Sessions, Profiles, Replays, Check-ins, Metrics and Feedback remain disabled until
+their deferred backlog item is explicitly selected and completed.
 
 ### Machine-readable compatibility matrix
 

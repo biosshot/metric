@@ -85,8 +85,9 @@ runtime highlighter was added.
 | Production asset delta published | Exact raw/gzip table above | Pass |
 | Existing Web behavior unchanged | Final Chromium/Firefox E2E suite passes | Pass |
 
-Phase 23 is complete. The next sequential phase is Phase 24, structured Logs end to
-end; it has not been started.
+At Phase 23 closure, the next sequential phase was Phase 24, Structured Logs.
+Phases 24-26 subsequently completed; ADR-0044 now defines Phase 27 as the
+production-readiness program.
 
 ## Post-gate presentation exception
 

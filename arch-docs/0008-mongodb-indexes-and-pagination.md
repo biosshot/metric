@@ -25,7 +25,8 @@ orders them by `q.n`, `r`, and `_id`.
 
 ### Event indexes
 
-In addition to MongoDB's automatic `_id` index, the initial `events` indexes are:
+In addition to MongoDB's automatic `_id` index, the current `error_events` indexes
+are:
 
 ```javascript
 // Global Processor backlog; partial on q.s == 0

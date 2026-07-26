@@ -6,17 +6,17 @@
 ## Context
 
 Phase 24 adds Sentry-compatible Structured Logs as the first new high-volume signal
-after the Error Monitoring MVP. Logs need independent indexes, retention, quotas and
-backlog isolation, but must reuse the accepted durable ingest/Processor shape without
+after the Error Monitoring MVP. Logs need independent indexes, retention and writer
+resource isolation, but must reuse the accepted bounded durable-ingest shape without
 copying the Error grouping pipeline.
 
 At the 100-million-record/day design target, expanded descriptive BSON and automatic
 indexing of arbitrary attributes would dominate storage and index cost. At the same
-time, storing the complete Log only as compressed binary would make message search,
-time feeds and Trace correlation impractical.
+time, storing the complete Log only as an opaque binary body would make message
+search, time feeds and Trace correlation impractical.
 
 The model therefore separates a small deliberately queryable projection from an
-optional versioned residual body.
+required versioned bounded accepted body.
 
 ## Implementation amendment: synchronous terminal durability
 
@@ -33,10 +33,10 @@ Terminal documents enter a dedicated bounded Log writer and are combined into
 unordered MongoDB `insert_many` operations. Synchronous terminal durability removes
 the pending/finalization state; it does not remove the independent lane or
 micro-batching requirement.
-The `q` pending fields, pending recovery index and `LogProcessor` finalization steps
-described below are superseded for Phase 24. They remain a possible later design only
-if Log processing gains an asynchronous dependency that cannot execute before
-acknowledgement.
+The earlier proposed `q` pending fields, pending recovery index and `LogProcessor`
+finalization are superseded and intentionally absent from the accepted model below.
+They require a new ADR only if Log processing later gains asynchronous work that
+cannot execute before acknowledgement.
 
 ## Collection and domain identity
 
@@ -55,10 +55,24 @@ The domain model uses a distinct identity:
 struct LogId([u8; 16]);
 ```
 
-`LogId` is generated server-side as a time-sortable 128-bit identifier with sufficient
-randomness for concurrent generators. It is not a Sentry Error `event_id`, Trace ID or
-Span ID. Its exact bit layout, monotonicity behavior and golden fixtures are fixed by
-the Phase 24 implementation contract before data is written.
+`LogId` is a server-derived time-sortable deterministic 128-bit identifier:
+
+```text
+bytes 0..8   = received_at Unix milliseconds, big endian
+bytes 8..16  = BLAKE3(
+                 "structured-log/v1" ||
+                 project_id ||
+                 occurred_at_ns ||
+                 accepted item payload
+               )[0..8]
+```
+
+It is not a Sentry Error `event_id`, Trace ID or Span ID. Retrying the same already
+formed `LogRecord` inside the writer derives the same identity; an existing record is
+verified rather than overwritten silently. A separate SDK redelivery receives a new
+server `received_at` and may therefore create a second Log. External Log delivery is
+at least once, not an exactly-once claim. The domain-separation literal and byte
+layout are fixed by Phase 24 golden tests.
 
 MongoDB stores `LogId` as 16-byte binary `_id`. Stable feed order is
 `occurred_at, LogId`, not timestamp alone.
@@ -72,20 +86,16 @@ The conceptual processed document is:
   _id, // 16-byte LogId
   p,   // project ID, BSON int32
   r,   // server receive time, BSON date
-  o,   // Log occurrence time, BSON date
-
-  x,   // hot TTL time, only when eligible
-  h,   // archive due time, only while awaiting archive
-  z,   // archive segment ID, only after archive commit
-
-  l,   // non-default normalized severity code
+  o,   // Log occurrence time, Unix nanoseconds, BSON int64
+  x,   // hot TTL time, BSON date
+  l,   // normalized severity code
   g,   // 16-byte Trace ID, optional
   n,   // 8-byte Span ID, optional
   m,   // normalized display/search message
-  k,   // bounded exact-search tokens, optional
-  s,   // non-default PII policy revision, optional
-  q,   // pending/retry/permanent-failure state, absent after success
-  b    // optional versioned residual body
+  e,   // environment, optional
+  v,   // release, optional
+  j,   // service, optional
+  b    // required versioned bounded accepted Log body
 }
 ```
 
@@ -98,7 +108,9 @@ An ordinary terminal Log may be as small as:
   r,
   o,
   x,
-  m
+  l,
+  m,
+  b
 }
 ```
 
@@ -123,8 +135,9 @@ enum LogSeverity {
 }
 ```
 
-`Info` is the physical default and omits `l`. Codes are never reused with another
-meaning. Input aliases and unknown values are decided by exact supported SDK fixtures:
+Every terminal document stores `l`, including `Info`. Codes are never reused with
+another meaning. Input aliases and unknown values are decided by exact supported SDK
+fixtures:
 
 - accepted aliases normalize to one known code;
 - an unknown source value is never silently presented as `Info`;
@@ -134,13 +147,12 @@ meaning. Input aliases and unknown values are decided by exact supported SDK fix
 
 ## Timestamps
 
-`r` is server receive time and `o` is the accepted occurrence time. Both are BSON
-dates for indexed range queries and retention scheduling.
+`r` is server receive time as a BSON date. `o` is the accepted occurrence time as
+signed Unix nanoseconds in BSON `int64` and is used by feed/range indexes. `x` is the
+server-controlled BSON-date retention deadline derived from `r`.
 
-If a supported SDK provides precision finer than BSON milliseconds, the bounded
-original timestamp representation may remain in `b`. Feed ordering remains
-deterministic through `_id`; sub-millisecond source precision is not turned into an
-additional mandatory BSON field without a benchmarked query requirement.
+The nanosecond representation preserves the supported SDK precision. Feed ordering
+remains deterministic through `(o, _id)`.
 
 Clock-drift correction, if implemented, preserves both the accepted corrected
 occurrence time and enough bounded source metadata to explain the correction. It does
@@ -184,40 +196,20 @@ unscoped cross-project lookup.
 All correlation queries include project scope. Logs remain valid and queryable when
 the related Span/Error has not arrived, has expired or was sampled out.
 
-## Exact-search tokens
+## Query projections and arbitrary attributes
 
-`k` reuses the ADR-0023 domain-separated exact-token approach. A token represents an
-accepted tuple such as:
+Generation 8 promotes only environment `e`, release `v` and service `j` as bounded
+optional exact-filter projections. It does not create `k` exact-search tokens or a
+multikey attribute index. Arbitrary user-controlled attributes remain inside `b` and
+never create MongoDB field paths, indexes or collections.
 
-```text
-log-attribute domain + normalized attribute key + normalized type + normalized value
-```
-
-The original key and value remain in `b`. A token match is a candidate and is verified
-against decoded residual data before returning the Log, preserving correctness in the
-theoretical hash-collision case.
-
-Tokens are not created for every attribute automatically. Phase 24 defines:
-
-- a small built-in allowlist of useful dimensions;
-- an optional bounded per-project allowlist;
-- maximum indexed attributes per Log;
-- maximum token count and bytes per Log;
-- supported scalar value types;
-- behavior for arrays and unsupported/nested values;
-- cardinality/discard metrics.
-
-Initial built-in candidates are environment, release, service name, logger name,
-server address and database system. The final list is fixture- and benchmark-driven;
-adding a field requires an index/storage cost decision.
-
-Arbitrary user-controlled keys do not create MongoDB field paths, indexes or
-collections.
+Adding indexed arbitrary attributes remains a deferred measured decision and requires
+a schema-generation change, storage/index budget and explicit query-cost gate.
 
 ## Residual body
 
-`b` is optional. It stores structured attributes and supported metadata not already
-represented by `_id`, `p`, `r`, `o`, `l`, `g`, `n` or `m`.
+`b` is required. It stores the complete bounded scrubbed accepted Log item as
+versioned canonical JSON, including fields also projected for query/display.
 
 The binary header is:
 
@@ -227,16 +219,14 @@ byte 1: body codec
 remaining bytes: encoded residual body
 ```
 
-Initial codecs follow the proven Event-body policy:
+The generation-8 codec is:
 
 ```text
 0 = canonical JSON
-1 = Zstandard-compressed canonical JSON
 ```
 
-Compression is used only when it saves at least the configured accepted threshold.
-The canonical decoded byte limit is enforced before and during decompression. A
-compression bomb fails closed.
+No Log-body compression codec is currently enabled. The decoded byte limit is
+enforced before durable storage.
 
 `b` may contain:
 
@@ -247,55 +237,29 @@ compression bomb fails closed.
 - supported unknown forward-compatible fields;
 - context not selected as a top-level query projection.
 
-`b` does not duplicate:
+Keeping the complete accepted item in `b` preserves structured attributes and
+forward-compatible fields. The small projection duplication is deliberate and is
+measured by BSON fixtures.
 
-- message;
-- normalized severity;
-- Trace ID or Span ID;
-- project ID;
-- receive/occurrence timestamps;
-- retention/archive state.
+## Terminal write lifecycle
 
-If no residual data remains, a terminal Log omits `b`.
+Before entering the Log writer, ingest:
 
-## Pending and finalization lifecycle
-
-The durable accepted/pending form is conceptually:
-
-```javascript
-{
-  _id,
-  p,
-  r,
-  o,
-  q: {
-    s, // 0 = pending/retry, 1 = permanently failed
-    a, // attempts
-    n, // next attempt time for pending/retry
-    c  // optional bounded numeric failure code
-  },
-  b // scrubbed accepted source payload
-}
-```
-
-The existing RAM lane may retain the accepted typed payload to avoid an immediate
-MongoDB read. When the lane is full or after restart, the Log dispatcher loads the
-pending `b` from MongoDB.
-
-`LogProcessor`:
-
-1. validates and normalizes the accepted payload;
+1. validates and scrubs the bounded accepted payload;
 2. extracts the canonical message into `m`;
 3. maps severity to `l`;
 4. extracts binary Trace/Span IDs into `g` and `n`;
-5. creates only the accepted bounded `k`;
-6. replaces `b` with the normalized residual body or removes it;
-7. sets retention/archive fields;
-8. removes `q` atomically with the terminal projection.
+5. extracts bounded environment/release/service projections;
+6. encodes the required versioned accepted body;
+7. assigns the hot-retention deadline.
 
-The accepted and terminal payload are not retained as two complete durable copies.
-There is no `processing` state in the one-process runtime. Local lane/running sets
-prevent concurrent work and pending durable records remain recoverable after a crash.
+The dedicated bounded Log writer combines terminal documents by `max_wait`,
+`max_documents` and `max_bytes`, then issues unordered MongoDB `insert_many`.
+A request succeeds only after every record in its submitted set is durable. Queue
+saturation, timeout or MongoDB failure returns an explicit retryable failure. A lost
+MongoDB response can be reconciled for the same submitted `LogRecord`: an existing
+identical record is success and conflicting content fails closed. If the SDK
+redelivers the Log as a new request, at-least-once semantics permit a duplicate.
 
 Logs are not grouped into Issues and never update `issues` or `issue_stats_hourly`.
 
@@ -308,7 +272,7 @@ MongoDB `insert_many`/bulk operations using the Phase 24 Log-lane policy:
 max_wait
 max_documents
 max_bytes
-max_in_flight_batches
+one in-flight batch per writer task
 ```
 
 Packing many Logs into an array inside one BSON document is rejected because it
@@ -331,48 +295,25 @@ index.
 ### Trace correlation
 
 ```javascript
-{ p: 1, g: 1, o: 1, _id: 1 }
+{ p: 1, g: 1, o: 1 }
 ```
 
 with a partial filter for documents containing `g`.
 
-### Exact attribute candidates
-
-```javascript
-{ p: 1, k: 1, o: -1 }
-```
-
-This multikey index is created only when the accepted indexed-attribute feature is
-enabled and its storage/load benchmark passes. Token count is bounded before write.
-
 ### Message search
 
-The initial Mongo-only implementation may use one compound text index:
+Generation 8 performs escaped case-insensitive contains matching on `m` inside a
+required project/time window. There is no text index. MongoDB first uses the
+`log_project_time` range and applies the message predicate to candidates.
 
-```javascript
-{ p: 1, m: "text" }
-```
-
-with technical-text configuration such as no natural-language stemming where the
-supported MongoDB version permits it.
-
-Its exact semantics, storage cost and limitations are published. Regex/substring
-collection scans are not a fallback. If the text index violates the storage or
-search-under-ingest gate, capability advertisement must expose the reduced search
-surface rather than enabling an unsafe query.
-
-### Pending recovery
-
-```javascript
-{ "q.n": 1, _id: 1 }
-```
-
-with a partial filter for documents containing pending/retry `q`.
+ADR-0044 must measure keys/documents examined and search latency on
+production-shaped retained data. If the production query-cost gate fails, the
+capability must be bounded further or replaced by an accepted indexed/search-engine
+design before the production declaration.
 
 ### Retention
 
-Retention uses `x` and the already accepted controlled Scheduler/TTL policy. Archive
-mode does not assign hot expiry until the Log archive manifest/object is complete.
+Retention uses `x` and the `log_expiry` TTL index.
 
 Every index definition is centralized in the MongoDB adapter and included in
 schema-generation validation. Wildcard indexes are prohibited.
@@ -384,56 +325,41 @@ The initial Logs product supports:
 - project and time range;
 - normalized severity;
 - message search within the documented MongoDB semantics;
-- accepted exact indexed attributes;
-- Trace ID and Span correlation;
+- exact environment, release and service filters;
+- Trace ID filtering/correlation and Span ID projection on detail;
 - stable cursor pagination;
-- bounded time histogram;
 - Log detail with decoded residual attributes.
 
 Phase 24 does not promise arbitrary group-by, arbitrary attribute regex/substring
-search or arbitrary MongoDB paths. Phase 27 Unified Explore separately chooses
-promoted dimensions, derived buckets or another accepted search/analytics backend
-based on real Log/Span measurements. Future query convenience cannot force every
-Phase 24 Log to carry an unbounded expanded BSON attribute object.
+search or arbitrary MongoDB paths. The deferred Unified Explore backlog item may
+later choose promoted dimensions, derived buckets or another accepted
+search/analytics backend based on production Log/Span measurements. Future query
+convenience cannot force every Log to carry an unbounded expanded BSON attribute
+object.
 
-## Retention, archive and quotas
+## Retention, deletion and current limits
 
-Logs have configuration independent from Error Events:
+Logs have an independent global hot-retention duration and are registered in bounded
+project deletion. They share the accepted request/item size boundary and batch
+settings while using an independent bounded writer channel. A Log overload cannot
+consume the Error writer channel.
 
-- accepted items/second and bytes/second;
-- maximum message, residual body, attribute count/depth/key/value and total item bytes;
-- RAM lane documents and bytes;
-- micro-batch documents and bytes;
-- hot retention duration;
-- optional archive eligibility;
-- per-project stored-byte policy;
-- indexed-attribute/token budget.
-
-Outcomes account for both rejected Log item count and bytes where supported by the
-compatibility contract. A Log overload cannot borrow Error lane capacity or Error
-admission reservations.
-
-Archive output uses Log-specific project/day segments and schema:
-
-```text
-archive/logs/<project>/<day>/...
-```
-
-It does not place Logs and Error Events in one sparse Parquet schema.
+Per-project stored-byte quotas, separate Log rate/byte quotas and Log cold archival
+are not implemented in generation 8. They remain production-hardening findings or
+future backlog and must not be advertised as current capability.
 
 ## Storage-budget verification
 
 Golden BSON fixtures cover at least:
 
-- minimal `Info` Log with no attributes;
-- non-default severity;
+- minimal `Info` Log with required body;
+- every severity code;
 - Trace-correlated Log;
 - small common attributes;
-- maximum indexed-token set;
-- uncompressed residual body;
-- compressed residual body;
-- pending/retry/permanent-failure forms;
-- archive and ordinary retention forms.
+- environment/release/service projections;
+- maximum uncompressed accepted body;
+- deterministic duplicate, ambiguous-response retry and identity-conflict forms;
+- ordinary retention and project-deletion registration.
 
 The Phase 24 report publishes:
 
@@ -443,8 +369,8 @@ The Phase 24 report publishes:
 - replication multiplier used in the estimate;
 - CPU cost of body encode/decode/compression;
 - sustained and burst write throughput;
-- message/exact-search latency during ingest;
-- retention/archive interference;
+- bounded message-search latency during ingest;
+- retention interference;
 - Error ingest and investigation regression results.
 
 No claimed byte saving may remove required durability, PII processing, individual Log
@@ -455,8 +381,8 @@ identity or documented search correctness.
 - Common Logs remain small and do not pay for Error-only fields.
 - Message feed/search and Trace correlation avoid residual-body decoding.
 - Arbitrary attributes remain compact and forward-compatible.
-- Exact custom-attribute search is bounded and explicit rather than automatic.
+- Exact custom-attribute search is not currently exposed.
 - MongoDB cannot immediately aggregate by every arbitrary attribute.
-- Text-index cost may be material and must be measured rather than hidden.
+- Bounded regex message-search cost must pass ADR-0044 or be replaced/limited.
 - A future search backend or time-series collection can be introduced behind accepted
   ports without changing the Log domain or API identity.

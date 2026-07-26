@@ -5,6 +5,10 @@ Owner: release verification and deployment boundary
 Owning decisions: ADR-0034, ADR-0035, ADR-0036, ADR-0037, ADR-0039
 Sequential gate: ADR-0039 Phase 22
 
+Historical scope note: this contract records the Phase 22 release boundary. Logs,
+Transactions, Spans and Performance Insights were enabled later by Phases 24-26.
+ADR-0044, not this historical contract, owns the current production-readiness claim.
+
 ## Boundary
 
 Phase 22 does not add product behavior or relax any Phase 1–21 contract. It owns
@@ -61,8 +65,10 @@ the compatibility manifest's versioned `release_required_families` set is not
 passing. Non-required inventory rows remain honest and visible without blocking the
 selected version-one scope.
 
-Disabled transactions, spans, profiles, sessions, replays, check-ins, metrics/logs
-and feedback remain advertised as disabled.
+At the Phase 22 boundary, transactions, spans, profiles, sessions, replays, check-ins,
+metrics/logs and feedback were advertised as disabled. Later phases changed only the
+capabilities backed by their own accepted evidence; the compatibility-matrix rule
+above remains active.
 
 ## Packaging contract
 

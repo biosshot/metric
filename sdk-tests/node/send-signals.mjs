@@ -25,9 +25,9 @@ await Sentry.startSpan(
       'http.method': 'POST',
     },
   },
-  async (rootSpan) => {
+  async () => {
     Sentry.logger.info('Starting complex scenario validation...');
-    
+
     // 1. Оставляем хлебный мякиш (breadcrumb) для контекста
     Sentry.addBreadcrumb({
       category: 'auth',
@@ -36,31 +36,28 @@ await Sentry.startSpan(
     });
 
     // 2. Спаны, выполняющиеся параллельно через Promise.all
-    await Sentry.startSpan(
-      { name: 'Parallel Operations Task', op: 'queue.process' },
-      async () => {
-        await Promise.all([
-          // Параллельный запрос к БД №1
-          Sentry.startSpan(
-            {
-              name: 'SELECT users WHERE id = $1',
-              op: 'db.sql.query',
-              attributes: { 'db.system': 'postgresql', 'service.name': 'users-db' },
-            },
-            () => new Promise((resolve) => setTimeout(resolve, 50))
-          ),
-          // Параллельный запрос к БД №2 (Redis/Mongo)
-          Sentry.startSpan(
-            {
-              name: 'GET user:session:cache',
-              op: 'db.redis',
-              attributes: { 'db.system': 'redis', 'service.name': 'cache-redis' },
-            },
-            () => new Promise((resolve) => setTimeout(resolve, 20))
-          ),
-        ]);
-      }
-    );
+    await Sentry.startSpan({ name: 'Parallel Operations Task', op: 'queue.process' }, async () => {
+      await Promise.all([
+        // Параллельный запрос к БД №1
+        Sentry.startSpan(
+          {
+            name: 'SELECT users WHERE id = $1',
+            op: 'db.sql.query',
+            attributes: { 'db.system': 'postgresql', 'service.name': 'users-db' },
+          },
+          () => new Promise((resolve) => setTimeout(resolve, 50)),
+        ),
+        // Параллельный запрос к БД №2 (Redis/Mongo)
+        Sentry.startSpan(
+          {
+            name: 'GET user:session:cache',
+            op: 'db.redis',
+            attributes: { 'db.system': 'redis', 'service.name': 'cache-redis' },
+          },
+          () => new Promise((resolve) => setTimeout(resolve, 20)),
+        ),
+      ]);
+    });
 
     // 3. Спан внешнего HTTP-запроса (Имитация распределенной трассировки)
     await Sentry.startSpan(
@@ -69,20 +66,20 @@ await Sentry.startSpan(
         op: 'http.client',
         attributes: {
           'http.method': 'GET',
-          'url': 'https://external-finance.com',
+          url: 'https://external-finance.com',
         },
       },
-      async (httpSpan) => {
+      async () => {
         // Генерируем заголовки трассировки для передачи в другой сервис
         const traceHeaders = Sentry.getTraceData();
-        
+
         Sentry.logger.info('Simulating outgoing HTTP request headers', {
           traceparent: traceHeaders['traceparent'],
           baggage: traceHeaders['baggage'],
         });
 
         await new Promise((resolve) => setTimeout(resolve, 100));
-      }
+      },
     );
 
     // 4. Спан с контролируемой ошибкой внутри (для проверки связывания спана и ошибки)
@@ -93,10 +90,10 @@ await Sentry.startSpan(
           op: 'internal.payment',
           attributes: { amount: 49.99, currency: 'USD' },
         },
-        async (paymentSpan) => {
+        async () => {
           // Имитируем бизнес-логику, которая упала
           throw new Error('Payment gateway timeout');
-        }
+        },
       );
     } catch (error) {
       // Логируем ошибку структурировано
@@ -104,7 +101,7 @@ await Sentry.startSpan(
       // Привязываем ошибку к текущему контексту
       Sentry.captureException(error);
     }
-  }
+  },
 );
 
 // Сброс данных в Sentry

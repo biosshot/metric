@@ -66,6 +66,11 @@ Dataset codes are append-only and never reused:
 | 70 | `project_keys` | project-owned | delete after data reconciliation |
 | 80 | `projects`, `project_deletions` | control plane | tombstone/status ownership |
 
+ADR-0040 later renamed dataset code 10 from the physical `events` collection to
+`error_events` without reusing the code. Phases 24-26 added codes 11 `logs`, 12
+`spans` and 13 `span_stats_hourly`; the runtime registry is authoritative for the
+current complete set.
+
 `audit_log` is retained audit. Organizations, users, memberships, sessions,
 tokens, setup tokens, and `schema_meta` are global. The compile-time registry
 must classify every bootstrap-owned collection exactly once; adding an

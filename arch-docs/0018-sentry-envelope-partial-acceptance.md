@@ -129,14 +129,16 @@ The backoff is configurable and defaults to one hour so enabling a feature becom
 visible to SDKs without an effectively permanent stale limit. Unknown future types do
 not receive invented category names.
 
-Per-item `unsupported` and dependency outcomes are aggregated in
-`ingest_outcomes_hourly`; no per-request discard document is created.
+The original design targeted `ingest_outcomes_hourly`. Schema generation 8 does not
+create that collection and the production server currently wires a no-op
+`OutcomeSink`; no per-request discard document is created. Durable outcome
+aggregation remains deferred to the ADR-0044 observability gate.
 
 ### Client reports
 
-`client_report` is supported from the first version. Its bounded category, reason, and
-quantity records are normalized into the existing hourly outcome projection with
-`source = "sdk"`. Individual reports and arbitrary raw content are not retained.
+`client_report` is accepted by the Envelope compatibility layer. Its bounded category,
+reason and quantity are parsed, but the current no-op production `OutcomeSink` does
+not persist them. Individual reports and arbitrary raw content are not retained.
 
 Client reports are lossy diagnostic telemetry. A failure to update their approximate
 aggregate does not fail an otherwise durably accepted Event and does not turn a

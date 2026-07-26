@@ -198,21 +198,14 @@ impl<B: SymbolicationBackend> SymbolicationStage for SymbolicationService<B> {
         cancellation: &'a CancellationToken,
     ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
         Box::pin(async move {
-            let result = self
+            Ok(self
                 .symbolicate_with_revisions(
                     event,
                     debug_file_revision,
                     artifact_revision,
                     cancellation,
                 )
-                .await;
-            if result.disposition == SymbolicationDisposition::Retryable {
-                Err(StageFailure::temporary(
-                    ProcessingErrorCode::SymbolicationRetryable,
-                ))
-            } else {
-                Ok(result)
-            }
+                .await)
         })
     }
 }
@@ -619,6 +612,14 @@ impl Processor {
             ),
         )
         .await??;
+        if should_retry_symbolication(&symbolication, pending.attempts, self.config.max_attempts) {
+            return Err(StageFailure::temporary(
+                ProcessingErrorCode::SymbolicationRetryable,
+            ));
+        }
+        if symbolication.disposition == SymbolicationDisposition::Retryable {
+            metrics::counter!("metric_symbolication_raw_fallback_total").increment(1);
+        }
         let grouping = run_stage(
             "grouper",
             self.config.stage_timeout,
@@ -759,6 +760,15 @@ impl Processor {
             | Err(_) => ProcessorOutcome::StateUnavailable,
         }
     }
+}
+
+fn should_retry_symbolication(
+    result: &SymbolicationResult,
+    completed_attempts: u32,
+    maximum_attempts: u32,
+) -> bool {
+    result.disposition == SymbolicationDisposition::Retryable
+        && completed_attempts.saturating_add(1) < maximum_attempts
 }
 
 impl metric_ports::WorkHandler for Processor {
@@ -959,6 +969,7 @@ mod tests {
     struct ScriptedStages {
         failure: Option<(&'static str, StageFailure)>,
         delay: Option<(&'static str, Duration)>,
+        symbolication_disposition: Option<SymbolicationDisposition>,
         order: Mutex<Vec<&'static str>>,
         active: AtomicUsize,
         maximum_active: AtomicUsize,
@@ -969,6 +980,7 @@ mod tests {
             Self {
                 failure,
                 delay: None,
+                symbolication_disposition: None,
                 order: Mutex::new(Vec::new()),
                 active: AtomicUsize::new(0),
                 maximum_active: AtomicUsize::new(0),
@@ -978,6 +990,13 @@ mod tests {
         fn delayed(stage: &'static str, duration: Duration) -> Self {
             Self {
                 delay: Some((stage, duration)),
+                ..Self::new(None)
+            }
+        }
+
+        fn retryable_symbolication() -> Self {
+            Self {
+                symbolication_disposition: Some(SymbolicationDisposition::Retryable),
                 ..Self::new(None)
             }
         }
@@ -1030,7 +1049,12 @@ mod tests {
         ) -> PortFuture<'a, Result<SymbolicationResult, StageFailure>> {
             Box::pin(async move {
                 let _guard = self.enter("symbolication").await?;
-                Ok(BaselineSymbolicationService::symbolicate(event))
+                let mut result = BaselineSymbolicationService::symbolicate(event);
+                if let Some(disposition) = self.symbolication_disposition {
+                    result.status = SymbolicationStatus::Unavailable;
+                    result.disposition = disposition;
+                }
+                Ok(result)
             })
         }
     }
@@ -1320,6 +1344,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn symbolicator_outage_retries_then_finalizes_raw() {
+        let states = Arc::new(FakeStates::new(ProcessingStateChange::Updated));
+        let stages = Arc::new(ScriptedStages::retryable_symbolication());
+        let outcome = processor(Ok(project()), states.clone(), stages.clone(), config())
+            .process(PendingEvent::fresh(accepted(29)))
+            .await;
+        assert_eq!(outcome, ProcessorOutcome::RetryScheduled);
+        assert_eq!(
+            states.updates.lock().unwrap()[0].code,
+            ProcessingErrorCode::SymbolicationRetryable
+        );
+
+        let states = Arc::new(FakeStates::new(ProcessingStateChange::Updated));
+        let stages = Arc::new(ScriptedStages::retryable_symbolication());
+        let outcome = processor(Ok(project()), states.clone(), stages.clone(), config())
+            .process(PendingEvent {
+                event: accepted(30),
+                attempts: 2,
+            })
+            .await;
+        assert_eq!(outcome, ProcessorOutcome::Processed);
+        assert!(states.updates.lock().unwrap().is_empty());
+        assert_eq!(
+            stages.order.lock().unwrap().as_slice(),
+            [
+                "normalizer",
+                "symbolication",
+                "grouper",
+                "issue_service",
+                "finalizer"
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn deadlines_cancellation_and_processor_concurrency_are_bounded() {
         let states = Arc::new(FakeStates::new(ProcessingStateChange::Updated));
         let stages = Arc::new(ScriptedStages::delayed(
@@ -1412,5 +1471,27 @@ mod tests {
             missing_debug_ids: Vec::new(),
             diagnostics: Vec::new(),
         };
+    }
+
+    #[test]
+    fn retryable_symbolication_finalizes_raw_on_the_last_attempt() {
+        let retryable = SymbolicationResult {
+            kind: SymbolicationKind::JavaScript,
+            status: SymbolicationStatus::Unavailable,
+            disposition: SymbolicationDisposition::Retryable,
+            raw: Vec::new(),
+            derived: Vec::new(),
+            missing_debug_ids: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        assert!(should_retry_symbolication(&retryable, 0, 3));
+        assert!(should_retry_symbolication(&retryable, 1, 3));
+        assert!(!should_retry_symbolication(&retryable, 2, 3));
+
+        let terminal = SymbolicationResult {
+            disposition: SymbolicationDisposition::FinalizeRaw,
+            ..retryable
+        };
+        assert!(!should_retry_symbolication(&terminal, 0, 3));
     }
 }

@@ -15,7 +15,7 @@
   class, status, name, service, environment, release, Insight flags and a bounded
   versioned body.
 - Project policy and independent Span admission prevent disabled or saturated Span
-  work from borrowing the Error/Log semaphore.
+  work from borrowing the Error/Log writer channels.
 - `spans` has a project/Trace index, a partial segment-feed index and configurable
   `retention.spans_days`. Project deletion registers `spans`.
 - Error finalization projects optional Trace/Span IDs into `error_events`.
