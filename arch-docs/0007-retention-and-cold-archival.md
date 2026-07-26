@@ -1,11 +1,11 @@
-# ADR-0007: Event retention and optional cold archival
+# ADR-0007: Signal retention and optional cold archival
 
 - Status: Accepted
 - Date: 2026-07-20
 
 ## Context
 
-Raw events can grow much faster than issue metadata and aggregate statistics. The
+Raw Events, Logs, and Spans can grow much faster than issue metadata and aggregate statistics. The
 first version needs predictable storage use for small installations while preserving
 an optional path to cheap long-term storage. Archival must never be required for a
 working installation and an archive failure must not silently delete unarchived
@@ -34,6 +34,8 @@ need to evaluate project settings.
 The initial retention classes are:
 
 - raw `error_events`: 30 days by default;
+- `logs`: 30 days by default;
+- `spans`: 30 days by default;
 - `issue_stats_hourly`: 400 days by default;
 - `issues`: no automatic retention deletion;
 - `releases` and `environments`: no automatic retention deletion;
@@ -72,7 +74,7 @@ immediately.
 An event with pending `q.s == 0` does not receive `x`. Retention therefore cannot
 delete the durable Processor backlog.
 
-When archival is disabled, a terminal processed or permanently failed event gets `x`
+When archival is disabled, a terminal processed or permanently failed Event gets `x`
 derived from `r` and the effective event-retention setting.
 If processing finishes after that deadline, the event may become immediately
 eligible for deletion.
@@ -80,6 +82,12 @@ eligible for deletion.
 When archival is enabled, reaching `h` makes a terminal event eligible for archival
 but does not set `x`. After its archive segment is durably completed and verified,
 the Event receives segment `z` and TTL date `x`, and `h` is removed.
+
+Logs and Spans are terminal at durable insertion. With archival disabled they receive
+`x` immediately. With archival enabled they receive `h` instead; only a completed,
+verified archive segment may replace `h` with `z` and `x`. Transactions use the Span
+storage model and therefore follow Span archival. There is no separate Trace archive
+because a Trace remains a virtual assembly of Spans.
 
 ### Initial MongoDB layout
 
@@ -99,21 +107,23 @@ rather than making an unbounded set of documents expire at once.
 
 ### Optional cold archive
 
-Cold event archival is disabled by default. If no archive backend is configured,
-terminal events are permanently removed after their configured hot retention.
+Cold signal archival is disabled by default. If no archive backend is configured,
+terminal Events, Logs, and Spans are permanently removed after their configured hot
+retention.
 
 When enabled, the archive backend is either the local filesystem or S3-compatible
-object storage. Events are written as versioned Apache Parquet segments with Zstandard
-compression. Segments are project-scoped, cover no more than one day, and are also
-bounded by a configurable target object size.
+object storage. Events, Logs, and Spans are written as separate versioned Apache
+Parquet segments with Zstandard compression. A segment is homogeneous,
+project-scoped, covers no more than one day, and is also bounded by a configurable
+target object size.
 
-A segment contains stable searchable metadata columns and the decoded canonical,
-scrubbed Event body. It never contains a pre-scrubbing durable copy.
+A segment contains stable metadata columns and the decoded canonical, scrubbed signal
+body. It never contains a pre-scrubbing durable copy.
 
 The archive key layout is logically project and date scoped, for example:
 
 ```text
-projects/{project_id}/events/{year}/{month}/{day}/{segment_id}.parquet
+projects/{project_id}/archives/{events|logs|spans}/{year}/{month}/{day}/{segment_id}.parquet
 ```
 
 ### Archive commit protocol
@@ -130,7 +140,8 @@ projects/{project_id}/events/{year}/{month}/{day}/{segment_id}.parquet
   format,
   compression,
   schema_version,
-  event_count,
+  kind,
+  record_count,
   stored_bytes,
   checksum,
   state,
@@ -150,8 +161,8 @@ The required order is:
 3. finalize the file or object;
 4. verify its size and checksum;
 5. mark the manifest `complete`;
-6. associate source events with the completed segment as `z`;
-7. set the source events' `x` values and remove `h`.
+6. associate source records with the completed segment as `z`;
+7. set the source records' `x` values and remove `h`.
 
 If archival is unavailable or verification fails, source events remain in MongoDB
 without `x`. This favors durability over bounded disk use and must produce an
@@ -159,7 +170,7 @@ operational alert.
 
 ### Archive access
 
-The first archive implementation is cold storage. Normal Web and MCP searches query
+The archive implementation is cold storage. Normal Web and MCP searches query
 MongoDB and aggregate collections, not Parquet objects. Issue metadata and hourly
 statistics remain available after raw events leave MongoDB.
 
@@ -188,6 +199,8 @@ hourly retention is required.
 - The simple initial TTL model may require partitioning or sharding at very high
   sustained volumes, based on benchmarks and observed TTL lag.
 - Archived data is not immediately searchable through the normal event API.
+- The first Log/Span archive schema is a breaking MongoDB schema-generation change;
+  the project still has no online migration framework.
 
 ## Deferred questions
 

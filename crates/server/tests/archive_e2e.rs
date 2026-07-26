@@ -4,14 +4,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::TryStreamExt;
 use metric_application::archive::{ArchiveConfig, ArchiveService};
 use metric_blob::{LocalBlobConfig, LocalBlobStore};
 use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, SecretBytes, Timestamp,
     blob::BlobKey,
+    signals::{
+        LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
+        SpanRecordId, TraceId,
+    },
 };
-use metric_mongo::{EventCodecConfig, MongoEventStore, MongoProjectStore};
-use metric_ports::{BlobStore, Clock, EventStore, EventWriteStatus};
+use metric_mongo::{
+    EventCodecConfig, MongoEventStore, MongoProjectStore, MongoSignalStore, SignalRetention,
+};
+use metric_ports::{BlobStore, Clock, EventStore, EventWriteStatus, SignalStore};
 use mongodb::{
     Client, Database,
     bson::{Binary, Document, doc, spec::BinarySubtype},
@@ -77,6 +84,62 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
             },
         )
         .await?;
+    let trace_id = TraceId::from_bytes([3; 16]);
+    let span_id = SpanId::from_bytes([4; 8]);
+    let signals = MongoSignalStore::with_retention(
+        database.clone(),
+        SignalRetention {
+            logs_days: 0,
+            spans_days: 0,
+            span_stats_hourly_days: 90,
+            archive: true,
+        },
+    );
+    let log_id = LogId::deterministic(
+        event.project_id,
+        now,
+        now.unix_millis() * 1_000_000,
+        b"archive log",
+    );
+    signals
+        .persist_logs(vec![LogRecord {
+            id: log_id,
+            project_id: event.project_id,
+            received_at: now,
+            occurred_at_ns: now.unix_millis() * 1_000_000,
+            severity: LogSeverity::Info,
+            message: "archive log".into(),
+            trace_id: Some(trace_id),
+            span_id: Some(span_id),
+            environment: None,
+            release: None,
+            service: Some("api".into()),
+            body: SignalBody::new(br#"{"body":"archive log"}"#.as_slice()),
+        }])
+        .await?;
+    let span_record_id = SpanRecordId::deterministic(event.project_id, trace_id, span_id);
+    signals
+        .persist_spans(vec![SpanRecord {
+            id: span_record_id,
+            project_id: event.project_id,
+            received_at: now,
+            started_at_ns: now.unix_millis() * 1_000_000,
+            duration_ns: 1_000_000,
+            trace_id,
+            span_id,
+            parent_span_id: None,
+            is_segment: true,
+            operation_class: SpanOperationClass::HttpServer,
+            operation: "http.server".into(),
+            status: "ok".into(),
+            name: "GET /archive".into(),
+            environment: None,
+            release: None,
+            service: Some("api".into()),
+            insight_flags: 0,
+            body: SignalBody::new(br#"{"transaction":"GET /archive"}"#.as_slice()),
+        }])
+        .await?;
     let blobs = Arc::new(
         LocalBlobStore::new(
             root,
@@ -104,25 +167,32 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
         },
     )?;
     let report = service.run_once().await?;
-    assert_eq!(report.claimed_events, 1);
-    assert_eq!(report.archived_events, 1);
+    assert_eq!(report.claimed_records, 3);
+    assert_eq!(report.archived_records, 3);
     assert!(report.stored_bytes > 0);
 
-    let manifest = database
+    let mut manifests = database
         .collection::<Document>("archive_manifests")
-        .find_one(doc! { "project_id": 7_i32 })
-        .await?
-        .unwrap();
-    assert_eq!(manifest.get_str("state")?, "complete");
-    assert!(manifest.get_bool("source_committed")?);
-    let object_key = BlobKey::new(manifest.get_str("object_key")?.to_owned())?;
-    let mut reader = blobs.open(&object_key).await?;
-    let mut archived = Vec::new();
-    while let Some(chunk) = reader.read_chunk(4096).await? {
-        archived.extend_from_slice(&chunk);
+        .find(doc! { "project_id": 7_i32 })
+        .await?;
+    let mut kinds = std::collections::BTreeSet::new();
+    while let Some(manifest) = manifests.try_next().await? {
+        assert_eq!(manifest.get_str("state")?, "complete");
+        assert!(manifest.get_bool("source_committed")?);
+        kinds.insert(manifest.get_str("kind")?.to_owned());
+        let object_key = BlobKey::new(manifest.get_str("object_key")?.to_owned())?;
+        let mut reader = blobs.open(&object_key).await?;
+        let mut archived = Vec::new();
+        while let Some(chunk) = reader.read_chunk(4096).await? {
+            archived.extend_from_slice(&chunk);
+        }
+        assert_eq!(&archived[..4], b"PAR1");
+        assert_eq!(&archived[archived.len() - 4..], b"PAR1");
     }
-    assert_eq!(&archived[..4], b"PAR1");
-    assert_eq!(&archived[archived.len() - 4..], b"PAR1");
+    assert_eq!(
+        kinds,
+        std::collections::BTreeSet::from(["event".to_owned(), "log".to_owned(), "span".to_owned()])
+    );
 
     let hot = database
         .collection::<Document>("error_events")
@@ -135,6 +205,22 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
         hot.get_datetime("x")?.timestamp_millis(),
         now.unix_millis() + 60_000
     );
+    for (collection, id) in [
+        ("logs", log_id.as_bytes()),
+        ("spans", span_record_id.as_bytes()),
+    ] {
+        let hot = database
+            .collection::<Document>(collection)
+            .find_one(doc! { "_id": binary(id) })
+            .await?
+            .unwrap();
+        assert!(!hot.contains_key("h"));
+        assert!(hot.contains_key("z"));
+        assert_eq!(
+            hot.get_datetime("x")?.timestamp_millis(),
+            now.unix_millis() + 60_000
+        );
+    }
     Ok(())
 }
 

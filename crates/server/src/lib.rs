@@ -432,6 +432,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 logs_days: config.retention.logs_days,
                 spans_days: config.retention.spans_days,
                 span_stats_hourly_days: config.retention.span_stats_hourly_days,
+                archive: config.archive.enabled,
             }),
         );
         let (log_writer, log_writer_task) = LogWriter::start(

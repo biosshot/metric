@@ -2,6 +2,7 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     DsnKey, OrganizationId, ProjectId, Timestamp,
     deletion::{
@@ -12,7 +13,6 @@ use metric_domain::{
 use metric_ports::{
     PortFuture, ProjectDeletionStore, ProjectDeletionStoreError, ProjectPurgeRequest,
 };
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -185,7 +185,7 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 28] = [
 ];
 
 /// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 5] = [
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 7] = [
     DatasetRegistration {
         code: 90,
         name: "blob:projects/{project_id}/events",
@@ -199,6 +199,16 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 5] = [
     DatasetRegistration {
         code: 92,
         name: "blob:projects/{project_id}/archives/events",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 93,
+        name: "blob:projects/{project_id}/archives/logs",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 94,
+        name: "blob:projects/{project_id}/archives/spans",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {

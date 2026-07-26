@@ -5,8 +5,10 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::{
-    EventId, OrganizationId, ProjectId, Timestamp, archive::ArchiveSegmentId,
-    artifacts::ArtifactBundleId, debug_files::DebugFileId,
+    EventId, OrganizationId, ProjectId, Timestamp,
+    archive::{ArchiveKind, ArchiveSegmentId},
+    artifacts::ArtifactBundleId,
+    debug_files::DebugFileId,
 };
 
 pub const MAX_BLOB_KEY_BYTES: usize = 512;
@@ -99,10 +101,23 @@ impl BlobKey {
         day: u8,
         segment_id: ArchiveSegmentId,
     ) -> Self {
+        Self::archive(ArchiveKind::Event, project_id, year, month, day, segment_id)
+    }
+
+    #[must_use]
+    pub fn archive(
+        kind: ArchiveKind,
+        project_id: ProjectId,
+        year: i32,
+        month: u8,
+        day: u8,
+        segment_id: ArchiveSegmentId,
+    ) -> Self {
         Self(
             format!(
-                "projects/{}/archives/events/{year:04}/{month:02}/{day:02}/{segment_id}.parquet",
-                project_id.get()
+                "projects/{}/archives/{}/{year:04}/{month:02}/{day:02}/{segment_id}.parquet",
+                project_id.get(),
+                kind.directory()
             )
             .into(),
         )
@@ -141,20 +156,26 @@ impl BlobKey {
     }
 
     pub fn archive_project(&self) -> Result<ProjectId, BlobValueError> {
+        self.archive_relation().map(|(project_id, _)| project_id)
+    }
+
+    pub fn archive_relation(&self) -> Result<(ProjectId, ArchiveKind), BlobValueError> {
         let segments = self.0.split('/').collect::<Vec<_>>();
         if segments.len() != 8
             || segments[0] != "projects"
             || segments[2] != "archives"
-            || segments[3] != "events"
             || !segments[7].ends_with(".parquet")
         {
             return Err(BlobValueError::InvalidKey);
         }
-        segments[1]
+        let project_id = segments[1]
             .parse::<i32>()
             .ok()
             .and_then(|value| ProjectId::new(value).ok())
-            .ok_or(BlobValueError::InvalidKey)
+            .ok_or(BlobValueError::InvalidKey)?;
+        let kind =
+            ArchiveKind::from_directory(segments[3]).map_err(|_| BlobValueError::InvalidKey)?;
+        Ok((project_id, kind))
     }
 }
 
@@ -241,6 +262,8 @@ pub enum BlobKind {
     DebugFile,
     ArtifactBundle,
     EventArchive,
+    LogArchive,
+    SpanArchive,
 }
 
 impl BlobKind {
@@ -253,6 +276,17 @@ impl BlobKind {
             Self::DebugFile => "debug_file",
             Self::ArtifactBundle => "artifact_bundle",
             Self::EventArchive => "event_archive",
+            Self::LogArchive => "log_archive",
+            Self::SpanArchive => "span_archive",
+        }
+    }
+
+    #[must_use]
+    pub const fn archive(kind: ArchiveKind) -> Self {
+        match kind {
+            ArchiveKind::Event => Self::EventArchive,
+            ArchiveKind::Log => Self::LogArchive,
+            ArchiveKind::Span => Self::SpanArchive,
         }
     }
 }
@@ -264,6 +298,8 @@ pub enum BlobNamespace {
     DebugFiles,
     ArtifactBundles,
     EventArchives,
+    LogArchives,
+    SpanArchives,
 }
 
 impl BlobNamespace {
@@ -275,6 +311,17 @@ impl BlobNamespace {
             Self::DebugFiles => "d/",
             Self::ArtifactBundles => "a/",
             Self::EventArchives => "projects/",
+            Self::LogArchives => "projects/",
+            Self::SpanArchives => "projects/",
+        }
+    }
+
+    #[must_use]
+    pub const fn archive(kind: ArchiveKind) -> Self {
+        match kind {
+            ArchiveKind::Event => Self::EventArchives,
+            ArchiveKind::Log => Self::LogArchives,
+            ArchiveKind::Span => Self::SpanArchives,
         }
     }
 
@@ -291,8 +338,16 @@ impl BlobNamespace {
             Self::DebugFiles => BlobKind::DebugFile,
             Self::ArtifactBundles => BlobKind::ArtifactBundle,
             Self::EventArchives => {
-                key.archive_project()?;
+                archive_kind(key, ArchiveKind::Event)?;
                 BlobKind::EventArchive
+            }
+            Self::LogArchives => {
+                archive_kind(key, ArchiveKind::Log)?;
+                BlobKind::LogArchive
+            }
+            Self::SpanArchives => {
+                archive_kind(key, ArchiveKind::Span)?;
+                BlobKind::SpanArchive
             }
         })
     }
@@ -370,6 +425,13 @@ fn valid_segment(segment: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
 }
 
+fn archive_kind(key: &BlobKey, expected: ArchiveKind) -> Result<(), BlobValueError> {
+    let (_, actual) = key.archive_relation()?;
+    (actual == expected)
+        .then_some(())
+        .ok_or(BlobValueError::InvalidKey)
+}
+
 fn base36(value: i32) -> String {
     const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut value = u32::try_from(value).expect("ProjectId is positive");
@@ -424,5 +486,24 @@ mod tests {
             BlobObjectId::from_bytes([2; 16]),
         );
         assert_eq!(key.event_relation().unwrap().0, ProjectId::new(7).unwrap());
+
+        let segment = ArchiveSegmentId::derive(
+            ProjectId::new(7).unwrap(),
+            &[crate::EventKey::new(
+                ProjectId::new(7).unwrap(),
+                EventId::from_bytes([3; 16]),
+            )],
+        );
+        for kind in ArchiveKind::ALL {
+            let key = BlobKey::archive(kind, ProjectId::new(7).unwrap(), 2026, 7, 26, segment);
+            assert_eq!(
+                key.archive_relation().unwrap(),
+                (ProjectId::new(7).unwrap(), kind)
+            );
+            assert_eq!(
+                BlobNamespace::archive(kind).kind_for_key(&key).unwrap(),
+                BlobKind::archive(kind)
+            );
+        }
     }
 }

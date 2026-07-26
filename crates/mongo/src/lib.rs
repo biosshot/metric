@@ -35,6 +35,7 @@ pub use signals::{MongoSignalStore, SignalRetention};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
@@ -42,7 +43,6 @@ use metric_domain::{
     api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
 };
 use metric_ports::{PortFuture, ProjectStore, ProjectStoreError};
-use futures_util::TryStreamExt;
 use mongodb::{
     Client, Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -51,9 +51,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 8;
+pub const SCHEMA_GENERATION: i32 = 9;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 13] = [
+const SCHEMA_MODULES: [&str; 14] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -67,6 +67,7 @@ const SCHEMA_MODULES: [&str; 13] = [
     "structured_logs_v1",
     "spans_virtual_traces_v1",
     "performance_insights_v1",
+    "signal_cold_archive_v1",
 ];
 const REQUIRED_COLLECTIONS: [&str; 28] = [
     "api_tokens",

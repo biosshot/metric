@@ -2,20 +2,22 @@
 
 use std::collections::BTreeMap;
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     EventKey, ProjectId, Timestamp,
     archive::{
-        ArchiveBatch, ArchiveBatchState, ArchiveEvent, ArchiveSegmentId,
-        EVENT_ARCHIVE_SCHEMA_VERSION,
+        ArchiveBatch, ArchiveBatchState, ArchiveEvent, ArchiveKind, ArchiveRecords,
+        ArchiveSegmentId, ArchiveSignal, ArchiveSourceId, EVENT_ARCHIVE_SCHEMA_VERSION,
+        LOG_ARCHIVE_SCHEMA_VERSION, SPAN_ARCHIVE_SCHEMA_VERSION,
     },
     blob::{BlobKey, BlobKind},
     grouping::IssueId,
+    signals::{LogId, SpanRecordId},
 };
 use metric_ports::{
     ArchiveClaimRequest, ArchiveCompleteRequest, ArchiveSourceCommitRequest, ArchiveStore,
     ArchiveStoreError, PortFuture,
 };
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -23,12 +25,17 @@ use mongodb::{
 };
 use time::OffsetDateTime;
 
-use crate::{EventCodecConfig, event};
+use crate::{EventCodecConfig, event, signals};
 
 const MAXIMUM_EVENTS: usize = 10_000;
 const MAXIMUM_TARGET_BYTES: usize = 512 * 1024 * 1024;
 const MAXIMUM_DECODED_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const DAY_MILLIS: i64 = 24 * 60 * 60 * 1_000;
+
+enum ArchiveRecord {
+    Event(ArchiveEvent),
+    Signal(ArchiveSignal),
+}
 
 #[derive(Clone)]
 pub struct MongoArchiveStore {
@@ -52,7 +59,10 @@ impl MongoArchiveStore {
         validate_claim(request)?;
         let manifests = self.database.collection::<Document>("archive_manifests");
         if let Some(existing) = manifests
-            .find_one(doc! { "source_committed": false })
+            .find_one(doc! {
+                "kind": request.kind.name(),
+                "source_committed": false,
+            })
             .sort(doc! { "state": 1, "created_at": 1, "_id": 1 })
             .hint(Hint::Name("archive_resume".to_owned()))
             .await
@@ -60,7 +70,16 @@ impl MongoArchiveStore {
         {
             return self.decode_manifest_batch(&existing).await.map(Some);
         }
+        match request.kind {
+            ArchiveKind::Event => self.claim_events(request).await,
+            ArchiveKind::Log | ArchiveKind::Span => self.claim_signals(request).await,
+        }
+    }
 
+    async fn claim_events(
+        &self,
+        request: ArchiveClaimRequest,
+    ) -> Result<Option<ArchiveBatch>, ArchiveStoreError> {
         let events = self.database.collection::<Document>("error_events");
         let terminal = doc! {
             "$or": [
@@ -84,10 +103,7 @@ impl MongoArchiveStore {
             return Ok(None);
         };
         let first_event = decode_event(&first, self.event_codec)?;
-        let day_start = first_event.received_at.unix_millis().div_euclid(DAY_MILLIS) * DAY_MILLIS;
-        let day_end = day_start
-            .checked_add(DAY_MILLIS)
-            .ok_or(ArchiveStoreError::InvalidData)?;
+        let (day_start, day_end) = day_bounds(first_event.received_at)?;
         let mut batch_filter = doc! {
             "p": first_event.project_id.get(),
             "r": {
@@ -132,8 +148,12 @@ impl MongoArchiveStore {
         if selected.is_empty() {
             return Err(ArchiveStoreError::InvalidData);
         }
-        let event_keys = selected.iter().map(|event| event.key).collect::<Vec<_>>();
-        let segment_id = ArchiveSegmentId::derive(first_event.project_id, &event_keys);
+        let source_ids = selected
+            .iter()
+            .map(|event| ArchiveSourceId::Event(event.key))
+            .collect::<Vec<_>>();
+        let segment_id =
+            ArchiveSegmentId::derive_sources(request.kind, first_event.project_id, &source_ids);
         let received_from = selected
             .first()
             .map(|event| event.received_at)
@@ -151,39 +171,162 @@ impl MongoArchiveStore {
             datetime.day(),
             segment_id,
         );
+        let batch = ArchiveBatch {
+            kind: request.kind,
+            segment_id,
+            project_id: first_event.project_id,
+            received_from,
+            received_to,
+            object_key,
+            source_ids,
+            records: ArchiveRecords::Events(selected),
+            state: ArchiveBatchState::Writing,
+        };
+        self.insert_manifest(batch, request.now).await.map(Some)
+    }
+
+    async fn claim_signals(
+        &self,
+        request: ArchiveClaimRequest,
+    ) -> Result<Option<ArchiveBatch>, ArchiveStoreError> {
+        let collection = self
+            .database
+            .collection::<Document>(source_collection(request.kind));
+        let Some(first) = collection
+            .find_one(doc! {
+                "h": { "$lte": date(request.now) },
+                "z": { "$exists": false },
+            })
+            .sort(doc! { "h": 1, "_id": 1 })
+            .projection(signal_projection())
+            .hint(Hint::Name(archive_index(request.kind).to_owned()))
+            .await
+            .map_err(|_| ArchiveStoreError::Unavailable)?
+        else {
+            return Ok(None);
+        };
+        let first_signal = decode_signal(&first, request.kind)?;
+        let (day_start, day_end) = day_bounds(first_signal.received_at)?;
+        let mut cursor = collection
+            .find(doc! {
+                "p": first_signal.project_id.get(),
+                "r": {
+                    "$gte": DateTime::from_millis(day_start),
+                    "$lt": DateTime::from_millis(day_end),
+                },
+                "h": { "$lte": date(request.now) },
+                "z": { "$exists": false },
+            })
+            .sort(doc! { "r": 1, "_id": 1 })
+            .projection(signal_projection())
+            .limit(
+                i64::try_from(request.maximum_events)
+                    .map_err(|_| ArchiveStoreError::InvalidData)?,
+            )
+            .await
+            .map_err(|_| ArchiveStoreError::Unavailable)?;
+        let mut selected = Vec::with_capacity(request.maximum_events);
+        let mut selected_bytes = 0_usize;
+        while let Some(document) = cursor
+            .try_next()
+            .await
+            .map_err(|_| ArchiveStoreError::Unavailable)?
+        {
+            let signal = decode_signal(&document, request.kind)?;
+            let estimated = signal
+                .canonical_payload
+                .len()
+                .checked_add(64)
+                .ok_or(ArchiveStoreError::InvalidData)?;
+            if !selected.is_empty()
+                && selected_bytes.saturating_add(estimated) > request.target_uncompressed_bytes
+            {
+                break;
+            }
+            selected_bytes = selected_bytes.saturating_add(estimated);
+            selected.push(signal);
+        }
+        if selected.is_empty() {
+            return Err(ArchiveStoreError::InvalidData);
+        }
+        let source_ids = selected
+            .iter()
+            .map(|signal| match request.kind {
+                ArchiveKind::Log => ArchiveSourceId::Log(LogId::from_bytes(signal.id)),
+                ArchiveKind::Span => ArchiveSourceId::Span(SpanRecordId::from_bytes(signal.id)),
+                ArchiveKind::Event => unreachable!("Event uses claim_events"),
+            })
+            .collect::<Vec<_>>();
+        let segment_id =
+            ArchiveSegmentId::derive_sources(request.kind, first_signal.project_id, &source_ids);
+        let received_from = selected
+            .first()
+            .map(|signal| signal.received_at)
+            .ok_or(ArchiveStoreError::InvalidData)?;
+        let received_to = selected
+            .last()
+            .map(|signal| signal.received_at)
+            .ok_or(ArchiveStoreError::InvalidData)?;
+        let datetime = OffsetDateTime::from_unix_timestamp_nanos(i128::from(day_start) * 1_000_000)
+            .map_err(|_| ArchiveStoreError::InvalidData)?;
+        let object_key = BlobKey::archive(
+            request.kind,
+            first_signal.project_id,
+            datetime.year(),
+            u8::from(datetime.month()),
+            datetime.day(),
+            segment_id,
+        );
+        let records = match request.kind {
+            ArchiveKind::Log => ArchiveRecords::Logs(selected),
+            ArchiveKind::Span => ArchiveRecords::Spans(selected),
+            ArchiveKind::Event => unreachable!("Event uses claim_events"),
+        };
+        let batch = ArchiveBatch {
+            kind: request.kind,
+            segment_id,
+            project_id: first_signal.project_id,
+            received_from,
+            received_to,
+            object_key,
+            source_ids,
+            records,
+            state: ArchiveBatchState::Writing,
+        };
+        self.insert_manifest(batch, request.now).await.map(Some)
+    }
+
+    async fn insert_manifest(
+        &self,
+        batch: ArchiveBatch,
+        created_at: Timestamp,
+    ) -> Result<ArchiveBatch, ArchiveStoreError> {
+        let manifests = self.database.collection::<Document>("archive_manifests");
         let manifest = doc! {
-            "_id": binary(segment_id.as_bytes()),
-            "project_id": first_event.project_id.get(),
-            "received_from": date(received_from),
-            "received_to": date(received_to),
-            "object_key": object_key.as_str(),
+            "_id": binary(batch.segment_id.as_bytes()),
+            "kind": batch.kind.name(),
+            "project_id": batch.project_id.get(),
+            "received_from": date(batch.received_from),
+            "received_to": date(batch.received_to),
+            "object_key": batch.object_key.as_str(),
             "format": "parquet",
             "compression": "zstd",
-            "schema_version": i32::from(EVENT_ARCHIVE_SCHEMA_VERSION),
-            "event_count": i64::try_from(selected.len()).map_err(|_| ArchiveStoreError::InvalidData)?,
+            "schema_version": i32::from(schema_version(batch.kind)),
+            "record_count": i64::try_from(batch.source_ids.len()).map_err(|_| ArchiveStoreError::InvalidData)?,
             "state": "writing",
-            "event_ids": event_keys.iter().map(|key| Bson::Binary(binary(key.as_bytes()))).collect::<Vec<_>>(),
+            "source_ids": batch.source_ids.iter().map(|id| Bson::Binary(binary_slice(&id.as_bytes()))).collect::<Vec<_>>(),
             "source_committed": false,
-            "created_at": date(request.now),
+            "created_at": date(created_at),
         };
         match manifests.insert_one(manifest).await {
-            Ok(_) => Ok(Some(ArchiveBatch {
-                segment_id,
-                project_id: first_event.project_id,
-                received_from,
-                received_to,
-                object_key,
-                event_keys,
-                events: selected,
-                state: ArchiveBatchState::Writing,
-            })),
+            Ok(_) => Ok(batch),
             Err(error) if is_duplicate(&error) => {
                 let existing = manifests
-                    .find_one(doc! { "_id": binary(segment_id.as_bytes()) })
+                    .find_one(doc! { "_id": binary(batch.segment_id.as_bytes()) })
                     .await
                     .map_err(|_| ArchiveStoreError::Unavailable)?
                     .ok_or(ArchiveStoreError::Unavailable)?;
-                self.decode_manifest_batch(&existing).await.map(Some)
+                self.decode_manifest_batch(&existing).await
             }
             Err(_) => Err(ArchiveStoreError::Unavailable),
         }
@@ -194,29 +337,25 @@ impl MongoArchiveStore {
         document: &Document,
     ) -> Result<ArchiveBatch, ArchiveStoreError> {
         let segment_id = ArchiveSegmentId::from_bytes(fixed_binary::<16>(document, "_id")?);
+        let kind = ArchiveKind::from_name(
+            document
+                .get_str("kind")
+                .map_err(|_| ArchiveStoreError::InvalidData)?,
+        )
+        .map_err(|_| ArchiveStoreError::InvalidData)?;
         let project_id = ProjectId::new(
             document
                 .get_i32("project_id")
                 .map_err(|_| ArchiveStoreError::InvalidData)?,
         )
         .map_err(|_| ArchiveStoreError::InvalidData)?;
-        let event_keys = document
-            .get_array("event_ids")
+        let source_ids = document
+            .get_array("source_ids")
             .map_err(|_| ArchiveStoreError::InvalidData)?
             .iter()
-            .map(|value| match value {
-                Bson::Binary(value) if value.subtype == BinarySubtype::Generic => {
-                    let bytes: [u8; 20] = value
-                        .bytes
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| ArchiveStoreError::InvalidData)?;
-                    EventKey::from_bytes(bytes).map_err(|_| ArchiveStoreError::InvalidData)
-                }
-                _ => Err(ArchiveStoreError::InvalidData),
-            })
+            .map(|value| decode_source_id(value, kind))
             .collect::<Result<Vec<_>, _>>()?;
-        if event_keys.is_empty() || event_keys.len() > MAXIMUM_EVENTS {
+        if source_ids.is_empty() || source_ids.len() > MAXIMUM_EVENTS {
             return Err(ArchiveStoreError::InvalidData);
         }
         let state = match document
@@ -227,33 +366,80 @@ impl MongoArchiveStore {
             "complete" => ArchiveBatchState::Complete,
             _ => return Err(ArchiveStoreError::InvalidData),
         };
-        let mut decoded = Vec::new();
-        if state == ArchiveBatchState::Writing {
-            let ids = event_keys
+        let records = if state == ArchiveBatchState::Writing {
+            let ids = source_ids
                 .iter()
-                .map(|key| Bson::Binary(binary(key.as_bytes())))
+                .map(|id| Bson::Binary(binary_slice(&id.as_bytes())))
                 .collect::<Vec<_>>();
             let mut cursor = self
                 .database
-                .collection::<Document>("error_events")
+                .collection::<Document>(source_collection(kind))
                 .find(doc! { "_id": { "$in": ids } })
-                .projection(event_projection())
+                .projection(source_projection(kind))
                 .await
                 .map_err(|_| ArchiveStoreError::Unavailable)?;
             let mut by_key = BTreeMap::new();
-            while let Some(event) = cursor
+            while let Some(document) = cursor
                 .try_next()
                 .await
                 .map_err(|_| ArchiveStoreError::Unavailable)?
             {
-                let event = decode_event(&event, self.event_codec)?;
-                by_key.insert(event.key, event);
+                match kind {
+                    ArchiveKind::Event => {
+                        let event = decode_event(&document, self.event_codec)?;
+                        by_key.insert(
+                            ArchiveSourceId::Event(event.key),
+                            ArchiveRecord::Event(event),
+                        );
+                    }
+                    ArchiveKind::Log | ArchiveKind::Span => {
+                        let signal = decode_signal(&document, kind)?;
+                        let id = match kind {
+                            ArchiveKind::Log => ArchiveSourceId::Log(LogId::from_bytes(signal.id)),
+                            ArchiveKind::Span => {
+                                ArchiveSourceId::Span(SpanRecordId::from_bytes(signal.id))
+                            }
+                            ArchiveKind::Event => unreachable!(),
+                        };
+                        by_key.insert(id, ArchiveRecord::Signal(signal));
+                    }
+                }
             }
-            for key in &event_keys {
-                decoded.push(by_key.remove(key).ok_or(ArchiveStoreError::InvalidData)?);
+            match kind {
+                ArchiveKind::Event => {
+                    let mut values = Vec::with_capacity(source_ids.len());
+                    for id in &source_ids {
+                        let ArchiveRecord::Event(value) =
+                            by_key.remove(id).ok_or(ArchiveStoreError::InvalidData)?
+                        else {
+                            return Err(ArchiveStoreError::InvalidData);
+                        };
+                        values.push(value);
+                    }
+                    ArchiveRecords::Events(values)
+                }
+                ArchiveKind::Log | ArchiveKind::Span => {
+                    let mut values = Vec::with_capacity(source_ids.len());
+                    for id in &source_ids {
+                        let ArchiveRecord::Signal(value) =
+                            by_key.remove(id).ok_or(ArchiveStoreError::InvalidData)?
+                        else {
+                            return Err(ArchiveStoreError::InvalidData);
+                        };
+                        values.push(value);
+                    }
+                    if kind == ArchiveKind::Log {
+                        ArchiveRecords::Logs(values)
+                    } else {
+                        ArchiveRecords::Spans(values)
+                    }
+                }
             }
-        }
+        } else {
+            empty_records(kind)
+        };
         Ok(ArchiveBatch {
+            kind,
             segment_id,
             project_id,
             received_from: timestamp(document, "received_from")?,
@@ -265,8 +451,8 @@ impl MongoArchiveStore {
                     .to_owned(),
             )
             .map_err(|_| ArchiveStoreError::InvalidData)?,
-            event_keys,
-            events: decoded,
+            source_ids,
+            records,
             state,
         })
     }
@@ -275,9 +461,6 @@ impl MongoArchiveStore {
         &self,
         request: ArchiveCompleteRequest,
     ) -> Result<(), ArchiveStoreError> {
-        if request.object.kind != BlobKind::EventArchive {
-            return Err(ArchiveStoreError::InvalidData);
-        }
         let manifests = self.database.collection::<Document>("archive_manifests");
         let id = binary(request.segment_id.as_bytes());
         let existing = manifests
@@ -285,6 +468,10 @@ impl MongoArchiveStore {
             .await
             .map_err(|_| ArchiveStoreError::Unavailable)?
             .ok_or(ArchiveStoreError::InvalidData)?;
+        let kind = manifest_kind(&existing)?;
+        if request.object.kind != BlobKind::archive(kind) {
+            return Err(ArchiveStoreError::InvalidData);
+        }
         if existing.get_str("object_key") != Ok(request.object.key.as_str()) {
             return Err(ArchiveStoreError::Conflict);
         }
@@ -318,7 +505,13 @@ impl MongoArchiveStore {
         &self,
         request: ArchiveSourceCommitRequest,
     ) -> Result<usize, ArchiveStoreError> {
-        if request.event_keys.is_empty() || request.event_keys.len() > MAXIMUM_EVENTS {
+        if request.source_ids.is_empty()
+            || request.source_ids.len() > MAXIMUM_EVENTS
+            || request
+                .source_ids
+                .iter()
+                .any(|source_id| source_id.kind() != request.kind)
+        {
             return Err(ArchiveStoreError::InvalidData);
         }
         let manifests = self.database.collection::<Document>("archive_manifests");
@@ -328,21 +521,27 @@ impl MongoArchiveStore {
             .await
             .map_err(|_| ArchiveStoreError::Unavailable)?
             .ok_or(ArchiveStoreError::InvalidData)?;
-        let expected = manifest_event_keys(&manifest)?;
-        if expected != request.event_keys {
+        if manifest_kind(&manifest)? != request.kind {
+            return Err(ArchiveStoreError::Conflict);
+        }
+        let expected = manifest_source_ids(&manifest)?;
+        if expected != request.source_ids {
             return Err(ArchiveStoreError::Conflict);
         }
         if manifest.get_bool("source_committed") == Ok(true) {
             return Ok(0);
         }
         let ids = request
-            .event_keys
+            .source_ids
             .iter()
-            .map(|key| Bson::Binary(binary(key.as_bytes())))
+            .map(|source_id| Bson::Binary(binary_slice(&source_id.as_bytes())))
             .collect::<Vec<_>>();
+        let collection = self
+            .database
+            .collection::<Document>(source_collection(request.kind));
         let conflicting = self
             .database
-            .collection::<Document>("error_events")
+            .collection::<Document>(source_collection(request.kind))
             .count_documents(doc! {
                 "_id": { "$in": &ids },
                 "z": { "$exists": true, "$ne": Bson::Binary(id.clone()) },
@@ -352,9 +551,7 @@ impl MongoArchiveStore {
         if conflicting > 0 {
             return Err(ArchiveStoreError::Conflict);
         }
-        let result = self
-            .database
-            .collection::<Document>("error_events")
+        let result = collection
             .update_many(
                 doc! { "_id": { "$in": ids } },
                 doc! {
@@ -423,13 +620,14 @@ pub(crate) fn archive_manifest_validator() -> Document {
         "$jsonSchema": {
             "bsonType": "object",
             "required": [
-                "_id", "project_id", "received_from", "received_to", "object_key",
-                "format", "compression", "schema_version", "event_count", "state",
-                "event_ids", "source_committed", "created_at",
+                "_id", "kind", "project_id", "received_from", "received_to", "object_key",
+                "format", "compression", "schema_version", "record_count", "state",
+                "source_ids", "source_committed", "created_at",
             ],
             "additionalProperties": false,
             "properties": {
                 "_id": { "bsonType": "binData" },
+                "kind": { "enum": ["event", "log", "span"] },
                 "project_id": { "bsonType": "int", "minimum": 1 },
                 "received_from": { "bsonType": "date" },
                 "received_to": { "bsonType": "date" },
@@ -437,11 +635,11 @@ pub(crate) fn archive_manifest_validator() -> Document {
                 "format": { "enum": ["parquet"] },
                 "compression": { "enum": ["zstd"] },
                 "schema_version": { "bsonType": "int", "enum": [1] },
-                "event_count": { "bsonType": "long", "minimum": 1, "maximum": 10000 },
+                "record_count": { "bsonType": "long", "minimum": 1, "maximum": 10000 },
                 "stored_bytes": { "bsonType": "long", "minimum": 0 },
                 "checksum": { "bsonType": "binData" },
                 "state": { "enum": ["writing", "complete"] },
-                "event_ids": {
+                "source_ids": {
                     "bsonType": "array",
                     "minItems": 1,
                     "maxItems": 10000,
@@ -455,7 +653,7 @@ pub(crate) fn archive_manifest_validator() -> Document {
         "$expr": {
             "$and": [
                 { "$eq": [{ "$binarySize": "$_id" }, 16] },
-                { "$eq": ["$event_count", { "$size": "$event_ids" }] },
+                { "$eq": ["$record_count", { "$size": "$source_ids" }] },
                 { "$or": [
                     { "$and": [
                         { "$eq": ["$state", "writing"] },
@@ -478,7 +676,7 @@ pub(crate) fn archive_manifest_validator() -> Document {
 pub(crate) fn archive_indexes() -> [IndexModel; 2] {
     [
         IndexModel::builder()
-            .keys(doc! { "source_committed": 1, "state": 1, "created_at": 1, "_id": 1 })
+            .keys(doc! { "kind": 1, "source_committed": 1, "state": 1, "created_at": 1, "_id": 1 })
             .options(
                 IndexOptions::builder()
                     .name("archive_resume".to_owned())
@@ -487,7 +685,7 @@ pub(crate) fn archive_indexes() -> [IndexModel; 2] {
             )
             .build(),
         IndexModel::builder()
-            .keys(doc! { "project_id": 1, "received_from": 1, "_id": 1 })
+            .keys(doc! { "project_id": 1, "kind": 1, "received_from": 1, "_id": 1 })
             .options(
                 IndexOptions::builder()
                     .name("archive_project_range".to_owned())
@@ -503,11 +701,11 @@ pub(crate) async fn validate_archive_indexes(
     let expected = BTreeMap::from([
         (
             "archive_project_range".to_owned(),
-            doc! { "project_id": 1, "received_from": 1, "_id": 1 },
+            doc! { "project_id": 1, "kind": 1, "received_from": 1, "_id": 1 },
         ),
         (
             "archive_resume".to_owned(),
-            doc! { "source_committed": 1, "state": 1, "created_at": 1, "_id": 1 },
+            doc! { "kind": 1, "source_committed": 1, "state": 1, "created_at": 1, "_id": 1 },
         ),
     ]);
     let mut actual = BTreeMap::new();
@@ -583,23 +781,86 @@ fn decode_event(
     })
 }
 
-fn manifest_event_keys(document: &Document) -> Result<Vec<EventKey>, ArchiveStoreError> {
+fn decode_signal(
+    document: &Document,
+    kind: ArchiveKind,
+) -> Result<ArchiveSignal, ArchiveStoreError> {
+    if !matches!(kind, ArchiveKind::Log | ArchiveKind::Span)
+        || document.get_datetime("h").is_err()
+        || document.contains_key("z")
+    {
+        return Err(ArchiveStoreError::InvalidData);
+    }
+    let project_id = ProjectId::new(
+        document
+            .get_i32("p")
+            .map_err(|_| ArchiveStoreError::InvalidData)?,
+    )
+    .map_err(|_| ArchiveStoreError::InvalidData)?;
+    let payload = signals::decode_body(document).map_err(|_| ArchiveStoreError::InvalidData)?;
+    Ok(ArchiveSignal {
+        id: fixed_binary::<16>(document, "_id")?,
+        project_id,
+        received_at: timestamp(document, "r")?,
+        occurred_at_ns: document
+            .get_i64("o")
+            .map_err(|_| ArchiveStoreError::InvalidData)?,
+        canonical_payload: payload,
+    })
+}
+
+fn manifest_source_ids(document: &Document) -> Result<Vec<ArchiveSourceId>, ArchiveStoreError> {
+    let kind = manifest_kind(document)?;
     document
-        .get_array("event_ids")
+        .get_array("source_ids")
         .map_err(|_| ArchiveStoreError::InvalidData)?
         .iter()
-        .map(|value| match value {
-            Bson::Binary(value) if value.subtype == BinarySubtype::Generic => {
-                let bytes: [u8; 20] = value
-                    .bytes
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| ArchiveStoreError::InvalidData)?;
-                EventKey::from_bytes(bytes).map_err(|_| ArchiveStoreError::InvalidData)
-            }
-            _ => Err(ArchiveStoreError::InvalidData),
-        })
+        .map(|value| decode_source_id(value, kind))
         .collect()
+}
+
+fn decode_source_id(value: &Bson, kind: ArchiveKind) -> Result<ArchiveSourceId, ArchiveStoreError> {
+    let Bson::Binary(value) = value else {
+        return Err(ArchiveStoreError::InvalidData);
+    };
+    if value.subtype != BinarySubtype::Generic {
+        return Err(ArchiveStoreError::InvalidData);
+    }
+    match kind {
+        ArchiveKind::Event => {
+            let bytes = value
+                .bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| ArchiveStoreError::InvalidData)?;
+            EventKey::from_bytes(bytes)
+                .map(ArchiveSourceId::Event)
+                .map_err(|_| ArchiveStoreError::InvalidData)
+        }
+        ArchiveKind::Log => value
+            .bytes
+            .as_slice()
+            .try_into()
+            .map(LogId::from_bytes)
+            .map(ArchiveSourceId::Log)
+            .map_err(|_| ArchiveStoreError::InvalidData),
+        ArchiveKind::Span => value
+            .bytes
+            .as_slice()
+            .try_into()
+            .map(SpanRecordId::from_bytes)
+            .map(ArchiveSourceId::Span)
+            .map_err(|_| ArchiveStoreError::InvalidData),
+    }
+}
+
+fn manifest_kind(document: &Document) -> Result<ArchiveKind, ArchiveStoreError> {
+    ArchiveKind::from_name(
+        document
+            .get_str("kind")
+            .map_err(|_| ArchiveStoreError::InvalidData)?,
+    )
+    .map_err(|_| ArchiveStoreError::InvalidData)
 }
 
 fn manifest_object_matches(document: &Document, request: &ArchiveCompleteRequest) -> bool {
@@ -615,6 +876,57 @@ fn manifest_object_matches(document: &Document, request: &ArchiveCompleteRequest
 
 fn event_projection() -> Document {
     doc! { "_id": 1, "p": 1, "r": 1, "o": 1, "h": 1, "z": 1, "u": 1, "q": 1, "b": 1 }
+}
+
+fn signal_projection() -> Document {
+    doc! { "_id": 1, "p": 1, "r": 1, "o": 1, "h": 1, "z": 1, "b": 1 }
+}
+
+fn source_projection(kind: ArchiveKind) -> Document {
+    match kind {
+        ArchiveKind::Event => event_projection(),
+        ArchiveKind::Log | ArchiveKind::Span => signal_projection(),
+    }
+}
+
+fn source_collection(kind: ArchiveKind) -> &'static str {
+    match kind {
+        ArchiveKind::Event => "error_events",
+        ArchiveKind::Log => "logs",
+        ArchiveKind::Span => "spans",
+    }
+}
+
+fn archive_index(kind: ArchiveKind) -> &'static str {
+    match kind {
+        ArchiveKind::Event => "event_archive_due",
+        ArchiveKind::Log => "log_archive_due",
+        ArchiveKind::Span => "span_archive_due",
+    }
+}
+
+fn schema_version(kind: ArchiveKind) -> u16 {
+    match kind {
+        ArchiveKind::Event => EVENT_ARCHIVE_SCHEMA_VERSION,
+        ArchiveKind::Log => LOG_ARCHIVE_SCHEMA_VERSION,
+        ArchiveKind::Span => SPAN_ARCHIVE_SCHEMA_VERSION,
+    }
+}
+
+fn empty_records(kind: ArchiveKind) -> ArchiveRecords {
+    match kind {
+        ArchiveKind::Event => ArchiveRecords::Events(Vec::new()),
+        ArchiveKind::Log => ArchiveRecords::Logs(Vec::new()),
+        ArchiveKind::Span => ArchiveRecords::Spans(Vec::new()),
+    }
+}
+
+fn day_bounds(timestamp: Timestamp) -> Result<(i64, i64), ArchiveStoreError> {
+    let start = timestamp.unix_millis().div_euclid(DAY_MILLIS) * DAY_MILLIS;
+    let end = start
+        .checked_add(DAY_MILLIS)
+        .ok_or(ArchiveStoreError::InvalidData)?;
+    Ok((start, end))
 }
 
 fn validate_claim(request: ArchiveClaimRequest) -> Result<(), ArchiveStoreError> {
@@ -647,6 +959,13 @@ fn fixed_binary<const N: usize>(
 }
 
 fn binary<const N: usize>(bytes: [u8; N]) -> Binary {
+    Binary {
+        subtype: BinarySubtype::Generic,
+        bytes: bytes.to_vec(),
+    }
+}
+
+fn binary_slice(bytes: &[u8]) -> Binary {
     Binary {
         subtype: BinarySubtype::Generic,
         bytes: bytes.to_vec(),

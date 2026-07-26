@@ -7,7 +7,10 @@ use std::{
 
 use metric_domain::{
     Timestamp,
-    archive::{ArchiveBatch, ArchiveBatchState, ArchiveEvent, EVENT_ARCHIVE_SCHEMA_VERSION},
+    archive::{
+        ArchiveBatch, ArchiveBatchState, ArchiveEvent, ArchiveKind, ArchiveRecords, ArchiveSignal,
+        EVENT_ARCHIVE_SCHEMA_VERSION, LOG_ARCHIVE_SCHEMA_VERSION, SPAN_ARCHIVE_SCHEMA_VERSION,
+    },
     blob::{BlobKind, BlobNamespace},
 };
 use metric_ports::{
@@ -85,8 +88,8 @@ impl ArchiveError {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArchiveRunReport {
-    pub claimed_events: usize,
-    pub archived_events: usize,
+    pub claimed_records: usize,
+    pub archived_records: usize,
     pub stored_bytes: u64,
 }
 
@@ -114,11 +117,27 @@ impl ArchiveService {
     }
 
     pub async fn run_once(&self) -> Result<ArchiveRunReport, ArchiveError> {
+        let mut report = ArchiveRunReport::default();
+        for kind in ArchiveKind::ALL {
+            let current = self.run_kind_once(kind).await?;
+            report.claimed_records = report
+                .claimed_records
+                .saturating_add(current.claimed_records);
+            report.archived_records = report
+                .archived_records
+                .saturating_add(current.archived_records);
+            report.stored_bytes = report.stored_bytes.saturating_add(current.stored_bytes);
+        }
+        Ok(report)
+    }
+
+    async fn run_kind_once(&self, kind: ArchiveKind) -> Result<ArchiveRunReport, ArchiveError> {
         let started = Instant::now();
         let now = self.clock.now();
         let Some(batch) = self
             .store
             .claim(ArchiveClaimRequest {
+                kind,
                 now,
                 maximum_events: self.config.maximum_events,
                 target_uncompressed_bytes: self.config.target_uncompressed_bytes,
@@ -126,33 +145,40 @@ impl ArchiveService {
             .await
             .map_err(map_store)?
         else {
-            metrics::gauge!("metric_archive_pending_batch").set(0.0);
+            metrics::gauge!("metric_archive_pending_batch", "kind" => kind.name()).set(0.0);
             return Ok(ArchiveRunReport::default());
         };
-        metrics::gauge!("metric_archive_pending_batch").set(1.0);
-        let claimed_events = batch.event_keys.len();
+        metrics::gauge!("metric_archive_pending_batch", "kind" => kind.name()).set(1.0);
+        let claimed_records = batch.source_ids.len();
         let stored_bytes = match batch.state {
             ArchiveBatchState::Writing => self.publish(&batch, now).await?,
             ArchiveBatchState::Complete => 0,
         };
         let expire_at = add_duration(now, self.config.hot_copy_delay)?;
-        let archived_events = self
+        let archived_records = self
             .store
             .commit_sources(ArchiveSourceCommitRequest {
+                kind,
                 segment_id: batch.segment_id,
-                event_keys: batch.event_keys,
+                source_ids: batch.source_ids,
                 expire_at,
             })
             .await
             .map_err(map_store)?;
-        metrics::counter!("metric_archive_runs_total", "outcome" => "ok").increment(1);
-        metrics::counter!("metric_archive_events_total").increment(archived_events as u64);
-        metrics::histogram!("metric_archive_run_duration_seconds")
+        metrics::counter!(
+            "metric_archive_runs_total",
+            "kind" => kind.name(),
+            "outcome" => "ok"
+        )
+        .increment(1);
+        metrics::counter!("metric_archive_records_total", "kind" => kind.name())
+            .increment(archived_records as u64);
+        metrics::histogram!("metric_archive_run_duration_seconds", "kind" => kind.name())
             .record(started.elapsed().as_secs_f64());
-        metrics::gauge!("metric_archive_pending_batch").set(0.0);
+        metrics::gauge!("metric_archive_pending_batch", "kind" => kind.name()).set(0.0);
         Ok(ArchiveRunReport {
-            claimed_events,
-            archived_events,
+            claimed_records,
+            archived_records,
             stored_bytes,
         })
     }
@@ -168,34 +194,36 @@ impl ArchiveService {
                 .ok_or(ArchiveError::InvalidConfiguration)?,
         )
         .map_err(|_| ArchiveError::InvalidConfiguration)?;
-        let mut cursor = None;
         let mut deleted = 0_u64;
-        for _ in 0..self.config.cleanup_max_pages {
-            let page = self
-                .blobs
-                .scan(BlobScanRequest {
-                    namespace: BlobNamespace::EventArchives,
-                    older_than: cutoff,
-                    cursor,
-                    limit: self.config.maximum_events,
-                })
-                .await
-                .map_err(map_blob)?;
-            for object in page.objects {
-                if !self
-                    .store
-                    .object_referenced(&object.key)
+        for kind in ArchiveKind::ALL {
+            let mut cursor = None;
+            for _ in 0..self.config.cleanup_max_pages {
+                let page = self
+                    .blobs
+                    .scan(BlobScanRequest {
+                        namespace: BlobNamespace::archive(kind),
+                        older_than: cutoff,
+                        cursor,
+                        limit: self.config.maximum_events,
+                    })
                     .await
-                    .map_err(map_store)?
-                {
-                    self.blobs.delete(&object.key).await.map_err(map_blob)?;
-                    deleted = deleted.saturating_add(1);
+                    .map_err(map_blob)?;
+                for object in page.objects {
+                    if !self
+                        .store
+                        .object_referenced(&object.key)
+                        .await
+                        .map_err(map_store)?
+                    {
+                        self.blobs.delete(&object.key).await.map_err(map_blob)?;
+                        deleted = deleted.saturating_add(1);
+                    }
                 }
+                let Some(next) = page.next_cursor else {
+                    break;
+                };
+                cursor = Some(next);
             }
-            let Some(next) = page.next_cursor else {
-                break;
-            };
-            cursor = Some(next);
         }
         metrics::counter!("metric_archive_orphan_objects_deleted_total").increment(deleted);
         Ok(deleted)
@@ -206,16 +234,17 @@ impl ArchiveService {
         batch: &ArchiveBatch,
         completed_at: metric_domain::Timestamp,
     ) -> Result<u64, ArchiveError> {
-        if batch.events.len() != batch.event_keys.len() || batch.events.is_empty() {
+        if batch.records.len() != batch.source_ids.len() || batch.records.is_empty() {
             return Err(ArchiveError::InvalidData);
         }
-        let events = batch.events.clone();
-        let bytes = tokio::task::spawn_blocking(move || encode_parquet(&events))
+        let kind = batch.kind;
+        let records = batch.records.clone();
+        let bytes = tokio::task::spawn_blocking(move || encode_batch(kind, &records))
             .await
             .map_err(|_| ArchiveError::Unavailable)??;
         let mut writer = self
             .blobs
-            .begin(BlobKind::EventArchive, completed_at)
+            .begin(BlobKind::archive(kind), completed_at)
             .await
             .map_err(map_blob)?;
         for chunk in bytes.chunks(self.config.write_chunk_bytes) {
@@ -241,7 +270,8 @@ impl ArchiveService {
             })
             .await
             .map_err(map_store)?;
-        metrics::histogram!("metric_archive_segment_bytes").record(object.size as f64);
+        metrics::histogram!("metric_archive_segment_bytes", "kind" => kind.name())
+            .record(object.size as f64);
         Ok(object.size)
     }
 }
@@ -267,16 +297,20 @@ pub fn start_archive_worker(service: Arc<ArchiveService>, shutdown: ShutdownSign
                     biased;
                     () = shutdown.cancelled() => return,
                     _ = tick.tick() => {
-                        if let Err(error) = service.run_once().await {
-                            metrics::counter!(
-                                "metric_archive_runs_total",
-                                "outcome" => error.code()
-                            ).increment(1);
-                            tracing::warn!(
-                                operation = "archive.run",
-                                error_code = error.code(),
-                                "cold archive run failed; hot Events were preserved"
-                            );
+                        for kind in ArchiveKind::ALL {
+                            if let Err(error) = service.run_kind_once(kind).await {
+                                metrics::counter!(
+                                    "metric_archive_runs_total",
+                                    "kind" => kind.name(),
+                                    "outcome" => error.code()
+                                ).increment(1);
+                                tracing::warn!(
+                                    operation = "archive.run",
+                                    kind = kind.name(),
+                                    error_code = error.code(),
+                                    "cold archive run failed; hot records were preserved"
+                                );
+                            }
                         }
                         if let Err(error) = service.cleanup_orphans_once().await {
                             metrics::counter!(
@@ -293,6 +327,15 @@ pub fn start_archive_worker(service: Arc<ArchiveService>, shutdown: ShutdownSign
                 }
             }
         }),
+    }
+}
+
+fn encode_batch(kind: ArchiveKind, records: &ArchiveRecords) -> Result<Vec<u8>, ArchiveError> {
+    match (kind, records) {
+        (ArchiveKind::Event, ArchiveRecords::Events(events)) => encode_parquet(events),
+        (ArchiveKind::Log, ArchiveRecords::Logs(logs)) => encode_signal_parquet(kind, logs),
+        (ArchiveKind::Span, ArchiveRecords::Spans(spans)) => encode_signal_parquet(kind, spans),
+        _ => Err(ArchiveError::InvalidData),
     }
 }
 
@@ -375,6 +418,85 @@ pub fn encode_parquet(events: &[ArchiveEvent]) -> Result<Vec<u8>, ArchiveError> 
             .collect::<Vec<_>>();
         write_column::<ByteArrayType>(&mut row_group, &payloads, None)?;
 
+        row_group.close().map_err(|_| ArchiveError::InvalidData)?;
+        writer.close().map_err(|_| ArchiveError::InvalidData)?;
+    }
+    if output.len() > MAXIMUM_TARGET_BYTES {
+        return Err(ArchiveError::InvalidData);
+    }
+    Ok(output)
+}
+
+pub fn encode_signal_parquet(
+    kind: ArchiveKind,
+    records: &[ArchiveSignal],
+) -> Result<Vec<u8>, ArchiveError> {
+    if !matches!(kind, ArchiveKind::Log | ArchiveKind::Span)
+        || records.is_empty()
+        || records.len() > MAXIMUM_EVENTS
+        || records.iter().any(|record| {
+            serde_json::from_slice::<serde_json::Value>(&record.canonical_payload).is_err()
+        })
+    {
+        return Err(ArchiveError::InvalidData);
+    }
+    let (schema_name, version) = match kind {
+        ArchiveKind::Log => ("metric_log_archive_v1", LOG_ARCHIVE_SCHEMA_VERSION),
+        ArchiveKind::Span => ("metric_span_archive_v1", SPAN_ARCHIVE_SCHEMA_VERSION),
+        ArchiveKind::Event => return Err(ArchiveError::InvalidData),
+    };
+    let schema = Arc::new(
+        parse_message_type(&format!(
+            "message {schema_name} {{
+                REQUIRED FIXED_LEN_BYTE_ARRAY (16) source_id;
+                REQUIRED INT32 project_id;
+                REQUIRED INT64 received_at_unix_ms;
+                REQUIRED INT64 occurred_at_unix_ns;
+                REQUIRED BYTE_ARRAY canonical_signal_json (UTF8);
+            }}"
+        ))
+        .map_err(|_| ArchiveError::InvalidData)?,
+    );
+    let properties = Arc::new(
+        WriterProperties::builder()
+            .set_compression(Compression::ZSTD(
+                ZstdLevel::try_new(3).map_err(|_| ArchiveError::InvalidConfiguration)?,
+            ))
+            .set_created_by(format!("metric {} archive schema {version}", kind.name()))
+            .build(),
+    );
+    let mut output = Vec::new();
+    {
+        let mut writer = SerializedFileWriter::new(&mut output, schema, properties)
+            .map_err(|_| ArchiveError::InvalidData)?;
+        let mut row_group = writer
+            .next_row_group()
+            .map_err(|_| ArchiveError::InvalidData)?;
+        let ids = records
+            .iter()
+            .map(|record| FixedLenByteArray::from(record.id.to_vec()))
+            .collect::<Vec<_>>();
+        write_column::<FixedLenByteArrayType>(&mut row_group, &ids, None)?;
+        let projects = records
+            .iter()
+            .map(|record| record.project_id.get())
+            .collect::<Vec<_>>();
+        write_column::<Int32Type>(&mut row_group, &projects, None)?;
+        let received = records
+            .iter()
+            .map(|record| record.received_at.unix_millis())
+            .collect::<Vec<_>>();
+        write_column::<Int64Type>(&mut row_group, &received, None)?;
+        let occurred = records
+            .iter()
+            .map(|record| record.occurred_at_ns)
+            .collect::<Vec<_>>();
+        write_column::<Int64Type>(&mut row_group, &occurred, None)?;
+        let payloads = records
+            .iter()
+            .map(|record| ByteArray::from(record.canonical_payload.to_vec()))
+            .collect::<Vec<_>>();
+        write_column::<ByteArrayType>(&mut row_group, &payloads, None)?;
         row_group.close().map_err(|_| ArchiveError::InvalidData)?;
         writer.close().map_err(|_| ArchiveError::InvalidData)?;
     }
@@ -485,6 +607,46 @@ mod tests {
         for column in reader.metadata().row_group(0).columns() {
             assert!(matches!(column.compression(), Compression::ZSTD(_)));
         }
+    }
+
+    #[test]
+    fn log_and_span_parquet_preserve_canonical_signal_rows() {
+        let project_id = ProjectId::new(7).unwrap();
+        let records = [
+            ArchiveSignal {
+                id: [1; 16],
+                project_id,
+                received_at: Timestamp::from_unix_millis(1_700_000_000_000).unwrap(),
+                occurred_at_ns: 1_699_999_000_000_000_000,
+                canonical_payload: br#"{"body":"archived"}"#.as_slice().into(),
+            },
+            ArchiveSignal {
+                id: [2; 16],
+                project_id,
+                received_at: Timestamp::from_unix_millis(1_700_000_000_001).unwrap(),
+                occurred_at_ns: 1_699_999_000_000_000_001,
+                canonical_payload: br#"{"op":"db.query"}"#.as_slice().into(),
+            },
+        ];
+        for kind in [ArchiveKind::Log, ArchiveKind::Span] {
+            let bytes = encode_signal_parquet(kind, &records).unwrap();
+            assert_eq!(&bytes[..4], b"PAR1");
+            assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
+            let reader = SerializedFileReader::new(Bytes::from(bytes)).unwrap();
+            assert_eq!(reader.metadata().file_metadata().num_rows(), 2);
+            assert!(
+                reader
+                    .metadata()
+                    .row_group(0)
+                    .columns()
+                    .iter()
+                    .all(|column| matches!(column.compression(), Compression::ZSTD(_)))
+            );
+        }
+        assert_eq!(
+            encode_signal_parquet(ArchiveKind::Event, &records),
+            Err(ArchiveError::InvalidData)
+        );
     }
 
     #[test]

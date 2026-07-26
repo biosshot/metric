@@ -1,3 +1,4 @@
+use futures_util::TryStreamExt;
 use metric_domain::{
     EventKey, ProjectId, Timestamp,
     signals::{
@@ -9,7 +10,6 @@ use metric_ports::{
     DurableOutcome, LogQuery, PerformanceQuery, PortFuture, SegmentQuery, SignalStore,
     SignalStoreError,
 };
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -61,6 +61,7 @@ pub struct SignalRetention {
     pub logs_days: u32,
     pub spans_days: u32,
     pub span_stats_hourly_days: u32,
+    pub archive: bool,
 }
 
 impl Default for SignalRetention {
@@ -69,6 +70,7 @@ impl Default for SignalRetention {
             logs_days: 30,
             spans_days: 30,
             span_stats_hourly_days: 90,
+            archive: false,
         }
     }
 }
@@ -88,6 +90,7 @@ impl MongoSignalStore {
                 logs_days: 30,
                 spans_days: 30,
                 span_stats_hourly_days: 90,
+                archive: false,
             },
         }
     }
@@ -464,7 +467,7 @@ impl SignalStore for MongoSignalStore {
             }
             let documents = records
                 .iter()
-                .map(|record| encode_log(record, self.retention.logs_days))
+                .map(|record| encode_log(record, self.retention.logs_days, self.retention.archive))
                 .collect::<Result<Vec<_>, _>>()?;
             let started = std::time::Instant::now();
             let result = self
@@ -508,7 +511,9 @@ impl SignalStore for MongoSignalStore {
             }
             let documents = records
                 .iter()
-                .map(|record| encode_span(record, self.retention.spans_days))
+                .map(|record| {
+                    encode_span(record, self.retention.spans_days, self.retention.archive)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let started = std::time::Instant::now();
             let result = self
@@ -613,7 +618,11 @@ impl SignalStore for MongoSignalStore {
     }
 }
 
-fn encode_log(record: &LogRecord, retention_days: u32) -> Result<Document, SignalStoreError> {
+fn encode_log(
+    record: &LogRecord,
+    retention_days: u32,
+    archive: bool,
+) -> Result<Document, SignalStoreError> {
     validate_body(record.body.as_bytes())?;
     let mut document = doc! {
         "_id": binary(record.id.as_bytes()),
@@ -622,9 +631,9 @@ fn encode_log(record: &LogRecord, retention_days: u32) -> Result<Document, Signa
         "o": record.occurred_at_ns,
         "l": record.severity.code(),
         "m": record.message.as_ref(),
-        "x": retention_date(record.received_at, i64::from(retention_days))?,
         "b": body_binary(record.body.as_bytes()),
     };
+    insert_retention(&mut document, record.received_at, retention_days, archive)?;
     insert_binary(&mut document, "g", record.trace_id.map(TraceId::as_bytes));
     insert_binary(&mut document, "n", record.span_id.map(SpanId::as_bytes));
     insert_optional(&mut document, "e", record.environment.as_deref());
@@ -652,7 +661,11 @@ fn decode_log(document: &Document) -> Result<LogRecord, SignalStoreError> {
     })
 }
 
-fn encode_span(record: &SpanRecord, retention_days: u32) -> Result<Document, SignalStoreError> {
+fn encode_span(
+    record: &SpanRecord,
+    retention_days: u32,
+    archive: bool,
+) -> Result<Document, SignalStoreError> {
     if record.duration_ns < 0 {
         return Err(SignalStoreError::InvalidData);
     }
@@ -670,9 +683,9 @@ fn encode_span(record: &SpanRecord, retention_days: u32) -> Result<Document, Sig
         "v": record.status.as_ref(),
         "m": record.name.as_ref(),
         "i": i64::from(record.insight_flags),
-        "x": retention_date(record.received_at, i64::from(retention_days))?,
         "b": body_binary(record.body.as_bytes()),
     };
+    insert_retention(&mut document, record.received_at, retention_days, archive)?;
     if let Some(parent) = record.parent_span_id {
         document.insert("a", binary(parent.as_bytes()));
     }
@@ -786,7 +799,7 @@ fn body_binary(body: &[u8]) -> Binary {
     }
 }
 
-fn decode_body(document: &Document) -> Result<Box<[u8]>, SignalStoreError> {
+pub(crate) fn decode_body(document: &Document) -> Result<Box<[u8]>, SignalStoreError> {
     let bytes = document.get_binary_generic("b").map_err(invalid)?;
     if bytes.len() < 3 || bytes[..2] != [1, 0] {
         return Err(SignalStoreError::InvalidData);
@@ -894,6 +907,17 @@ fn retention_date(value: Timestamp, days: i64) -> Result<DateTime, SignalStoreEr
     .map_err(|_| SignalStoreError::InvalidData)
 }
 
+fn insert_retention(
+    document: &mut Document,
+    received_at: Timestamp,
+    days: u32,
+    archive: bool,
+) -> Result<(), SignalStoreError> {
+    let due = retention_date(received_at, i64::from(days))?;
+    document.insert(if archive { "h" } else { "x" }, due);
+    Ok(())
+}
+
 fn unavailable(_: mongodb::error::Error) -> SignalStoreError {
     SignalStoreError::Unavailable
 }
@@ -946,7 +970,7 @@ pub fn log_validator() -> Document {
     doc! {
         "$jsonSchema": {
             "bsonType": "object",
-            "required": ["_id", "p", "r", "o", "l", "m", "x", "b"],
+            "required": ["_id", "p", "r", "o", "l", "m", "b"],
             "properties": {
                 "_id": { "bsonType": "binData" },
                 "p": { "bsonType": "int", "minimum": 1 },
@@ -955,6 +979,8 @@ pub fn log_validator() -> Document {
                 "l": { "bsonType": "int", "minimum": 1, "maximum": 6 },
                 "m": { "bsonType": "string", "maxLength": 8192 },
                 "x": { "bsonType": "date" },
+                "h": { "bsonType": "date" },
+                "z": { "bsonType": "binData" },
                 "g": { "bsonType": "binData" },
                 "n": { "bsonType": "binData" },
                 "e": { "bsonType": "string", "maxLength": 128 },
@@ -970,7 +996,7 @@ pub fn span_validator() -> Document {
     doc! {
         "$jsonSchema": {
             "bsonType": "object",
-            "required": ["_id", "p", "r", "o", "d", "g", "n", "c", "w", "v", "m", "i", "x", "b"],
+            "required": ["_id", "p", "r", "o", "d", "g", "n", "c", "w", "v", "m", "i", "b"],
             "properties": {
                 "_id": { "bsonType": "binData" },
                 "p": { "bsonType": "int", "minimum": 1 },
@@ -990,6 +1016,8 @@ pub fn span_validator() -> Document {
                 "j": { "bsonType": "string", "maxLength": 256 },
                 "i": { "bsonType": "long", "minimum": 0 },
                 "x": { "bsonType": "date" },
+                "h": { "bsonType": "date" },
+                "z": { "bsonType": "binData" },
                 "b": { "bsonType": "binData" },
             },
         },
@@ -1050,12 +1078,14 @@ pub fn signal_index_names(collection: &str) -> std::collections::BTreeSet<&'stat
             "_id_",
             "log_project_time",
             "log_project_trace",
+            "log_archive_due",
             "log_expiry",
         ]),
         "spans" => std::collections::BTreeSet::from([
             "_id_",
             "span_project_trace",
             "span_segment_feed",
+            "span_archive_due",
             "span_expiry",
         ]),
         "span_stats_hourly" => std::collections::BTreeSet::from([
@@ -1075,6 +1105,11 @@ fn log_indexes() -> Vec<IndexModel> {
             "log_project_trace",
             doc! { "g": { "$exists": true } },
         ),
+        partial_index(
+            doc! { "h": 1, "_id": 1 },
+            "log_archive_due",
+            doc! { "h": { "$exists": true } },
+        ),
         ttl_index("x", "log_expiry"),
     ]
 }
@@ -1089,6 +1124,11 @@ fn span_indexes() -> Vec<IndexModel> {
             doc! { "p": 1, "t": 1, "o": -1, "_id": -1 },
             "span_segment_feed",
             doc! { "t": true },
+        ),
+        partial_index(
+            doc! { "h": 1, "_id": 1 },
+            "span_archive_due",
+            doc! { "h": { "$exists": true } },
         ),
         ttl_index("x", "span_expiry"),
     ]
@@ -1172,7 +1212,7 @@ mod tests {
             service: Some("payments".into()),
             body: SignalBody::new(br#"{"body":"database retry","attempt":2}"#.as_slice()),
         };
-        let log_document = encode_log(&log, 7).unwrap();
+        let log_document = encode_log(&log, 7, false).unwrap();
         assert_eq!(decode_log(&log_document).unwrap(), log);
         assert_eq!(
             log_document.get_datetime("x").unwrap().timestamp_millis()
@@ -1201,7 +1241,7 @@ mod tests {
             insight_flags: 1,
             body: SignalBody::new(br#"{"request":{"method":"GET"}}"#.as_slice()),
         };
-        let span_document = encode_span(&span, 14).unwrap();
+        let span_document = encode_span(&span, 14, false).unwrap();
         assert_eq!(decode_span(&span_document).unwrap(), span);
         assert_eq!(
             span_document.get_datetime("x").unwrap().timestamp_millis()
@@ -1209,6 +1249,14 @@ mod tests {
             14 * 86_400_000
         );
         assert!(mongodb::bson::to_vec(&span_document).unwrap().len() < 512);
+
+        let archived_log = encode_log(&log, 7, true).unwrap();
+        let archived_span = encode_span(&span, 14, true).unwrap();
+        for document in [&archived_log, &archived_span] {
+            assert!(document.contains_key("h"));
+            assert!(!document.contains_key("x"));
+            assert!(!document.contains_key("z"));
+        }
     }
 
     #[test]

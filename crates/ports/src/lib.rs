@@ -10,7 +10,7 @@ use metric_domain::{
         IssueListQuery, IssuePage, IssueStatBucket, OrganizationMemberView, ProjectKeyView,
         ProjectPolicyUpdate, ProjectView, ReleasePage, SearchStorageQuery,
     },
-    archive::{ArchiveBatch, ArchiveSegmentId},
+    archive::{ArchiveBatch, ArchiveKind, ArchiveSegmentId, ArchiveSourceId},
     artifacts::{
         ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactCandidate, ArtifactGcClaim,
         ArtifactLookup, ArtifactUpload, ArtifactUploadRecord, ArtifactUploadState,
@@ -128,6 +128,7 @@ pub trait BlobStore: Send + Sync + 'static {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ArchiveClaimRequest {
+    pub kind: ArchiveKind,
     pub now: Timestamp,
     pub maximum_events: usize,
     pub target_uncompressed_bytes: usize,
@@ -142,8 +143,9 @@ pub struct ArchiveCompleteRequest {
 
 #[derive(Debug, Clone)]
 pub struct ArchiveSourceCommitRequest {
+    pub kind: ArchiveKind,
     pub segment_id: ArchiveSegmentId,
-    pub event_keys: Vec<EventKey>,
+    pub source_ids: Vec<ArchiveSourceId>,
     pub expire_at: Timestamp,
 }
 
@@ -158,7 +160,7 @@ pub enum ArchiveStoreError {
 }
 
 /// Durable archive-manifest ownership. Blob bytes are published through `BlobStore`;
-/// this port owns only bounded Event selection and the MongoDB commit sequence.
+/// this port owns only bounded source selection and the MongoDB commit sequence.
 pub trait ArchiveStore: Send + Sync + 'static {
     fn claim(
         &self,
@@ -298,10 +300,7 @@ pub trait ArtifactStore: Send + Sync + 'static {
         &self,
         organization_slug: Box<str>,
         project_slugs: Vec<Box<str>>,
-    ) -> PortFuture<
-        '_,
-        Result<(metric_domain::OrganizationId, Vec<ProjectView>), ArtifactStoreError>,
-    >;
+    ) -> PortFuture<'_, Result<(metric_domain::OrganizationId, Vec<ProjectView>), ArtifactStoreError>>;
 
     fn project_organization(
         &self,

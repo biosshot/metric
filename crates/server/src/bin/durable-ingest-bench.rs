@@ -100,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             logs_days: 30,
             spans_days: 30,
             span_stats_hourly_days: 90,
+            archive: false,
         }),
     );
     let clock: Arc<dyn Clock> = Arc::new(BenchClock);

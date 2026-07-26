@@ -332,8 +332,11 @@ with a partial filter for `t = true`, so child Spans do not occupy the index.
 
 ### Retention
 
-Retention uses `x` and the `span_expiry` TTL index. There is no Span cold-archive
-state or index in generation 8.
+Generation 8 uses `x` and the `span_expiry` TTL index. The next breaking schema
+generation adds optional Span cold-archive state: with archival enabled a new Span
+receives `h`, and only a completed, verified homogeneous Span archive segment may
+replace it with `z` and `x`, following ADR-0007. Transactions are root/segment Span
+records and use the same archive. Trace remains virtual and has no separate archive.
 
 No wildcard index is created.
 
@@ -527,7 +530,8 @@ group-by.
 ## Retention and deletion
 
 Spans and hourly aggregates have independent configurable retention. Project deletion
-registers both namespaces. Span cold archive is not implemented in generation 8.
+registers both namespaces. The next breaking schema generation also registers the
+Span archive namespace.
 Trace views naturally become partial as constituent retention periods expire.
 
 ## Test and performance gates

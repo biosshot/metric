@@ -37,7 +37,8 @@ force_path_style = true
 part_bytes = "8 MiB"
 
 [archive]
-# Disabled installations retain the ordinary MongoDB TTL behavior.
+# Enables homogeneous Error Event, Log, and Span cold archives. Disabled
+# installations retain the ordinary MongoDB TTL behavior.
 enabled = false
 maximum_events = 500
 target_uncompressed_bytes = "64 MiB"

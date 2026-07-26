@@ -313,7 +313,10 @@ design before the production declaration.
 
 ### Retention
 
-Retention uses `x` and the `log_expiry` TTL index.
+Retention uses `x` and the `log_expiry` TTL index when cold archival is disabled.
+When archival is enabled a new Log receives archive-due `h`; only a completed,
+verified homogeneous Log archive segment may replace `h` with archive segment `z`
+and hot-expiry `x`, following ADR-0007.
 
 Every index definition is centralized in the MongoDB adapter and included in
 schema-generation validation. Wildcard indexes are prohibited.
