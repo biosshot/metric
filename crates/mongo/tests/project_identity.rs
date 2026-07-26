@@ -7,6 +7,11 @@ use metric_domain::{
     DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
     ProjectKeyLabel, ProjectKeyState, SecretBytes, Slug, Timestamp,
+    api::ProjectPolicyUpdate,
+    inbound_filter::{
+        InboundFilterField, InboundFilterFields, InboundFilterOperation, InboundFilterPolicy,
+        InboundFilterRule, InboundFilterSignal,
+    },
 };
 use metric_mongo::{MongoBootstrapError, MongoProjectStore, SCHEMA_GENERATION};
 use metric_ports::{ProjectStore, ProjectStoreError};
@@ -126,6 +131,31 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     );
     store.set_key_state(key, ProjectKeyState::Active).await?;
     assert!(store.load_project(key).await.is_ok());
+
+    let inbound_filters = InboundFilterPolicy::new(vec![InboundFilterRule {
+        signal: InboundFilterSignal::Error,
+        field: InboundFilterField::Message,
+        operation: InboundFilterOperation::Contains,
+        pattern: "healthcheck".into(),
+    }])?;
+    let (updated, _) = store
+        .update_project_policy(
+            ProjectId::new(42)?,
+            ProjectPolicyUpdate {
+                expected_revision: 1,
+                ip_policy: IpScrubPolicy::Hmac,
+                items: inserted_project.items,
+                limits: inserted_project.limits,
+                inbound_filters,
+            },
+        )
+        .await?;
+    assert_eq!(updated.policy_revision, 2);
+    assert_eq!(updated.inbound_filters.rules().len(), 1);
+    let resolved = store.load_project(key).await?;
+    let mut fields = InboundFilterFields::empty(InboundFilterSignal::Error);
+    fields.message = Some("periodic healthcheck failure");
+    assert!(resolved.inbound_filters.matches(&fields).is_some());
 
     store
         .set_project_acceptance(ProjectId::new(42)?, ProjectAcceptanceState::Disabled)

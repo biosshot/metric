@@ -1,11 +1,15 @@
 use std::{collections::BTreeSet, sync::Arc};
 
+use hmac::{Hmac, Mac};
 use metric_domain::{
     AcceptedEvent, DsnKey, EventId, IpScrubPolicy, ProjectAcceptanceState, ProjectId,
     ProjectKeyState, ProjectSnapshot, ScrubbedEventPayload,
     blob::{
         AttachmentFilename, BlobChecksum, BlobContentType, BlobKey, BlobKind, BlobObjectId,
         EventAttachment,
+    },
+    inbound_filter::{
+        InboundFilterField, InboundFilterFields, InboundFilterMatch, InboundFilterSignal,
     },
     signals::{
         LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
@@ -17,13 +21,12 @@ use metric_ports::{
     IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink, ProjectResolveError, ProjectResolver,
     RandomSource, SignalStoreError, SpanSink,
 };
-use hmac::{Hmac, Mac};
 use serde_json::{Map, Value};
 use sha2::Sha256;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
-use crate::shutdown::ShutdownSignal;
+use crate::{observability::Metrics, shutdown::ShutdownSignal};
 
 const MAX_AUTH_SOURCES: usize = 4;
 const MAX_SCRUB_DEPTH: usize = 64;
@@ -69,6 +72,35 @@ pub struct DiscardedItem {
 pub struct PrimaryEvent {
     pub header_event_id: Option<EventId>,
     pub raw_json: Box<[u8]>,
+}
+
+enum ValidatedPrimaryEvent {
+    Accepted {
+        event_id: EventId,
+        payload: Vec<u8>,
+    },
+    Filtered {
+        event_id: EventId,
+        matched: InboundFilterMatch,
+    },
+}
+
+impl std::fmt::Debug for ValidatedPrimaryEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Accepted { event_id, payload } => formatter
+                .debug_struct("Accepted")
+                .field("event_id", event_id)
+                .field("payload_bytes", &payload.len())
+                .finish(),
+            Self::Filtered { event_id, matched } => formatter
+                .debug_struct("Filtered")
+                .field("event_id", event_id)
+                .field("signal", &matched.signal)
+                .field("field", &matched.field)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -369,7 +401,17 @@ impl IngestService {
         }
 
         let (event_id, mut payload) =
-            validate_and_scrub_event(primary, request.envelope_event_id, &snapshot)?;
+            match validate_and_scrub_event(primary, request.envelope_event_id, &snapshot)? {
+                ValidatedPrimaryEvent::Accepted { event_id, payload } => (event_id, payload),
+                ValidatedPrimaryEvent::Filtered { event_id, matched } => {
+                    self.record_filtered(matched);
+                    return Ok(IngestResult {
+                        event_id: Some(event_id),
+                        durable: None,
+                        disabled_categories,
+                    });
+                }
+            };
         let attachments = self
             .persist_attachments(
                 snapshot.project_id,
@@ -447,13 +489,48 @@ impl IngestService {
             }
             match signal.kind {
                 PendingSignalKind::Log if snapshot.items.log => {
-                    logs.extend(normalize_logs(snapshot, received_at, &signal.raw_json)?)
+                    for record in normalize_logs(snapshot, received_at, &signal.raw_json)? {
+                        let mut fields = InboundFilterFields::empty(InboundFilterSignal::Log);
+                        fields.release = record.release.as_deref();
+                        fields.environment = record.environment.as_deref();
+                        fields.service = record.service.as_deref();
+                        fields.message = Some(&record.message);
+                        fields.severity = Some(record.severity.as_str());
+                        if let Some(matched) = snapshot.inbound_filters.matches(&fields) {
+                            self.record_filtered(matched);
+                        } else {
+                            logs.push(record);
+                        }
+                    }
                 }
-                PendingSignalKind::Transaction if snapshot.items.transaction => spans.extend(
-                    normalize_transaction(snapshot, received_at, &signal.raw_json)?,
-                ),
+                PendingSignalKind::Transaction if snapshot.items.transaction => {
+                    for record in normalize_transaction(snapshot, received_at, &signal.raw_json)? {
+                        let signal = if record.is_segment {
+                            InboundFilterSignal::Transaction
+                        } else {
+                            InboundFilterSignal::Span
+                        };
+                        if let Some(matched) = snapshot
+                            .inbound_filters
+                            .matches(&span_filter_fields(&record, signal))
+                        {
+                            self.record_filtered(matched);
+                        } else {
+                            spans.push(record);
+                        }
+                    }
+                }
                 PendingSignalKind::Span if snapshot.items.span => {
-                    spans.extend(normalize_spans(snapshot, received_at, &signal.raw_json)?)
+                    for record in normalize_spans(snapshot, received_at, &signal.raw_json)? {
+                        if let Some(matched) = snapshot
+                            .inbound_filters
+                            .matches(&span_filter_fields(&record, InboundFilterSignal::Span))
+                        {
+                            self.record_filtered(matched);
+                        } else {
+                            spans.push(record);
+                        }
+                    }
                 }
                 PendingSignalKind::Log
                 | PendingSignalKind::Transaction
@@ -509,6 +586,15 @@ impl IngestService {
         disabled_categories.sort_unstable();
         disabled_categories.dedup();
         Ok(disabled_categories)
+    }
+
+    fn record_filtered(&self, matched: InboundFilterMatch) {
+        Metrics.inbound_filtered(matched.signal, matched.field);
+        self.outcome_sink.record(IngestOutcome {
+            kind: IngestOutcomeKind::Filtered,
+            reason: "inbound_filter",
+            quantity: 1,
+        });
     }
 
     pub fn record_outcome(&self, outcome: IngestOutcome) {
@@ -901,7 +987,7 @@ fn validate_and_scrub_event(
     primary: PrimaryEvent,
     envelope_event_id: Option<EventId>,
     snapshot: &ProjectSnapshot,
-) -> Result<(EventId, Vec<u8>), IngestError> {
+) -> Result<ValidatedPrimaryEvent, IngestError> {
     let mut value: Value = serde_json::from_slice(&primary.raw_json)
         .map_err(|_| IngestError::invalid("invalid_event_json"))?;
     let object = value
@@ -935,11 +1021,76 @@ fn validate_and_scrub_event(
     );
     object.remove("project");
     scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
+    if snapshot
+        .inbound_filters
+        .has_signal(InboundFilterSignal::Error)
+    {
+        let needs_request_url = snapshot
+            .inbound_filters
+            .has_field(InboundFilterSignal::Error, InboundFilterField::RequestHost)
+            || snapshot
+                .inbound_filters
+                .has_field(InboundFilterSignal::Error, InboundFilterField::RequestPath);
+        let request_url = if needs_request_url {
+            value
+                .pointer("/request/url")
+                .and_then(Value::as_str)
+                .and_then(|value| url::Url::parse(value).ok())
+        } else {
+            None
+        };
+        let mut fields = InboundFilterFields::empty(InboundFilterSignal::Error);
+        fields.release = value.get("release").and_then(Value::as_str);
+        fields.environment = value.get("environment").and_then(Value::as_str);
+        fields.service = value
+            .get("server_name")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                value
+                    .pointer("/contexts/trace/data/service.name")
+                    .and_then(Value::as_str)
+            });
+        fields.message = value
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/logentry/formatted").and_then(Value::as_str))
+            .or_else(|| value.pointer("/logentry/message").and_then(Value::as_str));
+        fields.exception_type = value
+            .pointer("/exception/values/0/type")
+            .and_then(Value::as_str);
+        fields.logger = value.get("logger").and_then(Value::as_str);
+        fields.request_host = request_url.as_ref().and_then(url::Url::host_str);
+        fields.request_path = request_url.as_ref().map(url::Url::path);
+        if let Some(matched) = snapshot.inbound_filters.matches(&fields) {
+            return Ok(ValidatedPrimaryEvent::Filtered {
+                event_id: body_event_id,
+                matched,
+            });
+        }
+    }
     let payload = serde_json::to_vec(&value).map_err(|_| IngestError {
         kind: IngestErrorKind::ScrubFailed,
         code: "scrub_failed",
     })?;
-    Ok((body_event_id, payload))
+    Ok(ValidatedPrimaryEvent::Accepted {
+        event_id: body_event_id,
+        payload,
+    })
+}
+
+fn span_filter_fields<'a>(
+    record: &'a SpanRecord,
+    signal: InboundFilterSignal,
+) -> InboundFilterFields<'a> {
+    let mut fields = InboundFilterFields::empty(signal);
+    fields.release = record.release.as_deref();
+    fields.environment = record.environment.as_deref();
+    fields.service = record.service.as_deref();
+    fields.name = Some(&record.name);
+    fields.operation = Some(&record.operation);
+    fields.status = Some(&record.status);
+    fields.duration_ms = Some(record.duration_ns / 1_000_000);
+    fields
 }
 
 fn scrub_value(
@@ -1566,6 +1717,7 @@ mod tests {
                 span: true,
             },
             limits: ProjectIngestLimits::default(),
+            inbound_filters: Default::default(),
             grouping_revision: 1,
         }
     }
@@ -1573,7 +1725,7 @@ mod tests {
     #[test]
     fn mandatory_floor_scrubs_unknown_nested_credentials() {
         let raw = br#"{"event_id":"0123456789abcdef0123456789abcdef","unknown":{"password":"open-sesame","header":"Bearer token","url":"https://user:pass@example.invalid/a"},"user":{"ip_address":"192.0.2.1"}}"#;
-        let (_, scrubbed) = validate_and_scrub_event(
+        let validated = validate_and_scrub_event(
             PrimaryEvent {
                 header_event_id: None,
                 raw_json: raw.as_slice().into(),
@@ -1582,7 +1734,10 @@ mod tests {
             &snapshot(),
         )
         .unwrap();
-        let text = String::from_utf8(scrubbed).unwrap();
+        let ValidatedPrimaryEvent::Accepted { payload, .. } = validated else {
+            panic!("empty filter policy must accept the Event");
+        };
+        let text = String::from_utf8(payload).unwrap();
         assert!(!text.contains("open-sesame"));
         assert!(!text.contains("Bearer token"));
         assert!(!text.contains("user:pass"));

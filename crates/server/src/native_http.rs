@@ -46,6 +46,10 @@ use metric_domain::{
     blob::BlobObjectId,
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
     grouping::IssueId,
+    inbound_filter::{
+        InboundFilterField, InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
+        InboundFilterSignal,
+    },
     issue::{ActorKind, ActorRef, IssueCommandAction, IssueSnapshot, IssueStatus},
     signals::{LogId, LogRecord, LogSeverity, SpanRecord, TraceId},
 };
@@ -190,10 +194,9 @@ impl IntoResponse for HttpApiError {
         response
             .headers_mut()
             .insert("x-metric-error-code", HeaderValue::from_static(code));
-        response.headers_mut().insert(
-            "x-metric-error-message",
-            HeaderValue::from_static(message),
-        );
+        response
+            .headers_mut()
+            .insert("x-metric-error-message", HeaderValue::from_static(message));
         response
     }
 }
@@ -1200,6 +1203,16 @@ struct PolicyBody {
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
     burst: Option<u32>,
+    inbound_filters: Vec<InboundFilterRuleBody>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InboundFilterRuleBody {
+    signal: String,
+    field: String,
+    operation: String,
+    pattern: String,
 }
 
 async fn update_project_policy(
@@ -1230,6 +1243,7 @@ async fn update_project_policy(
                     body.max_events_per_second,
                     body.burst,
                 )?,
+                inbound_filters: inbound_filter_policy(body.inbound_filters)?,
             },
             correlation_id(request_id)?,
         )
@@ -2078,6 +2092,54 @@ fn ip_policy(value: &str) -> Result<IpScrubPolicy, HttpApiError> {
     }
 }
 
+fn inbound_filter_policy(
+    rules: Vec<InboundFilterRuleBody>,
+) -> Result<InboundFilterPolicy, HttpApiError> {
+    let rules = rules
+        .into_iter()
+        .map(|rule| {
+            let signal = match rule.signal.as_str() {
+                "error" => InboundFilterSignal::Error,
+                "log" => InboundFilterSignal::Log,
+                "transaction" => InboundFilterSignal::Transaction,
+                "span" => InboundFilterSignal::Span,
+                _ => return Err(HttpApiError::InvalidRequest),
+            };
+            let field = match rule.field.as_str() {
+                "release" => InboundFilterField::Release,
+                "environment" => InboundFilterField::Environment,
+                "service" => InboundFilterField::Service,
+                "message" => InboundFilterField::Message,
+                "exception_type" => InboundFilterField::ExceptionType,
+                "logger" => InboundFilterField::Logger,
+                "request_host" => InboundFilterField::RequestHost,
+                "request_path" => InboundFilterField::RequestPath,
+                "severity" => InboundFilterField::Severity,
+                "name" => InboundFilterField::Name,
+                "operation" => InboundFilterField::Operation,
+                "status" => InboundFilterField::Status,
+                "duration" => InboundFilterField::Duration,
+                _ => return Err(HttpApiError::InvalidRequest),
+            };
+            let operation = match rule.operation.as_str() {
+                "exact" => InboundFilterOperation::Exact,
+                "prefix" => InboundFilterOperation::Prefix,
+                "suffix" => InboundFilterOperation::Suffix,
+                "contains" => InboundFilterOperation::Contains,
+                "glob" => InboundFilterOperation::Glob,
+                _ => return Err(HttpApiError::InvalidRequest),
+            };
+            Ok(InboundFilterRule {
+                signal,
+                field,
+                operation,
+                pattern: rule.pattern.into(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    InboundFilterPolicy::new(rules).map_err(|_| HttpApiError::InvalidRequest)
+}
+
 fn default_ip_policy() -> String {
     "hmac".to_owned()
 }
@@ -2216,7 +2278,13 @@ fn policy_value(project: &ProjectView) -> Value {
             "max_event_bytes": project.limits.max_event_bytes.get(),
             "max_events_per_second": project.limits.max_events_per_second.map(NonZeroU32::get),
             "burst": project.limits.burst.map(NonZeroU32::get),
-        }
+        },
+        "inbound_filters": project.inbound_filters.rules().iter().map(|rule| json!({
+            "signal": rule.signal.as_str(),
+            "field": rule.field.as_str(),
+            "operation": rule.operation.as_str(),
+            "pattern": rule.pattern,
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -2414,12 +2482,28 @@ mod tests {
                 span: true,
             },
             limits: ProjectIngestLimits::default(),
+            inbound_filters: InboundFilterPolicy::new(vec![InboundFilterRule {
+                signal: InboundFilterSignal::Error,
+                field: InboundFilterField::Message,
+                operation: InboundFilterOperation::Contains,
+                pattern: "healthcheck".into(),
+            }])
+            .unwrap(),
             grouping_revision: 1,
             created_at: Timestamp::from_unix_millis(1_700_000_000_000).unwrap(),
         };
         assert_eq!(
             serde_json::to_string(&project_value(&project).unwrap()).unwrap(),
-            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null}},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+        );
+        assert!(
+            inbound_filter_policy(vec![InboundFilterRuleBody {
+                signal: "log".to_owned(),
+                field: "exception_type".to_owned(),
+                operation: "exact".to_owned(),
+                pattern: "invalid".to_owned(),
+            }])
+            .is_err()
         );
     }
 

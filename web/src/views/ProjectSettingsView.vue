@@ -2,7 +2,13 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
-import type { ProjectPolicy } from '../api/types';
+import type {
+  InboundFilterField,
+  InboundFilterOperation,
+  InboundFilterRule,
+  InboundFilterSignal,
+  ProjectPolicy,
+} from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
@@ -27,6 +33,53 @@ const ipPolicyOptions: SelectOption[] = [
   { value: 'truncate', label: 'Truncate address', icon: 'shield' },
   { value: 'keep', label: 'Keep original address', icon: 'view' },
 ];
+const filterSignalOptions: SelectOption[] = [
+  { value: 'error', label: 'Error Event', icon: 'bug' },
+  { value: 'log', label: 'Structured Log', icon: 'logs' },
+  { value: 'transaction', label: 'Transaction', icon: 'activity' },
+  { value: 'span', label: 'Span', icon: 'traces' },
+];
+const filterOperationOptions: SelectOption[] = [
+  { value: 'exact', label: 'Equals' },
+  { value: 'prefix', label: 'Starts with' },
+  { value: 'suffix', label: 'Ends with' },
+  { value: 'contains', label: 'Contains' },
+  { value: 'glob', label: 'Glob' },
+];
+const commonFilterFields: SelectOption[] = [
+  { value: 'release', label: 'Release' },
+  { value: 'environment', label: 'Environment' },
+  { value: 'service', label: 'Service' },
+];
+const signalFilterFields: Record<InboundFilterSignal, SelectOption[]> = {
+  error: [
+    ...commonFilterFields,
+    { value: 'message', label: 'Normalized message' },
+    { value: 'exception_type', label: 'Exception type' },
+    { value: 'logger', label: 'Logger' },
+    { value: 'request_host', label: 'Request host' },
+    { value: 'request_path', label: 'Request path' },
+  ],
+  log: [
+    ...commonFilterFields,
+    { value: 'message', label: 'Normalized message' },
+    { value: 'severity', label: 'Severity' },
+  ],
+  transaction: [
+    ...commonFilterFields,
+    { value: 'name', label: 'Name' },
+    { value: 'operation', label: 'Operation' },
+    { value: 'status', label: 'Status' },
+    { value: 'duration', label: 'Duration (ms)' },
+  ],
+  span: [
+    ...commonFilterFields,
+    { value: 'name', label: 'Name' },
+    { value: 'operation', label: 'Operation' },
+    { value: 'status', label: 'Status' },
+    { value: 'duration', label: 'Duration (ms)' },
+  ],
+};
 
 const project = useQuery({
   queryKey: computed(() => ['project', projectId.value]),
@@ -55,6 +108,7 @@ const policy = reactive<ProjectPolicy>({
   ip_policy: 'hmac',
   items: { error: true, client_report: true, log: true, transaction: true, span: true },
   limits: { max_event_bytes: 1_048_576, max_events_per_second: null, burst: null },
+  inbound_filters: [],
 });
 
 watch(
@@ -65,12 +119,51 @@ watch(
     policy.ip_policy = value.ip_policy;
     policy.items = { ...value.items };
     policy.limits = { ...value.limits };
+    policy.inbound_filters = value.inbound_filters.map((rule) => ({ ...rule }));
   },
   { immediate: true },
 );
 
 function setIpPolicy(value: string): void {
   policy.ip_policy = value as ProjectPolicy['ip_policy'];
+}
+
+function filterFields(signal: InboundFilterSignal): SelectOption[] {
+  return signalFilterFields[signal];
+}
+
+function setFilterSignal(rule: InboundFilterRule, value: string): void {
+  rule.signal = value as InboundFilterSignal;
+  const accepted = filterFields(rule.signal);
+  if (!accepted.some((field) => field.value === rule.field)) {
+    rule.field = accepted[0].value as InboundFilterField;
+  }
+}
+
+function setFilterField(rule: InboundFilterRule, value: string): void {
+  rule.field = value as InboundFilterField;
+  if (rule.field === 'duration') rule.operation = 'exact';
+}
+
+function setFilterOperation(rule: InboundFilterRule, value: string): void {
+  rule.operation = value as InboundFilterOperation;
+}
+
+function filterOperations(field: InboundFilterField): SelectOption[] {
+  return field === 'duration' ? filterOperationOptions.slice(0, 1) : filterOperationOptions;
+}
+
+function addInboundFilter(): void {
+  policy.inbound_filters.push({
+    signal: 'error',
+    field: 'message',
+    operation: 'contains',
+    pattern: '',
+  });
+}
+
+function removeInboundFilter(index: number): void {
+  policy.inbound_filters.splice(index, 1);
 }
 
 const savePolicy = useMutation({
@@ -202,6 +295,87 @@ const cancelDeletion = useMutation({
           <span><strong>Spans</strong><small>Accept child and standalone spans.</small></span>
         </label>
       </div>
+      <section class="inbound-filter-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Before durable storage</p>
+            <h3>Inbound filters</h3>
+            <p>
+              Matching signals are acknowledged and discarded before MongoDB, attachments, or
+              BlobStore writes.
+            </p>
+          </div>
+          <button
+            v-if="session.has('project:admin')"
+            class="button button--secondary"
+            type="button"
+            :disabled="policy.inbound_filters.length >= 32"
+            @click="addInboundFilter"
+          >
+            <AppIcon name="plus" :size="16" />
+            Add filter
+          </button>
+        </div>
+        <div v-if="policy.inbound_filters.length === 0" class="empty-inline">
+          <AppIcon name="filter" :size="18" />
+          <span>No inbound filters. Every enabled signal follows its normal durable path.</span>
+        </div>
+        <div v-else class="inbound-filter-list">
+          <article
+            v-for="(rule, index) in policy.inbound_filters"
+            :key="index"
+            class="inbound-filter-rule"
+          >
+            <BaseSelect
+              :model-value="rule.signal"
+              :options="filterSignalOptions"
+              label="Signal"
+              :disabled="!session.has('project:admin')"
+              @update:model-value="setFilterSignal(rule, $event)"
+            />
+            <BaseSelect
+              :model-value="rule.field"
+              :options="filterFields(rule.signal)"
+              label="Field"
+              :disabled="!session.has('project:admin')"
+              @update:model-value="setFilterField(rule, $event)"
+            />
+            <BaseSelect
+              :model-value="rule.operation"
+              :options="filterOperations(rule.field)"
+              label="Match"
+              :disabled="!session.has('project:admin')"
+              @update:model-value="setFilterOperation(rule, $event)"
+            />
+            <label>
+              Pattern
+              <input
+                v-model="rule.pattern"
+                maxlength="256"
+                required
+                autocomplete="off"
+                :placeholder="
+                  rule.field === 'duration' ? 'Milliseconds, for example 5000' : 'Value'
+                "
+                :disabled="!session.has('project:admin')"
+              />
+            </label>
+            <button
+              v-if="session.has('project:admin')"
+              class="icon-button inbound-filter-rule__remove"
+              type="button"
+              aria-label="Remove inbound filter"
+              @click="removeInboundFilter(index)"
+            >
+              <AppIcon name="delete" :size="16" />
+            </button>
+          </article>
+        </div>
+        <small class="field-help">
+          Up to 32 rules, 256 bytes per pattern. Matching is case-sensitive; glob supports
+          <code>*</code> and <code>?</code>. Duration uses exact integer milliseconds.
+        </small>
+      </section>
       <div class="form-grid form-grid--three">
         <label>
           Maximum Event bytes

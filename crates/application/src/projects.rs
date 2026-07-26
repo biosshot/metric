@@ -733,6 +733,7 @@ mod tests {
                 span: true,
             },
             limits: ProjectIngestLimits::default(),
+            inbound_filters: Default::default(),
             grouping_revision: 1,
         }
     }

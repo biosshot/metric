@@ -2,9 +2,7 @@
 
 use std::{future::pending, sync::Arc, time::SystemTime};
 
-use metric_application::{
-    ingest::IngestService, observability::Metrics, shutdown::ShutdownRoot,
-};
+use metric_application::{ingest::IngestService, observability::Metrics, shutdown::ShutdownRoot};
 use metric_domain::{
     AcceptedEvent, DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
@@ -94,6 +92,7 @@ async fn main() -> std::io::Result<()> {
             span: true,
         },
         limits: ProjectIngestLimits::default(),
+        inbound_filters: Default::default(),
         grouping_revision: 1,
     };
     let service = Arc::new(IngestService::new(

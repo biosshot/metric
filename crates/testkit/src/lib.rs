@@ -9,12 +9,13 @@ use std::{
 
 use metric_domain::{
     AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
+    signals::{LogRecord, SpanRecord},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use metric_ports::{
-    Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, OutcomeSink, PortFuture,
-    ProjectResolveError, ProjectResolver, RandomError, RandomSource, SymbolicationBackend,
-    SymbolicationBackendError,
+    Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, LogSink, OutcomeSink,
+    PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource, SignalStoreError,
+    SpanSink, SymbolicationBackend, SymbolicationBackendError,
 };
 
 #[derive(Clone)]
@@ -98,6 +99,58 @@ impl EventSink for FakeEventSink {
                     .push(event);
             }
             Ok(outcome)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeLogSink(Arc<Mutex<Vec<LogRecord>>>);
+
+impl FakeLogSink {
+    #[must_use]
+    pub fn records(&self) -> Vec<LogRecord> {
+        self.0.lock().expect("fake Log sink lock poisoned").clone()
+    }
+}
+
+impl LogSink for FakeLogSink {
+    fn persist_logs(
+        &self,
+        records: Vec<LogRecord>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
+        Box::pin(async move {
+            let outcomes = vec![DurableOutcome::Accepted; records.len()];
+            self.0
+                .lock()
+                .expect("fake Log sink lock poisoned")
+                .extend(records);
+            Ok(outcomes)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeSpanSink(Arc<Mutex<Vec<SpanRecord>>>);
+
+impl FakeSpanSink {
+    #[must_use]
+    pub fn records(&self) -> Vec<SpanRecord> {
+        self.0.lock().expect("fake Span sink lock poisoned").clone()
+    }
+}
+
+impl SpanSink for FakeSpanSink {
+    fn persist_spans(
+        &self,
+        records: Vec<SpanRecord>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
+        Box::pin(async move {
+            let outcomes = vec![DurableOutcome::Accepted; records.len()];
+            self.0
+                .lock()
+                .expect("fake Span sink lock poisoned")
+                .extend(records);
+            Ok(outcomes)
         })
     }
 }

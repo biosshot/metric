@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-07-26:
+Status as of 2026-07-27:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -16,13 +16,15 @@ Status as of 2026-07-26:
 | Phase 25 Transactions/Spans/Traces | Complete | ADR-0043 and Phase 25 report |
 | Phase 26 Performance Insights | Complete | ADR-0043 and Phase 26 report |
 | Phase 27 Production readiness | Accepted, execution deferred | ADR-0044/0045 |
-| Phase 28 Signal Inbound Filters | Next | ADR-0045 |
-| Phases 29-36 lightweight product wave | Planned | ADR-0045 |
+| Phase 28 Signal Inbound Filters | Complete | ADR-0045 and Phase 28 report |
+| Phase 29 Releases and Deploys | Next | ADR-0045 |
+| Phases 30-36 lightweight product wave | Planned | ADR-0045 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045 |
 
 Phase 27 is not complete and no production-ready claim follows from deferring it.
-By explicit owner decision, Phase 28 is the next implementation phase. ADR-0045
-numbers the selected lightweight product wave through Phase 36.
+By explicit owner decision, deferred Phase 27 remains incomplete. Phase 28 is
+complete and Phase 29 is the next implementation phase. ADR-0045 numbers the selected
+lightweight product wave through Phase 36.
 
 ## Document precedence
 

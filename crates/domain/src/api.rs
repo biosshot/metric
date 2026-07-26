@@ -11,6 +11,7 @@ use crate::{
     event::{EventLevel, EventPlatform},
     finalization::{EnvironmentId, ProcessedEventPayload, ReleaseId, SearchToken},
     grouping::IssueId,
+    inbound_filter::InboundFilterPolicy,
     issue::{ActorRef, IssueActivityId, IssueSnapshot, IssueStatus},
 };
 
@@ -25,6 +26,7 @@ pub struct ProjectView {
     pub ip_policy: IpScrubPolicy,
     pub items: ItemCapabilities,
     pub limits: ProjectIngestLimits,
+    pub inbound_filters: InboundFilterPolicy,
     pub grouping_revision: u64,
     pub created_at: Timestamp,
 }
@@ -38,12 +40,13 @@ pub struct ProjectKeyView {
     pub created_at: Timestamp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectPolicyUpdate {
     pub expected_revision: u64,
     pub ip_policy: IpScrubPolicy,
     pub items: ItemCapabilities,
     pub limits: ProjectIngestLimits,
+    pub inbound_filters: InboundFilterPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

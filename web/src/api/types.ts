@@ -87,6 +87,31 @@ export interface ProjectPolicy {
     max_events_per_second: number | null;
     burst: number | null;
   };
+  inbound_filters: InboundFilterRule[];
+}
+
+export type InboundFilterSignal = 'error' | 'log' | 'transaction' | 'span';
+export type InboundFilterOperation = 'exact' | 'prefix' | 'suffix' | 'contains' | 'glob';
+export type InboundFilterField =
+  | 'release'
+  | 'environment'
+  | 'service'
+  | 'message'
+  | 'exception_type'
+  | 'logger'
+  | 'request_host'
+  | 'request_path'
+  | 'severity'
+  | 'name'
+  | 'operation'
+  | 'status'
+  | 'duration';
+
+export interface InboundFilterRule {
+  signal: InboundFilterSignal;
+  field: InboundFilterField;
+  operation: InboundFilterOperation;
+  pattern: string;
 }
 
 export interface Project {

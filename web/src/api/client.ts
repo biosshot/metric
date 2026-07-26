@@ -244,6 +244,7 @@ export const api = {
         max_event_bytes: policy.limits.max_event_bytes,
         max_events_per_second: policy.limits.max_events_per_second,
         burst: policy.limits.burst,
+        inbound_filters: policy.inbound_filters,
       }),
     }),
   issues: (projectId: string, status?: string, cursor?: string | null) =>

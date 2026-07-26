@@ -5,6 +5,10 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
+use flate2::{
+    Compression,
+    write::{GzEncoder, ZlibEncoder},
+};
 use metric_application::{
     ingest::{AttachmentIngestConfig, IngestService, MinidumpIngestConfig},
     observability::Metrics,
@@ -14,15 +18,16 @@ use metric_blob::{LocalBlobConfig, LocalBlobStore};
 use metric_domain::{
     DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
+    inbound_filter::{
+        InboundFilterField, InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
+        InboundFilterSignal,
+    },
 };
 use metric_ports::{BlobScanRequest, BlobStore, DurableOutcome, EventSinkError};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
-    FakeEventSink, FakeOutcomeSink, FakeProjectResolver, FixedClock, FixedRandom,
-};
-use flate2::{
-    Compression,
-    write::{GzEncoder, ZlibEncoder},
+    FakeEventSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver, FakeSpanSink, FixedClock,
+    FixedRandom,
 };
 use tower::ServiceExt;
 
@@ -67,6 +72,7 @@ fn snapshot() -> ProjectSnapshot {
             span: true,
         },
         limits: ProjectIngestLimits::default(),
+        inbound_filters: Default::default(),
         grouping_revision: 1,
     }
 }
@@ -144,6 +150,55 @@ async fn test_app_with_blob(
             chunk_bytes: 7,
             retained_header_bytes: 64,
         }),
+    );
+    (
+        http::router(
+            root.signal(),
+            Metrics,
+            ingest_http::router(service, config, root.signal()),
+        ),
+        blob,
+        directory,
+    )
+}
+
+async fn filtered_test_app(
+    config: IngestConfig,
+    snapshot: ProjectSnapshot,
+    event_sink: FakeEventSink,
+    log_sink: FakeLogSink,
+    span_sink: FakeSpanSink,
+    outcomes: FakeOutcomeSink,
+    root: &ShutdownRoot,
+) -> (Router, LocalBlobStore, PathBuf) {
+    let directory =
+        std::env::temp_dir().join(format!("metric-filtered-ingest-{}", uuid::Uuid::new_v4()));
+    let blob = LocalBlobStore::new(
+        &directory,
+        LocalBlobConfig {
+            capacity_bytes: 4096,
+            reserve_bytes: 128,
+            max_object_bytes: 2048,
+        },
+    )
+    .await
+    .unwrap();
+    let service = Arc::new(
+        IngestService::new(
+            Arc::new(FakeProjectResolver::new(
+                DsnKey::parse(KEY_TEXT).unwrap(),
+                snapshot,
+            )),
+            Arc::new(event_sink),
+            Arc::new(outcomes),
+            Arc::new(FixedClock(Timestamp::from_unix_millis(0).unwrap())),
+            Arc::new(FixedRandom(7)),
+            config.max_waiting_for_storage,
+            root.signal(),
+        )
+        .with_log_sink(Arc::new(log_sink))
+        .with_span_sink(Arc::new(span_sink))
+        .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default()),
     );
     (
         http::router(
@@ -249,6 +304,91 @@ async fn safe_attachment_is_blob_first_and_only_scrubbed_metadata_enters_event()
     let bytes = reader.read_chunk(1024).await.unwrap().unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("attachment-secret"));
     drop(reader);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn inbound_filters_discard_each_signal_before_event_signal_or_blob_storage() {
+    let root = ShutdownRoot::new();
+    let event_sink = FakeEventSink::accepting();
+    let log_sink = FakeLogSink::default();
+    let span_sink = FakeSpanSink::default();
+    let outcomes = FakeOutcomeSink::default();
+    let rules = vec![
+        InboundFilterRule {
+            signal: InboundFilterSignal::Error,
+            field: InboundFilterField::Message,
+            operation: InboundFilterOperation::Exact,
+            pattern: "synthetic failure".into(),
+        },
+        InboundFilterRule {
+            signal: InboundFilterSignal::Log,
+            field: InboundFilterField::Message,
+            operation: InboundFilterOperation::Contains,
+            pattern: "drop log".into(),
+        },
+        InboundFilterRule {
+            signal: InboundFilterSignal::Transaction,
+            field: InboundFilterField::Name,
+            operation: InboundFilterOperation::Exact,
+            pattern: "drop transaction".into(),
+        },
+        InboundFilterRule {
+            signal: InboundFilterSignal::Span,
+            field: InboundFilterField::Operation,
+            operation: InboundFilterOperation::Prefix,
+            pattern: "db.".into(),
+        },
+    ];
+    let mut filtered_snapshot = snapshot();
+    filtered_snapshot.inbound_filters =
+        Arc::new(InboundFilterPolicy::new(rules).unwrap().compile().unwrap());
+    let (app, blob, directory) = filtered_test_app(
+        config(),
+        filtered_snapshot,
+        event_sink.clone(),
+        log_sink.clone(),
+        span_sink.clone(),
+        outcomes.clone(),
+        &root,
+    )
+    .await;
+    let log = r#"{"items":[{"timestamp":1753372800.125,"level":"error","body":"drop log now"}]}"#;
+    let transaction = r#"{"type":"transaction","transaction":"drop transaction","start_timestamp":1753372800.0,"timestamp":1753372801.0,"contexts":{"trace":{"trace_id":"0123456789abcdef0123456789abcdef","span_id":"1111111111111111","op":"http.server","status":"ok"}},"spans":[{"trace_id":"0123456789abcdef0123456789abcdef","span_id":"2222222222222222","parent_span_id":"1111111111111111","start_timestamp":1753372800.1,"timestamp":1753372800.5,"op":"db.sql.query","status":"ok","description":"SELECT filtered"}]}"#;
+    let attachment = r#"{"safe":true}"#;
+    let body = envelope(&format!(
+        "\n{{\"type\":\"log\",\"length\":{}}}\n{}\n{{\"type\":\"transaction\",\"length\":{}}}\n{}\n{{\"type\":\"attachment\",\"length\":{},\"filename\":\"filtered.json\",\"content_type\":\"application/json\"}}\n{}",
+        log.len(),
+        log,
+        transaction.len(),
+        transaction,
+        attachment.len(),
+        attachment
+    ));
+    let response = app.oneshot(request(body)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(event_sink.events().is_empty());
+    assert!(log_sink.records().is_empty());
+    assert!(span_sink.records().is_empty());
+    assert_eq!(
+        outcomes
+            .outcomes()
+            .iter()
+            .filter(|outcome| outcome.kind == metric_ports::IngestOutcomeKind::Filtered)
+            .map(|outcome| outcome.quantity)
+            .sum::<u64>(),
+        4
+    );
+    let page = blob
+        .scan(BlobScanRequest {
+            namespace: metric_domain::blob::BlobNamespace::EventOwned,
+            older_than: Timestamp::from_unix_millis(2_000_000_000_000).unwrap(),
+            cursor: None,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert!(page.objects.is_empty());
     std::fs::remove_dir_all(directory).unwrap();
 }
 

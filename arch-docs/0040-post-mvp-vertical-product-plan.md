@@ -31,7 +31,7 @@ not an inter-role protocol.
 
 ## Current execution status
 
-Status as of 2026-07-26:
+Status as of 2026-07-27:
 
 | Phase | Capability | Status |
 | ---: | --- | --- |
@@ -40,8 +40,9 @@ Status as of 2026-07-26:
 | 25 | Transactions, Spans and Traces | Complete |
 | 26 | Performance Insights | Complete |
 | 27 | Production readiness program (ADR-0044) | Accepted, execution deferred |
-| 28 | Signal Inbound Filters | Next |
-| 29-36 | Lightweight product wave | Planned in ADR-0045 |
+| 28 | Signal Inbound Filters | Complete |
+| 29 | Releases and Deploys | Next |
+| 30-36 | Lightweight product wave | Planned in ADR-0045 |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation

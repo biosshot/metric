@@ -1,5 +1,7 @@
 use std::fmt;
 
+use metric_domain::inbound_filter::{InboundFilterField, InboundFilterSignal};
+
 /// Low-cardinality metric names registered by the Phase 0 facade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
@@ -71,6 +73,15 @@ impl Metrics {
         metrics::counter!("metric_project_cache_lookups_total", "result" => result.label())
             .increment(1);
     }
+
+    pub fn inbound_filtered(self, signal: InboundFilterSignal, field: InboundFilterField) {
+        metrics::counter!(
+            "metric_inbound_filtered_total",
+            "signal" => signal.as_str(),
+            "reason" => field.as_str()
+        )
+        .increment(1);
+    }
 }
 
 /// Request correlation identifier generated at the transport boundary.
@@ -113,5 +124,6 @@ mod tests {
     fn metrics_facade_accepts_only_bounded_dimensions() {
         Metrics.increment(Metric::HttpRequests, Outcome::Ok);
         Metrics.project_cache(ProjectCacheResult::Hit);
+        Metrics.inbound_filtered(InboundFilterSignal::Error, InboundFilterField::Message);
     }
 }

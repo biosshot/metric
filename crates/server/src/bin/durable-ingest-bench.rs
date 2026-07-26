@@ -158,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             span: true,
         },
         limits: ProjectIngestLimits::default(),
+        inbound_filters: Default::default(),
         grouping_revision: 1,
     };
     let service = Arc::new(

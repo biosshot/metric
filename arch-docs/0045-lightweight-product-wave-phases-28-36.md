@@ -20,8 +20,8 @@ The selected wave is:
 | Phase | Capability | Status |
 | ---: | --- | --- |
 | 27 | Production readiness | Accepted, execution deferred |
-| 28 | Signal Inbound Filters | Next |
-| 29 | Releases and Deploys | Planned |
+| 28 | Signal Inbound Filters | Complete |
+| 29 | Releases and Deploys | Next |
 | 30 | Sessions and Release Health | Planned |
 | 31 | User Feedback | Planned |
 | 32 | Unified Explore | Planned |

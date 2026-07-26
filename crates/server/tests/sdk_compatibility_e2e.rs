@@ -16,11 +16,16 @@ use metric_domain::{
     DsnKey, EventId, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
     ProjectIngestLimits, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Timestamp,
     blob::BlobKey,
+    inbound_filter::{
+        InboundFilterField, InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
+        InboundFilterSignal,
+    },
 };
-use metric_ports::BlobStore;
+use metric_ports::{BlobStore, IngestOutcomeKind};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
-    FakeEventSink, FakeOutcomeSink, FakeProjectResolver, FixedClock, FixedRandom,
+    FakeEventSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver, FakeSpanSink, FixedClock,
+    FixedRandom,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -45,6 +50,8 @@ struct RunningHarness {
     root: ShutdownRoot,
     sink: FakeEventSink,
     outcomes: FakeOutcomeSink,
+    logs: FakeLogSink,
+    spans: FakeSpanSink,
     blob: LocalBlobStore,
     blob_directory: PathBuf,
     address: std::net::SocketAddr,
@@ -65,6 +72,98 @@ async fn real_node_sdk_sends_an_attachment_event() {
     exercise_real_node_sdk("send-attachment.mjs", NodeFixture::Attachment)
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Node.js and npm ci in sdk-tests/node"]
+async fn real_node_sdk_filters_errors_logs_and_spans_before_storage() {
+    let workspace = workspace();
+    let sender = workspace.join("sdk-tests/node/send-signals.mjs");
+    let installed_sdk = workspace.join("sdk-tests/node/node_modules/@sentry/node/package.json");
+    assert!(
+        installed_sdk.is_file(),
+        "run npm ci in sdk-tests/node before the real SDK gate"
+    );
+    let accepted = start_harness(Router::new()).await.unwrap();
+    let accepted_dsn = format!("http://{KEY_TEXT}@{}/42", accepted.address);
+    let accepted_sender = sender.clone();
+    let accepted_output = tokio::task::spawn_blocking(move || {
+        Command::new("node")
+            .arg(accepted_sender)
+            .arg(accepted_dsn)
+            .output()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        accepted_output.status.success(),
+        "Node SDK failed: {}",
+        String::from_utf8_lossy(&accepted_output.stderr)
+    );
+    assert!(!accepted.sink.events().is_empty());
+    assert!(!accepted.logs.records().is_empty());
+    assert!(!accepted.spans.records().is_empty());
+    stop_harness(accepted).await.unwrap();
+
+    let policy = InboundFilterPolicy::new(vec![
+        InboundFilterRule {
+            signal: InboundFilterSignal::Error,
+            field: InboundFilterField::ExceptionType,
+            operation: InboundFilterOperation::Exact,
+            pattern: "Error".into(),
+        },
+        InboundFilterRule {
+            signal: InboundFilterSignal::Log,
+            field: InboundFilterField::Release,
+            operation: InboundFilterOperation::Exact,
+            pattern: "metric-node-signals@1.1.0".into(),
+        },
+        InboundFilterRule {
+            signal: InboundFilterSignal::Transaction,
+            field: InboundFilterField::Release,
+            operation: InboundFilterOperation::Exact,
+            pattern: "metric-node-signals@1.1.0".into(),
+        },
+        InboundFilterRule {
+            signal: InboundFilterSignal::Span,
+            field: InboundFilterField::Release,
+            operation: InboundFilterOperation::Exact,
+            pattern: "metric-node-signals@1.1.0".into(),
+        },
+    ])
+    .unwrap();
+    let harness = start_harness_with_policy(Router::new(), policy)
+        .await
+        .unwrap();
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let output =
+        tokio::task::spawn_blocking(move || Command::new("node").arg(sender).arg(dsn).output())
+            .await
+            .unwrap()
+            .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        output.status.success(),
+        "Node SDK failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(harness.sink.events().is_empty());
+    assert!(harness.logs.records().is_empty());
+    assert!(harness.spans.records().is_empty());
+    assert_eq!(harness.blob.capacity().used_bytes, 0);
+    assert!(
+        harness
+            .outcomes
+            .outcomes()
+            .iter()
+            .filter(|outcome| outcome.kind == IngestOutcomeKind::Filtered)
+            .map(|outcome| outcome.quantity)
+            .sum::<u64>()
+            >= 3
+    );
+    stop_harness(harness).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -406,10 +505,27 @@ fn workspace() -> PathBuf {
 }
 
 async fn start_harness(extra_routes: Router) -> Result<RunningHarness, Box<dyn Error>> {
+    start_harness_with_policy(extra_routes, InboundFilterPolicy::default()).await
+}
+
+async fn start_harness_with_policy(
+    extra_routes: Router,
+    policy: InboundFilterPolicy,
+) -> Result<RunningHarness, Box<dyn Error>> {
     let root = ShutdownRoot::new();
     let sink = FakeEventSink::accepting();
     let outcomes = FakeOutcomeSink::default();
-    let (app, blob, blob_directory) = test_app(sink.clone(), outcomes.clone(), &root).await;
+    let logs = FakeLogSink::default();
+    let spans = FakeSpanSink::default();
+    let (app, blob, blob_directory) = test_app(
+        sink.clone(),
+        outcomes.clone(),
+        logs.clone(),
+        spans.clone(),
+        policy,
+        &root,
+    )
+    .await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(http::run(
@@ -422,6 +538,8 @@ async fn start_harness(extra_routes: Router) -> Result<RunningHarness, Box<dyn E
         root,
         sink,
         outcomes,
+        logs,
+        spans,
         blob,
         blob_directory,
         address,
@@ -593,6 +711,9 @@ async fn verify_attachment(payload: &Value, blob: &LocalBlobStore) -> Result<(),
 async fn test_app(
     sink: FakeEventSink,
     outcomes: FakeOutcomeSink,
+    logs: FakeLogSink,
+    spans: FakeSpanSink,
+    policy: InboundFilterPolicy,
     root: &ShutdownRoot,
 ) -> (Router, LocalBlobStore, PathBuf) {
     let config = IngestConfig {
@@ -611,8 +732,7 @@ async fn test_app(
         backlog: Default::default(),
         attachments: Default::default(),
     };
-    let directory =
-        std::env::temp_dir().join(format!("metric-sdk-blob-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("metric-sdk-blob-{}", uuid::Uuid::new_v4()));
     let blob = LocalBlobStore::new(
         &directory,
         LocalBlobConfig {
@@ -644,6 +764,7 @@ async fn test_app(
                         span: true,
                     },
                     limits: ProjectIngestLimits::default(),
+                    inbound_filters: Arc::new(policy.compile().unwrap()),
                     grouping_revision: 1,
                 },
             )),
@@ -654,7 +775,9 @@ async fn test_app(
             config.max_waiting_for_storage,
             root.signal(),
         )
-        .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default()),
+        .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default())
+        .with_log_sink(Arc::new(logs))
+        .with_span_sink(Arc::new(spans)),
     );
     (
         http::router(

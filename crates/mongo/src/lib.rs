@@ -41,6 +41,10 @@ use metric_domain::{
     ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
     ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, ScrubPolicy, SecretBytes, Slug, Timestamp,
     api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
+    inbound_filter::{
+        InboundFilterField, InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
+        InboundFilterSignal,
+    },
 };
 use metric_ports::{PortFuture, ProjectStore, ProjectStoreError};
 use mongodb::{
@@ -51,9 +55,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 9;
+pub const SCHEMA_GENERATION: i32 = 10;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 14] = [
+const SCHEMA_MODULES: [&str; 15] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -68,6 +72,7 @@ const SCHEMA_MODULES: [&str; 14] = [
     "spans_virtual_traces_v1",
     "performance_insights_v1",
     "signal_cold_archive_v1",
+    "signal_inbound_filters_v1",
 ];
 const REQUIRED_COLLECTIONS: [&str; 28] = [
     "api_tokens",
@@ -668,6 +673,7 @@ impl MongoProjectStore {
             "policy": {
                 "revision": i64::try_from(project.policy_revision).map_err(|_| ProjectStoreError::InvalidData)?,
                 "ip": ip_policy_name(project.ip_policy),
+                "inbound_filters": Bson::Array(Vec::new()),
             },
             "items": {
                 "error": project.items.error,
@@ -986,6 +992,7 @@ impl MongoProjectStore {
                         "revision": i64::try_from(update.expected_revision.saturating_add(1))
                             .map_err(|_| ProjectStoreError::InvalidData)?,
                         "ip": ip_policy_name(update.ip_policy),
+                        "inbound_filters": encode_inbound_filter_policy(&update.inbound_filters),
                     },
                     "items": {
                         "error": update.items.error,
@@ -1251,6 +1258,11 @@ fn decode_snapshot(
             max_events_per_second,
             burst,
         },
+        inbound_filters: Arc::new(
+            decode_inbound_filter_policy(policy)?
+                .compile()
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+        ),
         grouping_revision: positive_i64(project, "grouping_revision")?,
     })
 }
@@ -1335,6 +1347,7 @@ pub(crate) fn decode_project_view(document: &Document) -> Result<ProjectView, Pr
             max_events_per_second: optional_positive_u32(limits, "max_events_per_second")?,
             burst: optional_positive_u32(limits, "burst")?,
         },
+        inbound_filters: decode_inbound_filter_policy(policy)?,
         grouping_revision: positive_i64(document, "grouping_revision")?,
         created_at: timestamp(document, "created_at")?,
     })
@@ -1465,6 +1478,86 @@ fn parse_ip_policy(value: &str) -> Result<IpScrubPolicy, ProjectStoreError> {
     }
 }
 
+fn encode_inbound_filter_policy(policy: &InboundFilterPolicy) -> Bson {
+    Bson::Array(
+        policy
+            .rules()
+            .iter()
+            .map(|rule| {
+                Bson::Document(doc! {
+                    "signal": rule.signal.as_str(),
+                    "field": rule.field.as_str(),
+                    "operation": rule.operation.as_str(),
+                    "pattern": rule.pattern.as_ref(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn decode_inbound_filter_policy(
+    policy: &Document,
+) -> Result<InboundFilterPolicy, ProjectStoreError> {
+    let Some(filters) = policy.get("inbound_filters") else {
+        return Ok(InboundFilterPolicy::default());
+    };
+    let filters = filters.as_array().ok_or(ProjectStoreError::InvalidData)?;
+    let mut rules = Vec::with_capacity(filters.len());
+    for filter in filters {
+        let filter = filter.as_document().ok_or(ProjectStoreError::InvalidData)?;
+        let signal = match filter
+            .get_str("signal")
+            .map_err(|_| ProjectStoreError::InvalidData)?
+        {
+            "error" => InboundFilterSignal::Error,
+            "log" => InboundFilterSignal::Log,
+            "transaction" => InboundFilterSignal::Transaction,
+            "span" => InboundFilterSignal::Span,
+            _ => return Err(ProjectStoreError::InvalidData),
+        };
+        let field = match filter
+            .get_str("field")
+            .map_err(|_| ProjectStoreError::InvalidData)?
+        {
+            "release" => InboundFilterField::Release,
+            "environment" => InboundFilterField::Environment,
+            "service" => InboundFilterField::Service,
+            "message" => InboundFilterField::Message,
+            "exception_type" => InboundFilterField::ExceptionType,
+            "logger" => InboundFilterField::Logger,
+            "request_host" => InboundFilterField::RequestHost,
+            "request_path" => InboundFilterField::RequestPath,
+            "severity" => InboundFilterField::Severity,
+            "name" => InboundFilterField::Name,
+            "operation" => InboundFilterField::Operation,
+            "status" => InboundFilterField::Status,
+            "duration" => InboundFilterField::Duration,
+            _ => return Err(ProjectStoreError::InvalidData),
+        };
+        let operation = match filter
+            .get_str("operation")
+            .map_err(|_| ProjectStoreError::InvalidData)?
+        {
+            "exact" => InboundFilterOperation::Exact,
+            "prefix" => InboundFilterOperation::Prefix,
+            "suffix" => InboundFilterOperation::Suffix,
+            "contains" => InboundFilterOperation::Contains,
+            "glob" => InboundFilterOperation::Glob,
+            _ => return Err(ProjectStoreError::InvalidData),
+        };
+        rules.push(InboundFilterRule {
+            signal,
+            field,
+            operation,
+            pattern: filter
+                .get_str("pattern")
+                .map_err(|_| ProjectStoreError::InvalidData)?
+                .into(),
+        });
+    }
+    InboundFilterPolicy::new(rules).map_err(|_| ProjectStoreError::InvalidData)
+}
+
 fn organization_validator() -> Document {
     doc! { "$jsonSchema": {
         "bsonType": "object",
@@ -1508,6 +1601,25 @@ fn project_validator() -> Document {
                 "properties": {
                     "revision": { "bsonType": "long", "minimum": 1 },
                     "ip": { "enum": ["hmac", "keep", "remove", "truncate"] },
+                    "inbound_filters": {
+                        "bsonType": "array",
+                        "maxItems": 32,
+                        "items": {
+                            "bsonType": "object",
+                            "required": ["signal", "field", "operation", "pattern"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "signal": { "enum": ["error", "log", "transaction", "span"] },
+                                "field": { "enum": [
+                                    "release", "environment", "service", "message",
+                                    "exception_type", "logger", "request_host", "request_path",
+                                    "severity", "name", "operation", "status", "duration"
+                                ] },
+                                "operation": { "enum": ["exact", "prefix", "suffix", "contains", "glob"] },
+                                "pattern": { "bsonType": "string", "minLength": 1, "maxLength": 256 },
+                            },
+                        },
+                    },
                 },
             },
                     "items": {

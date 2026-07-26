@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "phase-28-worst-case-compiled-inbound-filter-policy",
+    "source_base_commit": "7656196",
+    "generated_at": "2026-07-26T21:14:18Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "cargo": "cargo 1.88.0 (873a06493 2025-05-10)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics; Windows 11 Home Single Language",
+    "profile": "release",
+    "fixture": "32 valid non-matching contains rules over one 8192-byte Error message",
+    "storage": "none; compiled matcher hot path only",
+    "command": "cargo test -p metric-domain --release performance_worst_case_policy_rps -- --ignored --nocapture"
+  },
+  "metrics": {
+    "rps": 3651,
+    "iterations": 10000,
+    "elapsed_ms": 2739,
+    "minimum_gate_rps": 1000
+  }
+}

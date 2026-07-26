@@ -127,26 +127,14 @@
   color: #f2f2f2;
   background: #0a0a0a;
   font-family:
-    'JetBrains Mono Variable',
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    'Liberation Mono',
-    monospace;
+    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', monospace;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color-scheme: dark;
   --font-mono:
-    'JetBrains Mono Variable',
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    'Liberation Mono',
-    monospace;
+    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', monospace;
   --canvas: #0a0a0a;
   --surface: #101010;
   --surface-subtle: #171717;
@@ -724,6 +712,58 @@ label small,
 .settings-form > .button {
   width: auto;
   justify-self: start;
+}
+
+.inbound-filter-section {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border: 1px solid var(--semantic-info);
+  border-radius: var(--radius);
+  background: var(--semantic-info-surface);
+}
+
+.inbound-filter-section .section-heading {
+  margin-bottom: 0;
+}
+
+.inbound-filter-section .section-heading p:not(.eyebrow) {
+  max-width: 72ch;
+  margin: 0.3rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.inbound-filter-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.inbound-filter-rule {
+  display: grid;
+  align-items: end;
+  gap: 0.65rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--canvas);
+  grid-template-columns:
+    minmax(150px, 0.8fr) minmax(170px, 1fr) minmax(140px, 0.8fr)
+    minmax(220px, 1.4fr) 40px;
+}
+
+.inbound-filter-rule__remove {
+  color: var(--semantic-error);
+}
+
+.empty-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.8rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-small);
+  color: var(--text-muted);
 }
 
 .token-secret-panel {
@@ -2363,6 +2403,19 @@ label small,
 }
 
 @media (max-width: 1350px) {
+  .inbound-filter-rule {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) 40px;
+  }
+
+  .inbound-filter-rule > label {
+    grid-column: 2;
+  }
+
+  .inbound-filter-rule__remove {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
   .signal-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2414,6 +2467,20 @@ label small,
 }
 
 @media (max-width: 860px) {
+  .inbound-filter-rule {
+    align-items: stretch;
+    grid-template-columns: 1fr 40px;
+  }
+
+  .inbound-filter-rule > :not(.inbound-filter-rule__remove) {
+    grid-column: 1 / -1;
+  }
+
+  .inbound-filter-rule__remove {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
   .app-shell {
     display: block;
     padding-top: 58px;

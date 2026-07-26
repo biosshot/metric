@@ -10,6 +10,7 @@ pub mod deletion;
 pub mod event;
 pub mod finalization;
 pub mod grouping;
+pub mod inbound_filter;
 pub mod issue;
 pub mod notifications;
 pub mod processing;
@@ -20,6 +21,7 @@ use std::{
     fmt,
     num::{NonZeroI32, NonZeroU32, NonZeroU64},
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -488,6 +490,7 @@ pub struct ProjectSnapshot {
     pub scrub_policy: ScrubPolicy,
     pub items: ItemCapabilities,
     pub limits: ProjectIngestLimits,
+    pub inbound_filters: Arc<inbound_filter::CompiledInboundFilterPolicy>,
     pub grouping_revision: u64,
 }
 

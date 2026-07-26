@@ -148,6 +148,50 @@ describe('native API client', () => {
     });
   });
 
+  it('updates bounded inbound filters with the project policy revision', async () => {
+    const policy = {
+      revision: 3,
+      ip_policy: 'hmac' as const,
+      items: {
+        error: true,
+        client_report: true,
+        log: true,
+        transaction: true,
+        span: true,
+      },
+      limits: {
+        max_event_bytes: 1_048_576,
+        max_events_per_second: null,
+        burst: null,
+      },
+      inbound_filters: [
+        {
+          signal: 'error' as const,
+          field: 'message' as const,
+          operation: 'contains' as const,
+          pattern: 'healthcheck',
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...policy, revision: 4 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.updatePolicy('42', policy);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/v1/projects/42/policy');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      expected_revision: 3,
+      inbound_filters: policy.inbound_filters,
+    });
+  });
+
   it('refuses a mutation when this tab lost its CSRF token', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
