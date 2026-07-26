@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-07-25:
+Status as of 2026-07-26:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -15,11 +15,14 @@ Status as of 2026-07-25:
 | Phase 24 Structured Logs | Complete | ADR-0042 and Phase 24 report |
 | Phase 25 Transactions/Spans/Traces | Complete | ADR-0043 and Phase 25 report |
 | Phase 26 Performance Insights | Complete | ADR-0043 and Phase 26 report |
-| Phase 27 Production readiness | Current | ADR-0044 |
-| Later product capabilities | Deferred, unnumbered backlog | ADR-0040 |
+| Phase 27 Production readiness | Accepted, execution deferred | ADR-0044/0045 |
+| Phase 28 Signal Inbound Filters | Next | ADR-0045 |
+| Phases 29-36 lightweight product wave | Planned | ADR-0045 |
+| Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045 |
 
-There is exactly one current Phase 27: production readiness. Unified Explore is an
-unnumbered deferred backlog item and has no active implementation phase.
+Phase 27 is not complete and no production-ready claim follows from deferring it.
+By explicit owner decision, Phase 28 is the next implementation phase. ADR-0045
+numbers the selected lightweight product wave through Phase 36.
 
 ## Document precedence
 
@@ -87,11 +90,13 @@ the current release may claim production readiness.
 - `0037-capacity-model-for-100-million-events-per-day.md`: hardware-specific Error
   workload and correctness envelope.
 - `0039-sequential-module-implementation-plan.md`: completed MVP Phases 0-22.
-- `0040-post-mvp-vertical-product-plan.md`: completed Phases 23-26 plus unnumbered
+- `0040-post-mvp-vertical-product-plan.md`: completed Phases 23-26 plus the broad
   product backlog.
 - `0042-compact-structured-log-mongodb-model.md`: current Log model and terminal
   writer.
 - `0043-compact-spans-traces-and-performance-insights.md`: current Span/Trace and
   performance model.
-- `0044-production-readiness-program.md`: current Phase 27 and production launch
-  gate.
+- `0044-production-readiness-program.md`: accepted but deferred Phase 27 and
+  production launch gate.
+- `0045-lightweight-product-wave-phases-28-36.md`: current Phase 28 and the accepted
+  Phase 29-36 sequence.

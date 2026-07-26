@@ -4,9 +4,13 @@
 - Date: 2026-07-25
 - Supersedes: ADR-0040 product-phase ordering after Phase 26 until this program passes
 
+Execution amendment: on 2026-07-26 the owner deferred, but did not complete or
+cancel, this program. ADR-0045 selects Phases 28-36 for the next product wave.
+Production readiness cannot be claimed until this ADR later resumes and passes.
+
 ## Context
 
-Faultkeep already contains the product core needed for a useful Sentry-compatible
+Metric already contains the product core needed for a useful Sentry-compatible
 installation:
 
 - Error ingest, processing, grouping, Issues and hourly statistics;
@@ -38,15 +42,15 @@ new numbers only when product work resumes.
 
 ## Decision
 
-No new product capability is added until the production launch gate in this ADR
-passes. Work is limited to correctness fixes, bounded performance improvements,
-security, operational interfaces, deployment, verification and documentation for
-already implemented capabilities.
+The original decision froze new product capability until the production launch gate
+passed. ADR-0045 amends that ordering while this program is deferred and authorizes
+only its bounded Phase 28-36 wave. The production-readiness definition and gates in
+this ADR remain unchanged and unpassed.
 
 The first supported production shape remains:
 
 ```text
-one active faultkeep --role=all process
+one active metric --role=all process
 -> one declared MongoDB 8 topology
 -> optional external Symbolicator
 -> S3-compatible BlobStore for durable Blob features
@@ -55,12 +59,12 @@ one active faultkeep --role=all process
 -> external monitoring and backup system
 ```
 
-Multiple active Faultkeep replicas, split roles, a broker, MongoDB sharding and
+Multiple active Metric replicas, split roles, a broker, MongoDB sharding and
 zero-downtime rolling upgrades are not implied by the production claim.
 
 ## Meaning of production-ready
 
-Faultkeep is production-ready only when all of the following are true for a named
+Metric is production-ready only when all of the following are true for a named
 release and a declared deployment profile:
 
 1. every acknowledged record is either durably recoverable or covered by an
@@ -85,6 +89,9 @@ Passing unit tests or building a container is necessary but cannot independently
 satisfy this definition.
 
 ## Scope freeze
+
+This freeze applies whenever Phase 27 execution resumes. During its documented
+deferral, ADR-0045 is the only accepted exception for new product scope.
 
 Allowed changes during Phase 27:
 
@@ -471,11 +478,13 @@ performance optimization. Performance changes require a before/after artifact.
 
 ## Deferred after production readiness
 
-After Gate 27.7, product planning resumes from measured user value. The previous
-ADR-0040 backlog remains candidate work, with these items deliberately later:
+ADR-0045 has already selected bounded forms of Explore, saved queries, Alerts and
+Monitors as Phases 28-36 during this program's deferral. After Gate 27.7, the
+remaining ADR-0040 backlog resumes from measured user value, with these items
+deliberately later:
 
-- Unified Explore, saved queries and Dashboards;
-- advanced Alerts/Monitors and collaboration;
+- advanced Explore/Dashboard/Alert/Monitor capabilities beyond ADR-0045;
+- collaboration;
 - teams and advanced authorization;
 - MCP;
 - online migrations and mixed-version rolling upgrades;
@@ -485,8 +494,8 @@ Production evidence may change their order. It does not silently authorize them.
 
 ## Consequences
 
-- Faultkeep stops accumulating features until its existing value is operationally
-  trustworthy.
+- When resumed, Phase 27 stops Metric from accumulating additional features until
+  its existing value is operationally trustworthy.
 - The initial production claim is intentionally narrower than broad Sentry parity.
 - Single-process deployment remains simple and measurable.
 - Basic coordinated offline recovery becomes mandatory; sophisticated online

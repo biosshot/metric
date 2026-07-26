@@ -31,7 +31,7 @@ not an inter-role protocol.
 
 ## Current execution status
 
-Status as of 2026-07-25:
+Status as of 2026-07-26:
 
 | Phase | Capability | Status |
 | ---: | --- | --- |
@@ -39,15 +39,17 @@ Status as of 2026-07-25:
 | 24 | Structured Logs | Complete |
 | 25 | Transactions, Spans and Traces | Complete |
 | 26 | Performance Insights | Complete |
-| 27 | Production readiness program (ADR-0044) | Current |
+| 27 | Production readiness program (ADR-0044) | Accepted, execution deferred |
+| 28 | Signal Inbound Filters | Next |
+| 29-36 | Lightweight product wave | Planned in ADR-0045 |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
 
-ADR-0044 pauses the product ordering below after Phase 26. `Unified Explore` and every
-later product item remain deferred, unnumbered backlog until the production launch
-gate passes.
+ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
+decision deferred execution of Phase 27 without completing it. ADR-0045 now owns the
+selected Phase 28-36 ordering; all unselected items below remain unnumbered backlog.
 
 ## Accepted direction
 
@@ -400,13 +402,13 @@ search-under-ingest requirements for Phase 24 closure on the current development
 machine. They are regression sentinels, not production-capacity claims. The earlier
 amendment remains in force for Phases 25-26 until their owner-directed closure pass.
 
-## Deferred product backlog after production readiness
+## Product backlog and ADR-0045 selections
 
-The following items preserve their accepted scope but no longer own phase numbers.
-ADR-0044 is the sole current Phase 27. When product work resumes, the owner selects
-and numbers backlog items from measured user value and production evidence.
+ADR-0045 selects and narrows nine items from this broader backlog as Phases 28-36.
+Where this older text conflicts with ADR-0045, the newer scope and exclusions win.
+All other items remain unnumbered.
 
-### Backlog item — Unified Explore query surface
+### Phase 32 selection — Unified Explore query surface
 
 Implement one bounded query language and native API over accepted datasets:
 
@@ -438,7 +440,7 @@ Exit gate:
 - dataset addition does not require changing existing dataset codecs;
 - search-under-ingest and adversarial-cardinality suites pass.
 
-### Backlog item — Saved queries and Dashboards
+### Phase 33 selection — Saved queries and Dashboards
 
 Implement:
 
@@ -450,6 +452,10 @@ Implement:
 - dashboard sharing within accepted authorization scope;
 - cached derived results only where correctness and invalidation are explicit.
 
+ADR-0045 narrows initial visibility to one shared project scope: all authorized
+project readers see the same saved queries and Dashboards, write-capable members may
+mutate them, and no private/per-member copies or cross-project Dashboard are added.
+
 Exit gate:
 
 - one dashboard cannot fan out into unbounded MongoDB operations;
@@ -457,7 +463,7 @@ Exit gate:
 - malformed or deleted fields fail visibly;
 - dashboard load does not violate ingest/query resource reservations.
 
-### Backlog item — Issue and query Alert rules
+### Phase 34 selection — Alerts and notification destinations
 
 Extend the existing notification outbox rather than adding delivery to processors.
 
@@ -503,52 +509,44 @@ Exit gate:
 - Issue feed does not introduce per-row assignee queries;
 - browser E2E covers assignment, comment, mention and notification.
 
-### Backlog item — Grouping controls and inbound filters
+### Phase 28 selection — Signal Inbound Filters only
 
 The completed Error pipeline already accepts bounded SDK fingerprints, applies the
 `{{ default }}` placeholder semantics, versions the grouping strategy and exposes a
 stored grouping explanation. This backlog item does not reimplement those features.
 
-Implement:
-
-- accepted server-side fingerprint and stacktrace rules;
-- explicit Issue merge;
-- bounded selected-Event split;
-- project inbound filters for accepted messages, exception types, releases,
-  environments and request patterns;
-- discard counters/client reports without storing filtered Error bodies.
-
-Deliberately exclude ML/fuzzy grouping and automatic database-wide regrouping.
+ADR-0045 selects bounded typed project inbound filters for the currently implemented
+Error, Log and Span/Transaction signals. Each lane exposes only its accepted fields
+and filters before its first durable write. Server grouping rules, Issue merge/split
+and all historical regrouping remain unnumbered backlog.
 
 Exit gate:
 
-- grouping rules are deterministic and versioned;
-- merge/split crash points preserve Event ownership and rebuildable counts;
-- filter evaluation is bounded before durable Event storage;
-- rule changes do not silently rewrite historical Issues;
-- grouping throughput remains within the accepted Error regression budget.
+- filter evaluation is bounded before durable signal storage;
+- filtered bodies are not stored;
+- absence of filters is regression-equivalent to existing Error, Log and Span paths;
+- ingest throughput remains within each accepted signal regression budget.
 
-### Backlog item — Releases, deploys, commits and source ownership
+### Phase 29 selection — Releases and Deploys
 
-Extend the existing release/artifact support with:
+ADR-0045 narrows this item to:
 
 - release create/finalize APIs compatible with the accepted `sentry-cli` subset;
 - deploy records;
-- repository and commit metadata;
 - release authors and first/last/new/regressed Issue summaries;
-- suspect-commit calculation with explicit bounded inputs;
-- source links and CODEOWNERS import;
-- ownership rules and automatic user assignment where identities resolve.
+- optional bounded repository plus `commit_from`/`commit_to` references.
+
+Full commit ingestion, diffs, suspect commits, source links, CODEOWNERS and ownership
+assignment remain unnumbered backlog.
 
 Exit gate:
 
 - release/artifact identity remains consistent for source maps and debug files;
-- commit ingestion is bounded and idempotent;
+- release and deploy ingestion is bounded and idempotent;
 - missing integrations degrade to stored metadata rather than broken Issues;
-- suspect-commit calculation publishes its limitations;
 - real `sentry-cli` release/deploy E2E passes.
 
-### Backlog item — Sessions and Release Health
+### Phase 30 selection — Sessions and Release Health
 
 Implement:
 
@@ -557,16 +555,20 @@ Implement:
 - bounded session state transitions;
 - `session_stats_hourly`;
 - crash-free sessions/users and release/environment summaries;
-- configurable retention and rebuild behavior.
+- independent configurable detailed/bucket retention and rebuild behavior;
+- optional project/day size-bounded Parquet/Zstandard cold archive through the
+  existing BlobStore/archive coordinator, never one object per Session.
 
 Exit gate:
 
 - out-of-order and duplicate session updates have deterministic semantics;
 - active sessions cannot grow without expiry;
 - user cardinality is bounded/approximated according to a documented algorithm;
-- Error-to-session crash correlation works without delaying Error finalization.
+- Session-to-signal links are exposed only when a pinned accepted payload carries the
+  same stable identity; release/environment/time proximity is never presented as an
+  individual-record relationship.
 
-### Backlog item — User Feedback
+### Phase 31 selection — User Feedback
 
 Implement:
 
@@ -586,7 +588,7 @@ Exit gate:
 
 ## Deferred backlog group: reliability monitoring
 
-### Backlog item — Cron Monitoring
+### Phase 35 selection — Cron Monitoring
 
 Implement:
 
@@ -604,7 +606,7 @@ Exit gate:
 - a check-in flood cannot starve Error/Log lanes;
 - SDK Cron E2E covers success, error, timeout and missed.
 
-### Backlog item — Uptime Monitoring
+### Phase 36 selection — Uptime Monitoring
 
 Implement:
 
@@ -822,18 +824,27 @@ Exit gate:
 
 ## Dependency order and optionality
 
-The completed chain and current gate are:
+The completed chain, deferred gate and selected product wave are:
 
 ```text
 23 Dark monochrome Web
 -> 24 Logs
 -> 25 Spans/Traces
 -> 26 Performance
--> 27 Production readiness
+-> 27 Production readiness (accepted, execution deferred)
+-> 28 Inbound Filters (next)
+-> 29 Releases/Deploys
+-> 30 Sessions/Release Health
+-> 31 Feedback
+-> 32 Explore
+-> 33 Saved Queries/Dashboards
+-> 34 Alerts/Destinations
+-> 35 Cron
+-> 36 Uptime
 ```
 
-After ADR-0044 passes, the deferred backlog keeps only capability dependencies, not
-old phase-number ordering:
+ADR-0045 owns the exact Phase 28-36 scope, exclusions and gates. The remaining
+unnumbered backlog keeps only capability dependencies:
 
 - saved queries and Dashboards depend on Unified Explore;
 - query Alerts depend on a bounded query surface and the existing outbox;
@@ -845,9 +856,9 @@ old phase-number ordering:
 - online migrations and distributed roles are operations-driven and require separate
   acceptance evidence.
 
-A backlog item receives a new phase number only if all of its accepted dependencies
-already exist and the move does not introduce a placeholder abstraction into an
-earlier hot path.
+A remaining backlog item receives a new phase number only if all of its accepted
+dependencies already exist and the move does not introduce a placeholder abstraction
+into an earlier hot path.
 Profiling and Replay may be disabled indefinitely without weakening Error, Log or
 Trace correctness.
 
