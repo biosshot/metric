@@ -39,6 +39,7 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/traces", index.clone())
         .route_service("/traces/{trace_id}", index.clone())
         .route_service("/performance", index.clone())
+        .route_service("/explore", index.clone())
         .route_service("/feedback", index.clone())
         .route_service("/feedback/{feedback_id}", index.clone())
         .route_service("/releases", index.clone())
@@ -103,6 +104,7 @@ mod tests {
             "/traces",
             "/traces/001122",
             "/performance",
+            "/explore",
             "/feedback",
             "/feedback/001122",
             "/releases",

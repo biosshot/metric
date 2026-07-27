@@ -221,6 +221,38 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json({ applied: true, issue });
   }
   if (path === `/api/v1/projects/42/events/${event.event_id}`) return json(event);
+  if (path === '/api/v1/projects/42/explore' && request.method() === 'POST') {
+    const body = request.postDataJSON() as {
+      dataset: string;
+      from: number;
+      until: number;
+      aggregates: Array<{ function: string }>;
+    };
+    if (
+      body.dataset !== 'errors' ||
+      body.aggregates[0]?.function !== 'count' ||
+      body.until <= body.from
+    ) {
+      return json(
+        {
+          error: {
+            code: 'explore_invalid_query',
+            message: 'Explore query is invalid',
+            request_id: 'explore-invalid',
+          },
+        },
+        422,
+      );
+    }
+    return json({
+      shape: 'number',
+      dataset: 'errors',
+      normalized: 'v1|errors|bounded',
+      cost: 198,
+      items: [{ count: 17 }],
+      next_cursor: null,
+    });
+  }
   if (path === '/api/v1/capabilities') {
     return json({
       api_version: 'v1',
@@ -399,6 +431,24 @@ test('loading and empty states explain what is happening', async ({ page }) => {
   await expect(page.getByText('Events sent by your SDK will appear here')).toBeVisible();
 });
 
+test('Explore submits a typed bounded query and renders a number result', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+  await page.getByRole('link', { name: 'Explore' }).click();
+  await expect(page.getByRole('heading', { name: 'Unified Explore' })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Result' }).click();
+  await page.getByRole('option', { name: /^Number/ }).click();
+  await page.getByRole('button', { name: 'Run query' }).click();
+  await expect(page.locator('.explore-number')).toContainText('17');
+  await expect(page.getByText('Estimated cost')).toContainText('198');
+});
+
 test('all routes have no serious accessibility violations at desktop and narrow widths', async ({
   page,
 }) => {
@@ -436,6 +486,7 @@ test('all routes have no serious accessibility violations at desktop and narrow 
     { name: 'issues', url: '/issues', heading: 'Issues' },
     { name: 'issue-detail', url: `/issues/${issue.id}`, heading: issue.title },
     { name: 'event-detail', url: `/events/${event.event_id}`, heading: '120 frames' },
+    { name: 'explore', url: '/explore', heading: 'Unified Explore' },
     { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
     { name: 'project-settings', url: '/project/settings', heading: 'Project settings' },
     { name: 'system-status', url: '/system', heading: 'System status' },

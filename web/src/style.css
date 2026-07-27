@@ -2943,6 +2943,106 @@ label small,
   gap: 0.75rem;
 }
 
+.explore-builder {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(10rem, 1fr)) auto;
+  align-items: end;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.explore-run {
+  min-width: 8.5rem;
+}
+
+.explore-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+}
+
+.explore-result-meta span {
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+}
+
+.explore-number {
+  display: grid;
+  gap: 0.55rem;
+  min-height: 12rem;
+  place-content: center;
+  text-align: center;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-large);
+  background: var(--accent-soft);
+}
+
+.explore-number span {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.explore-number strong {
+  font-size: clamp(3rem, 8vw, 6rem);
+  line-height: 1;
+}
+
+.explore-chart {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.explore-chart article {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.4fr) minmax(10rem, 1fr) minmax(7rem, auto);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+}
+
+.explore-chart article > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.explore-chart article span,
+.explore-chart article small {
+  color: var(--text-muted);
+}
+
+.explore-chart__bar {
+  position: relative;
+  height: 0.65rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+
+.explore-chart__bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--bar-width);
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0.72;
+}
+
+.explore-table td {
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 800px) {
   .release-create,
   .release-deploy-form,
@@ -2959,7 +3059,9 @@ label small,
   }
 
   .feedback-row,
-  .feedback-status-form {
+  .feedback-status-form,
+  .explore-builder,
+  .explore-chart article {
     grid-template-columns: 1fr;
   }
 }

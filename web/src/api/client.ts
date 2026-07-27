@@ -8,6 +8,8 @@ import type {
   CreateProjectInput,
   CreateProjectResponse,
   Event,
+  ExploreRequest,
+  ExploreResult,
   Feedback,
   FeedbackStatus,
   Identity,
@@ -52,6 +54,10 @@ const messages: Record<string, string> = {
   search_limit_exceeded: 'The search is too complex. Remove some conditions.',
   search_requires_positive_anchor: 'Add at least one positive indexed search condition.',
   search_too_broad: 'The search is too broad. Add another condition.',
+  explore_invalid_query: 'This Explore query uses an unsupported field or combination.',
+  explore_cost_exceeded: 'This Explore query is too expensive. Shorten the range or grouping.',
+  explore_capacity: 'Explore is busy. Wait briefly and retry.',
+  explore_unavailable: 'Explore storage is temporarily unavailable.',
 };
 
 export class ApiError extends Error {
@@ -342,6 +348,11 @@ export const api = {
         limit: 100,
       })}`,
     ),
+  explore: (projectId: string, body: ExploreRequest) =>
+    request<ExploreResult>(`/api/v1/projects/${projectId}/explore`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   feedback: (projectId: string, status?: string, cursor?: string | null) =>
     request<Page<Feedback>>(
       `/api/v1/projects/${projectId}/feedback${query({ status, cursor, limit: 50 })}`,

@@ -280,6 +280,40 @@ export interface PerformanceBucket {
   sample_limit: number;
 }
 
+export type ExploreDataset = 'errors' | 'logs' | 'spans';
+export type ExploreShape = 'table' | 'number' | 'timeseries';
+export type ExploreScalar = string | number | boolean | null;
+
+export interface ExploreRequest {
+  dataset: ExploreDataset;
+  from: number;
+  until: number;
+  predicates: Array<{
+    field: string;
+    op: 'exact' | 'present' | 'range';
+    value?: ExploreScalar;
+    upper?: ExploreScalar;
+  }>;
+  aggregates: Array<{
+    function: 'count' | 'sum' | 'min' | 'max' | 'avg' | 'p50' | 'p75' | 'p90' | 'p95' | 'p99';
+    field?: string;
+    alias?: string;
+  }>;
+  group_by: string[];
+  interval?: '1m' | '5m' | '1h' | '1d';
+  cursor?: string | null;
+  limit: number;
+}
+
+export interface ExploreResult {
+  shape: ExploreShape;
+  dataset: ExploreDataset;
+  normalized: string;
+  cost: number;
+  items: Array<Record<string, ExploreScalar>>;
+  next_cursor: string | null;
+}
+
 export type FeedbackStatus = 'open' | 'resolved' | 'spam';
 
 export interface FeedbackAttachment {
@@ -422,6 +456,15 @@ export interface CapabilityDocument {
     final_reconciliation: boolean;
     filesystem_namespaces: number;
   } | null;
+  explore: {
+    datasets: ExploreDataset[];
+    maximum_range_days: number;
+    maximum_predicates: number;
+    maximum_group_by: number;
+    maximum_rows: number;
+    intervals: string[];
+    raw_database_syntax: false;
+  };
 }
 
 export interface ComponentStatus {

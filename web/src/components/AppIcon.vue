@@ -42,6 +42,7 @@ import {
   UserPlus,
   Users,
   Trash2,
+  Telescope,
   X,
 } from '@lucide/vue';
 import type { Component } from 'vue';
@@ -86,6 +87,7 @@ const icons = {
   shield: Shield,
   logs: ScrollText,
   traces: Workflow,
+  explore: Telescope,
   userPlus: UserPlus,
   users: Users,
   delete: Trash2,
