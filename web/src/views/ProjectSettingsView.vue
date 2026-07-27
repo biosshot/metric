@@ -106,7 +106,14 @@ const deletion = useQuery({
 const policy = reactive<ProjectPolicy>({
   revision: 0,
   ip_policy: 'hmac',
-  items: { error: true, client_report: true, log: true, transaction: true, span: true },
+  items: {
+    error: true,
+    client_report: true,
+    log: true,
+    transaction: true,
+    span: true,
+    feedback: true,
+  },
   limits: { max_event_bytes: 1_048_576, max_events_per_second: null, burst: null },
   inbound_filters: [],
 });
@@ -293,6 +300,14 @@ const cancelDeletion = useMutation({
             :disabled="!session.has('project:admin')"
           />
           <span><strong>Spans</strong><small>Accept child and standalone spans.</small></span>
+        </label>
+        <label class="check-control">
+          <input
+            v-model="policy.items.feedback"
+            type="checkbox"
+            :disabled="!session.has('project:admin')"
+          />
+          <span><strong>User Feedback</strong><small>Accept Feedback SDK reports.</small></span>
         </label>
       </div>
       <section class="inbound-filter-section">

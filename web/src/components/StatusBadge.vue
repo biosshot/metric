@@ -17,7 +17,7 @@ const icon = computed<AppIconName>(() => {
     ].includes(props.status)
   )
     return 'success';
-  if (['ignored', 'disabled', 'unavailable'].includes(props.status)) return 'blocked';
+  if (['ignored', 'disabled', 'unavailable', 'spam'].includes(props.status)) return 'blocked';
   if (['open', 'error', 'fatal', 'unresolved', 'degraded', 'warning'].includes(props.status))
     return 'alert';
   return 'status';

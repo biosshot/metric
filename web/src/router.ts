@@ -14,6 +14,8 @@ import TraceView from './views/TraceView.vue';
 import PerformanceView from './views/PerformanceView.vue';
 import ReleasesView from './views/ReleasesView.vue';
 import ReleaseDetailView from './views/ReleaseDetailView.vue';
+import FeedbackView from './views/FeedbackView.vue';
+import FeedbackDetailView from './views/FeedbackDetailView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -27,6 +29,8 @@ export const router = createRouter({
     { path: '/traces', name: 'traces', component: TransactionsView },
     { path: '/traces/:traceId', name: 'trace', component: TraceView },
     { path: '/performance', name: 'performance', component: PerformanceView },
+    { path: '/feedback', name: 'feedback', component: FeedbackView },
+    { path: '/feedback/:feedbackId', name: 'feedback-item', component: FeedbackDetailView },
     { path: '/releases', name: 'releases', component: ReleasesView },
     { path: '/releases/:releaseId', name: 'release', component: ReleaseDetailView },
     { path: '/auth/setup', name: 'password-setup', component: AuthView },

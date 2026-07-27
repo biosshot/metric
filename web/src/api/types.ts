@@ -83,6 +83,7 @@ export interface ProjectPolicy {
     log: boolean;
     transaction: boolean;
     span: boolean;
+    feedback: boolean;
   };
   limits: {
     max_event_bytes: number;
@@ -136,6 +137,7 @@ export interface CreateProjectInput {
   log_enabled: boolean;
   transaction_enabled: boolean;
   span_enabled: boolean;
+  feedback_enabled: boolean;
   max_event_bytes: number;
   max_events_per_second: number | null;
   burst: number | null;
@@ -278,6 +280,35 @@ export interface PerformanceBucket {
   sample_limit: number;
 }
 
+export type FeedbackStatus = 'open' | 'resolved' | 'spam';
+
+export interface FeedbackAttachment {
+  attachment_id: string;
+  filename: string;
+  content_type: string;
+  attachment_type: string;
+  size: number;
+  checksum: string;
+}
+
+export interface Feedback {
+  id: string;
+  project_id: string;
+  received_at: string;
+  status: FeedbackStatus;
+  status_changed_at: string;
+  message: string;
+  name: string | null;
+  contact_email: string | null;
+  url: string | null;
+  associated_event_id: string | null;
+  issue_id: string | null;
+  trace_id: string | null;
+  replay_id: string | null;
+  attachments: FeedbackAttachment[];
+  expires_at: string;
+}
+
 export interface ReleaseSummary {
   id: string;
   version: string;
@@ -373,6 +404,7 @@ export interface CapabilityDocument {
   features: Record<string, boolean>;
   retention: {
     events_days: number;
+    feedback_days: number;
     issue_stats_hourly_days: number;
     logs_days: number;
     spans_days: number;

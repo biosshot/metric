@@ -33,6 +33,7 @@ const project = reactive<CreateProjectInput>({
   log_enabled: true,
   transaction_enabled: true,
   span_enabled: true,
+  feedback_enabled: true,
   max_event_bytes: 1_048_576,
   max_events_per_second: null,
   burst: null,
@@ -188,6 +189,16 @@ const createProject = useMutation({
                 <strong>Spans</strong>
               </span>
               <small>Accept child and standalone spans.</small>
+            </span>
+          </label>
+          <label class="check-control">
+            <input v-model="project.feedback_enabled" type="checkbox" />
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="message" :size="17" />
+                <strong>User Feedback</strong>
+              </span>
+              <small>Accept bounded reports from the Feedback SDK.</small>
             </span>
           </label>
         </div>

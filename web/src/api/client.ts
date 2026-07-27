@@ -8,6 +8,8 @@ import type {
   CreateProjectInput,
   CreateProjectResponse,
   Event,
+  Feedback,
+  FeedbackStatus,
   Identity,
   Issue,
   IssueActivity,
@@ -246,6 +248,7 @@ export const api = {
         log_enabled: policy.items.log,
         transaction_enabled: policy.items.transaction,
         span_enabled: policy.items.span,
+        feedback_enabled: policy.items.feedback,
         max_event_bytes: policy.limits.max_event_bytes,
         max_events_per_second: policy.limits.max_events_per_second,
         burst: policy.limits.burst,
@@ -339,6 +342,19 @@ export const api = {
         limit: 100,
       })}`,
     ),
+  feedback: (projectId: string, status?: string, cursor?: string | null) =>
+    request<Page<Feedback>>(
+      `/api/v1/projects/${projectId}/feedback${query({ status, cursor, limit: 50 })}`,
+    ),
+  feedbackItem: (projectId: string, feedbackId: string) =>
+    request<Feedback>(`/api/v1/projects/${projectId}/feedback/${feedbackId}`),
+  updateFeedbackStatus: (projectId: string, feedbackId: string, status: FeedbackStatus) =>
+    request<Feedback>(`/api/v1/projects/${projectId}/feedback/${feedbackId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+  feedbackAttachmentUrl: (projectId: string, feedbackId: string, attachmentId: string) =>
+    `/api/v1/projects/${projectId}/feedback/${feedbackId}/attachments/${attachmentId}`,
   releases: (projectId: string, cursor?: string | null) =>
     request<Page<ReleaseSummary>>(
       `/api/v1/projects/${projectId}/releases${query({ cursor, limit: 50 })}`,
