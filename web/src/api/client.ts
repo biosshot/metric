@@ -25,6 +25,7 @@ import type {
   ProjectPolicy,
   Release,
   ReleaseIssue,
+  ReleaseHealth,
   ReleaseSummary,
   Deploy,
   Span,
@@ -355,9 +356,7 @@ export const api = {
       body: JSON.stringify({}),
     }),
   releaseDeploys: (projectId: string, releaseId: string) =>
-    request<Page<Deploy>>(
-      `/api/v1/projects/${projectId}/releases/${releaseId}/deploys?limit=50`,
-    ),
+    request<Page<Deploy>>(`/api/v1/projects/${projectId}/releases/${releaseId}/deploys?limit=50`),
   createDeploy: (
     projectId: string,
     releaseId: string,
@@ -375,6 +374,8 @@ export const api = {
         limit: 20,
       })}`,
     ),
+  releaseHealth: (projectId: string, releaseId: string) =>
+    request<ReleaseHealth>(`/api/v1/projects/${projectId}/releases/${releaseId}/health`),
   search: (projectId: string, expression: string, cursor?: string | null) =>
     request<Page<Event> & { candidates_examined: number }>(
       `/api/v1/projects/${projectId}/events/search${query({

@@ -42,6 +42,21 @@ const regressedIssues = useQuery({
   queryFn: () => api.releaseIssues(projectId.value, releaseId.value, 'regressed'),
   enabled: computed(() => Boolean(projectId.value && releaseId.value)),
 });
+const health = useQuery({
+  queryKey: computed(() => ['release-health', projectId.value, releaseId.value]),
+  queryFn: () => api.releaseHealth(projectId.value, releaseId.value),
+  enabled: computed(() => Boolean(projectId.value && releaseId.value)),
+});
+const healthSummary = computed(() => {
+  const items = health.data.value?.items ?? [];
+  const sessions = items.reduce((sum, item) => sum + item.sessions, 0);
+  const crashed = items.reduce((sum, item) => sum + item.crashed, 0);
+  return {
+    sessions,
+    crashFreeSessions: sessions ? (100 * (sessions - crashed)) / sessions : 100,
+    crashFreeUsers: health.data.value?.crash_free_users ?? 100,
+  };
+});
 
 const finalize = useMutation({
   mutationFn: () => api.finalizeRelease(projectId.value, releaseId.value),
@@ -141,10 +156,20 @@ function timestamp(value: string | null): string {
         <article class="panel summary-card">
           <span>Deployments</span><strong>{{ deploys.data.value?.items.length ?? 0 }}</strong>
         </article>
+        <article class="panel summary-card summary-card--success">
+          <span>Crash-free sessions</span>
+          <strong>{{ healthSummary.crashFreeSessions.toFixed(2) }}%</strong>
+        </article>
+        <article class="panel summary-card summary-card--info">
+          <span>Crash-free users</span>
+          <strong>{{ healthSummary.crashFreeUsers.toFixed(2) }}%</strong>
+        </article>
       </div>
 
       <nav class="release-signal-links" aria-label="Related signals">
-        <RouterLink :to="{ path: '/issues', query: { q: `release:${release.data.value.version}` } }">
+        <RouterLink
+          :to="{ path: '/issues', query: { q: `release:${release.data.value.version}` } }"
+        >
           <AppIcon name="bug" :size="16" /> Errors
         </RouterLink>
         <RouterLink :to="{ path: '/logs', query: { release: release.data.value.version } }">
@@ -155,10 +180,70 @@ function timestamp(value: string | null): string {
         </RouterLink>
       </nav>
 
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Release Health</p>
+            <h2>Application sessions</h2>
+          </div>
+          <span class="muted">{{ healthSummary.sessions }} sessions · users approximate</span>
+        </div>
+        <LoadingPanel v-if="health.isPending.value" label="Loading Release Health…" />
+        <ApiErrorPanel
+          v-else-if="health.error.value"
+          :error="health.error.value"
+          title="Release Health could not be loaded"
+          @retry="health.refetch()"
+        />
+        <EmptyState
+          v-else-if="!health.data.value?.items.length"
+          icon="release"
+          title="No application sessions"
+          description="Send a Session lifecycle from an SDK configured with this Release."
+        />
+        <div v-else class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Hour</th>
+                <th>Environment</th>
+                <th>Sessions</th>
+                <th>Crashed</th>
+                <th>Crash-free</th>
+                <th>Crash-free users</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="bucket in health.data.value?.items"
+                :key="`${bucket.hour}:${bucket.environment_id}`"
+              >
+                <td>{{ timestamp(bucket.hour) }}</td>
+                <td>
+                  <strong>{{ bucket.environment }}</strong>
+                </td>
+                <td>{{ bucket.sessions }}</td>
+                <td>{{ bucket.crashed }}</td>
+                <td>{{ bucket.crash_free_sessions.toFixed(2) }}%</td>
+                <td>≈ {{ bucket.crash_free_users.toFixed(2) }}%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-if="health.data.value" class="muted health-footnote">
+          User counts use a {{ health.data.value.user_sketch_bytes }} byte mergeable sketch (about
+          {{ health.data.value.user_sketch_standard_error_percent }}% standard error, saturation
+          near {{ health.data.value.user_sketch_saturation_estimate }} users per hour).
+        </p>
+      </section>
+
       <div class="release-columns">
         <section class="panel">
           <div class="section-heading">
-            <div><p class="eyebrow">Issues</p><h2>New in this release</h2></div>
+            <div>
+              <p class="eyebrow">Issues</p>
+              <h2>New in this release</h2>
+            </div>
           </div>
           <LoadingPanel v-if="newIssues.isPending.value" label="Loading new Issues…" />
           <ApiErrorPanel
@@ -179,13 +264,17 @@ function timestamp(value: string | null): string {
             class="release-issue"
             :to="`/issues/${issue.id}`"
           >
-            <strong>{{ issue.title }}</strong><span>{{ timestamp(issue.first_seen) }}</span>
+            <strong>{{ issue.title }}</strong
+            ><span>{{ timestamp(issue.first_seen) }}</span>
           </RouterLink>
         </section>
 
         <section class="panel">
           <div class="section-heading">
-            <div><p class="eyebrow">Regressions</p><h2>Regressed in this release</h2></div>
+            <div>
+              <p class="eyebrow">Regressions</p>
+              <h2>Regressed in this release</h2>
+            </div>
           </div>
           <LoadingPanel v-if="regressedIssues.isPending.value" label="Loading regressions…" />
           <ApiErrorPanel
@@ -206,14 +295,18 @@ function timestamp(value: string | null): string {
             class="release-issue"
             :to="`/issues/${issue.id}`"
           >
-            <strong>{{ issue.title }}</strong><span>{{ timestamp(issue.last_seen) }}</span>
+            <strong>{{ issue.title }}</strong
+            ><span>{{ timestamp(issue.last_seen) }}</span>
           </RouterLink>
         </section>
       </div>
 
       <section class="panel">
         <div class="section-heading">
-          <div><p class="eyebrow">Deploy timeline</p><h2>Environments</h2></div>
+          <div>
+            <p class="eyebrow">Deploy timeline</p>
+            <h2>Environments</h2>
+          </div>
         </div>
         <ApiErrorPanel
           v-if="createDeploy.error.value"
@@ -262,7 +355,10 @@ function timestamp(value: string | null): string {
 
       <section class="panel">
         <div class="section-heading">
-          <div><p class="eyebrow">Automation</p><h2>sentry-cli</h2></div>
+          <div>
+            <p class="eyebrow">Automation</p>
+            <h2>sentry-cli</h2>
+          </div>
         </div>
         <CodeBlock :code="cli" language="powershell" title="Release workflow" />
       </section>

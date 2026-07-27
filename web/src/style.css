@@ -2805,6 +2805,10 @@ label small,
   margin-bottom: 1rem;
 }
 
+.health-footnote {
+  margin: 1rem 0 0;
+}
+
 .release-issue {
   display: grid;
   gap: 0.25rem;

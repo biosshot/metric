@@ -322,6 +322,31 @@ export interface ReleaseIssue {
   last_release: string | null;
 }
 
+export interface ReleaseHealthBucket {
+  hour: string;
+  environment_id: string;
+  environment: string;
+  sessions: number;
+  crashed: number;
+  abnormal: number;
+  exited: number;
+  crash_free_sessions: number;
+  approximate_users: number;
+  approximate_crashed_users: number;
+  crash_free_users: number;
+}
+
+export interface ReleaseHealth {
+  items: ReleaseHealthBucket[];
+  approximate_users: true;
+  users: number;
+  crashed_users: number;
+  crash_free_users: number;
+  user_sketch_bytes: number;
+  user_sketch_standard_error_percent: number;
+  user_sketch_saturation_estimate: number;
+}
+
 export interface IssueStatistic {
   bucket_start: string;
   occurrence_count: number;
@@ -352,6 +377,9 @@ export interface CapabilityDocument {
     logs_days: number;
     spans_days: number;
     span_stats_hourly_days: number;
+    sessions_days: number;
+    session_stats_hourly_days: number;
+    session_active_max_hours: number;
     clock: 'received_at';
     gradual_policy_reduction: boolean;
   } | null;
