@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use metric_application::{
-    ingest::{AttachmentIngestConfig, IngestService},
+    ingest::{AttachmentIngestConfig, FeedbackIngestConfig, IngestService},
     observability::Metrics,
     shutdown::ShutdownRoot,
 };
@@ -24,8 +24,8 @@ use metric_domain::{
 use metric_ports::{BlobStore, IngestOutcomeKind};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
-    FakeEventSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver, FakeSessionSink,
-    FakeSpanSink, FixedClock, FixedRandom,
+    FakeEventSink, FakeFeedbackSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver,
+    FakeSessionSink, FakeSpanSink, FixedClock, FixedRandom,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -53,6 +53,7 @@ struct RunningHarness {
     logs: FakeLogSink,
     spans: FakeSpanSink,
     sessions: FakeSessionSink,
+    feedback: FakeFeedbackSink,
     blob: LocalBlobStore,
     blob_directory: PathBuf,
     address: std::net::SocketAddr,
@@ -207,6 +208,12 @@ async fn real_node_sdk_filters_errors_logs_and_spans_before_storage() {
 #[ignore = "requires npm ci/build in sdk-tests/browser and an installed Chromium"]
 async fn real_browser_sdk_sends_an_error_event() {
     exercise_real_browser_sdk().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires npm ci/build in sdk-tests/browser and an installed Chromium"]
+async fn real_browser_sdk_sends_feedback_with_attachment() {
+    exercise_real_browser_feedback().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -407,6 +414,111 @@ async fn exercise_real_browser_sdk() -> Result<(), Box<dyn Error>> {
     verification
 }
 
+async fn exercise_real_browser_feedback() -> Result<(), Box<dyn Error>> {
+    let workspace = workspace();
+    let browser_root = workspace.join("sdk-tests/browser");
+    let runner = browser_root.join("run-browser.mjs");
+    let page = browser_root.join("page.html");
+    let bundle = browser_root.join("dist/send-feedback.js");
+    let installed_sdk = browser_root.join("node_modules/@sentry/browser/package.json");
+    if !installed_sdk.is_file() || !bundle.is_file() {
+        return Err("run npm ci and npm run build in sdk-tests/browser before the gate".into());
+    }
+
+    let page_html = Arc::<str>::from(std::fs::read_to_string(page)?);
+    let bundle_js = Arc::<str>::from(std::fs::read_to_string(bundle)?);
+    let browser_routes = Router::new()
+        .route(
+            "/sdk-browser",
+            get({
+                let page_html = Arc::clone(&page_html);
+                move || {
+                    let page_html = Arc::clone(&page_html);
+                    async move { Html(page_html.to_string()) }
+                }
+            }),
+        )
+        .route(
+            "/sdk-browser.js",
+            get({
+                let bundle_js = Arc::clone(&bundle_js);
+                move || {
+                    let bundle_js = Arc::clone(&bundle_js);
+                    async move {
+                        (
+                            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                            bundle_js.to_string(),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        );
+    let harness = start_harness(browser_routes).await?;
+    let page_url = format!("http://{}/sdk-browser", harness.address);
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("node")
+            .arg(runner)
+            .arg(page_url)
+            .arg(dsn)
+            .output()
+    })
+    .await;
+    if output.as_ref().is_ok_and(Result::is_ok) {
+        for _ in 0..80 {
+            if !harness.feedback.records().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    let verification = async {
+        let output = output??;
+        let sender = verify_process_output(&output, "Browser Feedback")?;
+        let records = harness.feedback.records();
+        if records.len() != 1 || !harness.sink.events().is_empty() {
+            return Err(format!(
+                "Browser Feedback routing mismatch: feedback={}, errors={}, outcomes={:?}, error_payloads={:?}",
+                records.len(),
+                harness.sink.events().len(),
+                harness.outcomes.outcomes(),
+                harness
+                    .sink
+                    .events()
+                    .iter()
+                    .map(|event| String::from_utf8_lossy(event.payload.as_bytes()).into_owned())
+                    .collect::<Vec<_>>(),
+            )
+            .into());
+        }
+        let feedback = records.first().ok_or("Feedback record disappeared")?;
+        if feedback.feedback_id != parse_sender_event_id(&sender.event_id)?
+            || feedback.message.as_ref() != "The checkout button did not respond"
+            || feedback.name.as_deref() != Some("Ada")
+            || feedback.contact_email.as_deref() != Some("ada@example.com")
+            || feedback.attachments.len() != 1
+        {
+            return Err("Browser Feedback fields changed during ingestion".into());
+        }
+        let attachment = &feedback.attachments[0];
+        let mut reader = harness.blob.open(&attachment.blob.key).await?;
+        let bytes = reader
+            .read_chunk(1024)
+            .await?
+            .ok_or("Feedback attachment blob is empty")?;
+        if bytes.as_ref() != b"safe browser feedback context" {
+            return Err("Browser Feedback attachment bytes changed".into());
+        }
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+
+    stop_harness(harness).await?;
+    verification
+}
+
 async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn Error>> {
     let harness = start_harness(Router::new()).await?;
     let workspace = workspace();
@@ -555,12 +667,14 @@ async fn start_harness_with_policy(
     let logs = FakeLogSink::default();
     let spans = FakeSpanSink::default();
     let sessions = FakeSessionSink::default();
+    let feedback = FakeFeedbackSink::default();
     let (app, blob, blob_directory) = test_app(
         sink.clone(),
         outcomes.clone(),
         logs.clone(),
         spans.clone(),
         sessions.clone(),
+        feedback.clone(),
         policy,
         &root,
     )
@@ -580,6 +694,7 @@ async fn start_harness_with_policy(
         logs,
         spans,
         sessions,
+        feedback,
         blob,
         blob_directory,
         address,
@@ -748,12 +863,14 @@ async fn verify_attachment(payload: &Value, blob: &LocalBlobStore) -> Result<(),
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn test_app(
     sink: FakeEventSink,
     outcomes: FakeOutcomeSink,
     logs: FakeLogSink,
     spans: FakeSpanSink,
     sessions: FakeSessionSink,
+    feedback: FakeFeedbackSink,
     policy: InboundFilterPolicy,
     root: &ShutdownRoot,
 ) -> (Router, LocalBlobStore, PathBuf) {
@@ -804,6 +921,7 @@ async fn test_app(
                         log: true,
                         transaction: true,
                         span: true,
+                        feedback: true,
                     },
                     limits: ProjectIngestLimits::default(),
                     inbound_filters: Arc::new(policy.compile().unwrap()),
@@ -820,7 +938,8 @@ async fn test_app(
         .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default())
         .with_log_sink(Arc::new(logs))
         .with_span_sink(Arc::new(spans))
-        .with_session_sink(Arc::new(sessions)),
+        .with_session_sink(Arc::new(sessions))
+        .with_feedback_sink(Arc::new(feedback), FeedbackIngestConfig::default()),
     );
     (
         http::router(

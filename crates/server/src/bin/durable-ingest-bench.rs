@@ -158,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             log: true,
             transaction: true,
             span: true,
+            feedback: true,
         },
         limits: ProjectIngestLimits::default(),
         inbound_filters: Default::default(),

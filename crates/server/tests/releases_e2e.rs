@@ -89,6 +89,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
                 log: true,
                 transaction: true,
                 span: true,
+                feedback: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,

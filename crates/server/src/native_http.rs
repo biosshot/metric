@@ -24,8 +24,8 @@ use metric_application::{
         IncidentEventSelection,
     },
     native_api::{
-        EventListRequest, LogListRequest, NativeApiError, NativeApiService, PerformanceListRequest,
-        TransactionListRequest,
+        AttachmentView, EventListRequest, FeedbackListRequest, LogListRequest, NativeApiError,
+        NativeApiService, PerformanceListRequest, TransactionListRequest,
     },
     observability::RequestId,
     projects::CreateProject,
@@ -46,6 +46,7 @@ use metric_domain::{
     },
     blob::BlobObjectId,
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
+    feedback::{FeedbackRecord, FeedbackStatus},
     grouping::IssueId,
     inbound_filter::{
         InboundFilterField, InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
@@ -81,6 +82,7 @@ struct NativeHttpState {
 #[derive(Debug, Clone, Copy)]
 pub struct RetentionCapability {
     pub events_days: u32,
+    pub feedback_days: u32,
     pub issue_stats_hourly_days: u32,
     pub logs_days: u32,
     pub spans_days: u32,
@@ -334,6 +336,15 @@ pub fn router(
             get(get_event),
         )
         .route("/api/v1/projects/{project_id}/events", get(list_events))
+        .route("/api/v1/projects/{project_id}/feedback", get(list_feedback))
+        .route(
+            "/api/v1/projects/{project_id}/feedback/{feedback_id}/attachments/{attachment_id}",
+            get(download_feedback_attachment),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/feedback/{feedback_id}",
+            get(get_feedback).patch(update_feedback_status),
+        )
         .route("/api/v1/projects/{project_id}/logs", get(list_logs))
         .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
         .route(
@@ -407,6 +418,97 @@ async fn event_attachments(
             "checksum": attachment.checksum,
         })).collect::<Vec<_>>()
     })))
+}
+
+async fn list_feedback(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let status = query
+        .get("status")
+        .map(|value| FeedbackStatus::parse(value).map_err(|_| HttpApiError::InvalidRequest))
+        .transpose()?;
+    let page = api(&state)?
+        .feedback_list(
+            &context,
+            project_id_from(&project_id)?,
+            FeedbackListRequest {
+                status,
+                cursor: query.get("cursor").map(String::as_str),
+                limit: query_limit(&query)?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": page.items.iter().map(feedback_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": page.next_cursor,
+    })))
+}
+
+async fn get_feedback(
+    State(state): State<NativeHttpState>,
+    Path((project_id, feedback_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let feedback = api(&state)?
+        .feedback(
+            &context,
+            project_id_from(&project_id)?,
+            EventId::parse(&feedback_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(feedback_value(&feedback)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FeedbackStatusBody {
+    status: String,
+}
+
+async fn update_feedback_status(
+    State(state): State<NativeHttpState>,
+    Path((project_id, feedback_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<FeedbackStatusBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let feedback = api(&state)?
+        .update_feedback_status(
+            &context,
+            project_id_from(&project_id)?,
+            EventId::parse(&feedback_id).map_err(|_| HttpApiError::InvalidRequest)?,
+            FeedbackStatus::parse(&body.status).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(feedback_value(&feedback)?))
+}
+
+async fn download_feedback_attachment(
+    State(state): State<NativeHttpState>,
+    Path((project_id, feedback_id, attachment_id)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let (attachment, reader) = api(&state)?
+        .open_feedback_attachment(
+            &context,
+            project_id_from(&project_id)?,
+            EventId::parse(&feedback_id).map_err(|_| HttpApiError::InvalidRequest)?,
+            BlobObjectId::parse(&attachment_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    attachment_download_response(attachment, reader).await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -504,6 +606,13 @@ async fn download_attachment(
         )
         .await
         .map_err(HttpApiError::Api)?;
+    attachment_download_response(attachment, reader).await
+}
+
+async fn attachment_download_response(
+    attachment: AttachmentView,
+    reader: Box<dyn metric_ports::BlobReadSession>,
+) -> Result<Response, HttpApiError> {
     let stream = futures_util::stream::try_unfold(reader, |mut reader| async move {
         reader
             .read_chunk(64 * 1024)
@@ -1009,6 +1118,8 @@ struct ProjectBody {
     transaction_enabled: bool,
     #[serde(default = "default_true")]
     span_enabled: bool,
+    #[serde(default = "default_true")]
+    feedback_enabled: bool,
     #[serde(default = "default_event_bytes")]
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
@@ -1038,6 +1149,7 @@ async fn create_project(
                     log: body.log_enabled,
                     transaction: body.transaction_enabled,
                     span: body.span_enabled,
+                    feedback: body.feedback_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -1227,6 +1339,7 @@ struct PolicyBody {
     log_enabled: bool,
     transaction_enabled: bool,
     span_enabled: bool,
+    feedback_enabled: bool,
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
     burst: Option<u32>,
@@ -1264,6 +1377,7 @@ async fn update_project_policy(
                     log: body.log_enabled,
                     transaction: body.transaction_enabled,
                     span: body.span_enabled,
+                    feedback: body.feedback_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -2006,6 +2120,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
     let retention = state.retention.map(|policy| {
         json!({
             "events_days": policy.events_days,
+            "feedback_days": policy.feedback_days,
             "issue_stats_hourly_days": policy.issue_stats_hourly_days,
             "logs_days": policy.logs_days,
             "spans_days": policy.spans_days,
@@ -2058,6 +2173,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "performance_insights": state.required_ready,
             "sessions": state.required_ready,
             "release_health": state.required_ready,
+            "user_feedback": state.required_ready,
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -2565,6 +2681,7 @@ fn policy_value(project: &ProjectView) -> Value {
             "log": project.items.log,
             "transaction": project.items.transaction,
             "span": project.items.span,
+            "feedback": project.items.feedback,
         },
         "limits": {
             "max_event_bytes": project.limits.max_event_bytes.get(),
@@ -2591,6 +2708,33 @@ fn project_key_value(key: &ProjectKeyView) -> Result<Value, HttpApiError> {
         },
         "label": key.label.as_str(),
         "created_at": timestamp_string(key.created_at)?,
+    }))
+}
+
+fn feedback_value(feedback: &FeedbackRecord) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "id": feedback.feedback_id.to_string(),
+        "project_id": feedback.project_id.get().to_string(),
+        "received_at": timestamp_string(feedback.received_at)?,
+        "status": feedback.status.as_str(),
+        "status_changed_at": timestamp_string(feedback.status_changed_at)?,
+        "message": feedback.message,
+        "name": feedback.name,
+        "contact_email": feedback.contact_email,
+        "url": feedback.url,
+        "associated_event_id": feedback.associated_event_id.map(|value| value.to_string()),
+        "issue_id": feedback.issue_id.map(|value| value.to_string()),
+        "trace_id": feedback.trace_id.map(|value| value.to_string()),
+        "replay_id": feedback.replay_id.map(|value| value.to_string()),
+        "attachments": feedback.attachments.iter().map(|attachment| json!({
+            "attachment_id": attachment.attachment_id.to_string(),
+            "filename": attachment.filename.as_str(),
+            "content_type": attachment.content_type.as_str(),
+            "attachment_type": attachment.attachment_type,
+            "size": attachment.blob.size,
+            "checksum": attachment.blob.checksum.to_string(),
+        })).collect::<Vec<_>>(),
+        "expires_at": timestamp_string(feedback.expires_at)?,
     }))
 }
 
@@ -2832,6 +2976,7 @@ mod tests {
                 log: true,
                 transaction: true,
                 span: true,
+                feedback: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: InboundFilterPolicy::new(vec![InboundFilterRule {
@@ -2846,7 +2991,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&project_value(&project).unwrap()).unwrap(),
-            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
         );
         assert!(
             inbound_filter_policy(vec![InboundFilterRuleBody {
@@ -3013,6 +3158,22 @@ mod tests {
                 RouteAccess::Permission(Permission::EventRead),
             ),
             (
+                "GET /projects/:id/feedback",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "GET /projects/:id/feedback/:feedback",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "PATCH /projects/:id/feedback/:feedback",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "GET /projects/:id/feedback/:feedback/attachments/:attachment",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
                 "GET /projects/:id/releases",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
@@ -3023,7 +3184,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 40);
+        assert_eq!(matrix.len(), 44);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

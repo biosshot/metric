@@ -92,6 +92,7 @@ async fn main() -> std::io::Result<()> {
             log: true,
             transaction: true,
             span: true,
+            feedback: true,
         },
         limits: ProjectIngestLimits::default(),
         inbound_filters: Default::default(),

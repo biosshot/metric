@@ -220,7 +220,12 @@ impl BlobReferenceStore for MongoEventStore {
     ) -> PortFuture<'_, Result<bool, BlobStoreError>> {
         Box::pin(async move {
             let key = EventKey::new(reference.project_id, reference.event_id);
-            let Some(document) = self
+            let expected = BlobKey::event_owned(
+                reference.project_id,
+                reference.event_id,
+                reference.object_id,
+            );
+            let document = self
                 .database
                 .collection::<Document>("error_events")
                 .find_one(doc! {
@@ -229,37 +234,47 @@ impl BlobReferenceStore for MongoEventStore {
                 })
                 .projection(doc! { "b": 1 })
                 .await
-                .map_err(|_| BlobStoreError::Unavailable)?
-            else {
-                return Ok(false);
-            };
-            let body = document
-                .get_binary_generic("b")
-                .map_err(|_| BlobStoreError::Corrupt)?;
-            let decoded = decode_body(body, self.codec.max_decoded_body_bytes)
-                .map_err(|_| BlobStoreError::Corrupt)?;
-            let event: Value =
-                serde_json::from_slice(&decoded).map_err(|_| BlobStoreError::Corrupt)?;
-            let expected = BlobKey::event_owned(
-                reference.project_id,
-                reference.event_id,
-                reference.object_id,
-            );
-            let attachment_reference = event
-                .get("attachments")
-                .and_then(Value::as_array)
-                .is_some_and(|attachments| {
-                    attachments.iter().any(|attachment| {
-                        attachment.get("blob_key").and_then(Value::as_str)
-                            == Some(expected.as_str())
-                    })
-                });
-            let native_reference = event
-                .get("native_crash")
-                .and_then(|value| value.get("blob_key"))
-                .and_then(Value::as_str)
-                == Some(expected.as_str());
-            Ok(attachment_reference || native_reference)
+                .map_err(|_| BlobStoreError::Unavailable)?;
+            if let Some(document) = document {
+                let body = document
+                    .get_binary_generic("b")
+                    .map_err(|_| BlobStoreError::Corrupt)?;
+                let decoded = decode_body(body, self.codec.max_decoded_body_bytes)
+                    .map_err(|_| BlobStoreError::Corrupt)?;
+                let event: Value =
+                    serde_json::from_slice(&decoded).map_err(|_| BlobStoreError::Corrupt)?;
+                let attachment_reference = event
+                    .get("attachments")
+                    .and_then(Value::as_array)
+                    .is_some_and(|attachments| {
+                        attachments.iter().any(|attachment| {
+                            attachment.get("blob_key").and_then(Value::as_str)
+                                == Some(expected.as_str())
+                        })
+                    });
+                let native_reference = event
+                    .get("native_crash")
+                    .and_then(|value| value.get("blob_key"))
+                    .and_then(Value::as_str)
+                    == Some(expected.as_str());
+                if attachment_reference || native_reference {
+                    return Ok(true);
+                }
+            }
+            self.database
+                .collection::<Document>("feedback")
+                .find_one(doc! {
+                    "_id": binary(key.as_bytes()),
+                    "p": reference.project_id.get(),
+                    "b": { "$elemMatch": {
+                        "i": binary(reference.object_id.as_bytes()),
+                        "k": expected.as_str(),
+                    }},
+                })
+                .projection(doc! { "_id": 1 })
+                .await
+                .map(|document| document.is_some())
+                .map_err(|_| BlobStoreError::Unavailable)
         })
     }
 }

@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::{Arc, Mutex},
+};
 
 use hmac::{Hmac, Mac};
 use metric_domain::{
@@ -8,6 +11,7 @@ use metric_domain::{
         AttachmentFilename, BlobChecksum, BlobContentType, BlobKey, BlobKind, BlobObjectId,
         EventAttachment,
     },
+    feedback::{FeedbackRecord, FeedbackStatus},
     finalization::{derive_environment_id, derive_release_id},
     inbound_filter::{
         InboundFilterField, InboundFilterFields, InboundFilterMatch, InboundFilterSignal,
@@ -21,8 +25,8 @@ use metric_domain::{
 };
 use metric_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
-    IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink, ProjectResolveError, ProjectResolver,
-    RandomSource, SessionSink, SignalStoreError, SpanSink,
+    FeedbackSink, FeedbackStoreError, IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink,
+    ProjectResolveError, ProjectResolver, RandomSource, SessionSink, SignalStoreError, SpanSink,
 };
 use serde_json::{Map, Value};
 use sha2::Sha256;
@@ -197,6 +201,45 @@ impl Default for AttachmentIngestConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FeedbackIngestConfig {
+    pub retention_days: u32,
+    pub max_message_bytes: usize,
+    pub max_name_bytes: usize,
+    pub max_contact_bytes: usize,
+    pub max_url_bytes: usize,
+    pub max_attachments: usize,
+    pub max_attachment_bytes: usize,
+    pub max_total_attachment_bytes: usize,
+    pub max_submissions_per_minute: u32,
+    pub limiter_capacity: usize,
+    pub allow_png_screenshots: bool,
+}
+
+impl Default for FeedbackIngestConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 90,
+            max_message_bytes: 4 * 1024,
+            max_name_bytes: 256,
+            max_contact_bytes: 320,
+            max_url_bytes: 2 * 1024,
+            max_attachments: 3,
+            max_attachment_bytes: 2 * 1024 * 1024,
+            max_total_attachment_bytes: 5 * 1024 * 1024,
+            max_submissions_per_minute: 30,
+            limiter_capacity: 10_000,
+            allow_png_screenshots: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FeedbackRateWindow {
+    opened_at: i64,
+    submissions: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngestResult {
     pub event_id: Option<EventId>,
@@ -270,6 +313,9 @@ pub struct IngestService {
     log_sink: Option<Arc<dyn LogSink>>,
     span_sink: Option<Arc<dyn SpanSink>>,
     session_sink: Option<Arc<dyn SessionSink>>,
+    feedback_sink: Option<Arc<dyn FeedbackSink>>,
+    feedback_config: FeedbackIngestConfig,
+    feedback_rate: Mutex<HashMap<ProjectId, FeedbackRateWindow>>,
 }
 
 impl IngestService {
@@ -297,6 +343,9 @@ impl IngestService {
             log_sink: None,
             span_sink: None,
             session_sink: None,
+            feedback_sink: None,
+            feedback_config: FeedbackIngestConfig::default(),
+            feedback_rate: Mutex::new(HashMap::new()),
         }
     }
 
@@ -315,6 +364,17 @@ impl IngestService {
     #[must_use]
     pub fn with_session_sink(mut self, session_sink: Arc<dyn SessionSink>) -> Self {
         self.session_sink = Some(session_sink);
+        self
+    }
+
+    #[must_use]
+    pub fn with_feedback_sink(
+        mut self,
+        feedback_sink: Arc<dyn FeedbackSink>,
+        config: FeedbackIngestConfig,
+    ) -> Self {
+        self.feedback_sink = Some(feedback_sink);
+        self.feedback_config = config;
         self
     }
 
@@ -400,6 +460,17 @@ impl IngestService {
                 code: "project_event_too_large",
             });
         }
+        if primary_is_feedback(&primary)? {
+            return self
+                .ingest_feedback(
+                    &snapshot,
+                    primary,
+                    request.envelope_event_id,
+                    request.attachments,
+                    disabled_categories,
+                )
+                .await;
+        }
         if !snapshot.items.error {
             self.outcome_sink.record(IngestOutcome {
                 kind: IngestOutcomeKind::Unsupported,
@@ -431,6 +502,7 @@ impl IngestService {
                 event_id,
                 &snapshot,
                 request.attachments,
+                false,
             )
             .await?;
         if attachments.dropped > 0 {
@@ -479,6 +551,130 @@ impl IngestService {
             durable: Some(durable),
             disabled_categories,
         })
+    }
+
+    async fn ingest_feedback(
+        &self,
+        snapshot: &ProjectSnapshot,
+        primary: PrimaryEvent,
+        envelope_event_id: Option<EventId>,
+        attachments: Vec<PendingAttachment>,
+        mut disabled_categories: Vec<&'static str>,
+    ) -> Result<IngestResult, IngestError> {
+        if !snapshot.items.feedback {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "feedback_disabled",
+                quantity: 1,
+            });
+            return Ok(IngestResult {
+                event_id: None,
+                durable: None,
+                disabled_categories,
+            });
+        }
+        validate_feedback_attachment_limits(&attachments, self.feedback_config)?;
+        let received_at = self.clock.now();
+        let mut feedback = normalize_feedback(
+            snapshot,
+            primary,
+            envelope_event_id,
+            received_at,
+            self.feedback_config,
+        )?;
+        self.admit_feedback(snapshot.project_id, received_at)?;
+        let persisted = self
+            .persist_attachments(
+                snapshot.project_id,
+                feedback.feedback_id,
+                snapshot,
+                attachments,
+                self.feedback_config.allow_png_screenshots,
+            )
+            .await?;
+        if persisted.dropped > 0 {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "feedback_attachment_policy_unsupported",
+                quantity: persisted.dropped,
+            });
+            disabled_categories.push(DisabledCategory::Attachment.sentry_name());
+            disabled_categories.sort_unstable();
+            disabled_categories.dedup();
+        }
+        feedback.attachments = persisted.accepted;
+        feedback
+            .validate()
+            .map_err(|_| IngestError::invalid("invalid_feedback"))?;
+        let sink = self
+            .feedback_sink
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("feedback_storage_unavailable"))?;
+        let _permit = self
+            .storage_permits
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| IngestError::unavailable("storage_wait_capacity"))?;
+        let durable = tokio::select! {
+            biased;
+            () = self.shutdown.cancelled() => return Err(IngestError {
+                kind: IngestErrorKind::ShuttingDown,
+                code: "shutting_down",
+            }),
+            result = sink.persist_feedback(feedback.clone()) => {
+                result.map_err(map_feedback_store_error)?
+            },
+        };
+        self.outcome_sink.record(IngestOutcome {
+            kind: match durable {
+                DurableOutcome::Accepted => IngestOutcomeKind::Accepted,
+                DurableOutcome::Duplicate => IngestOutcomeKind::Duplicate,
+            },
+            reason: "feedback",
+            quantity: 1,
+        });
+        Ok(IngestResult {
+            event_id: Some(feedback.feedback_id),
+            durable: Some(durable),
+            disabled_categories,
+        })
+    }
+
+    fn admit_feedback(
+        &self,
+        project_id: ProjectId,
+        received_at: metric_domain::Timestamp,
+    ) -> Result<(), IngestError> {
+        let mut windows = self
+            .feedback_rate
+            .lock()
+            .map_err(|_| IngestError::unavailable("feedback_limiter_unavailable"))?;
+        let now = received_at.unix_millis();
+        if let Some(window) = windows.get_mut(&project_id) {
+            if now.saturating_sub(window.opened_at) >= 60_000 {
+                *window = FeedbackRateWindow {
+                    opened_at: now,
+                    submissions: 1,
+                };
+                return Ok(());
+            }
+            if window.submissions >= self.feedback_config.max_submissions_per_minute {
+                return Err(IngestError::rate_limited("feedback_rate_limited"));
+            }
+            window.submissions = window.submissions.saturating_add(1);
+            return Ok(());
+        }
+        if windows.len() >= self.feedback_config.limiter_capacity {
+            return Err(IngestError::rate_limited("feedback_limiter_capacity"));
+        }
+        windows.insert(
+            project_id,
+            FeedbackRateWindow {
+                opened_at: now,
+                submissions: 1,
+            },
+        );
+        Ok(())
     }
 
     async fn persist_signals(
@@ -790,6 +986,7 @@ impl IngestService {
         event_id: EventId,
         snapshot: &ProjectSnapshot,
         attachments: Vec<PendingAttachment>,
+        allow_png: bool,
     ) -> Result<PersistedAttachments, IngestError> {
         if attachments.is_empty() {
             return Ok(PersistedAttachments::default());
@@ -806,7 +1003,7 @@ impl IngestService {
             .ok_or_else(|| IngestError::unavailable("blob_storage_unavailable"))?;
         let mut result = PersistedAttachments::default();
         for attachment in attachments {
-            let Some(bytes) = scrub_safe_attachment(&attachment, snapshot)? else {
+            let Some(bytes) = scrub_safe_attachment(&attachment, snapshot, allow_png)? else {
                 result.dropped = result.dropped.saturating_add(1);
                 continue;
             };
@@ -860,6 +1057,7 @@ struct PersistedAttachments {
 fn scrub_safe_attachment(
     attachment: &PendingAttachment,
     snapshot: &ProjectSnapshot,
+    allow_png: bool,
 ) -> Result<Option<Vec<u8>>, IngestError> {
     match attachment.content_type.as_ref() {
         "application/json" => {
@@ -883,6 +1081,13 @@ fn scrub_safe_attachment(
             } else {
                 Ok(Some(attachment.bytes.to_vec()))
             }
+        }
+        "image/png"
+            if allow_png
+                && attachment.bytes.len() >= 8
+                && attachment.bytes[..8] == *b"\x89PNG\r\n\x1a\n" =>
+        {
+            Ok(Some(attachment.bytes.to_vec()))
         }
         _ => Ok(None),
     }
@@ -1014,6 +1219,200 @@ fn validate_project_consistency(
         });
     }
     Ok(())
+}
+
+fn primary_is_feedback(primary: &PrimaryEvent) -> Result<bool, IngestError> {
+    let value: Value = serde_json::from_slice(&primary.raw_json)
+        .map_err(|_| IngestError::invalid("invalid_event_json"))?;
+    Ok(value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "feedback"))
+}
+
+fn validate_feedback_attachment_limits(
+    attachments: &[PendingAttachment],
+    config: FeedbackIngestConfig,
+) -> Result<(), IngestError> {
+    if attachments.len() > config.max_attachments {
+        return Err(IngestError {
+            kind: IngestErrorKind::TooLarge,
+            code: "feedback_too_many_attachments",
+        });
+    }
+    let mut total = 0_usize;
+    for attachment in attachments {
+        if attachment.bytes.len() > config.max_attachment_bytes {
+            return Err(IngestError {
+                kind: IngestErrorKind::TooLarge,
+                code: "feedback_attachment_too_large",
+            });
+        }
+        total = total
+            .checked_add(attachment.bytes.len())
+            .ok_or(IngestError {
+                kind: IngestErrorKind::TooLarge,
+                code: "feedback_attachments_too_large",
+            })?;
+    }
+    if total > config.max_total_attachment_bytes {
+        return Err(IngestError {
+            kind: IngestErrorKind::TooLarge,
+            code: "feedback_attachments_too_large",
+        });
+    }
+    Ok(())
+}
+
+fn normalize_feedback(
+    snapshot: &ProjectSnapshot,
+    primary: PrimaryEvent,
+    envelope_event_id: Option<EventId>,
+    received_at: metric_domain::Timestamp,
+    config: FeedbackIngestConfig,
+) -> Result<FeedbackRecord, IngestError> {
+    let mut value: Value = serde_json::from_slice(&primary.raw_json)
+        .map_err(|_| IngestError::invalid("invalid_feedback_json"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| IngestError::invalid("feedback_not_object"))?;
+    if object.get("type").and_then(Value::as_str) != Some("feedback") {
+        return Err(IngestError::invalid("invalid_feedback_type"));
+    }
+    let feedback_id = object
+        .get("event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| IngestError::invalid("missing_feedback_id"))
+        .and_then(|value| {
+            EventId::parse(value).map_err(|_| IngestError::invalid("invalid_feedback_id"))
+        })?;
+    for stated in [primary.header_event_id, envelope_event_id]
+        .into_iter()
+        .flatten()
+    {
+        if stated != feedback_id {
+            return Err(IngestError::invalid("conflicting_event_id"));
+        }
+    }
+    object.remove("project");
+    scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
+    let context = value
+        .pointer("/contexts/feedback")
+        .and_then(Value::as_object)
+        .ok_or_else(|| IngestError::invalid("missing_feedback_context"))?;
+    let message = feedback_text(
+        context.get("message"),
+        config.max_message_bytes,
+        true,
+        "invalid_feedback_message",
+    )?
+    .ok_or_else(|| IngestError::invalid("missing_feedback_message"))?;
+    let name = feedback_text(
+        context.get("name"),
+        config.max_name_bytes,
+        false,
+        "invalid_feedback_name",
+    )?;
+    let contact_email = feedback_text(
+        context
+            .get("contact_email")
+            .or_else(|| context.get("email")),
+        config.max_contact_bytes,
+        false,
+        "invalid_feedback_contact",
+    )?;
+    let url = feedback_text(
+        context.get("url"),
+        config.max_url_bytes,
+        false,
+        "invalid_feedback_url",
+    )?;
+    if url.as_deref().is_some_and(|value| {
+        url::Url::parse(value)
+            .ok()
+            .is_none_or(|url| !matches!(url.scheme(), "http" | "https"))
+    }) {
+        return Err(IngestError::invalid("invalid_feedback_url"));
+    }
+    let associated_event_id = optional_event_id(
+        context.get("associated_event_id"),
+        "invalid_associated_event_id",
+    )?;
+    let replay_id = optional_event_id(context.get("replay_id"), "invalid_replay_id")?;
+    let trace_id = value
+        .pointer("/contexts/trace/trace_id")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| IngestError::invalid("invalid_feedback_trace_id"))
+                .and_then(|value| {
+                    TraceId::parse(value)
+                        .map_err(|_| IngestError::invalid("invalid_feedback_trace_id"))
+                })
+        })
+        .transpose()?;
+    let retention_millis = i64::from(config.retention_days)
+        .checked_mul(24 * 60 * 60 * 1_000)
+        .ok_or_else(|| IngestError::invalid("invalid_feedback_retention"))?;
+    let expires_at = received_at
+        .unix_millis()
+        .checked_add(retention_millis)
+        .and_then(|value| metric_domain::Timestamp::from_unix_millis(value).ok())
+        .ok_or_else(|| IngestError::invalid("invalid_feedback_retention"))?;
+    Ok(FeedbackRecord {
+        project_id: snapshot.project_id,
+        feedback_id,
+        received_at,
+        status: FeedbackStatus::Open,
+        status_changed_at: received_at,
+        message,
+        name,
+        contact_email,
+        url,
+        associated_event_id,
+        issue_id: None,
+        trace_id,
+        replay_id,
+        attachments: Vec::new(),
+        expires_at,
+    })
+}
+
+fn feedback_text(
+    value: Option<&Value>,
+    maximum: usize,
+    required: bool,
+    code: &'static str,
+) -> Result<Option<Box<str>>, IngestError> {
+    let Some(value) = value else {
+        return if required {
+            Err(IngestError::invalid(code))
+        } else {
+            Ok(None)
+        };
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| IngestError::invalid(code))?
+        .trim();
+    if value.is_empty() || value.len() > maximum || value.contains('\0') {
+        return Err(IngestError::invalid(code));
+    }
+    Ok(Some(value.into()))
+}
+
+fn optional_event_id(
+    value: Option<&Value>,
+    code: &'static str,
+) -> Result<Option<EventId>, IngestError> {
+    value
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| IngestError::invalid(code))
+                .and_then(|value| EventId::parse(value).map_err(|_| IngestError::invalid(code)))
+        })
+        .transpose()
 }
 
 fn validate_and_scrub_event(
@@ -1809,6 +2208,18 @@ fn map_span_sink_error(error: SignalStoreError) -> IngestError {
     }
 }
 
+fn map_feedback_store_error(error: FeedbackStoreError) -> IngestError {
+    match error {
+        FeedbackStoreError::Conflict | FeedbackStoreError::InvalidData => {
+            IngestError::invalid("feedback_conflict")
+        }
+        FeedbackStoreError::Capacity => IngestError::rate_limited("feedback_storage_capacity"),
+        FeedbackStoreError::NotFound | FeedbackStoreError::Unavailable => {
+            IngestError::unavailable("feedback_storage_unavailable")
+        }
+    }
+}
+
 fn map_sink_error(error: EventSinkError) -> IngestError {
     match error {
         EventSinkError::Unavailable => IngestError::unavailable("storage_unavailable"),
@@ -1833,7 +2244,9 @@ fn map_blob_error(error: BlobStoreError) -> IngestError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use metric_domain::{ItemCapabilities, ProjectIngestLimits, ScrubPolicy, SecretBytes};
+    use metric_domain::{
+        ItemCapabilities, ProjectIngestLimits, ScrubPolicy, SecretBytes, Timestamp,
+    };
 
     fn snapshot() -> ProjectSnapshot {
         ProjectSnapshot {
@@ -1852,11 +2265,59 @@ mod tests {
                 log: true,
                 transaction: true,
                 span: true,
+                feedback: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: Default::default(),
             grouping_revision: 1,
         }
+    }
+
+    #[test]
+    fn feedback_is_bounded_and_scrubbed_before_persistence() {
+        let snapshot = snapshot();
+        let received_at = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
+        let feedback = normalize_feedback(
+            &snapshot,
+            PrimaryEvent {
+                header_event_id: Some(EventId::from_bytes([3; 16])),
+                raw_json: serde_json::to_vec(&serde_json::json!({
+                    "event_id": EventId::from_bytes([3; 16]).to_string(),
+                    "type": "feedback",
+                    "contexts": {
+                        "feedback": {
+                            "message": "Checkout failed",
+                            "name": "Ada",
+                            "email": "ada@example.com",
+                            "url": "https://example.test/checkout",
+                        }
+                    },
+                    "password": "must-not-survive",
+                }))
+                .unwrap()
+                .into_boxed_slice(),
+            },
+            Some(EventId::from_bytes([3; 16])),
+            received_at,
+            FeedbackIngestConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(feedback.message.as_ref(), "Checkout failed");
+        assert_eq!(feedback.contact_email.as_deref(), Some("ada@example.com"));
+        let oversized = PendingAttachment {
+            position: 0,
+            filename: "large.txt".into(),
+            content_type: "text/plain".into(),
+            attachment_type: "event.attachment".into(),
+            bytes: vec![0; FeedbackIngestConfig::default().max_attachment_bytes + 1]
+                .into_boxed_slice(),
+        };
+        assert_eq!(
+            validate_feedback_attachment_limits(&[oversized], FeedbackIngestConfig::default())
+                .unwrap_err()
+                .code(),
+            "feedback_attachment_too_large"
+        );
     }
 
     #[test]

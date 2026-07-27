@@ -147,6 +147,7 @@ async fn seed(store: &MongoProjectStore) -> Result<(), Box<dyn Error>> {
                 log: true,
                 transaction: true,
                 span: true,
+                feedback: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,

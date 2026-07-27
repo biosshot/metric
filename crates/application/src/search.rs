@@ -789,6 +789,7 @@ pub enum CursorKind {
     Activity = 3,
     Release = 4,
     Environment = 5,
+    Feedback = 6,
 }
 
 #[must_use]

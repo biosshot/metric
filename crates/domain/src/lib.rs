@@ -8,6 +8,7 @@ pub mod blob;
 pub mod debug_files;
 pub mod deletion;
 pub mod event;
+pub mod feedback;
 pub mod finalization;
 pub mod grouping;
 pub mod inbound_filter;
@@ -482,6 +483,7 @@ pub struct ItemCapabilities {
     pub log: bool,
     pub transaction: bool,
     pub span: bool,
+    pub feedback: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

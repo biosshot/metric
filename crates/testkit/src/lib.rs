@@ -9,14 +9,16 @@ use std::{
 
 use metric_domain::{
     AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
+    feedback::FeedbackRecord,
     sessions::SessionUpdate,
     signals::{LogRecord, SpanRecord},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use metric_ports::{
-    Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, LogSink, OutcomeSink,
-    PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource, SessionSink,
-    SignalStoreError, SpanSink, SymbolicationBackend, SymbolicationBackendError,
+    Clock, DurableOutcome, EventSink, EventSinkError, FeedbackSink, FeedbackStoreError,
+    IngestOutcome, LogSink, OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver,
+    RandomError, RandomSource, SessionSink, SignalStoreError, SpanSink, SymbolicationBackend,
+    SymbolicationBackendError,
 };
 
 #[derive(Clone)]
@@ -181,6 +183,34 @@ impl SessionSink for FakeSessionSink {
                 .expect("fake Session sink lock poisoned")
                 .extend(updates);
             Ok(outcomes)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeFeedbackSink(Arc<Mutex<Vec<FeedbackRecord>>>);
+
+impl FakeFeedbackSink {
+    #[must_use]
+    pub fn records(&self) -> Vec<FeedbackRecord> {
+        self.0
+            .lock()
+            .expect("fake Feedback sink lock poisoned")
+            .clone()
+    }
+}
+
+impl FeedbackSink for FakeFeedbackSink {
+    fn persist_feedback(
+        &self,
+        feedback: FeedbackRecord,
+    ) -> PortFuture<'_, Result<DurableOutcome, FeedbackStoreError>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .expect("fake Feedback sink lock poisoned")
+                .push(feedback);
+            Ok(DurableOutcome::Accepted)
         })
     }
 }

@@ -546,7 +546,7 @@ enum ItemClass {
 
 fn classify_item(kind: &str) -> ItemClass {
     match kind {
-        "event" => ItemClass::Event,
+        "event" | "feedback" => ItemClass::Event,
         "client_report" => ItemClass::ClientReport,
         "log" => ItemClass::Signal(RawSignalKind::Log),
         "transaction" => ItemClass::Signal(RawSignalKind::Transaction),
@@ -591,6 +591,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.primary.unwrap().bytes.as_ref(), EVENT.as_bytes());
+    }
+
+    #[test]
+    fn current_feedback_item_is_the_primary_record() {
+        let payload = r#"{"event_id":"0123456789abcdef0123456789abcdef","type":"feedback","contexts":{"feedback":{"message":"Checkout failed"}}}"#;
+        let parsed = parse_envelope(
+            &envelope(r#"{"type":"feedback"}"#, payload),
+            EnvelopeLimits {
+                max_items: 100,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.primary.unwrap().bytes.as_ref(), payload.as_bytes());
+        assert!(parsed.discarded.is_empty());
     }
 
     #[test]

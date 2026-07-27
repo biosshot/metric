@@ -9,6 +9,7 @@ mod auth;
 mod debug_files;
 mod deletion;
 mod event;
+mod feedback;
 mod finalizer;
 mod issue;
 mod maintenance;
@@ -29,6 +30,7 @@ pub use deletion::{
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
 };
+pub use feedback::MongoFeedbackStore;
 pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finalized_event};
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 pub use maintenance::MongoMaintenanceStore;
@@ -59,9 +61,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 12;
+pub const SCHEMA_GENERATION: i32 = 13;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 17] = [
+const SCHEMA_MODULES: [&str; 18] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -79,8 +81,9 @@ const SCHEMA_MODULES: [&str; 17] = [
     "signal_inbound_filters_v1",
     "releases_deploys_v1",
     "sessions_release_health_v1",
+    "user_feedback_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 31] = [
+const REQUIRED_COLLECTIONS: [&str; 32] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -89,6 +92,7 @@ const REQUIRED_COLLECTIONS: [&str; 31] = [
     "archive_manifests",
     "environments",
     "error_events",
+    "feedback",
     "debug_files",
     "debug_uploads",
     "deploys",
@@ -247,6 +251,11 @@ impl MongoProjectStore {
         MongoSessionStore::from_database(self.database.clone(), retention)
     }
 
+    #[must_use]
+    pub fn feedback_store(&self) -> MongoFeedbackStore {
+        MongoFeedbackStore::new(self.database.clone())
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -313,6 +322,8 @@ impl MongoProjectStore {
         )
         .await?;
         self.create_validated_collection("error_events", event::event_validator())
+            .await?;
+        self.create_validated_collection("feedback", feedback::feedback_validator())
             .await?;
         self.create_validated_collection("logs", signals::log_validator())
             .await?;
@@ -417,6 +428,12 @@ impl MongoProjectStore {
         event::create_event_indexes(&self.database).await?;
         signals::create_signal_indexes(&self.database).await?;
         sessions::create_session_indexes(&self.database).await?;
+        for model in feedback::feedback_indexes() {
+            self.database
+                .collection::<Document>("feedback")
+                .create_index(model)
+                .await?;
+        }
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
         releases::create_deploy_indexes(&self.database).await?;
@@ -535,6 +552,7 @@ impl MongoProjectStore {
             ),
             ("project_deletions", deletion::deletion_index_names()),
             ("error_events", event::event_index_names()),
+            ("feedback", feedback::feedback_index_names()),
             ("logs", signals::signal_index_names("logs")),
             ("spans", signals::signal_index_names("spans")),
             (
@@ -602,6 +620,7 @@ impl MongoProjectStore {
             ("artifact_uploads", artifacts::artifact_upload_validator()),
             ("artifact_bundles", artifacts::artifact_bundle_validator()),
             ("error_events", event::event_validator()),
+            ("feedback", feedback::feedback_validator()),
             ("logs", signals::log_validator()),
             ("spans", signals::span_validator()),
             ("span_stats_hourly", signals::span_stats_validator()),
@@ -716,6 +735,7 @@ impl MongoProjectStore {
                 "log": project.items.log,
                 "transaction": project.items.transaction,
                 "span": project.items.span,
+                "feedback": project.items.feedback,
             },
             "limits": limits,
             "grouping_revision": i64::try_from(project.grouping_revision).map_err(|_| ProjectStoreError::InvalidData)?,
@@ -1035,6 +1055,7 @@ impl MongoProjectStore {
                         "log": update.items.log,
                         "transaction": update.items.transaction,
                         "span": update.items.span,
+                        "feedback": update.items.feedback,
                     },
                     "limits": limits,
                 }},
@@ -1301,6 +1322,9 @@ fn decode_snapshot(
             span: items
                 .get_bool("span")
                 .map_err(|_| ProjectStoreError::InvalidData)?,
+            feedback: items
+                .get_bool("feedback")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
         },
         limits: ProjectIngestLimits {
             max_event_bytes,
@@ -1382,6 +1406,9 @@ pub(crate) fn decode_project_view(document: &Document) -> Result<ProjectView, Pr
                 .map_err(|_| ProjectStoreError::InvalidData)?,
             span: items
                 .get_bool("span")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            feedback: items
+                .get_bool("feedback")
                 .map_err(|_| ProjectStoreError::InvalidData)?,
         },
         limits: ProjectIngestLimits {
@@ -1673,7 +1700,7 @@ fn project_validator() -> Document {
             },
                     "items": {
                         "bsonType": "object",
-                        "required": ["error", "client_report", "log", "transaction", "span"],
+                        "required": ["error", "client_report", "log", "transaction", "span", "feedback"],
                         "additionalProperties": false,
                         "properties": {
                             "error": { "bsonType": "bool" },
@@ -1681,6 +1708,7 @@ fn project_validator() -> Document {
                             "log": { "bsonType": "bool" },
                             "transaction": { "bsonType": "bool" },
                             "span": { "bsonType": "bool" },
+                            "feedback": { "bsonType": "bool" },
                 },
             },
             "limits": {

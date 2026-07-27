@@ -66,8 +66,8 @@ use metric_domain::Timestamp;
 use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
-    LogSink, OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError,
-    RandomSource, SessionSink, SessionStore, SignalStore, SpanSink,
+    FeedbackSink, FeedbackStore, LogSink, OutcomeSink, PortFuture, ProjectResolveError,
+    ProjectResolver, RandomError, RandomSource, SessionSink, SessionStore, SignalStore, SpanSink,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -136,6 +136,7 @@ struct RuntimeModules {
     log_sink: Option<std::sync::Arc<dyn LogSink>>,
     span_sink: Option<std::sync::Arc<dyn SpanSink>>,
     session_sink: Option<std::sync::Arc<dyn SessionSink>>,
+    feedback_sink: Option<std::sync::Arc<dyn FeedbackSink>>,
     writer_task: Option<MongoWriterTask>,
     log_writer_task: Option<LogWriterTask>,
     span_writer_task: Option<SpanWriterTask>,
@@ -238,6 +239,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         log_sink,
         span_sink,
         session_sink,
+        feedback_sink,
         writer_task,
         log_writer_task,
         span_writer_task,
@@ -510,6 +512,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             config.scheduler.maintenance_interval.get(),
             shutdown.signal(),
         );
+        let feedback = std::sync::Arc::new(store.feedback_store());
+        let feedback_sink: std::sync::Arc<dyn FeedbackSink> = feedback.clone();
+        let feedback_store: std::sync::Arc<dyn FeedbackStore> = feedback;
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
@@ -523,6 +528,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_blob_store(std::sync::Arc::clone(&blob_store))
             .with_signal_store(std::sync::Arc::clone(&signal_store))
             .with_session_store(session_store)
+            .with_feedback_store(feedback_store)
             .with_release_service(std::sync::Arc::clone(&release_service)),
         );
         let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =
@@ -735,6 +741,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             log_sink: Some(log_sink),
             span_sink: Some(span_sink),
             session_sink: Some(session_sink),
+            feedback_sink: Some(feedback_sink),
             writer_task: Some(writer_task),
             log_writer_task: Some(log_writer_task),
             span_writer_task: Some(span_writer_task),
@@ -765,6 +772,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             log_sink: None,
             span_sink: None,
             session_sink: None,
+            feedback_sink: None,
             writer_task: None,
             log_writer_task: None,
             span_writer_task: None,
@@ -820,6 +828,16 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(session_sink) = session_sink {
         ingest_service = ingest_service.with_session_sink(session_sink);
     }
+    if let Some(feedback_sink) = feedback_sink {
+        ingest_service = ingest_service.with_feedback_sink(
+            feedback_sink,
+            metric_application::ingest::FeedbackIngestConfig {
+                retention_days: config.retention.feedback_days,
+                allow_png_screenshots: config.ingest.attachments.enabled,
+                ..metric_application::ingest::FeedbackIngestConfig::default()
+            },
+        );
+    }
     let ingest = std::sync::Arc::new(ingest_service);
     let required_ready = writer_task.is_some()
         && log_writer_task.is_some()
@@ -839,6 +857,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_http::NativeHttpModules {
                 retention: required_ready.then_some(native_http::RetentionCapability {
                     events_days: config.retention.events_days,
+                    feedback_days: config.retention.feedback_days,
                     issue_stats_hourly_days: config.retention.issue_stats_hourly_days,
                     logs_days: config.retention.logs_days,
                     spans_days: config.retention.spans_days,

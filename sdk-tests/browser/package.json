@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild send-error.js --bundle --format=iife --platform=browser --outfile=dist/send-error.js",
+    "build": "esbuild send-error.js --bundle --format=iife --platform=browser --outfile=dist/send-error.js && esbuild send-feedback.js --bundle --format=iife --platform=browser --outfile=dist/send-feedback.js",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0"
   },

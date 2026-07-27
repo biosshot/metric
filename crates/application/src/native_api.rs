@@ -11,6 +11,7 @@ use metric_domain::{
     auth::{Actor, AuditAction, AuthContext, Permission, RequestCorrelationId},
     blob::{BlobKey, BlobObjectId},
     deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
+    feedback::{FeedbackAnchor, FeedbackRecord, FeedbackStatus},
     grouping::IssueId,
     issue::{
         ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueSnapshot,
@@ -23,8 +24,9 @@ use metric_domain::{
     },
 };
 use metric_ports::{
-    BlobReadSession, BlobStore, BlobStoreError, Clock, InvestigationStore, InvestigationStoreError,
-    LogQuery, PerformanceQuery, SegmentQuery, SignalStore, SignalStoreError,
+    BlobReadSession, BlobStore, BlobStoreError, Clock, FeedbackQuery, FeedbackStore,
+    FeedbackStoreError, InvestigationStore, InvestigationStoreError, LogQuery, PerformanceQuery,
+    SegmentQuery, SignalStore, SignalStoreError,
 };
 use thiserror::Error;
 
@@ -134,6 +136,13 @@ pub struct PerformanceListRequest {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FeedbackListRequest<'a> {
+    pub status: Option<FeedbackStatus>,
+    pub cursor: Option<&'a str>,
+    pub limit: Option<usize>,
+}
+
 pub struct NativeApiService {
     identity: Arc<IdentityService>,
     projects: Arc<ProjectService>,
@@ -146,6 +155,7 @@ pub struct NativeApiService {
     signal_store: Option<Arc<dyn SignalStore>>,
     session_store: Option<Arc<dyn metric_ports::SessionStore>>,
     releases: Option<Arc<ReleaseService>>,
+    feedback_store: Option<Arc<dyn FeedbackStore>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +191,7 @@ impl NativeApiService {
             signal_store: None,
             session_store: None,
             releases: None,
+            feedback_store: None,
         }
     }
 
@@ -203,6 +214,158 @@ impl NativeApiService {
     pub fn with_release_service(mut self, releases: Arc<ReleaseService>) -> Self {
         self.releases = Some(releases);
         self
+    }
+
+    #[must_use]
+    pub fn with_feedback_store(mut self, feedback_store: Arc<dyn FeedbackStore>) -> Self {
+        self.feedback_store = Some(feedback_store);
+        self
+    }
+
+    pub async fn feedback(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        feedback_id: EventId,
+    ) -> Result<FeedbackRecord, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        let mut feedback = self
+            .feedback_store()?
+            .load_feedback(project_id, feedback_id)
+            .await
+            .map_err(map_feedback_error)?;
+        self.enrich_feedback(&mut feedback).await?;
+        Ok(feedback)
+    }
+
+    pub async fn feedback_list(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        request: FeedbackListRequest<'_>,
+    ) -> Result<NativePage<FeedbackRecord>, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        let normalized = request.status.map_or("all", FeedbackStatus::as_str);
+        let digest = cursor_digest(project_id, normalized, CursorKind::Feedback);
+        let before = request
+            .cursor
+            .map(|value| decode_feedback_anchor(value, digest))
+            .transpose()?;
+        let page = self
+            .feedback_store()?
+            .list_feedback(
+                project_id,
+                FeedbackQuery {
+                    status: request.status,
+                    before,
+                    limit: page_size(request.limit)?,
+                },
+            )
+            .await
+            .map_err(map_feedback_error)?;
+        let next_cursor = page.next.map(|anchor| {
+            encode_cursor(
+                CursorKind::Feedback,
+                anchor.received_at,
+                &anchor.feedback_id.as_bytes(),
+                digest,
+            )
+        });
+        let mut items = page.items;
+        for feedback in &mut items {
+            self.enrich_feedback(feedback).await?;
+        }
+        Ok(NativePage { items, next_cursor })
+    }
+
+    pub async fn update_feedback_status(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        feedback_id: EventId,
+        status: FeedbackStatus,
+    ) -> Result<FeedbackRecord, NativeApiError> {
+        self.authorize(context, project_id, Permission::IssueWrite)
+            .await?;
+        let mut feedback = self
+            .feedback_store()?
+            .update_feedback_status(project_id, feedback_id, status, self.clock.now())
+            .await
+            .map_err(map_feedback_error)?;
+        self.enrich_feedback(&mut feedback).await?;
+        Ok(feedback)
+    }
+
+    pub async fn open_feedback_attachment(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        feedback_id: EventId,
+        attachment_id: BlobObjectId,
+    ) -> Result<(AttachmentView, Box<dyn BlobReadSession>), NativeApiError> {
+        let feedback = self.feedback(context, project_id, feedback_id).await?;
+        let attachment = feedback
+            .attachments
+            .iter()
+            .find(|attachment| attachment.attachment_id == attachment_id)
+            .ok_or(NativeApiError::NotFound)?;
+        let (related_project, related_event, related_object) = attachment
+            .blob
+            .key
+            .event_relation()
+            .map_err(|_| NativeApiError::Unavailable)?;
+        if related_project != project_id
+            || related_event != feedback_id
+            || related_object != attachment_id
+        {
+            return Err(NativeApiError::Unavailable);
+        }
+        let view = AttachmentView {
+            attachment_id,
+            blob_key: attachment.blob.key.clone(),
+            filename: attachment.filename.as_str().into(),
+            content_type: attachment.content_type.as_str().into(),
+            attachment_type: attachment.attachment_type.clone(),
+            size: attachment.blob.size,
+            checksum: attachment.blob.checksum.to_string().into(),
+        };
+        let reader = self
+            .blob_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .open(&view.blob_key)
+            .await
+            .map_err(map_blob_error)?;
+        Ok((view, reader))
+    }
+
+    fn feedback_store(&self) -> Result<&Arc<dyn FeedbackStore>, NativeApiError> {
+        self.feedback_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)
+    }
+
+    async fn enrich_feedback(&self, feedback: &mut FeedbackRecord) -> Result<(), NativeApiError> {
+        let Some(event_id) = feedback.associated_event_id else {
+            return Ok(());
+        };
+        match self
+            .investigation
+            .load_event(
+                feedback.project_id,
+                EventKey::new(feedback.project_id, event_id),
+            )
+            .await
+        {
+            Ok(event) => feedback.issue_id = Some(event.issue_id),
+            Err(InvestigationStoreError::NotFound) => {}
+            Err(InvestigationStoreError::InvalidData | InvestigationStoreError::Unavailable) => {
+                return Err(NativeApiError::Unavailable);
+            }
+        }
+        Ok(())
     }
 
     fn release_service(&self) -> Result<&ReleaseService, NativeApiError> {
@@ -1362,6 +1525,15 @@ fn decode_event_anchor(value: &str, digest: [u8; 16]) -> Result<EventAnchor, Nat
     })
 }
 
+fn decode_feedback_anchor(value: &str, digest: [u8; 16]) -> Result<FeedbackAnchor, NativeApiError> {
+    let (received_at, id) =
+        decode_cursor(value, CursorKind::Feedback, 16, digest).map_err(map_cursor_error)?;
+    Ok(FeedbackAnchor {
+        received_at,
+        feedback_id: EventId::from_bytes(id.try_into().map_err(|_| NativeApiError::InvalidCursor)?),
+    })
+}
+
 fn decode_activity_anchor(value: &str, digest: [u8; 16]) -> Result<ActivityAnchor, NativeApiError> {
     let (at, id) =
         decode_cursor(value, CursorKind::Activity, 16, digest).map_err(map_cursor_error)?;
@@ -1418,6 +1590,16 @@ fn map_signal_error(error: SignalStoreError) -> NativeApiError {
         SignalStoreError::InvalidData
         | SignalStoreError::Capacity
         | SignalStoreError::Unavailable => NativeApiError::Unavailable,
+    }
+}
+
+fn map_feedback_error(error: FeedbackStoreError) -> NativeApiError {
+    match error {
+        FeedbackStoreError::NotFound => NativeApiError::NotFound,
+        FeedbackStoreError::Conflict => NativeApiError::Conflict,
+        FeedbackStoreError::InvalidData => NativeApiError::InvalidRequest,
+        FeedbackStoreError::Capacity => NativeApiError::RateLimited,
+        FeedbackStoreError::Unavailable => NativeApiError::Unavailable,
     }
 }
 

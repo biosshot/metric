@@ -28,6 +28,7 @@ use metric_domain::{
         ProjectDeletionChange, ProjectDeletionOperationId, ProjectDeletionRequest,
         ProjectDeletionStatus,
     },
+    feedback::{FeedbackAnchor, FeedbackPage, FeedbackRecord, FeedbackStatus},
     finalization::{FinalizationPolicy, FinalizeBatch, FinalizeResult},
     grouping::IssueId,
     issue::{
@@ -1421,6 +1422,59 @@ pub trait SessionStore: Send + Sync + 'static {
         from: Timestamp,
         until: Timestamp,
     ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FeedbackStoreError {
+    #[error("Feedback target does not exist")]
+    NotFound,
+    #[error("Feedback identity conflicts with existing data")]
+    Conflict,
+    #[error("Feedback data is invalid")]
+    InvalidData,
+    #[error("Feedback submission is rate limited")]
+    Capacity,
+    #[error("Feedback storage is temporarily unavailable")]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedbackQuery {
+    pub status: Option<FeedbackStatus>,
+    pub before: Option<FeedbackAnchor>,
+    pub limit: usize,
+}
+
+/// Low-volume Feedback submission boundary. A successful outcome means that the
+/// metadata and every referenced Blob are already durable.
+pub trait FeedbackSink: Send + Sync + 'static {
+    fn persist_feedback(
+        &self,
+        feedback: FeedbackRecord,
+    ) -> PortFuture<'_, Result<DurableOutcome, FeedbackStoreError>>;
+}
+
+/// Project-scoped Feedback investigation and workflow boundary.
+pub trait FeedbackStore: Send + Sync + 'static {
+    fn list_feedback(
+        &self,
+        project_id: ProjectId,
+        query: FeedbackQuery,
+    ) -> PortFuture<'_, Result<FeedbackPage, FeedbackStoreError>>;
+
+    fn load_feedback(
+        &self,
+        project_id: ProjectId,
+        feedback_id: metric_domain::EventId,
+    ) -> PortFuture<'_, Result<FeedbackRecord, FeedbackStoreError>>;
+
+    fn update_feedback_status(
+        &self,
+        project_id: ProjectId,
+        feedback_id: metric_domain::EventId,
+        status: FeedbackStatus,
+        changed_at: Timestamp,
+    ) -> PortFuture<'_, Result<FeedbackRecord, FeedbackStoreError>>;
 }
 
 /// Signal-specific durable and query boundary. Raw MongoDB filters never cross it.

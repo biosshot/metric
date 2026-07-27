@@ -118,6 +118,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             native_http::NativeHttpModules {
                 retention: Some(native_http::RetentionCapability {
                     events_days: 30,
+                    feedback_days: 90,
                     issue_stats_hourly_days: 400,
                     logs_days: 30,
                     spans_days: 30,
