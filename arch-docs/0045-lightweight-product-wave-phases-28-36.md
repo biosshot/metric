@@ -21,8 +21,8 @@ The selected wave is:
 | ---: | --- | --- |
 | 27 | Production readiness | Accepted, execution deferred |
 | 28 | Signal Inbound Filters | Complete |
-| 29 | Releases and Deploys | Next |
-| 30 | Sessions and Release Health | Planned |
+| 29 | Releases and Deploys | Complete |
+| 30 | Sessions and Release Health | Next |
 | 31 | User Feedback | Planned |
 | 32 | Unified Explore | Planned |
 | 33 | Saved Queries and Dashboards | Planned |

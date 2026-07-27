@@ -1,0 +1,30 @@
+{
+  "phase": 29,
+  "capability": "releases-and-deploys",
+  "recorded_at": "2026-07-27",
+  "command": "cargo test -p metric-domain --release performance_release_identity_rps -- --ignored --nocapture",
+  "workload": {
+    "operations": 100000,
+    "operation": "validate one bounded explicit release and derive deterministic release/deploy identities",
+    "mode": "release",
+    "concurrency": 1
+  },
+  "result": {
+    "elapsed_ms": 31,
+    "rps": 3179691,
+    "minimum_rps": 100000,
+    "passed": true
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 5 5600H with Radeon Graphics",
+    "physical_cores": 6,
+    "logical_processors": 12,
+    "os": "Windows 11 Home Single Language",
+    "rustc": "1.88.0"
+  },
+  "notes": [
+    "This is a retained control-plane CPU baseline, not ingest throughput.",
+    "Compare future runs on the same machine and command before attributing a regression.",
+    "No server process is started by this benchmark."
+  ]
+}
