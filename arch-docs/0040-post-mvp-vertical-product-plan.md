@@ -45,12 +45,13 @@ Status as of 2026-07-27:
 | 30 | Sessions and Release Health | Complete |
 | 31 | User Feedback | Complete |
 | 32-33 | Lightweight product wave | Complete |
-| 34-36 | Lightweight product wave | Planned in ADR-0045 |
+| 34 | Alerts and notification destinations | Complete |
+| 35-36 | Lightweight product wave | Planned in ADR-0045 |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
-Phase 28-33 evidence is published in their corresponding reports; Phase 34 is next.
+Phase 28-34 evidence is published in their corresponding reports; Phase 35 is next.
 
 ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
 decision deferred execution of Phase 27 without completing it. ADR-0045 now owns the
@@ -480,7 +481,9 @@ Implement:
 - environment/release/tag predicates;
 - cooldown, deduplication and storm limits;
 - rule evaluation history, test mode and stable failure reasons;
-- webhook actions first; future integrations consume the same outbox contract.
+- Telegram Bot API and user-configured SMTP Email actions consume the existing
+  durable outbox contract; the Phase 20 webhook remains backward compatible but is
+  not expanded in this phase.
 
 Exit gate:
 
@@ -488,7 +491,7 @@ Exit gate:
 - repeated processing/restart does not create unbounded duplicate notifications;
 - high-cardinality rules are rejected before activation;
 - alert bursts respect per-project and global delivery budgets;
-- E2E covers Event/Log/Span -> rule -> outbox -> webhook.
+- E2E covers Event/Log/Span -> rule -> outbox -> Telegram/SMTP Email.
 
 ## Deferred backlog group: Error workflow and release intelligence
 

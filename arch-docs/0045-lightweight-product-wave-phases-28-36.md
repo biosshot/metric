@@ -26,7 +26,7 @@ The selected wave is:
 | 31 | User Feedback | Complete |
 | 32 | Unified Explore | Complete |
 | 33 | Saved Queries and Dashboards | Complete |
-| 34 | Alerts and notification destinations | Planned |
+| 34 | Alerts and notification destinations | Complete |
 | 35 | Cron Monitoring | Planned |
 | 36 | Uptime Monitoring | Planned |
 
@@ -502,12 +502,15 @@ Initial rule classes:
 Initial destination kinds:
 
 ```text
-generic webhook
 Telegram Bot API
-Web Push
+SMTP Email
 ```
 
-Email and provider-specific chat/issue-tracker integrations remain deferred.
+The generic webhook delivered by Phase 20 remains backward compatible, but Phase 34
+does not add or expose new webhook configuration. Web Push and provider-specific
+chat/issue-tracker integrations remain deferred. SMTP is selected instead of Web
+Push because it is provider-neutral and can be configured by an organization owner
+without a Metric-operated mail service.
 
 ### Storage and delivery
 
@@ -520,9 +523,10 @@ notification_deliveries
 ```
 
 `NotificationDestination` becomes a bounded tagged configuration. Telegram bot
-tokens, webhook secrets, Web Push subscription keys and VAPID material follow the
-existing sealed-secret/redaction boundary. Web Push payloads contain only bounded
-non-PII summary data and an internal URL.
+tokens, webhook secrets and SMTP passwords follow the existing
+sealed-secret/redaction boundary. SMTP permits only authenticated TLS or STARTTLS;
+host resolution is checked against the existing private-network policy before
+connection.
 
 Issue rules create outbox transitions during existing finalization. Aggregate rules
 are evaluated by bounded Scheduler work over Explore. All adapters consume claimed
@@ -534,10 +538,12 @@ idempotency where the provider permits it.
 - repeated evaluation/restart cannot create unbounded duplicate deliveries;
 - one alert may target multiple destination kinds without duplicating rule logic;
 - provider outages never block ingest, Processor or Issue reads;
-- Telegram escaping/rate-limit handling and Web Push expiry are tested;
+- Telegram escaping/rate-limit handling and SMTP TLS/authentication failure
+  classification are tested;
 - secrets never enter payload history, logs or API responses;
 - alert storms respect project, destination and global budgets;
-- E2E covers Event and aggregate rule delivery through all three adapters.
+- E2E covers Event and aggregate rule delivery through Telegram and SMTP Email;
+  the retained Phase 20 webhook regression remains green.
 
 ## Phase 35: Cron Monitoring
 
