@@ -316,6 +316,7 @@ impl fmt::Debug for IssueActivityId {
 pub enum IssueNotificationKind {
     NewIssue = 1,
     Regression = 2,
+    Resolved = 3,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

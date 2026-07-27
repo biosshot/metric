@@ -4,11 +4,18 @@ use std::{collections::BTreeSet, future::Future, pin::Pin, sync::Arc, time::Dura
 
 use crate::{
     auth::{AuthError, IdentityService},
+    explore::ExploreService,
     shutdown::ShutdownSignal,
 };
 use metric_domain::{
     Timestamp,
     auth::{AuditAction, AuthContext, Permission, RequestCorrelationId},
+    explore::{
+        ExploreAggregate, ExploreAggregateKind, ExploreField, ExplorePredicate, ExplorePredicateOp,
+        ExploreQuery, ExploreValue,
+    },
+    grouping::IssueId,
+    issue::IssueTransitionId,
     notifications::{
         AlertRule, ClaimedNotificationDelivery, IssueNotificationTransition, NotificationDelivery,
         NotificationDeliveryStatus, NotificationDestination, NotificationPayload,
@@ -16,8 +23,8 @@ use metric_domain::{
     },
 };
 use metric_ports::{
-    Clock, NotificationStore, NotificationStoreError, WebhookDeliveryAdapter, WebhookDeliveryError,
-    WebhookDeliveryReceipt,
+    Clock, NotificationDeliveryAdapter, NotificationDeliveryError, NotificationDeliveryReceipt,
+    NotificationStore, NotificationStoreError,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -28,6 +35,7 @@ use tokio::{
 };
 
 const EXPANSION_RULE_LIMIT: usize = 256;
+const AGGREGATE_ALIAS: &str = "count";
 
 #[derive(Debug, Clone, Copy)]
 pub struct NotificationConfig {
@@ -196,6 +204,105 @@ impl NotificationAdminService {
             )
             .await
     }
+
+    pub async fn destinations(
+        &self,
+        context: &AuthContext,
+        project_id: metric_domain::ProjectId,
+    ) -> Result<Vec<NotificationDestination>, NotificationError> {
+        self.access.authorize(context, project_id).await?;
+        self.store
+            .list_destinations(project_id, EXPANSION_RULE_LIMIT)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn rules(
+        &self,
+        context: &AuthContext,
+        project_id: metric_domain::ProjectId,
+    ) -> Result<Vec<AlertRule>, NotificationError> {
+        self.access.authorize(context, project_id).await?;
+        self.store
+            .list_rules(project_id, EXPANSION_RULE_LIMIT)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn delivery_history(
+        &self,
+        context: &AuthContext,
+        project_id: metric_domain::ProjectId,
+    ) -> Result<Vec<NotificationDelivery>, NotificationError> {
+        self.access.authorize(context, project_id).await?;
+        self.store
+            .list_delivery_history(project_id, 100)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn enqueue_test(
+        &self,
+        context: &AuthContext,
+        project_id: metric_domain::ProjectId,
+        destination_id: metric_domain::notifications::NotificationDestinationId,
+        request_id: &RequestCorrelationId,
+        now: Timestamp,
+    ) -> Result<NotificationDelivery, NotificationError> {
+        self.access.authorize(context, project_id).await?;
+        let destination_exists = self
+            .store
+            .list_destinations(project_id, EXPANSION_RULE_LIMIT)
+            .await?
+            .iter()
+            .any(|destination| destination.id == destination_id && destination.enabled);
+        if !destination_exists {
+            return Err(NotificationError::InvalidData);
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"metric/notification-test/v1");
+        hasher.update(&project_id.get().to_be_bytes());
+        hasher.update(&destination_id.as_bytes());
+        hasher.update(request_id.as_str().as_bytes());
+        let digest = hasher.finalize();
+        let mut transition_bytes = [0; 16];
+        transition_bytes.copy_from_slice(&digest.as_bytes()[..16]);
+        let transition_id = IssueTransitionId::from_bytes(transition_bytes);
+        let rule_id = metric_domain::notifications::AlertRuleId::from_bytes(transition_bytes);
+        let id = notification_delivery_id(transition_id, rule_id, destination_id);
+        let payload = NotificationPayload::new(
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "type": "test",
+                "project_id": project_id.get(),
+                "title": "Metric test notification",
+                "occurred_at_ms": now.unix_millis(),
+                "rule_id": hex::encode(rule_id.as_bytes()),
+                "destination_id": hex::encode(destination_id.as_bytes()),
+            }))
+            .map_err(|_| NotificationError::InvalidData)?,
+        )
+        .map_err(|_| NotificationError::InvalidData)?;
+        let delivery = NotificationDelivery {
+            id,
+            project_id,
+            issue_id: IssueId::from_bytes(transition_bytes),
+            transition_id,
+            rule_id,
+            action_id: destination_id,
+            destination_id,
+            payload,
+            status: NotificationDeliveryStatus::Pending,
+            attempts: 0,
+            next_attempt_at: now,
+            last_error: None,
+            created_at: now,
+            delivered_at: None,
+            delete_at: None,
+        };
+        self.store.enqueue_delivery(delivery.clone()).await?;
+        Ok(delivery)
+    }
 }
 
 fn map_auth_error(error: AuthError) -> NotificationError {
@@ -218,7 +325,7 @@ impl From<NotificationStoreError> for NotificationError {
 
 pub struct NotificationDispatcher {
     store: Arc<dyn NotificationStore>,
-    adapter: Arc<dyn WebhookDeliveryAdapter>,
+    adapter: Arc<dyn NotificationDeliveryAdapter>,
     clock: Arc<dyn Clock>,
     config: NotificationConfig,
     wake: Arc<Notify>,
@@ -231,7 +338,7 @@ pub trait NotificationSignal: Send + Sync + 'static {
 impl NotificationDispatcher {
     pub fn new(
         store: Arc<dyn NotificationStore>,
-        adapter: Arc<dyn WebhookDeliveryAdapter>,
+        adapter: Arc<dyn NotificationDeliveryAdapter>,
         clock: Arc<dyn Clock>,
         config: NotificationConfig,
     ) -> Result<Self, NotificationError> {
@@ -353,7 +460,7 @@ impl NotificationDispatcher {
             self.adapter.deliver(claim.clone()),
         )
         .await
-        .unwrap_or(Err(WebhookDeliveryError::Timeout));
+        .unwrap_or(Err(NotificationDeliveryError::Timeout));
         let now = self.clock.now();
         match classify_result(result) {
             DeliveryDisposition::Delivered => {
@@ -470,6 +577,251 @@ pub struct NotificationTask {
     joins: Vec<JoinHandle<()>>,
 }
 
+pub struct AggregateAlertEvaluator {
+    store: Arc<dyn NotificationStore>,
+    explore: Arc<ExploreService>,
+    clock: Arc<dyn Clock>,
+    poll_interval: Duration,
+    lease: Duration,
+    limit: usize,
+}
+
+impl AggregateAlertEvaluator {
+    pub fn new(
+        store: Arc<dyn NotificationStore>,
+        explore: Arc<ExploreService>,
+        clock: Arc<dyn Clock>,
+        poll_interval: Duration,
+        lease: Duration,
+        limit: usize,
+    ) -> Result<Self, NotificationError> {
+        if poll_interval.is_zero() || lease <= poll_interval || limit == 0 || limit > 1_000 {
+            return Err(NotificationError::InvalidConfiguration);
+        }
+        Ok(Self {
+            store,
+            explore,
+            clock,
+            poll_interval,
+            lease,
+            limit,
+        })
+    }
+
+    pub async fn evaluate_once(&self) -> Result<usize, NotificationError> {
+        let mut completed = 0;
+        for _ in 0..self.limit {
+            let now = self.clock.now();
+            let claimed_until = add_duration(now, self.lease)?;
+            let Some(rule) = self
+                .store
+                .claim_due_aggregate_rule(now, claimed_until)
+                .await?
+            else {
+                break;
+            };
+            self.evaluate_rule(rule, now, claimed_until).await?;
+            completed += 1;
+        }
+        Ok(completed)
+    }
+
+    async fn evaluate_rule(
+        &self,
+        rule: AlertRule,
+        now: Timestamp,
+        claimed_until: Timestamp,
+    ) -> Result<(), NotificationError> {
+        let aggregate = rule
+            .aggregate
+            .as_ref()
+            .ok_or(NotificationError::InvalidData)?;
+        let from = add_duration_signed(now, -i64::from(aggregate.lookback_minutes) * 60_000)?;
+        let mut predicates = Vec::new();
+        for (field, value) in [
+            (ExploreField::Environment, aggregate.environment.as_ref()),
+            (ExploreField::Release, aggregate.release.as_ref()),
+        ] {
+            if let Some(value) = value {
+                predicates.push(ExplorePredicate {
+                    field,
+                    op: ExplorePredicateOp::Exact,
+                    value: Some(ExploreValue::String(value.as_str().into())),
+                    upper: None,
+                });
+            }
+        }
+        let plan = self
+            .explore
+            .plan(
+                rule.project_id,
+                ExploreQuery {
+                    dataset: aggregate.dataset,
+                    from,
+                    until: now,
+                    predicates,
+                    aggregates: vec![ExploreAggregate {
+                        kind: ExploreAggregateKind::Count,
+                        field: None,
+                        alias: AGGREGATE_ALIAS.into(),
+                    }],
+                    group_by: Vec::new(),
+                    interval: None,
+                    cursor: None,
+                    limit: 1,
+                },
+            )
+            .map_err(|_| NotificationError::InvalidData)?;
+        let result = self
+            .explore
+            .execute(plan)
+            .await
+            .map_err(|_| NotificationError::StorageUnavailable)?;
+        let count = result
+            .rows
+            .first()
+            .and_then(|row| row.values.get(AGGREGATE_ALIAS))
+            .and_then(|value| match value {
+                ExploreValue::Integer(value) => u64::try_from(*value).ok(),
+                ExploreValue::Number(value) if value.is_finite() && *value >= 0.0 => {
+                    Some(*value as u64)
+                }
+                _ => None,
+            })
+            .unwrap_or(0);
+        let threshold_met = count >= aggregate.threshold;
+        let window_expired = rule.storm_window_started_at.is_none_or(|started| {
+            now.unix_millis().saturating_sub(started.unix_millis()) >= 3_600_000
+        });
+        let storm_window_started_at = if window_expired {
+            Some(now)
+        } else {
+            rule.storm_window_started_at
+        };
+        let mut storm_count = if window_expired { 0 } else { rule.storm_count };
+        let cooldown_elapsed = rule.last_triggered_at.is_none_or(|last| {
+            now.unix_millis().saturating_sub(last.unix_millis())
+                >= i64::from(rule.cooldown_minutes) * 60_000
+        });
+        let firing = threshold_met && cooldown_elapsed && storm_count < rule.storm_limit_per_hour;
+        let resolving = !threshold_met && rule.threshold_met && aggregate.notify_resolved;
+        let action = firing.then_some("aggregate_threshold").or_else(|| {
+            resolving
+                .then_some("aggregate_resolved")
+                .filter(|_| storm_count < rule.storm_limit_per_hour)
+        });
+        let mut deliveries = Vec::new();
+        let mut last_triggered_at = rule.last_triggered_at;
+        if let Some(action) = action {
+            storm_count = storm_count.saturating_add(1);
+            last_triggered_at = Some(now);
+            let transition_id =
+                aggregate_transition_id(rule.id, rule.next_evaluation_at.unwrap_or(now), action);
+            for destination_id in rule.destination_ids.iter().copied() {
+                let id = notification_delivery_id(transition_id, rule.id, destination_id);
+                deliveries.push(NotificationDelivery {
+                    id,
+                    project_id: rule.project_id,
+                    issue_id: IssueId::from_bytes(transition_id.as_bytes()),
+                    transition_id,
+                    rule_id: rule.id,
+                    action_id: destination_id,
+                    destination_id,
+                    payload: aggregate_payload(&rule, destination_id, action, count, now)?,
+                    status: NotificationDeliveryStatus::Pending,
+                    attempts: 0,
+                    next_attempt_at: now,
+                    last_error: None,
+                    created_at: now,
+                    delivered_at: None,
+                    delete_at: None,
+                });
+            }
+        }
+        let next = add_duration(
+            now,
+            Duration::from_secs(u64::from(aggregate.evaluation_interval_minutes) * 60),
+        )?;
+        self.store
+            .complete_aggregate_rule(
+                rule.id,
+                claimed_until,
+                next,
+                threshold_met,
+                last_triggered_at,
+                storm_window_started_at,
+                storm_count,
+                deliveries,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub fn start(self: Arc<Self>, shutdown: ShutdownSignal) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = interval(self.poll_interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    () = shutdown.cancelled() => break,
+                    _ = ticker.tick() => {
+                        let _ = self.evaluate_once().await;
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn aggregate_transition_id(
+    rule_id: metric_domain::notifications::AlertRuleId,
+    now: Timestamp,
+    action: &str,
+) -> IssueTransitionId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"metric/aggregate-alert/v1");
+    hasher.update(&rule_id.as_bytes());
+    hasher.update(&now.unix_millis().to_be_bytes());
+    hasher.update(action.as_bytes());
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    IssueTransitionId::from_bytes(bytes)
+}
+
+fn aggregate_payload(
+    rule: &AlertRule,
+    destination_id: metric_domain::notifications::NotificationDestinationId,
+    action: &str,
+    count: u64,
+    now: Timestamp,
+) -> Result<NotificationPayload, NotificationError> {
+    let aggregate = rule
+        .aggregate
+        .as_ref()
+        .ok_or(NotificationError::InvalidData)?;
+    NotificationPayload::new(
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "type": action,
+            "project_id": rule.project_id.get(),
+            "title": rule.name.as_str(),
+            "dataset": aggregate.dataset.as_str(),
+            "count": count,
+            "threshold": aggregate.threshold,
+            "occurred_at_ms": now.unix_millis(),
+            "rule_id": hex::encode(rule.id.as_bytes()),
+            "destination_id": hex::encode(destination_id.as_bytes()),
+        }))
+        .map_err(|_| NotificationError::InvalidData)?,
+    )
+    .map_err(|_| NotificationError::InvalidData)
+}
+
+fn add_duration_signed(timestamp: Timestamp, millis: i64) -> Result<Timestamp, NotificationError> {
+    Timestamp::from_unix_millis(timestamp.unix_millis().saturating_add(millis))
+        .map_err(|_| NotificationError::InvalidData)
+}
+
 impl NotificationTask {
     pub async fn wait(self) {
         for join in self.joins {
@@ -485,7 +837,7 @@ enum DeliveryDisposition {
 }
 
 fn classify_result(
-    result: Result<WebhookDeliveryReceipt, WebhookDeliveryError>,
+    result: Result<NotificationDeliveryReceipt, NotificationDeliveryError>,
 ) -> DeliveryDisposition {
     match result {
         Ok(receipt) if (200..300).contains(&receipt.status) => DeliveryDisposition::Delivered,
@@ -493,15 +845,17 @@ fn classify_result(
             DeliveryDisposition::Retryable("http_retryable", receipt.retry_after)
         }
         Ok(_) => DeliveryDisposition::Permanent("http_rejected"),
-        Err(WebhookDeliveryError::Retryable) => {
+        Err(NotificationDeliveryError::Retryable) => {
             DeliveryDisposition::Retryable("network_error", None)
         }
-        Err(WebhookDeliveryError::Timeout) => DeliveryDisposition::Retryable("timeout", None),
-        Err(WebhookDeliveryError::ResponseTooLarge) => {
+        Err(NotificationDeliveryError::Timeout) => DeliveryDisposition::Retryable("timeout", None),
+        Err(NotificationDeliveryError::ResponseTooLarge) => {
             DeliveryDisposition::Retryable("response_too_large", None)
         }
-        Err(WebhookDeliveryError::Rejected) => DeliveryDisposition::Permanent("ssrf_rejected"),
-        Err(WebhookDeliveryError::InvalidSecret) => {
+        Err(NotificationDeliveryError::Rejected) => {
+            DeliveryDisposition::Permanent("provider_rejected")
+        }
+        Err(NotificationDeliveryError::InvalidSecret) => {
             DeliveryDisposition::Permanent("invalid_secret")
         }
     }
@@ -515,6 +869,7 @@ fn notification_payload(
     let kind = match transition.kind {
         metric_domain::issue::IssueNotificationKind::NewIssue => "new_issue",
         metric_domain::issue::IssueNotificationKind::Regression => "regression",
+        metric_domain::issue::IssueNotificationKind::Resolved => "resolved",
     };
     let bytes = serde_json::to_vec(&json!({
         "version": 1,
@@ -584,7 +939,7 @@ mod tests {
     fn retryable_and_terminal_statuses_are_closed() {
         for status in [200, 202, 204] {
             assert!(matches!(
-                classify_result(Ok(WebhookDeliveryReceipt {
+                classify_result(Ok(NotificationDeliveryReceipt {
                     status,
                     retry_after: None
                 })),
@@ -593,7 +948,7 @@ mod tests {
         }
         for status in [408, 429, 500, 503] {
             assert!(matches!(
-                classify_result(Ok(WebhookDeliveryReceipt {
+                classify_result(Ok(NotificationDeliveryReceipt {
                     status,
                     retry_after: None
                 })),
@@ -602,7 +957,7 @@ mod tests {
         }
         for status in [300, 301, 400, 401, 404] {
             assert!(matches!(
-                classify_result(Ok(WebhookDeliveryReceipt {
+                classify_result(Ok(NotificationDeliveryReceipt {
                     status,
                     retry_after: None
                 })),
@@ -647,8 +1002,10 @@ mod tests {
             destination: NotificationDestination {
                 id: destination_id,
                 project_id,
+                kind: metric_domain::notifications::NotificationDestinationKind::Webhook,
                 endpoint: WebhookEndpoint::new("https://example.com/hook").unwrap(),
                 sealed_secret: SealedWebhookSecret::new(vec![1; 32]).unwrap(),
+                smtp: None,
                 enabled: true,
                 created_at: Timestamp::from_unix_millis(1).unwrap(),
                 updated_at: Timestamp::from_unix_millis(1).unwrap(),
@@ -679,5 +1036,27 @@ mod tests {
         assert_eq!(value["type"], "regression");
         assert_eq!(value["version"], 1);
         assert_eq!(value.as_object().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn aggregate_delivery_identity_is_scheduled_window_scoped() {
+        let rule = AlertRuleId::from_bytes([7; 16]);
+        let scheduled = Timestamp::from_unix_millis(60_000).unwrap();
+        assert_eq!(
+            aggregate_transition_id(rule, scheduled, "aggregate_threshold"),
+            aggregate_transition_id(rule, scheduled, "aggregate_threshold")
+        );
+        assert_ne!(
+            aggregate_transition_id(rule, scheduled, "aggregate_threshold"),
+            aggregate_transition_id(
+                rule,
+                Timestamp::from_unix_millis(120_000).unwrap(),
+                "aggregate_threshold"
+            )
+        );
+        assert_ne!(
+            aggregate_transition_id(rule, scheduled, "aggregate_threshold"),
+            aggregate_transition_id(rule, scheduled, "aggregate_resolved")
+        );
     }
 }

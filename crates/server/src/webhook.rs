@@ -10,10 +10,12 @@ use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use metric_domain::{
     SecretBytes,
-    notifications::{ClaimedNotificationDelivery, SealedWebhookSecret},
+    notifications::{
+        ClaimedNotificationDelivery, NotificationDestinationKind, SealedWebhookSecret,
+    },
 };
 use metric_ports::{
-    PortFuture, WebhookDeliveryAdapter, WebhookDeliveryError, WebhookDeliveryReceipt,
+    NotificationDeliveryAdapter, NotificationDeliveryError, NotificationDeliveryReceipt, PortFuture,
 };
 use reqwest::{
     Client,
@@ -67,12 +69,12 @@ impl WebhookSecretBox {
         }
     }
 
-    pub fn seal(&self, secret: &[u8]) -> Result<SealedWebhookSecret, WebhookDeliveryError> {
+    pub fn seal(&self, secret: &[u8]) -> Result<SealedWebhookSecret, NotificationDeliveryError> {
         if secret.is_empty() || secret.len() > 4_096 {
-            return Err(WebhookDeliveryError::InvalidSecret);
+            return Err(NotificationDeliveryError::InvalidSecret);
         }
         let mut nonce = [0_u8; SECRET_NONCE_BYTES];
-        getrandom::fill(&mut nonce).map_err(|_| WebhookDeliveryError::InvalidSecret)?;
+        getrandom::fill(&mut nonce).map_err(|_| NotificationDeliveryError::InvalidSecret)?;
         let ciphertext = self
             .cipher
             .encrypt(
@@ -82,18 +84,21 @@ impl WebhookSecretBox {
                     aad: SECRET_AAD,
                 },
             )
-            .map_err(|_| WebhookDeliveryError::InvalidSecret)?;
+            .map_err(|_| NotificationDeliveryError::InvalidSecret)?;
         let mut sealed = Vec::with_capacity(1 + nonce.len() + ciphertext.len());
         sealed.push(SECRET_VERSION);
         sealed.extend_from_slice(&nonce);
         sealed.extend_from_slice(&ciphertext);
-        SealedWebhookSecret::new(sealed).map_err(|_| WebhookDeliveryError::InvalidSecret)
+        SealedWebhookSecret::new(sealed).map_err(|_| NotificationDeliveryError::InvalidSecret)
     }
 
-    fn open(&self, sealed: &SealedWebhookSecret) -> Result<Vec<u8>, WebhookDeliveryError> {
+    pub(crate) fn open(
+        &self,
+        sealed: &SealedWebhookSecret,
+    ) -> Result<Vec<u8>, NotificationDeliveryError> {
         let bytes = sealed.expose_ciphertext();
         if bytes.len() <= 1 + SECRET_NONCE_BYTES || bytes[0] != SECRET_VERSION {
-            return Err(WebhookDeliveryError::InvalidSecret);
+            return Err(NotificationDeliveryError::InvalidSecret);
         }
         self.cipher
             .decrypt(
@@ -103,7 +108,7 @@ impl WebhookSecretBox {
                     aad: SECRET_AAD,
                 },
             )
-            .map_err(|_| WebhookDeliveryError::InvalidSecret)
+            .map_err(|_| NotificationDeliveryError::InvalidSecret)
     }
 }
 
@@ -116,12 +121,12 @@ impl ReqwestWebhookAdapter {
     pub fn new(
         secret_box: WebhookSecretBox,
         config: WebhookAdapterConfig,
-    ) -> Result<Self, WebhookDeliveryError> {
+    ) -> Result<Self, NotificationDeliveryError> {
         if config.timeout.is_zero()
             || !(1..=1024 * 1024).contains(&config.max_response_bytes)
             || config.max_retry_after.is_zero()
         {
-            return Err(WebhookDeliveryError::Rejected);
+            return Err(NotificationDeliveryError::Rejected);
         }
         Ok(Self { secret_box, config })
     }
@@ -129,32 +134,35 @@ impl ReqwestWebhookAdapter {
     async fn deliver_inner(
         &self,
         claim: ClaimedNotificationDelivery,
-    ) -> Result<WebhookDeliveryReceipt, WebhookDeliveryError> {
+    ) -> Result<NotificationDeliveryReceipt, NotificationDeliveryError> {
         if !claim.destination.enabled
             || claim.destination.project_id != claim.delivery.project_id
             || claim.destination.id != claim.delivery.destination_id
         {
-            return Err(WebhookDeliveryError::Rejected);
+            return Err(NotificationDeliveryError::Rejected);
+        }
+        if claim.destination.kind != NotificationDestinationKind::Webhook {
+            return Err(NotificationDeliveryError::Rejected);
         }
         let endpoint = Url::parse(claim.destination.endpoint.as_str())
-            .map_err(|_| WebhookDeliveryError::Rejected)?;
+            .map_err(|_| NotificationDeliveryError::Rejected)?;
         validate_url(&endpoint, self.config)?;
         let host = endpoint
             .host_str()
-            .ok_or(WebhookDeliveryError::Rejected)?
+            .ok_or(NotificationDeliveryError::Rejected)?
             .to_owned();
         let port = endpoint
             .port_or_known_default()
-            .ok_or(WebhookDeliveryError::Rejected)?;
+            .ok_or(NotificationDeliveryError::Rejected)?;
         let addresses = tokio::net::lookup_host((host.as_str(), port))
             .await
-            .map_err(|_| WebhookDeliveryError::Retryable)?
+            .map_err(|_| NotificationDeliveryError::Retryable)?
             .collect::<Vec<_>>();
         if addresses.is_empty()
             || (!self.config.allow_private_networks
                 && addresses.iter().any(|address| forbidden_ip(address.ip())))
         {
-            return Err(WebhookDeliveryError::Rejected);
+            return Err(NotificationDeliveryError::Rejected);
         }
         let pinned = addresses[0];
         let client = Client::builder()
@@ -162,7 +170,7 @@ impl ReqwestWebhookAdapter {
             .timeout(self.config.timeout)
             .resolve(&host, pinned)
             .build()
-            .map_err(|_| WebhookDeliveryError::Retryable)?;
+            .map_err(|_| NotificationDeliveryError::Retryable)?;
         let secret = self.secret_box.open(&claim.destination.sealed_secret)?;
         let timestamp = claim.attempted_at.unix_millis().to_string();
         let delivery_id = hex::encode(claim.delivery.id.as_bytes());
@@ -175,20 +183,20 @@ impl ReqwestWebhookAdapter {
         let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("idempotency-key"),
-            HeaderValue::from_str(&delivery_id).map_err(|_| WebhookDeliveryError::Rejected)?,
+            HeaderValue::from_str(&delivery_id).map_err(|_| NotificationDeliveryError::Rejected)?,
         );
         headers.insert(
             HeaderName::from_static("x-delivery-id"),
-            HeaderValue::from_str(&delivery_id).map_err(|_| WebhookDeliveryError::Rejected)?,
+            HeaderValue::from_str(&delivery_id).map_err(|_| NotificationDeliveryError::Rejected)?,
         );
         headers.insert(
             HeaderName::from_static(TIMESTAMP_HEADER),
-            HeaderValue::from_str(&timestamp).map_err(|_| WebhookDeliveryError::Rejected)?,
+            HeaderValue::from_str(&timestamp).map_err(|_| NotificationDeliveryError::Rejected)?,
         );
         headers.insert(
             HeaderName::from_static(SIGNATURE_HEADER),
             HeaderValue::from_str(&format!("sha256={signature}"))
-                .map_err(|_| WebhookDeliveryError::Rejected)?,
+                .map_err(|_| NotificationDeliveryError::Rejected)?,
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -215,35 +223,38 @@ impl ReqwestWebhookAdapter {
             let chunk = chunk.map_err(classify_reqwest)?;
             bytes = bytes
                 .checked_add(chunk.len())
-                .ok_or(WebhookDeliveryError::ResponseTooLarge)?;
+                .ok_or(NotificationDeliveryError::ResponseTooLarge)?;
             if bytes > self.config.max_response_bytes {
                 break;
             }
         }
-        Ok(WebhookDeliveryReceipt {
+        Ok(NotificationDeliveryReceipt {
             status,
             retry_after,
         })
     }
 }
 
-impl WebhookDeliveryAdapter for ReqwestWebhookAdapter {
+impl NotificationDeliveryAdapter for ReqwestWebhookAdapter {
     fn deliver(
         &self,
         claim: ClaimedNotificationDelivery,
-    ) -> PortFuture<'_, Result<WebhookDeliveryReceipt, WebhookDeliveryError>> {
+    ) -> PortFuture<'_, Result<NotificationDeliveryReceipt, NotificationDeliveryError>> {
         Box::pin(self.deliver_inner(claim))
     }
 }
 
-fn validate_url(endpoint: &Url, config: WebhookAdapterConfig) -> Result<(), WebhookDeliveryError> {
+fn validate_url(
+    endpoint: &Url,
+    config: WebhookAdapterConfig,
+) -> Result<(), NotificationDeliveryError> {
     if endpoint.username() != ""
         || endpoint.password().is_some()
         || endpoint.fragment().is_some()
         || !matches!(endpoint.scheme(), "https" | "http")
         || (endpoint.scheme() == "http" && !config.allow_http)
     {
-        return Err(WebhookDeliveryError::Rejected);
+        return Err(NotificationDeliveryError::Rejected);
     }
     if let Some(ip) = endpoint.host().and_then(|host| match host {
         url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
@@ -252,12 +263,12 @@ fn validate_url(endpoint: &Url, config: WebhookAdapterConfig) -> Result<(), Webh
     }) && !config.allow_private_networks
         && forbidden_ip(ip)
     {
-        return Err(WebhookDeliveryError::Rejected);
+        return Err(NotificationDeliveryError::Rejected);
     }
     Ok(())
 }
 
-fn forbidden_ip(ip: IpAddr) -> bool {
+pub(crate) fn forbidden_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             ip.is_private()
@@ -290,11 +301,11 @@ fn signature(secret: &[u8], delivery_id: &str, timestamp: &str, body: &[u8]) -> 
     hex::encode(mac.finalize().into_bytes())
 }
 
-fn classify_reqwest(error: reqwest::Error) -> WebhookDeliveryError {
+fn classify_reqwest(error: reqwest::Error) -> NotificationDeliveryError {
     if error.is_timeout() {
-        WebhookDeliveryError::Timeout
+        NotificationDeliveryError::Timeout
     } else {
-        WebhookDeliveryError::Retryable
+        NotificationDeliveryError::Retryable
     }
 }
 

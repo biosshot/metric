@@ -815,33 +815,75 @@ pub trait NotificationStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
 
     fn upsert_rule(&self, rule: AlertRule) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn list_destinations(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<NotificationDestination>, NotificationStoreError>>;
+
+    fn list_rules(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<AlertRule>, NotificationStoreError>>;
+
+    fn claim_due_aggregate_rule(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+    ) -> PortFuture<'_, Result<Option<AlertRule>, NotificationStoreError>>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn complete_aggregate_rule(
+        &self,
+        rule_id: metric_domain::notifications::AlertRuleId,
+        claimed_until: Timestamp,
+        next_evaluation_at: Timestamp,
+        threshold_met: bool,
+        last_triggered_at: Option<Timestamp>,
+        storm_window_started_at: Option<Timestamp>,
+        storm_count: u32,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn enqueue_delivery(
+        &self,
+        delivery: NotificationDelivery,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn list_delivery_history(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<NotificationDelivery>, NotificationStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum WebhookDeliveryError {
-    #[error("webhook destination is permanently invalid or forbidden")]
+pub enum NotificationDeliveryError {
+    #[error("notification destination is permanently invalid or forbidden")]
     Rejected,
-    #[error("webhook delivery failed temporarily")]
+    #[error("notification delivery failed temporarily")]
     Retryable,
-    #[error("webhook delivery timed out")]
+    #[error("notification delivery timed out")]
     Timeout,
-    #[error("webhook response exceeds its configured bound")]
+    #[error("notification provider response exceeds its configured bound")]
     ResponseTooLarge,
-    #[error("webhook destination secret is invalid")]
+    #[error("notification destination secret is invalid")]
     InvalidSecret,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WebhookDeliveryReceipt {
+pub struct NotificationDeliveryReceipt {
     pub status: u16,
     pub retry_after: Option<Duration>,
 }
 
-pub trait WebhookDeliveryAdapter: Send + Sync + 'static {
+pub trait NotificationDeliveryAdapter: Send + Sync + 'static {
     fn deliver(
         &self,
         claim: ClaimedNotificationDelivery,
-    ) -> PortFuture<'_, Result<WebhookDeliveryReceipt, WebhookDeliveryError>>;
+    ) -> PortFuture<'_, Result<NotificationDeliveryReceipt, NotificationDeliveryError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

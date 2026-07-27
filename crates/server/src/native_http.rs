@@ -28,6 +28,7 @@ use metric_application::{
         AttachmentView, EventListRequest, FeedbackListRequest, LogListRequest, NativeApiError,
         NativeApiService, PerformanceListRequest, TransactionListRequest, encode_explore_cursor,
     },
+    notifications::{NotificationAdminService, NotificationError},
     observability::RequestId,
     projects::CreateProject,
     releases::CreateDeployRequest,
@@ -61,7 +62,14 @@ use metric_domain::{
         InboundFilterField, InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
         InboundFilterSignal,
     },
-    issue::{ActorKind, ActorRef, IssueCommandAction, IssueSnapshot, IssueStatus},
+    issue::{
+        ActorKind, ActorRef, IssueCommandAction, IssueNotificationKind, IssueSnapshot, IssueStatus,
+    },
+    notifications::{
+        AggregateAlert, AlertRule, AlertRuleId, MAX_EMAIL_ADDRESS_BYTES, MAX_SMTP_HOST_BYTES,
+        NotificationDestination, NotificationDestinationId, NotificationDestinationKind,
+        NotificationText, RuleName, SmtpDestination, SmtpSecurity, WebhookEndpoint,
+    },
     signals::{LogId, LogRecord, LogSeverity, SpanRecord, TraceId},
 };
 use serde::Deserialize;
@@ -86,6 +94,8 @@ struct NativeHttpState {
     debug_files: Option<DebugFileCapability>,
     incident_capsule: Option<Arc<IncidentCapsuleService>>,
     notifications: bool,
+    notification_admin: Option<Arc<NotificationAdminService>>,
+    notification_secret_box: Option<crate::webhook::WebhookSecretBox>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,12 +131,15 @@ pub struct NativeHttpModules {
     pub debug_files: Option<DebugFileCapability>,
     pub incident_capsule: Option<Arc<IncidentCapsuleService>>,
     pub notifications: bool,
+    pub notification_admin: Option<Arc<NotificationAdminService>>,
+    pub notification_secret_box: Option<crate::webhook::WebhookSecretBox>,
 }
 
 #[derive(Debug)]
 enum HttpApiError {
     Api(NativeApiError),
     Capsule(IncidentCapsuleError),
+    Notification(NotificationError),
     InvalidRequest,
     InvalidCredentials,
     CsrfFailed,
@@ -226,6 +239,16 @@ impl IntoResponse for HttpApiError {
                 };
                 (status, error.code(), capsule_public_message(error))
             }
+            Self::Notification(error) => {
+                let status = match error {
+                    NotificationError::InvalidConfiguration | NotificationError::InvalidData => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    NotificationError::Forbidden => StatusCode::FORBIDDEN,
+                    NotificationError::StorageUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+                };
+                (status, error.code(), notification_public_message(error))
+            }
         };
         let mut response = (
             status,
@@ -245,6 +268,16 @@ impl IntoResponse for HttpApiError {
             .headers_mut()
             .insert("x-metric-error-message", HeaderValue::from_static(message));
         response
+    }
+}
+
+fn notification_public_message(error: &NotificationError) -> &'static str {
+    match error {
+        NotificationError::InvalidConfiguration | NotificationError::InvalidData => {
+            "notification configuration is invalid"
+        }
+        NotificationError::Forbidden => "notification administration is forbidden",
+        NotificationError::StorageUnavailable => "notification storage is temporarily unavailable",
     }
 }
 
@@ -323,6 +356,8 @@ pub fn router(
         debug_files: modules.debug_files,
         incident_capsule: modules.incident_capsule,
         notifications: modules.notifications,
+        notification_admin: modules.notification_admin,
+        notification_secret_box: modules.notification_secret_box,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -443,6 +478,22 @@ pub fn router(
         .route(
             "/api/v1/projects/{project_id}/dashboards/{dashboard_id}/refresh",
             post(refresh_dashboard),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-destinations",
+            get(list_notification_destinations).post(put_notification_destination),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-destinations/{destination_id}/test",
+            post(test_notification_destination),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-deliveries",
+            get(list_notification_deliveries),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/alert-rules",
+            get(list_alert_rules).post(put_alert_rule),
         )
         .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
         .route(
@@ -1104,6 +1155,373 @@ fn dashboard_refresh_value(value: DashboardRefresh) -> Value {
                 }).collect::<serde_json::Map<_, _>>()
             }).collect::<Vec<_>>()),
         })).collect::<Vec<_>>(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotificationDestinationBody {
+    id: Option<String>,
+    kind: String,
+    endpoint: String,
+    secret: String,
+    enabled: bool,
+    smtp_port: Option<u16>,
+    smtp_security: Option<String>,
+    smtp_username: Option<String>,
+    smtp_from: Option<String>,
+    smtp_recipients: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlertRuleBody {
+    id: Option<String>,
+    name: String,
+    enabled: bool,
+    triggers: Vec<String>,
+    destination_ids: Vec<String>,
+    aggregate_dataset: Option<String>,
+    lookback_minutes: Option<u32>,
+    evaluation_interval_minutes: Option<u32>,
+    threshold: Option<u64>,
+    environment: Option<String>,
+    release: Option<String>,
+    notify_resolved: Option<bool>,
+    cooldown_minutes: Option<u32>,
+    storm_limit_per_hour: Option<u32>,
+}
+
+async fn list_notification_destinations(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let values = notification_admin(&state)?
+        .destinations(&context, project_id_from(&project_id)?)
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok(Json(json!({
+        "items": values.iter().map(notification_destination_value).collect::<Vec<_>>()
+    })))
+}
+
+async fn put_notification_destination(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Result<Json<NotificationDestinationBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let project_id = project_id_from(&project_id)?;
+    let id = body
+        .id
+        .as_deref()
+        .map(hex_16)
+        .transpose()?
+        .map(NotificationDestinationId::from_bytes)
+        .unwrap_or_else(|| NotificationDestinationId::from_bytes(*uuid::Uuid::new_v4().as_bytes()));
+    let kind = match body.kind.as_str() {
+        "telegram" => NotificationDestinationKind::Telegram,
+        "smtp_email" => NotificationDestinationKind::SmtpEmail,
+        _ => return Err(HttpApiError::InvalidRequest),
+    };
+    let endpoint_limit = match kind {
+        NotificationDestinationKind::SmtpEmail => MAX_SMTP_HOST_BYTES,
+        NotificationDestinationKind::Telegram => 128,
+        NotificationDestinationKind::Webhook => unreachable!(),
+    };
+    let endpoint = WebhookEndpoint::new(body.endpoint).map_err(|_| HttpApiError::InvalidRequest)?;
+    if endpoint.as_str().len() > endpoint_limit {
+        return Err(HttpApiError::InvalidRequest);
+    }
+    let sealed_secret = state
+        .notification_secret_box
+        .as_ref()
+        .ok_or(HttpApiError::Unavailable)?
+        .seal(body.secret.as_bytes())
+        .map_err(|_| HttpApiError::InvalidRequest)?;
+    let smtp = if kind == NotificationDestinationKind::SmtpEmail {
+        let recipients = body
+            .smtp_recipients
+            .ok_or(HttpApiError::InvalidRequest)?
+            .into_iter()
+            .map(|value| {
+                NotificationText::new(value, MAX_EMAIL_ADDRESS_BYTES)
+                    .map_err(|_| HttpApiError::InvalidRequest)
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
+        Some(SmtpDestination {
+            port: body.smtp_port.ok_or(HttpApiError::InvalidRequest)?,
+            security: match body.smtp_security.as_deref() {
+                Some("starttls") => SmtpSecurity::StartTls,
+                Some("tls") => SmtpSecurity::Tls,
+                _ => return Err(HttpApiError::InvalidRequest),
+            },
+            username: NotificationText::new(
+                body.smtp_username.ok_or(HttpApiError::InvalidRequest)?,
+                MAX_EMAIL_ADDRESS_BYTES,
+            )
+            .map_err(|_| HttpApiError::InvalidRequest)?,
+            from: NotificationText::new(
+                body.smtp_from.ok_or(HttpApiError::InvalidRequest)?,
+                MAX_EMAIL_ADDRESS_BYTES,
+            )
+            .map_err(|_| HttpApiError::InvalidRequest)?,
+            recipients,
+        })
+    } else {
+        None
+    };
+    let now = current_timestamp()?;
+    let destination = NotificationDestination {
+        id,
+        project_id,
+        kind,
+        endpoint,
+        sealed_secret,
+        smtp,
+        enabled: body.enabled,
+        created_at: now,
+        updated_at: now,
+    };
+    destination
+        .validate()
+        .map_err(|_| HttpApiError::InvalidRequest)?;
+    notification_admin(&state)?
+        .put_destination(&context, correlation_id(request_id)?, destination.clone())
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(notification_destination_value(&destination)),
+    ))
+}
+
+async fn test_notification_destination(
+    State(state): State<NativeHttpState>,
+    Path((project_id, destination_id)): Path<(String, String)>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let delivery = notification_admin(&state)?
+        .enqueue_test(
+            &context,
+            project_id_from(&project_id)?,
+            NotificationDestinationId::from_bytes(hex_16(&destination_id)?),
+            &correlation_id(request_id)?,
+            current_timestamp()?,
+        )
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(notification_delivery_value(&delivery)),
+    ))
+}
+
+async fn list_notification_deliveries(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let values = notification_admin(&state)?
+        .delivery_history(&context, project_id_from(&project_id)?)
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok(Json(json!({
+        "items": values.iter().map(notification_delivery_value).collect::<Vec<_>>()
+    })))
+}
+
+async fn list_alert_rules(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let values = notification_admin(&state)?
+        .rules(&context, project_id_from(&project_id)?)
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok(Json(json!({
+        "items": values.iter().map(alert_rule_value).collect::<Vec<_>>()
+    })))
+}
+
+async fn put_alert_rule(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Result<Json<AlertRuleBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let project_id = project_id_from(&project_id)?;
+    let id = body
+        .id
+        .as_deref()
+        .map(hex_16)
+        .transpose()?
+        .map(AlertRuleId::from_bytes)
+        .unwrap_or_else(|| AlertRuleId::from_bytes(*uuid::Uuid::new_v4().as_bytes()));
+    let triggers = body
+        .triggers
+        .iter()
+        .map(|value| match value.as_str() {
+            "new_issue" => Ok(IssueNotificationKind::NewIssue),
+            "regression" => Ok(IssueNotificationKind::Regression),
+            "resolved" => Ok(IssueNotificationKind::Resolved),
+            _ => Err(HttpApiError::InvalidRequest),
+        })
+        .collect::<Result<Box<[_]>, _>>()?;
+    let destination_ids = body
+        .destination_ids
+        .iter()
+        .map(|value| hex_16(value).map(NotificationDestinationId::from_bytes))
+        .collect::<Result<Box<[_]>, _>>()?;
+    let now = current_timestamp()?;
+    let aggregate = body
+        .aggregate_dataset
+        .as_deref()
+        .map(|dataset| {
+            Ok::<_, HttpApiError>(AggregateAlert {
+                dataset: match dataset {
+                    "errors" => ExploreDataset::Errors,
+                    "logs" => ExploreDataset::Logs,
+                    "spans" => ExploreDataset::Spans,
+                    _ => return Err(HttpApiError::InvalidRequest),
+                },
+                lookback_minutes: body.lookback_minutes.ok_or(HttpApiError::InvalidRequest)?,
+                evaluation_interval_minutes: body
+                    .evaluation_interval_minutes
+                    .ok_or(HttpApiError::InvalidRequest)?,
+                threshold: body.threshold.ok_or(HttpApiError::InvalidRequest)?,
+                environment: body
+                    .environment
+                    .filter(|value| !value.is_empty())
+                    .map(|value| NotificationText::new(value, 200))
+                    .transpose()
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                release: body
+                    .release
+                    .filter(|value| !value.is_empty())
+                    .map(|value| NotificationText::new(value, 200))
+                    .transpose()
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                notify_resolved: body.notify_resolved.unwrap_or(true),
+            })
+        })
+        .transpose()?;
+    let next_evaluation_at = aggregate.as_ref().map(|_| now);
+    let rule = AlertRule {
+        id,
+        project_id,
+        name: RuleName::new(body.name).map_err(|_| HttpApiError::InvalidRequest)?,
+        enabled: body.enabled,
+        triggers,
+        aggregate,
+        destination_ids,
+        cooldown_minutes: body.cooldown_minutes.unwrap_or(5),
+        storm_limit_per_hour: body.storm_limit_per_hour.unwrap_or(100),
+        next_evaluation_at,
+        last_triggered_at: None,
+        storm_window_started_at: None,
+        storm_count: 0,
+        threshold_met: false,
+        created_at: now,
+        updated_at: now,
+    };
+    rule.validate().map_err(|_| HttpApiError::InvalidRequest)?;
+    notification_admin(&state)?
+        .put_rule(&context, correlation_id(request_id)?, rule.clone())
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok((StatusCode::CREATED, Json(alert_rule_value(&rule))))
+}
+
+fn notification_destination_value(destination: &NotificationDestination) -> Value {
+    let (kind, smtp) = match destination.kind {
+        NotificationDestinationKind::Webhook => ("webhook", None),
+        NotificationDestinationKind::Telegram => ("telegram", None),
+        NotificationDestinationKind::SmtpEmail => (
+            "smtp_email",
+            destination.smtp.as_ref().map(|smtp| {
+                json!({
+                    "port": smtp.port,
+                    "security": match smtp.security {
+                        SmtpSecurity::StartTls => "starttls",
+                        SmtpSecurity::Tls => "tls",
+                    },
+                    "username": smtp.username.as_str(),
+                    "from": smtp.from.as_str(),
+                    "recipients": smtp.recipients.iter().map(NotificationText::as_str).collect::<Vec<_>>(),
+                })
+            }),
+        ),
+    };
+    json!({
+        "id": hex::encode(destination.id.as_bytes()),
+        "project_id": destination.project_id.get().to_string(),
+        "kind": kind,
+        "endpoint": destination.endpoint.as_str(),
+        "has_secret": true,
+        "smtp": smtp,
+        "enabled": destination.enabled,
+        "created_at": destination.created_at.unix_millis(),
+        "updated_at": destination.updated_at.unix_millis(),
+    })
+}
+
+fn alert_rule_value(rule: &AlertRule) -> Value {
+    json!({
+        "id": hex::encode(rule.id.as_bytes()),
+        "project_id": rule.project_id.get().to_string(),
+        "name": rule.name.as_str(),
+        "enabled": rule.enabled,
+        "triggers": rule.triggers.iter().map(|trigger| match trigger {
+            IssueNotificationKind::NewIssue => "new_issue",
+            IssueNotificationKind::Regression => "regression",
+            IssueNotificationKind::Resolved => "resolved",
+        }).collect::<Vec<_>>(),
+        "aggregate": rule.aggregate.as_ref().map(|aggregate| json!({
+            "dataset": aggregate.dataset.as_str(),
+            "lookback_minutes": aggregate.lookback_minutes,
+            "evaluation_interval_minutes": aggregate.evaluation_interval_minutes,
+            "threshold": aggregate.threshold,
+            "environment": aggregate.environment.as_ref().map(NotificationText::as_str),
+            "release": aggregate.release.as_ref().map(NotificationText::as_str),
+            "notify_resolved": aggregate.notify_resolved,
+        })),
+        "cooldown_minutes": rule.cooldown_minutes,
+        "storm_limit_per_hour": rule.storm_limit_per_hour,
+        "destination_ids": rule.destination_ids.iter().map(|id| hex::encode(id.as_bytes())).collect::<Vec<_>>(),
+        "created_at": rule.created_at.unix_millis(),
+        "updated_at": rule.updated_at.unix_millis(),
+    })
+}
+
+fn notification_delivery_value(
+    delivery: &metric_domain::notifications::NotificationDelivery,
+) -> Value {
+    json!({
+        "id": hex::encode(delivery.id.as_bytes()),
+        "destination_id": hex::encode(delivery.destination_id.as_bytes()),
+        "status": match delivery.status {
+            metric_domain::notifications::NotificationDeliveryStatus::Pending => "pending",
+            metric_domain::notifications::NotificationDeliveryStatus::Delivered => "delivered",
+            metric_domain::notifications::NotificationDeliveryStatus::Dead => "dead",
+        },
+        "attempts": delivery.attempts,
+        "last_error": delivery.last_error,
+        "created_at": delivery.created_at.unix_millis(),
+        "delivered_at": delivery.delivered_at.map(Timestamp::unix_millis),
     })
 }
 
@@ -2903,10 +3321,13 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "debug_source_artifacts": false,
         })),
         "notifications": state.notifications.then(|| json!({
-            "triggers": ["new_issue", "regression"],
-            "backends": ["webhook"],
+            "triggers": ["new_issue", "regression", "resolved", "aggregate_threshold"],
+            "backends": ["telegram", "smtp_email"],
+            "legacy_webhook_delivery": true,
             "delivery": "at_least_once",
-            "signed": true,
+            "aggregate_datasets": ["errors", "logs", "spans"],
+            "sealed_secrets": true,
+            "smtp_security": ["starttls", "tls"],
         })),
     }))
 }
@@ -2997,6 +3418,21 @@ fn identity(state: &NativeHttpState) -> Result<&Arc<IdentityService>, HttpApiErr
 
 fn api(state: &NativeHttpState) -> Result<&Arc<NativeApiService>, HttpApiError> {
     state.api.as_ref().ok_or(HttpApiError::Unavailable)
+}
+
+fn notification_admin(
+    state: &NativeHttpState,
+) -> Result<&Arc<NotificationAdminService>, HttpApiError> {
+    state
+        .notification_admin
+        .as_ref()
+        .ok_or(HttpApiError::Unavailable)
+}
+
+fn current_timestamp() -> Result<Timestamp, HttpApiError> {
+    let millis = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+    Timestamp::from_unix_millis(i64::try_from(millis).map_err(|_| HttpApiError::Unavailable)?)
+        .map_err(|_| HttpApiError::Unavailable)
 }
 
 fn json_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, HttpApiError> {
@@ -3959,6 +4395,30 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
+                "GET /projects/:id/notification-destinations",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "POST /projects/:id/notification-destinations",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "POST /projects/:id/notification-destinations/:destination/test",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "GET /projects/:id/notification-deliveries",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "GET /projects/:id/alert-rules",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "POST /projects/:id/alert-rules",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
                 "GET /projects/:id/releases",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
@@ -3969,7 +4429,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 56);
+        assert_eq!(matrix.len(), 62);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::{
     EventId, ProjectId, Timestamp,
+    explore::ExploreDataset,
     grouping::IssueId,
     issue::{IssueNotificationKind, IssueTitle, IssueTransitionId},
 };
@@ -16,6 +17,9 @@ pub const MAX_ENDPOINT_BYTES: usize = 2_048;
 pub const MAX_SEALED_SECRET_BYTES: usize = 8_192;
 pub const MAX_NOTIFICATION_PAYLOAD_BYTES: usize = 16 * 1024;
 pub const MAX_DIAGNOSTIC_BYTES: usize = 512;
+pub const MAX_EMAIL_RECIPIENTS: usize = 16;
+pub const MAX_SMTP_HOST_BYTES: usize = 253;
+pub const MAX_EMAIL_ADDRESS_BYTES: usize = 320;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NotificationValueError {
@@ -57,6 +61,70 @@ macro_rules! opaque_id {
 opaque_id!(AlertRuleId);
 opaque_id!(NotificationDestinationId);
 opaque_id!(NotificationDeliveryId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationDestinationKind {
+    Webhook,
+    Telegram,
+    SmtpEmail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpSecurity {
+    StartTls,
+    Tls,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct NotificationText(Box<str>);
+
+impl NotificationText {
+    pub fn new(value: impl Into<Box<str>>, maximum: usize) -> Result<Self, NotificationValueError> {
+        let value = value.into();
+        validate_text(&value, maximum)?;
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for NotificationText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("NotificationText")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmtpDestination {
+    pub port: u16,
+    pub security: SmtpSecurity,
+    pub username: NotificationText,
+    pub from: NotificationText,
+    pub recipients: Box<[NotificationText]>,
+}
+
+impl SmtpDestination {
+    pub fn validate(&self) -> Result<(), NotificationValueError> {
+        if self.port == 0
+            || self.recipients.is_empty()
+            || self.recipients.len() > MAX_EMAIL_RECIPIENTS
+            || !looks_like_email(self.from.as_str())
+            || self
+                .recipients
+                .iter()
+                .any(|recipient| !looks_like_email(recipient.as_str()))
+        {
+            return Err(NotificationValueError::Empty);
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuleName(Box<str>);
@@ -133,11 +201,31 @@ impl fmt::Debug for SealedWebhookSecret {
 pub struct NotificationDestination {
     pub id: NotificationDestinationId,
     pub project_id: ProjectId,
+    pub kind: NotificationDestinationKind,
     pub endpoint: WebhookEndpoint,
     pub sealed_secret: SealedWebhookSecret,
+    pub smtp: Option<SmtpDestination>,
     pub enabled: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+impl NotificationDestination {
+    pub fn validate(&self) -> Result<(), NotificationValueError> {
+        match self.kind {
+            NotificationDestinationKind::Webhook | NotificationDestinationKind::Telegram
+                if self.smtp.is_none() =>
+            {
+                Ok(())
+            }
+            NotificationDestinationKind::SmtpEmail => self
+                .smtp
+                .as_ref()
+                .ok_or(NotificationValueError::Empty)?
+                .validate(),
+            _ => Err(NotificationValueError::Empty),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,17 +235,61 @@ pub struct AlertRule {
     pub name: RuleName,
     pub enabled: bool,
     pub triggers: Box<[IssueNotificationKind]>,
+    pub aggregate: Option<AggregateAlert>,
     pub destination_ids: Box<[NotificationDestinationId]>,
+    pub cooldown_minutes: u32,
+    pub storm_limit_per_hour: u32,
+    pub next_evaluation_at: Option<Timestamp>,
+    pub last_triggered_at: Option<Timestamp>,
+    pub storm_window_started_at: Option<Timestamp>,
+    pub storm_count: u32,
+    pub threshold_met: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
 
 impl AlertRule {
     pub fn validate(&self) -> Result<(), NotificationValueError> {
-        if self.triggers.is_empty() || self.destination_ids.is_empty() {
+        if (self.triggers.is_empty() && self.aggregate.is_none()) || self.destination_ids.is_empty()
+        {
             return Err(NotificationValueError::EmptyRule);
         }
         if self.destination_ids.len() > MAX_RULE_DESTINATIONS {
+            return Err(NotificationValueError::TooLarge);
+        }
+        if self.cooldown_minutes > 30 * 24 * 60
+            || self.storm_limit_per_hour == 0
+            || self.storm_limit_per_hour > 10_000
+            || self
+                .aggregate
+                .as_ref()
+                .is_some_and(|aggregate| aggregate.validate().is_err())
+        {
+            return Err(NotificationValueError::TooLarge);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AggregateAlert {
+    pub dataset: ExploreDataset,
+    pub lookback_minutes: u32,
+    pub evaluation_interval_minutes: u32,
+    pub threshold: u64,
+    pub environment: Option<NotificationText>,
+    pub release: Option<NotificationText>,
+    pub notify_resolved: bool,
+}
+
+impl AggregateAlert {
+    pub fn validate(&self) -> Result<(), NotificationValueError> {
+        if !(1..=30 * 24 * 60).contains(&self.lookback_minutes)
+            || !(1..=24 * 60).contains(&self.evaluation_interval_minutes)
+            || self.threshold == 0
+            || (self.dataset == ExploreDataset::Errors
+                && (self.environment.is_some() || self.release.is_some()))
+        {
             return Err(NotificationValueError::TooLarge);
         }
         Ok(())
@@ -273,6 +405,16 @@ fn validate_text(value: &str, maximum: usize) -> Result<(), NotificationValueErr
     Ok(())
 }
 
+fn looks_like_email(value: &str) -> bool {
+    let Some((local, domain)) = value.rsplit_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && domain.contains('.')
+        && !value.chars().any(char::is_whitespace)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +441,36 @@ mod tests {
         let secret = SealedWebhookSecret::new(vec![7; 32]).unwrap();
         assert!(!format!("{endpoint:?}").contains("secret.example"));
         assert!(!format!("{secret:?}").contains('7'));
+    }
+
+    #[test]
+    fn aggregate_alert_bounds_and_error_predicates_fail_closed() {
+        let valid = AggregateAlert {
+            dataset: ExploreDataset::Logs,
+            lookback_minutes: 15,
+            evaluation_interval_minutes: 5,
+            threshold: 100,
+            environment: Some(NotificationText::new("production", 200).unwrap()),
+            release: None,
+            notify_resolved: true,
+        };
+        assert!(valid.validate().is_ok());
+        assert!(
+            AggregateAlert {
+                dataset: ExploreDataset::Errors,
+                environment: valid.environment.clone(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            AggregateAlert {
+                threshold: 0,
+                ..valid
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

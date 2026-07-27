@@ -182,10 +182,24 @@ impl MongoIssueStore {
         let (filter, update) = match command.action {
             IssueCommandAction::Resolve => (
                 and_filter(base, doc! { "s": { "$exists": false } }),
-                doc! { "$set": {
-                    "s": 1_i32,
-                    "w": { "t": date(command.at), "a": actor_binary(command.actor) },
-                } },
+                doc! {
+                    "$set": {
+                        "s": 1_i32,
+                        "w": { "t": date(command.at), "a": actor_binary(command.actor) },
+                        "j": true,
+                    },
+                    "$push": { "n": {
+                        "i": binary(notification_transition_id(
+                            command.project_id,
+                            command.issue_id,
+                            IssueNotificationKind::Resolved,
+                            EventId::from_bytes(command.idempotency_key),
+                        ).as_bytes()),
+                        "k": IssueNotificationKind::Resolved as i32,
+                        "e": binary(command.idempotency_key),
+                        "t": date(command.at),
+                    } },
+                },
             ),
             IssueCommandAction::Ignore => (
                 and_filter(

@@ -27,6 +27,7 @@ getrandom.workspace = true
 hmac.workspace = true
 humantime.workspace = true
 hex.workspace = true
+lettre.workspace = true
 mongodb.workspace = true
 reqwest.workspace = true
 serde.workspace = true

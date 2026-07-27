@@ -5,6 +5,7 @@ pub mod debug_http;
 pub mod http;
 pub mod ingest_http;
 pub mod native_http;
+pub mod notification_delivery;
 pub mod release_http;
 pub mod web_http;
 pub mod webhook;
@@ -43,7 +44,8 @@ use metric_application::{
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
     notifications::{
-        NotificationConfig, NotificationDispatcher, NotificationError, NotificationTask,
+        AggregateAlertEvaluator, NotificationConfig, NotificationDispatcher, NotificationError,
+        NotificationTask,
     },
     observability::{Metric, Metrics, Outcome},
     processor::{
@@ -157,7 +159,11 @@ struct RuntimeModules {
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
     release_service: Option<std::sync::Arc<ReleaseService>>,
     incident_capsule_service: Option<std::sync::Arc<IncidentCapsuleService>>,
+    notification_admin_service:
+        Option<std::sync::Arc<metric_application::notifications::NotificationAdminService>>,
+    notification_secret_box: Option<webhook::WebhookSecretBox>,
     notification_task: Option<NotificationTask>,
+    aggregate_alert_task: Option<tokio::task::JoinHandle<()>>,
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
@@ -260,7 +266,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         native_api_service,
         release_service,
         incident_capsule_service,
+        notification_admin_service,
+        notification_secret_box,
         notification_task,
+        aggregate_alert_task,
         project_deletion_task,
         blob_cleanup_task,
         debug_file_service,
@@ -274,6 +283,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .take()
             .expect("validated MongoDB configuration has a scrub HMAC key");
         let webhook_secret_box = webhook::WebhookSecretBox::new(&hmac_key);
+        let notification_secret_box = webhook_secret_box.clone();
         let setup = async {
             let store = MongoProjectStore::connect(
                 uri.expose(),
@@ -302,22 +312,34 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         )?);
         let notification_store: std::sync::Arc<dyn metric_ports::NotificationStore> =
             std::sync::Arc::new(store.notification_store());
-        let notification_adapter: std::sync::Arc<dyn metric_ports::WebhookDeliveryAdapter> =
+        let webhook_adapter = webhook::ReqwestWebhookAdapter::new(
+            webhook_secret_box.clone(),
+            webhook::WebhookAdapterConfig {
+                timeout: config.notifications.timeout.get(),
+                max_response_bytes: config.notifications.maximum_response_bytes,
+                max_retry_after: config.notifications.maximum_retry_after.get(),
+                allow_http: config.notifications.allow_http,
+                allow_private_networks: config.notifications.allow_private_networks,
+            },
+        )
+        .map_err(|_| NotificationError::InvalidConfiguration)?;
+        let notification_adapter: std::sync::Arc<dyn metric_ports::NotificationDeliveryAdapter> =
             std::sync::Arc::new(
-                webhook::ReqwestWebhookAdapter::new(
+                notification_delivery::ProviderDeliveryAdapter::new(
+                    webhook_adapter,
                     webhook_secret_box,
-                    webhook::WebhookAdapterConfig {
+                    notification_delivery::ProviderAdapterConfig {
                         timeout: config.notifications.timeout.get(),
                         max_response_bytes: config.notifications.maximum_response_bytes,
                         max_retry_after: config.notifications.maximum_retry_after.get(),
-                        allow_http: config.notifications.allow_http,
                         allow_private_networks: config.notifications.allow_private_networks,
+                        telegram_api_base: "https://api.telegram.org".into(),
                     },
                 )
                 .map_err(|_| NotificationError::InvalidConfiguration)?,
             );
         let notification_dispatcher = std::sync::Arc::new(NotificationDispatcher::new(
-            notification_store,
+            std::sync::Arc::clone(&notification_store),
             notification_adapter,
             std::sync::Arc::clone(&clock),
             NotificationConfig {
@@ -386,6 +408,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 },
             },
         )?);
+        let notification_admin_service = std::sync::Arc::new(
+            metric_application::notifications::NotificationAdminService::new(
+                identity_service.clone(),
+                std::sync::Arc::clone(&notification_store),
+            ),
+        );
         if let Some(token) =
             startup_bootstrap_token(identity_service.ensure_bootstrap_token().await)?
         {
@@ -527,6 +555,17 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             explore_store,
             ExploreConfig::default(),
         )?);
+        let aggregate_alert_task = Some(
+            std::sync::Arc::new(AggregateAlertEvaluator::new(
+                notification_store,
+                std::sync::Arc::clone(&explore_service),
+                std::sync::Arc::clone(&clock),
+                config.scheduler.poll_interval.get(),
+                config.notifications.attempt_lease.get(),
+                config.notifications.transition_batch_size.min(1_000),
+            )?)
+            .start(shutdown.signal()),
+        );
         let dashboard_store: std::sync::Arc<dyn metric_ports::DashboardStore> =
             std::sync::Arc::new(store.dashboard_store());
         let dashboard_service = std::sync::Arc::new(DashboardService::new(
@@ -779,7 +818,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_api_service: Some(native_api_service),
             release_service: Some(release_service),
             incident_capsule_service: Some(incident_capsule_service),
+            notification_admin_service: Some(notification_admin_service),
+            notification_secret_box: Some(notification_secret_box),
             notification_task: Some(notification_task),
+            aggregate_alert_task,
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
             debug_file_service: Some(debug_file_service),
@@ -810,7 +852,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             native_api_service: None,
             release_service: None,
             incident_capsule_service: None,
+            notification_admin_service: None,
+            notification_secret_box: None,
             notification_task: None,
+            aggregate_alert_task: None,
             project_deletion_task: None,
             blob_cleanup_task: None,
             debug_file_service: None,
@@ -870,6 +915,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         && dispatcher_task.is_some()
         && scheduler_task.is_some()
         && notification_task.is_some()
+        && aggregate_alert_task.is_some()
         && (!config.archive.enabled || archive_task.is_some());
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router(
@@ -906,6 +952,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 }),
                 incident_capsule: incident_capsule_service,
                 notifications: notification_task.is_some(),
+                notification_admin: notification_admin_service,
+                notification_secret_box,
             },
         ))
         .merge(debug_http::router(
@@ -957,6 +1005,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     }
     if let Some(task) = notification_task {
         task.wait().await;
+    }
+    if let Some(task) = aggregate_alert_task {
+        let _ = task.await;
     }
     if let Some(task) = project_deletion_task {
         task.wait().await;

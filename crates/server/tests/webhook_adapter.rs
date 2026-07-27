@@ -13,10 +13,10 @@ use metric_domain::{
     notifications::{
         AlertRuleId, ClaimedNotificationDelivery, NotificationDelivery, NotificationDeliveryId,
         NotificationDeliveryStatus, NotificationDestination, NotificationDestinationId,
-        NotificationPayload, WebhookEndpoint,
+        NotificationDestinationKind, NotificationPayload, WebhookEndpoint,
     },
 };
-use metric_ports::{WebhookDeliveryAdapter, WebhookDeliveryError};
+use metric_ports::{NotificationDeliveryAdapter, NotificationDeliveryError};
 use metric_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
 use tokio::sync::oneshot;
 
@@ -101,7 +101,7 @@ async fn controlled_receiver_enforces_redirect_timeout_retry_after_and_response_
         adapter
             .deliver(claim(format!("http://{address}/slow"), sealed))
             .await,
-        Err(WebhookDeliveryError::Timeout)
+        Err(NotificationDeliveryError::Timeout)
     );
 
     let _ = stop_tx.send(());
@@ -135,8 +135,10 @@ fn claim(
         destination: NotificationDestination {
             id: destination_id,
             project_id,
+            kind: NotificationDestinationKind::Webhook,
             endpoint: WebhookEndpoint::new(endpoint).unwrap(),
             sealed_secret: secret,
+            smtp: None,
             enabled: true,
             created_at: Timestamp::from_unix_millis(1).unwrap(),
             updated_at: Timestamp::from_unix_millis(1).unwrap(),

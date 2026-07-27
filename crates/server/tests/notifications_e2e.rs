@@ -22,14 +22,14 @@ use metric_domain::{
     },
     issue::{IssueGroupingDetail, IssueNotificationKind, IssueOccurrence, IssueTitle},
     notifications::{
-        AlertRule, AlertRuleId, NotificationDestination, NotificationDestinationId, RuleName,
-        WebhookEndpoint,
+        AlertRule, AlertRuleId, NotificationDestination, NotificationDestinationId,
+        NotificationDestinationKind, RuleName, WebhookEndpoint,
     },
 };
 use metric_mongo::{IssueCodecConfig, MongoProjectStore};
 use metric_ports::{
-    Clock, IssueStore, NotificationStore, PortFuture, WebhookDeliveryAdapter, WebhookDeliveryError,
-    WebhookDeliveryReceipt,
+    Clock, IssueStore, NotificationDeliveryAdapter, NotificationDeliveryError,
+    NotificationDeliveryReceipt, NotificationStore, PortFuture,
 };
 use metric_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
 use mongodb::{Client, Database, bson::doc};
@@ -70,8 +70,10 @@ async fn measure_expansion(database: &Database) -> Result<(), Box<dyn Error>> {
         .upsert_destination(NotificationDestination {
             id: destination_id,
             project_id,
+            kind: NotificationDestinationKind::Webhook,
             endpoint: WebhookEndpoint::new("https://example.com/benchmark")?,
             sealed_secret: metric_domain::notifications::SealedWebhookSecret::new(vec![1; 32])?,
+            smtp: None,
             enabled: true,
             created_at: now,
             updated_at: now,
@@ -84,7 +86,15 @@ async fn measure_expansion(database: &Database) -> Result<(), Box<dyn Error>> {
             name: RuleName::new("benchmark")?,
             enabled: true,
             triggers: vec![IssueNotificationKind::NewIssue].into_boxed_slice(),
+            aggregate: None,
             destination_ids: vec![destination_id].into_boxed_slice(),
+            cooldown_minutes: 0,
+            storm_limit_per_hour: 100,
+            next_evaluation_at: None,
+            last_triggered_at: None,
+            storm_window_started_at: None,
+            storm_count: 0,
+            threshold_met: false,
             created_at: now,
             updated_at: now,
         })
@@ -168,8 +178,10 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .upsert_destination(NotificationDestination {
             id: destination_id,
             project_id,
+            kind: NotificationDestinationKind::Webhook,
             endpoint: WebhookEndpoint::new(format!("http://{address}/hook"))?,
             sealed_secret: secret_box.seal(signing_secret)?,
+            smtp: None,
             enabled: true,
             created_at: now,
             updated_at: now,
@@ -183,7 +195,15 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             name: RuleName::new("New issues")?,
             enabled: true,
             triggers: vec![IssueNotificationKind::NewIssue].into_boxed_slice(),
+            aggregate: None,
             destination_ids: vec![destination_id].into_boxed_slice(),
+            cooldown_minutes: 0,
+            storm_limit_per_hour: 100,
+            next_evaluation_at: None,
+            last_triggered_at: None,
+            storm_window_started_at: None,
+            storm_count: 0,
+            threshold_met: false,
             created_at: now,
             updated_at: now,
         })
@@ -365,11 +385,11 @@ fn numbered_occurrence(project_id: ProjectId, number: usize) -> IssueOccurrence 
 
 struct NeverAdapter;
 
-impl WebhookDeliveryAdapter for NeverAdapter {
+impl NotificationDeliveryAdapter for NeverAdapter {
     fn deliver(
         &self,
         _claim: metric_domain::notifications::ClaimedNotificationDelivery,
-    ) -> PortFuture<'_, Result<WebhookDeliveryReceipt, WebhookDeliveryError>> {
+    ) -> PortFuture<'_, Result<NotificationDeliveryReceipt, NotificationDeliveryError>> {
         Box::pin(async { panic!("expansion benchmark must not deliver") })
     }
 }

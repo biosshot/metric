@@ -7,13 +7,16 @@ use std::{
 use futures_util::TryStreamExt;
 use metric_domain::{
     EventId, ProjectId, Timestamp,
+    explore::ExploreDataset,
     grouping::IssueId,
     issue::{IssueNotificationKind, IssueTitle, IssueTransitionId},
     notifications::{
-        AlertRule, AlertRuleId, ClaimedNotificationDelivery, IssueNotificationTransition,
-        NotificationDelivery, NotificationDeliveryId, NotificationDeliveryStatus,
-        NotificationDestination, NotificationDestinationId, NotificationPayload, RuleName,
-        SealedWebhookSecret, WebhookEndpoint,
+        AggregateAlert, AlertRule, AlertRuleId, ClaimedNotificationDelivery,
+        IssueNotificationTransition, MAX_EMAIL_ADDRESS_BYTES, NotificationDelivery,
+        NotificationDeliveryId, NotificationDeliveryStatus, NotificationDestination,
+        NotificationDestinationId, NotificationDestinationKind, NotificationPayload,
+        NotificationText, RuleName, SealedWebhookSecret, SmtpDestination, SmtpSecurity,
+        WebhookEndpoint,
     },
 };
 use metric_ports::{NotificationStore, NotificationStoreError, PortFuture};
@@ -311,6 +314,9 @@ impl MongoNotificationStore {
         &self,
         destination: NotificationDestination,
     ) -> Result<(), NotificationStoreError> {
+        destination
+            .validate()
+            .map_err(|_| NotificationStoreError::InvalidData)?;
         self.database
             .collection::<Document>("notification_destinations")
             .replace_one(
@@ -336,6 +342,179 @@ impl MongoNotificationStore {
             .await
             .map_err(|_| NotificationStoreError::Unavailable)?;
         Ok(())
+    }
+
+    async fn list_destinations_inner(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> Result<Vec<NotificationDestination>, NotificationStoreError> {
+        if !(1..=1_000).contains(&limit) {
+            return Err(NotificationStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("notification_destinations")
+            .find(doc! { "p": project_id.get() })
+            .sort(doc! { "c": 1, "_id": 1 })
+            .limit(i64::try_from(limit).unwrap_or(i64::MAX))
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?;
+        let mut values = Vec::new();
+        while let Some(document) = cursor
+            .try_next()
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?
+        {
+            values.push(decode_destination(&document)?);
+        }
+        Ok(values)
+    }
+
+    async fn list_rules_inner(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> Result<Vec<AlertRule>, NotificationStoreError> {
+        if !(1..=1_000).contains(&limit) {
+            return Err(NotificationStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("alert_rules")
+            .find(doc! { "p": project_id.get() })
+            .sort(doc! { "c": 1, "_id": 1 })
+            .limit(i64::try_from(limit).unwrap_or(i64::MAX))
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?;
+        let mut values = Vec::new();
+        while let Some(document) = cursor
+            .try_next()
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?
+        {
+            values.push(decode_rule(&document)?);
+        }
+        Ok(values)
+    }
+
+    async fn claim_due_aggregate_rule_inner(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+    ) -> Result<Option<AlertRule>, NotificationStoreError> {
+        if lease_until <= now {
+            return Err(NotificationStoreError::InvalidData);
+        }
+        self.database
+            .collection::<Document>("alert_rules")
+            .find_one_and_update(
+                doc! { "e": true, "g": { "$exists": true }, "x": { "$lte": date(now) } },
+                vec![doc! { "$set": { "y": "$x", "x": date(lease_until) } }],
+            )
+            .sort(doc! { "x": 1, "_id": 1 })
+            .return_document(ReturnDocument::After)
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?
+            .map(|document| decode_rule(&document))
+            .transpose()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn complete_aggregate_rule_inner(
+        &self,
+        rule_id: AlertRuleId,
+        claimed_until: Timestamp,
+        next_evaluation_at: Timestamp,
+        threshold_met: bool,
+        last_triggered_at: Option<Timestamp>,
+        storm_window_started_at: Option<Timestamp>,
+        storm_count: u32,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> Result<(), NotificationStoreError> {
+        let collection = self
+            .database
+            .collection::<Document>("notification_deliveries");
+        for delivery in deliveries {
+            collection
+                .update_one(
+                    doc! { "_id": binary(delivery.id.as_bytes()) },
+                    doc! { "$setOnInsert": encode_delivery(&delivery)? },
+                )
+                .upsert(true)
+                .await
+                .map_err(|_| NotificationStoreError::Unavailable)?;
+        }
+        let mut set = doc! {
+            "x": date(next_evaluation_at),
+            "tm": threshold_met,
+            "sc": i64::from(storm_count),
+        };
+        let mut unset = Document::new();
+        for (name, value) in [("lt", last_triggered_at), ("sw", storm_window_started_at)] {
+            if let Some(value) = value {
+                set.insert(name, date(value));
+            } else {
+                unset.insert(name, "");
+            }
+        }
+        unset.insert("y", "");
+        let mut update = doc! { "$set": set };
+        if !unset.is_empty() {
+            update.insert("$unset", unset);
+        }
+        self.database
+            .collection::<Document>("alert_rules")
+            .update_one(
+                doc! { "_id": binary(rule_id.as_bytes()), "x": date(claimed_until) },
+                update,
+            )
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?;
+        Ok(())
+    }
+
+    async fn enqueue_delivery_inner(
+        &self,
+        delivery: NotificationDelivery,
+    ) -> Result<(), NotificationStoreError> {
+        self.database
+            .collection::<Document>("notification_deliveries")
+            .update_one(
+                doc! { "_id": binary(delivery.id.as_bytes()) },
+                doc! { "$setOnInsert": encode_delivery(&delivery)? },
+            )
+            .upsert(true)
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?;
+        Ok(())
+    }
+
+    async fn list_delivery_history_inner(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> Result<Vec<NotificationDelivery>, NotificationStoreError> {
+        if !(1..=500).contains(&limit) {
+            return Err(NotificationStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("notification_deliveries")
+            .find(doc! { "p": project_id.get() })
+            .sort(doc! { "c": -1, "_id": -1 })
+            .limit(i64::try_from(limit).unwrap_or(i64::MAX))
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?;
+        let mut values = Vec::new();
+        while let Some(document) = cursor
+            .try_next()
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?
+        {
+            values.push(decode_delivery(&document)?);
+        }
+        Ok(values)
     }
 }
 
@@ -436,6 +615,68 @@ impl NotificationStore for MongoNotificationStore {
     fn upsert_rule(&self, rule: AlertRule) -> PortFuture<'_, Result<(), NotificationStoreError>> {
         Box::pin(self.upsert_rule_inner(rule))
     }
+
+    fn list_destinations(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<NotificationDestination>, NotificationStoreError>> {
+        Box::pin(self.list_destinations_inner(project_id, limit))
+    }
+
+    fn list_rules(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<AlertRule>, NotificationStoreError>> {
+        Box::pin(self.list_rules_inner(project_id, limit))
+    }
+
+    fn claim_due_aggregate_rule(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+    ) -> PortFuture<'_, Result<Option<AlertRule>, NotificationStoreError>> {
+        Box::pin(self.claim_due_aggregate_rule_inner(now, lease_until))
+    }
+
+    fn complete_aggregate_rule(
+        &self,
+        rule_id: AlertRuleId,
+        claimed_until: Timestamp,
+        next_evaluation_at: Timestamp,
+        threshold_met: bool,
+        last_triggered_at: Option<Timestamp>,
+        storm_window_started_at: Option<Timestamp>,
+        storm_count: u32,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>> {
+        Box::pin(self.complete_aggregate_rule_inner(
+            rule_id,
+            claimed_until,
+            next_evaluation_at,
+            threshold_met,
+            last_triggered_at,
+            storm_window_started_at,
+            storm_count,
+            deliveries,
+        ))
+    }
+
+    fn enqueue_delivery(
+        &self,
+        delivery: NotificationDelivery,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>> {
+        Box::pin(self.enqueue_delivery_inner(delivery))
+    }
+
+    fn list_delivery_history(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<NotificationDelivery>, NotificationStoreError>> {
+        Box::pin(self.list_delivery_history_inner(project_id, limit))
+    }
 }
 
 fn decode_issue_transitions(
@@ -475,6 +716,7 @@ fn decode_issue_transitions(
         {
             1 => IssueNotificationKind::NewIssue,
             2 => IssueNotificationKind::Regression,
+            3 => IssueNotificationKind::Resolved,
             _ => return Err(NotificationStoreError::InvalidData),
         };
         output.push(IssueNotificationTransition {
@@ -491,16 +733,44 @@ fn decode_issue_transitions(
 }
 
 fn encode_rule(rule: &AlertRule) -> Document {
-    doc! {
+    let mut document = doc! {
         "_id": binary(rule.id.as_bytes()),
         "p": rule.project_id.get(),
         "n": rule.name.as_str(),
         "e": rule.enabled,
         "k": rule.triggers.iter().copied().map(trigger_name).collect::<Vec<_>>(),
         "d": rule.destination_ids.iter().map(|id| Bson::Binary(binary(id.as_bytes()))).collect::<Vec<_>>(),
+        "o": i64::from(rule.cooldown_minutes),
+        "b": i64::from(rule.storm_limit_per_hour),
+        "sc": i64::from(rule.storm_count),
+        "tm": rule.threshold_met,
         "c": date(rule.created_at),
         "u": date(rule.updated_at),
+    };
+    if let Some(aggregate) = &rule.aggregate {
+        document.insert(
+            "g",
+            doc! {
+                "d": aggregate.dataset.as_str(),
+                "l": i64::from(aggregate.lookback_minutes),
+                "i": i64::from(aggregate.evaluation_interval_minutes),
+                "t": i64::try_from(aggregate.threshold).unwrap_or(i64::MAX),
+                "e": aggregate.environment.as_ref().map(NotificationText::as_str),
+                "r": aggregate.release.as_ref().map(NotificationText::as_str),
+                "n": aggregate.notify_resolved,
+            },
+        );
     }
+    for (name, value) in [
+        ("x", rule.next_evaluation_at),
+        ("lt", rule.last_triggered_at),
+        ("sw", rule.storm_window_started_at),
+    ] {
+        if let Some(value) = value {
+            document.insert(name, date(value));
+        }
+    }
+    document
 }
 
 fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError> {
@@ -511,6 +781,7 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
         .map(|value| match value.as_str() {
             Some("new_issue") => Ok(IssueNotificationKind::NewIssue),
             Some("regression") => Ok(IssueNotificationKind::Regression),
+            Some("resolved") => Ok(IssueNotificationKind::Resolved),
             _ => Err(NotificationStoreError::InvalidData),
         })
         .collect::<Result<Box<[_]>, _>>()?;
@@ -530,6 +801,56 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
                 .map_err(|_| NotificationStoreError::InvalidData)
         })
         .collect::<Result<Box<[_]>, _>>()?;
+    let aggregate = document
+        .get_document("g")
+        .ok()
+        .map(|value| {
+            Ok::<_, NotificationStoreError>(AggregateAlert {
+                dataset: match value
+                    .get_str("d")
+                    .map_err(|_| NotificationStoreError::InvalidData)?
+                {
+                    "errors" => ExploreDataset::Errors,
+                    "logs" => ExploreDataset::Logs,
+                    "spans" => ExploreDataset::Spans,
+                    _ => return Err(NotificationStoreError::InvalidData),
+                },
+                lookback_minutes: u32::try_from(
+                    value
+                        .get_i64("l")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                evaluation_interval_minutes: u32::try_from(
+                    value
+                        .get_i64("i")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                threshold: u64::try_from(
+                    value
+                        .get_i64("t")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                environment: value
+                    .get_str("e")
+                    .ok()
+                    .map(|value| NotificationText::new(value, 200))
+                    .transpose()
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+                release: value
+                    .get_str("r")
+                    .ok()
+                    .map(|value| NotificationText::new(value, 200))
+                    .transpose()
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+                notify_resolved: value
+                    .get_bool("n")
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+            })
+        })
+        .transpose()?;
     let rule = AlertRule {
         id: AlertRuleId::from_bytes(id16(document, "_id")?),
         project_id: ProjectId::new(
@@ -548,7 +869,19 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
             .get_bool("e")
             .map_err(|_| NotificationStoreError::InvalidData)?,
         triggers,
+        aggregate,
         destination_ids,
+        cooldown_minutes: u32::try_from(document.get_i64("o").unwrap_or(0))
+            .map_err(|_| NotificationStoreError::InvalidData)?,
+        storm_limit_per_hour: u32::try_from(document.get_i64("b").unwrap_or(100))
+            .map_err(|_| NotificationStoreError::InvalidData)?,
+        next_evaluation_at: optional_timestamp(document, "y")?
+            .or(optional_timestamp(document, "x")?),
+        last_triggered_at: optional_timestamp(document, "lt")?,
+        storm_window_started_at: optional_timestamp(document, "sw")?,
+        storm_count: u32::try_from(document.get_i64("sc").unwrap_or(0))
+            .map_err(|_| NotificationStoreError::InvalidData)?,
+        threshold_met: document.get_bool("tm").unwrap_or(false),
         created_at: timestamp(document, "c")?,
         updated_at: timestamp(document, "u")?,
     };
@@ -558,9 +891,10 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
 }
 
 fn encode_destination(destination: &NotificationDestination) -> Document {
-    doc! {
+    let mut document = doc! {
         "_id": binary(destination.id.as_bytes()),
         "p": destination.project_id.get(),
+        "k": destination_kind_name(destination.kind),
         "u": destination.endpoint.as_str(),
         "s": Binary {
             subtype: BinarySubtype::Generic,
@@ -569,13 +903,78 @@ fn encode_destination(destination: &NotificationDestination) -> Document {
         "e": destination.enabled,
         "c": date(destination.created_at),
         "m": date(destination.updated_at),
+    };
+    if let Some(smtp) = &destination.smtp {
+        document.insert(
+            "o",
+            doc! {
+                "p": i32::from(smtp.port),
+                "t": smtp_security_name(smtp.security),
+                "a": smtp.username.as_str(),
+                "f": smtp.from.as_str(),
+                "r": smtp.recipients.iter().map(NotificationText::as_str).collect::<Vec<_>>(),
+            },
+        );
     }
+    document
 }
 
 fn decode_destination(
     document: &Document,
 ) -> Result<NotificationDestination, NotificationStoreError> {
-    Ok(NotificationDestination {
+    let kind = match document.get_str("k").unwrap_or("webhook") {
+        "webhook" => NotificationDestinationKind::Webhook,
+        "telegram" => NotificationDestinationKind::Telegram,
+        "smtp_email" => NotificationDestinationKind::SmtpEmail,
+        _ => return Err(NotificationStoreError::InvalidData),
+    };
+    let smtp = document
+        .get_document("o")
+        .ok()
+        .map(|smtp| {
+            let recipients = smtp
+                .get_array("r")
+                .map_err(|_| NotificationStoreError::InvalidData)?
+                .iter()
+                .map(|value| {
+                    NotificationText::new(
+                        value.as_str().ok_or(NotificationStoreError::InvalidData)?,
+                        MAX_EMAIL_ADDRESS_BYTES,
+                    )
+                    .map_err(|_| NotificationStoreError::InvalidData)
+                })
+                .collect::<Result<Box<[_]>, _>>()?;
+            Ok::<_, NotificationStoreError>(SmtpDestination {
+                port: u16::try_from(
+                    smtp.get_i32("p")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                security: match smtp
+                    .get_str("t")
+                    .map_err(|_| NotificationStoreError::InvalidData)?
+                {
+                    "starttls" => SmtpSecurity::StartTls,
+                    "tls" => SmtpSecurity::Tls,
+                    _ => return Err(NotificationStoreError::InvalidData),
+                },
+                username: NotificationText::new(
+                    smtp.get_str("a")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                    MAX_EMAIL_ADDRESS_BYTES,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                from: NotificationText::new(
+                    smtp.get_str("f")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                    MAX_EMAIL_ADDRESS_BYTES,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                recipients,
+            })
+        })
+        .transpose()?;
+    let destination = NotificationDestination {
         id: NotificationDestinationId::from_bytes(id16(document, "_id")?),
         project_id: ProjectId::new(
             document
@@ -583,12 +982,14 @@ fn decode_destination(
                 .map_err(|_| NotificationStoreError::InvalidData)?,
         )
         .map_err(|_| NotificationStoreError::InvalidData)?,
+        kind,
         endpoint: WebhookEndpoint::new(
             document
                 .get_str("u")
                 .map_err(|_| NotificationStoreError::InvalidData)?,
         )
         .map_err(|_| NotificationStoreError::InvalidData)?,
+        smtp,
         sealed_secret: SealedWebhookSecret::new(
             document
                 .get_binary_generic("s")
@@ -601,7 +1002,11 @@ fn decode_destination(
             .map_err(|_| NotificationStoreError::InvalidData)?,
         created_at: timestamp(document, "c")?,
         updated_at: timestamp(document, "m")?,
-    })
+    };
+    destination
+        .validate()
+        .map_err(|_| NotificationStoreError::InvalidData)?;
+    Ok(destination)
 }
 
 fn encode_delivery(delivery: &NotificationDelivery) -> Result<Document, NotificationStoreError> {
@@ -713,6 +1118,22 @@ fn trigger_name(kind: IssueNotificationKind) -> &'static str {
     match kind {
         IssueNotificationKind::NewIssue => "new_issue",
         IssueNotificationKind::Regression => "regression",
+        IssueNotificationKind::Resolved => "resolved",
+    }
+}
+
+fn destination_kind_name(kind: NotificationDestinationKind) -> &'static str {
+    match kind {
+        NotificationDestinationKind::Webhook => "webhook",
+        NotificationDestinationKind::Telegram => "telegram",
+        NotificationDestinationKind::SmtpEmail => "smtp_email",
+    }
+}
+
+fn smtp_security_name(security: SmtpSecurity) -> &'static str {
+    match security {
+        SmtpSecurity::StartTls => "starttls",
+        SmtpSecurity::Tls => "tls",
     }
 }
 
@@ -763,16 +1184,29 @@ fn date(timestamp: Timestamp) -> DateTime {
 pub(crate) fn destination_validator() -> Document {
     doc! { "$jsonSchema": {
         "bsonType": "object",
-        "required": ["_id", "p", "u", "s", "e", "c", "m"],
+        "required": ["_id", "p", "k", "u", "s", "e", "c", "m"],
         "additionalProperties": false,
         "properties": {
             "_id": { "bsonType": "binData" },
             "p": { "bsonType": "int", "minimum": 1 },
+            "k": { "enum": ["webhook", "telegram", "smtp_email"] },
             "u": { "bsonType": "string", "maxLength": 2048 },
             "s": { "bsonType": "binData" },
             "e": { "bsonType": "bool" },
             "c": { "bsonType": "date" },
             "m": { "bsonType": "date" },
+            "o": {
+                "bsonType": "object",
+                "required": ["p", "t", "a", "f", "r"],
+                "additionalProperties": false,
+                "properties": {
+                    "p": { "bsonType": "int", "minimum": 1, "maximum": 65535 },
+                    "t": { "enum": ["starttls", "tls"] },
+                    "a": { "bsonType": "string", "maxLength": 320 },
+                    "f": { "bsonType": "string", "maxLength": 320 },
+                    "r": { "bsonType": "array", "minItems": 1, "maxItems": 16, "items": { "bsonType": "string", "maxLength": 320 } },
+                },
+            },
         },
     }}
 }
@@ -780,17 +1214,26 @@ pub(crate) fn destination_validator() -> Document {
 pub(crate) fn rule_validator() -> Document {
     doc! { "$jsonSchema": {
         "bsonType": "object",
-        "required": ["_id", "p", "n", "e", "k", "d", "c", "u"],
+        "required": ["_id", "p", "n", "e", "k", "d", "o", "b", "sc", "tm", "c", "u"],
         "additionalProperties": false,
         "properties": {
             "_id": { "bsonType": "binData" },
             "p": { "bsonType": "int", "minimum": 1 },
             "n": { "bsonType": "string", "maxLength": 200 },
             "e": { "bsonType": "bool" },
-            "k": { "bsonType": "array", "minItems": 1, "maxItems": 2, "items": { "enum": ["new_issue", "regression"] } },
+            "k": { "bsonType": "array", "maxItems": 3, "items": { "enum": ["new_issue", "regression", "resolved"] } },
             "d": { "bsonType": "array", "minItems": 1, "maxItems": 32, "items": { "bsonType": "binData" } },
             "c": { "bsonType": "date" },
             "u": { "bsonType": "date" },
+            "g": { "bsonType": "object" },
+            "o": { "bsonType": "long", "minimum": 0 },
+            "b": { "bsonType": "long", "minimum": 1 },
+            "sc": { "bsonType": "long", "minimum": 0 },
+            "tm": { "bsonType": "bool" },
+            "x": { "bsonType": "date" },
+            "lt": { "bsonType": "date" },
+            "sw": { "bsonType": "date" },
+            "y": { "bsonType": "date" },
         },
     }}
 }
@@ -829,11 +1272,18 @@ pub(crate) fn notification_indexes(collection: &str) -> Vec<IndexModel> {
             "notification_destination_project",
             None,
         )],
-        "alert_rules" => vec![named_index(
-            doc! { "p": 1, "e": 1, "k": 1, "_id": 1 },
-            "alert_rule_match",
-            None,
-        )],
+        "alert_rules" => vec![
+            named_index(
+                doc! { "p": 1, "e": 1, "k": 1, "_id": 1 },
+                "alert_rule_match",
+                None,
+            ),
+            named_index(
+                doc! { "e": 1, "x": 1, "_id": 1 },
+                "alert_rule_aggregate_due",
+                Some(doc! { "e": true, "g": { "$exists": true } }),
+            ),
+        ],
         "notification_deliveries" => vec![
             named_index(
                 doc! { "s": 1, "n": 1, "_id": 1 },
@@ -863,7 +1313,7 @@ pub(crate) fn notification_indexes(collection: &str) -> Vec<IndexModel> {
 pub(crate) fn notification_index_names(collection: &str) -> BTreeSet<&'static str> {
     match collection {
         "notification_destinations" => BTreeSet::from(["_id_", "notification_destination_project"]),
-        "alert_rules" => BTreeSet::from(["_id_", "alert_rule_match"]),
+        "alert_rules" => BTreeSet::from(["_id_", "alert_rule_aggregate_due", "alert_rule_match"]),
         "notification_deliveries" => BTreeSet::from([
             "_id_",
             "notification_delivery_due",
