@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import EmptyState from '../components/EmptyState.vue';
@@ -9,9 +10,10 @@ import { api } from '../api/client';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
+const route = useRoute();
 const service = ref('');
 const environment = ref('');
-const release = ref('');
+const release = ref(typeof route.query.release === 'string' ? route.query.release : '');
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');

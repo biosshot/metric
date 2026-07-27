@@ -12,6 +12,8 @@ import LogDetailView from './views/LogDetailView.vue';
 import TransactionsView from './views/TransactionsView.vue';
 import TraceView from './views/TraceView.vue';
 import PerformanceView from './views/PerformanceView.vue';
+import ReleasesView from './views/ReleasesView.vue';
+import ReleaseDetailView from './views/ReleaseDetailView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -25,6 +27,8 @@ export const router = createRouter({
     { path: '/traces', name: 'traces', component: TransactionsView },
     { path: '/traces/:traceId', name: 'trace', component: TraceView },
     { path: '/performance', name: 'performance', component: PerformanceView },
+    { path: '/releases', name: 'releases', component: ReleasesView },
+    { path: '/releases/:releaseId', name: 'release', component: ReleaseDetailView },
     { path: '/auth/setup', name: 'password-setup', component: AuthView },
     { path: '/organization', name: 'organization', component: OrganizationView },
     { path: '/account/tokens', redirect: '/organization' },

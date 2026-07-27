@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { api } from '../api/client';
 import type { CreatedApiToken } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -8,14 +8,28 @@ import AppIcon from '../components/AppIcon.vue';
 import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
 const queryClient = useQueryClient();
-const tokenName = ref('sentry-cli debug files');
+const tokenProfile = ref('releases');
+const tokenName = ref('sentry-cli releases');
 const expiresOn = ref(new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10));
 const createdToken = ref<CreatedApiToken | null>(null);
 const revokingTokenId = ref<string | null>(null);
+const profileOptions: SelectOption[] = [
+  { value: 'releases', label: 'Releases and deploys', icon: 'release' },
+  { value: 'debug-files', label: 'Debug files', icon: 'fileCode' },
+];
+const tokenScopes = computed(() =>
+  tokenProfile.value === 'releases'
+    ? ['release:read', 'release:write']
+    : ['debug_file:read', 'debug_file:write'],
+);
+const profileTitle = computed(() =>
+  tokenProfile.value === 'releases' ? 'Create Release CLI token' : 'Create debug-file token',
+);
 
 const tokens = useQuery({
   queryKey: ['api-tokens'],
@@ -26,7 +40,7 @@ const createToken = useMutation({
   mutationFn: () =>
     api.createToken(
       tokenName.value,
-      ['debug_file:read', 'debug_file:write'],
+      tokenScopes.value,
       `${expiresOn.value}T23:59:59Z`,
     ),
   onSuccess: async (token) => {
@@ -99,13 +113,14 @@ function formatTimestamp(value: string | null): string {
       <div class="section-heading">
         <div>
           <p class="eyebrow">sentry-cli</p>
-          <h2>Create debug-file token</h2>
+          <h2>{{ profileTitle }}</h2>
           <p class="muted">
-            Grants only <code>debug_file:read</code> and <code>debug_file:write</code>.
+            Grants only <code>{{ tokenScopes.join(', ') }}</code>.
           </p>
         </div>
       </div>
       <div class="form-grid">
+        <BaseSelect v-model="tokenProfile" :options="profileOptions" label="CLI capability" />
         <label>
           Token name
           <input v-model.trim="tokenName" required maxlength="120" autocomplete="off" />

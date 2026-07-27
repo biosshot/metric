@@ -23,6 +23,10 @@ import type {
   ProjectKey,
   ProjectDeletionStatus,
   ProjectPolicy,
+  Release,
+  ReleaseIssue,
+  ReleaseSummary,
+  Deploy,
   Span,
   StructuredLog,
   Trace,
@@ -332,6 +336,43 @@ export const api = {
         release: filters.release,
         service: filters.service,
         limit: 100,
+      })}`,
+    ),
+  releases: (projectId: string, cursor?: string | null) =>
+    request<Page<ReleaseSummary>>(
+      `/api/v1/projects/${projectId}/releases${query({ cursor, limit: 50 })}`,
+    ),
+  release: (projectId: string, releaseId: string) =>
+    request<Release>(`/api/v1/projects/${projectId}/releases/${releaseId}`),
+  createRelease: (projectId: string, version: string, url?: string) =>
+    request<Release>(`/api/v1/projects/${projectId}/releases`, {
+      method: 'POST',
+      body: JSON.stringify({ version, url: url || null }),
+    }),
+  finalizeRelease: (projectId: string, releaseId: string) =>
+    request<Release>(`/api/v1/projects/${projectId}/releases/${releaseId}/finalize`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  releaseDeploys: (projectId: string, releaseId: string) =>
+    request<Page<Deploy>>(
+      `/api/v1/projects/${projectId}/releases/${releaseId}/deploys?limit=50`,
+    ),
+  createDeploy: (
+    projectId: string,
+    releaseId: string,
+    input: { environment: string; name?: string; url?: string },
+  ) =>
+    request<Deploy>(`/api/v1/projects/${projectId}/releases/${releaseId}/deploys`, {
+      method: 'POST',
+      headers: { 'idempotency-key': crypto.randomUUID().replaceAll('-', '') },
+      body: JSON.stringify(input),
+    }),
+  releaseIssues: (projectId: string, releaseId: string, kind: 'new' | 'regressed') =>
+    request<Page<ReleaseIssue>>(
+      `/api/v1/projects/${projectId}/releases/${releaseId}/issues${query({
+        kind,
+        limit: 20,
       })}`,
     ),
   search: (projectId: string, expression: string, cursor?: string | null) =>

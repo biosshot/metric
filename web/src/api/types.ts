@@ -4,6 +4,8 @@ export type Permission =
   | 'issue:write'
   | 'project:read'
   | 'project:admin'
+  | 'release:read'
+  | 'release:write'
   | 'organization:admin'
   | 'organization:owner'
   | 'organization:delete'
@@ -184,6 +186,12 @@ export interface Issue {
   assignee: { kind: string; id: string } | null;
   first_release: string | null;
   last_release: string | null;
+  regression: {
+    time: string;
+    event_id: string;
+    count: number;
+    release: string | null;
+  } | null;
   grouping: { strategy: string; summary: string };
 }
 
@@ -268,6 +276,50 @@ export interface PerformanceBucket {
   p99_ms: number;
   approximate: true;
   sample_limit: number;
+}
+
+export interface ReleaseSummary {
+  id: string;
+  version: string;
+  activity_at: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  released_at: string | null;
+  explicit: boolean;
+}
+
+export interface Release extends ReleaseSummary {
+  project_ids: string[];
+  created_at: string;
+  first_event_id: string | null;
+  latest_event_id: string | null;
+  url: string | null;
+  reference: string | null;
+  repositories: Array<{
+    repository: string;
+    commit_from: string | null;
+    commit_to: string | null;
+  }>;
+}
+
+export interface Deploy {
+  id: string;
+  release_id: string;
+  environment: string;
+  name: string | null;
+  url: string | null;
+  started_at: string;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export interface ReleaseIssue {
+  id: string;
+  title: string;
+  first_seen: string;
+  last_seen: string;
+  first_release: string | null;
+  last_release: string | null;
 }
 
 export interface IssueStatistic {

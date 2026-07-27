@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -15,9 +16,11 @@ import type { Event, Issue, Page } from '../api/types';
 type InvestigationResult = Page<Issue> | (Page<Event> & { candidates_examined: number });
 
 const session = useSessionStore();
+const route = useRoute();
 const status = ref('');
-const search = ref('');
-const submittedSearch = ref('');
+const initialSearch = typeof route.query.q === 'string' ? route.query.q : '';
+const search = ref(initialSearch);
+const submittedSearch = ref(initialSearch);
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const statusOptions: SelectOption[] = [

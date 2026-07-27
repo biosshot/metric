@@ -39,6 +39,8 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/traces", index.clone())
         .route_service("/traces/{trace_id}", index.clone())
         .route_service("/performance", index.clone())
+        .route_service("/releases", index.clone())
+        .route_service("/releases/{release_id}", index.clone())
         .route_service("/organization", index.clone())
         .route_service("/account/tokens", index.clone())
         .route_service("/auth/setup", index.clone())
@@ -99,6 +101,8 @@ mod tests {
             "/traces",
             "/traces/001122",
             "/performance",
+            "/releases",
+            "/releases/001122",
             "/organization",
             "/account/tokens",
             "/auth/setup",
@@ -134,7 +138,8 @@ mod tests {
         std::fs::write(root.join("index.html"), "<main>Metric Web</main>").unwrap();
         std::fs::write(root.join("favicon.svg"), "<svg/>").unwrap();
         std::fs::write(
-            root.join("fonts").join("jetbrains-mono-latin-wght-normal.woff2"),
+            root.join("fonts")
+                .join("jetbrains-mono-latin-wght-normal.woff2"),
             [0u8; 8],
         )
         .unwrap();

@@ -137,6 +137,11 @@ function formatTime(value: string): string {
           <span>Last release</span>
           <strong>{{ issue.data.value.last_release || 'Not reported' }}</strong>
         </article>
+        <article v-if="issue.data.value.regression">
+          <span>Latest regression</span>
+          <strong>{{ issue.data.value.regression.release || 'Release not reported' }}</strong>
+          <small>{{ formatTime(issue.data.value.regression.time) }}</small>
+        </article>
       </div>
 
       <section class="panel" aria-labelledby="frequency-heading">

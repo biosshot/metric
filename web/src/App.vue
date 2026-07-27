@@ -123,6 +123,10 @@ async function logout(): Promise<void> {
           <AppIcon name="gauge" :size="18" />
           Performance
         </RouterLink>
+        <RouterLink to="/releases" @click="navigationOpen = false">
+          <AppIcon name="release" :size="18" />
+          Releases
+        </RouterLink>
         <RouterLink to="/project/setup" @click="navigationOpen = false">
           <AppIcon name="connect" :size="18" />
           SDK setup
