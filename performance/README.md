@@ -1,5 +1,19 @@
 # Performance regression artifacts
 
+## Phase 30 Sessions and Release Health
+
+The retained Phase 30 baseline measures deterministic Session lifecycle merging and
+fixed-size Release Health sketch maintenance in the pure domain path. It reports
+explicit RPS but does not claim HTTP, queue, or MongoDB capacity:
+
+```text
+cargo test -p metric-domain --release sessions::tests::performance_session_merge_rps -- --ignored --exact --nocapture
+```
+
+Run at most once per local pass and compare only on the same machine, toolchain,
+fixture, iteration count, and release profile. The reviewed artifact is stored under
+`performance/baselines/sessions-release-health/`; no server process is started.
+
 Phase 17 retains the real `sentry-cli` upload, private debug index hit/miss RPS,
 and open-circuit backend-failure RPS in `baselines/debug-files/`. Compare a newly
 captured JSON result with:

@@ -18,13 +18,14 @@ Status as of 2026-07-27:
 | Phase 27 Production readiness | Accepted, execution deferred | ADR-0044/0045 |
 | Phase 28 Signal Inbound Filters | Complete | ADR-0045 and Phase 28 report |
 | Phase 29 Releases and Deploys | Complete | ADR-0045 and Phase 29 report |
-| Phase 30 Sessions and Release Health | Next | ADR-0045 |
-| Phases 31-36 lightweight product wave | Planned | ADR-0045 |
+| Phase 30 Sessions and Release Health | Complete | ADR-0045 and Phase 30 report |
+| Phase 31 User Feedback | Next | ADR-0045 |
+| Phases 32-36 lightweight product wave | Planned | ADR-0045 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045 |
 
 Phase 27 is not complete and no production-ready claim follows from deferring it.
-By explicit owner decision, deferred Phase 27 remains incomplete. Phase 28 is
-complete, Phase 29 is complete, and Phase 30 is the next implementation phase.
+By explicit owner decision, deferred Phase 27 remains incomplete. Phases 28-30 are
+complete, and Phase 31 is the next implementation phase.
 ADR-0045 numbers the selected lightweight product wave through Phase 36.
 
 ## Document precedence
@@ -49,6 +50,8 @@ current roadmap.
 | Structured Log | validate/scrub/project -> bounded LogWriter -> terminal unordered `insert_many` |
 | Transaction/Span | validate/scrub/expand -> bounded SpanWriter -> terminal unordered `insert_many` |
 | Performance aggregate | best-effort derived `span_stats_hourly`, rebuildable from terminal root Spans |
+| SDK Session | validate/scrub -> dedicated bounded SessionWriter -> compact lifecycle upsert |
+| Release Health | rebuildable `session_stats_hourly` derived from durable Sessions |
 
 Logs and Spans do not have a pending Processor backlog. Their successful HTTP
 response is issued only after every submitted terminal record is durable.
@@ -58,7 +61,7 @@ duplicate because its ID contains the server receive time.
 
 ## Current physical storage names
 
-The active schema generation is 11. The Error occurrence collection is
+The active schema generation is 12. The Error occurrence collection is
 `error_events`; `events` is only a legacy generation-7 physical name. Native HTTP
 routes may still contain `/events` because route names are product concepts, not
 MongoDB collection selectors.
@@ -73,6 +76,8 @@ logs
 spans
 span_stats_hourly
 deploys
+sessions
+session_stats_hourly
 ```
 
 Future collection names in ADR-0040 are reserved design decisions, not evidence that
@@ -102,5 +107,5 @@ the current release may claim production readiness.
   performance model.
 - `0044-production-readiness-program.md`: accepted but deferred Phase 27 and
   production launch gate.
-- `0045-lightweight-product-wave-phases-28-36.md`: current Phase 28 and the accepted
-  Phase 29-36 sequence.
+- `0045-lightweight-product-wave-phases-28-36.md`: completed Phases 28-30 and the
+  accepted Phase 31-36 sequence.

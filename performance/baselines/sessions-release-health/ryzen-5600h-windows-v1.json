@@ -1,0 +1,30 @@
+{
+  "phase": 30,
+  "capability": "sessions-release-health",
+  "recorded_at": "2026-07-27",
+  "command": "cargo test -p metric-domain --release sessions::tests::performance_session_merge_rps -- --ignored --exact --nocapture",
+  "workload": {
+    "operations": 100000,
+    "operation": "merge bounded Session lifecycle updates and maintain fixed-size user sketches",
+    "mode": "release",
+    "concurrency": 1
+  },
+  "result": {
+    "elapsed_ms": 22,
+    "rps": 4483219,
+    "minimum_rps": 100000,
+    "passed": true
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 5 5600H with Radeon Graphics",
+    "physical_cores": 6,
+    "logical_processors": 12,
+    "os": "Windows 11 Home Single Language",
+    "rustc": "1.88.0"
+  },
+  "notes": [
+    "This is a retained pure-domain CPU regression baseline, not HTTP or MongoDB capacity.",
+    "Compare future runs on the same machine, toolchain, fixture and command.",
+    "Exactly one performance run was captured; the benchmark starts no server process."
+  ]
+}
