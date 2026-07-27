@@ -24,7 +24,7 @@ The selected wave is:
 | 29 | Releases and Deploys | Complete |
 | 30 | Sessions and Release Health | Complete |
 | 31 | User Feedback | Complete |
-| 32 | Unified Explore | Planned |
+| 32 | Unified Explore | Complete |
 | 33 | Saved Queries and Dashboards | Planned |
 | 34 | Alerts and notification destinations | Planned |
 | 35 | Cron Monitoring | Planned |
