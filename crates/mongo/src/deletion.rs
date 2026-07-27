@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 32] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 34] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -100,6 +100,16 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 32] = [
     DatasetRegistration {
         code: 16,
         name: "feedback",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 17,
+        name: "saved_queries",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 18,
+        name: "dashboards",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -248,8 +258,8 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 8] = [
     },
 ];
 
-const PURGE_CODES: [u16; 22] = [
-    10, 11, 12, 13, 14, 15, 16, 20, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66, 68, 70,
+const PURGE_CODES: [u16; 24] = [
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66, 68, 70,
 ];
 
 impl MongoProjectStore {
@@ -545,6 +555,20 @@ impl MongoProjectStore {
             }
             16 => {
                 self.delete_owned_batch("feedback", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            17 => {
+                self.delete_owned_batch(
+                    "saved_queries",
+                    "project_id",
+                    project_id,
+                    cursor,
+                    batch_size,
+                )
+                .await
+            }
+            18 => {
+                self.delete_owned_batch("dashboards", "project_id", project_id, cursor, batch_size)
                     .await
             }
             20 => {

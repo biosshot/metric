@@ -10,6 +10,9 @@ use metric_domain::{
     },
     auth::{Actor, AuditAction, AuthContext, Permission, RequestCorrelationId},
     blob::{BlobKey, BlobObjectId},
+    dashboards::{
+        Dashboard, DashboardId, DashboardRefresh, DashboardVariables, SavedQuery, SavedQueryId,
+    },
     deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
     explore::{ExploreCursor, ExploreQuery, ExploreResult},
     feedback::{FeedbackAnchor, FeedbackRecord, FeedbackStatus},
@@ -33,6 +36,7 @@ use thiserror::Error;
 
 use crate::{
     auth::{AuthError, IdentityService},
+    dashboards::{DashboardError, DashboardInput, DashboardService, SavedQueryInput},
     deletion::{ProjectDeletionError, ProjectDeletionService},
     explore::{ExploreError, ExploreService},
     issues::{IssueService, IssueServiceError},
@@ -69,6 +73,8 @@ pub enum NativeApiError {
     Search(#[from] SearchError),
     #[error(transparent)]
     Explore(#[from] ExploreError),
+    #[error(transparent)]
+    Dashboard(#[from] DashboardError),
     #[error("service is temporarily unavailable")]
     Unavailable,
 }
@@ -86,6 +92,7 @@ impl NativeApiError {
             Self::RateLimited => "rate_limited",
             Self::Search(error) => error.code(),
             Self::Explore(error) => error.code(),
+            Self::Dashboard(error) => error.code(),
             Self::Unavailable => "temporarily_unavailable",
         }
     }
@@ -162,6 +169,7 @@ pub struct NativeApiService {
     releases: Option<Arc<ReleaseService>>,
     feedback_store: Option<Arc<dyn FeedbackStore>>,
     explore: Option<Arc<ExploreService>>,
+    dashboards: Option<Arc<DashboardService>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +207,7 @@ impl NativeApiService {
             releases: None,
             feedback_store: None,
             explore: None,
+            dashboards: None,
         }
     }
 
@@ -233,6 +242,169 @@ impl NativeApiService {
     pub fn with_explore(mut self, explore: Arc<ExploreService>) -> Self {
         self.explore = Some(explore);
         self
+    }
+
+    #[must_use]
+    pub fn with_dashboards(mut self, dashboards: Arc<DashboardService>) -> Self {
+        self.dashboards = Some(dashboards);
+        self
+    }
+
+    pub async fn list_saved_queries(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+    ) -> Result<Vec<SavedQuery>, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .list_saved_queries(project_id)
+            .await?)
+    }
+
+    pub async fn saved_query(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: SavedQueryId,
+    ) -> Result<SavedQuery, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .load_saved_query(project_id, id)
+            .await?)
+    }
+
+    pub async fn create_saved_query(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        input: SavedQueryInput,
+    ) -> Result<SavedQuery, NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .create_saved_query(project_id, context.user_id, input)
+            .await?)
+    }
+
+    pub async fn update_saved_query(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: SavedQueryId,
+        expected_revision: u64,
+        input: SavedQueryInput,
+    ) -> Result<SavedQuery, NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .update_saved_query(project_id, id, context.user_id, expected_revision, input)
+            .await?)
+    }
+
+    pub async fn delete_saved_query(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: SavedQueryId,
+    ) -> Result<(), NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .delete_saved_query(project_id, id)
+            .await?)
+    }
+
+    pub async fn list_dashboards(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+    ) -> Result<Vec<Dashboard>, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .list_dashboards(project_id)
+            .await?)
+    }
+
+    pub async fn dashboard(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: DashboardId,
+    ) -> Result<Dashboard, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .load_dashboard(project_id, id)
+            .await?)
+    }
+
+    pub async fn create_dashboard(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        input: DashboardInput,
+    ) -> Result<Dashboard, NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .create_dashboard(project_id, context.user_id, input)
+            .await?)
+    }
+
+    pub async fn update_dashboard(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: DashboardId,
+        expected_revision: u64,
+        input: DashboardInput,
+    ) -> Result<Dashboard, NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .update_dashboard(project_id, id, context.user_id, expected_revision, input)
+            .await?)
+    }
+
+    pub async fn delete_dashboard(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: DashboardId,
+    ) -> Result<(), NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::IssueWrite)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .delete_dashboard(project_id, id)
+            .await?)
+    }
+
+    pub async fn refresh_dashboard(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        id: DashboardId,
+        variables: DashboardVariables,
+    ) -> Result<DashboardRefresh, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        Ok(self
+            .dashboard_service()?
+            .refresh(project_id, id, variables)
+            .await?)
     }
 
     pub async fn explore(
@@ -400,6 +572,10 @@ impl NativeApiService {
         self.feedback_store
             .as_ref()
             .ok_or(NativeApiError::Unavailable)
+    }
+
+    fn dashboard_service(&self) -> Result<&Arc<DashboardService>, NativeApiError> {
+        self.dashboards.as_ref().ok_or(NativeApiError::Unavailable)
     }
 
     async fn enrich_feedback(&self, feedback: &mut FeedbackRecord) -> Result<(), NativeApiError> {

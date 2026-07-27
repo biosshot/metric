@@ -22,6 +22,7 @@ use metric_application::{
         BlobCleanupConfig, BlobCleanupError, BlobCleanupService, BlobCleanupTask,
         start_blob_cleanup_worker,
     },
+    dashboards::{DashboardConfig, DashboardError, DashboardService},
     debug_files::{
         DebugFileCleanupTask, DebugFileConfig, DebugFileError, DebugFileService,
         start_debug_file_cleanup,
@@ -129,6 +130,8 @@ pub enum ServerError {
     Archive(#[from] ArchiveError),
     #[error(transparent)]
     Explore(#[from] ExploreError),
+    #[error(transparent)]
+    Dashboard(#[from] DashboardError),
     #[error("external Symbolicator configuration is invalid")]
     Symbolicator,
 }
@@ -524,6 +527,15 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             explore_store,
             ExploreConfig::default(),
         )?);
+        let dashboard_store: std::sync::Arc<dyn metric_ports::DashboardStore> =
+            std::sync::Arc::new(store.dashboard_store());
+        let dashboard_service = std::sync::Arc::new(DashboardService::new(
+            dashboard_store,
+            std::sync::Arc::clone(&explore_service),
+            std::sync::Arc::clone(&clock),
+            std::sync::Arc::clone(&random),
+            DashboardConfig::default(),
+        )?);
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
@@ -539,6 +551,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_session_store(session_store)
             .with_feedback_store(feedback_store)
             .with_explore(explore_service)
+            .with_dashboards(dashboard_service)
             .with_release_service(std::sync::Arc::clone(&release_service)),
         );
         let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =

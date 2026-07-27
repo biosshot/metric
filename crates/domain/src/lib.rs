@@ -5,6 +5,7 @@ pub mod archive;
 pub mod artifacts;
 pub mod auth;
 pub mod blob;
+pub mod dashboards;
 pub mod debug_files;
 pub mod deletion;
 pub mod event;

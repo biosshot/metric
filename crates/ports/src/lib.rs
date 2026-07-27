@@ -1326,6 +1326,81 @@ pub trait ExploreStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<metric_domain::explore::ExploreResult, ExploreStoreError>>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DashboardStoreError {
+    #[error("dashboard resource does not exist")]
+    NotFound,
+    #[error("dashboard resource conflicts with current state")]
+    Conflict,
+    #[error("dashboard data is invalid")]
+    InvalidData,
+    #[error("dashboard storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Durable project-scoped configuration for saved queries and dashboards.
+///
+/// Signal rows and derived query results never cross this storage boundary.
+pub trait DashboardStore: Send + Sync + 'static {
+    fn list_saved_queries(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<metric_domain::dashboards::SavedQuery>, DashboardStoreError>>;
+
+    fn load_saved_query(
+        &self,
+        project_id: ProjectId,
+        id: metric_domain::dashboards::SavedQueryId,
+    ) -> PortFuture<'_, Result<metric_domain::dashboards::SavedQuery, DashboardStoreError>>;
+
+    fn insert_saved_query(
+        &self,
+        saved_query: metric_domain::dashboards::SavedQuery,
+    ) -> PortFuture<'_, Result<(), DashboardStoreError>>;
+
+    fn replace_saved_query(
+        &self,
+        saved_query: metric_domain::dashboards::SavedQuery,
+        expected_revision: u64,
+    ) -> PortFuture<'_, Result<(), DashboardStoreError>>;
+
+    fn delete_saved_query(
+        &self,
+        project_id: ProjectId,
+        id: metric_domain::dashboards::SavedQueryId,
+    ) -> PortFuture<'_, Result<(), DashboardStoreError>>;
+
+    fn list_dashboards(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<metric_domain::dashboards::Dashboard>, DashboardStoreError>>;
+
+    fn load_dashboard(
+        &self,
+        project_id: ProjectId,
+        id: metric_domain::dashboards::DashboardId,
+    ) -> PortFuture<'_, Result<metric_domain::dashboards::Dashboard, DashboardStoreError>>;
+
+    fn insert_dashboard(
+        &self,
+        dashboard: metric_domain::dashboards::Dashboard,
+    ) -> PortFuture<'_, Result<(), DashboardStoreError>>;
+
+    fn replace_dashboard(
+        &self,
+        dashboard: metric_domain::dashboards::Dashboard,
+        expected_revision: u64,
+    ) -> PortFuture<'_, Result<(), DashboardStoreError>>;
+
+    fn delete_dashboard(
+        &self,
+        project_id: ProjectId,
+        id: metric_domain::dashboards::DashboardId,
+    ) -> PortFuture<'_, Result<(), DashboardStoreError>>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogQuery {
     pub from_ns: i64,

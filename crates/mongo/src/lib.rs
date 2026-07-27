@@ -6,6 +6,7 @@ mod api;
 mod archive;
 mod artifacts;
 mod auth;
+mod dashboards;
 mod debug_files;
 mod deletion;
 mod event;
@@ -23,6 +24,7 @@ pub use api::MongoInvestigationStore;
 pub use archive::MongoArchiveStore;
 pub use artifacts::{ArtifactQuota, MongoArtifactStore};
 pub use auth::MongoAuthStore;
+pub use dashboards::MongoDashboardStore;
 pub use debug_files::{DebugFileQuota, MongoDebugFileStore};
 pub use deletion::{
     DATASET_REGISTRY, DELETION_PLAN_VERSION, DatasetOwnership, DatasetRegistration,
@@ -63,9 +65,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 13;
+pub const SCHEMA_GENERATION: i32 = 14;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 18] = [
+const SCHEMA_MODULES: [&str; 19] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -84,8 +86,9 @@ const SCHEMA_MODULES: [&str; 18] = [
     "releases_deploys_v1",
     "sessions_release_health_v1",
     "user_feedback_v1",
+    "saved_queries_dashboards_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 32] = [
+const REQUIRED_COLLECTIONS: [&str; 34] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -97,6 +100,7 @@ const REQUIRED_COLLECTIONS: [&str; 32] = [
     "feedback",
     "debug_files",
     "debug_uploads",
+    "dashboards",
     "deploys",
     "issue_activities",
     "issues",
@@ -111,6 +115,7 @@ const REQUIRED_COLLECTIONS: [&str; 32] = [
     "project_keys",
     "projects",
     "releases",
+    "saved_queries",
     "schema_meta",
     "session_stats_hourly",
     "sessions",
@@ -263,6 +268,11 @@ impl MongoProjectStore {
         MongoExploreStore::new(self.database.clone())
     }
 
+    #[must_use]
+    pub fn dashboard_store(&self) -> MongoDashboardStore {
+        MongoDashboardStore::new(self.database.clone())
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -331,6 +341,10 @@ impl MongoProjectStore {
         self.create_validated_collection("error_events", event::event_validator())
             .await?;
         self.create_validated_collection("feedback", feedback::feedback_validator())
+            .await?;
+        self.create_validated_collection("saved_queries", dashboards::saved_query_validator())
+            .await?;
+        self.create_validated_collection("dashboards", dashboards::dashboard_validator())
             .await?;
         self.create_validated_collection("logs", signals::log_validator())
             .await?;
@@ -441,6 +455,7 @@ impl MongoProjectStore {
                 .create_index(model)
                 .await?;
         }
+        dashboards::create_dashboard_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
         releases::create_deploy_indexes(&self.database).await?;
@@ -560,6 +575,22 @@ impl MongoProjectStore {
             ("project_deletions", deletion::deletion_index_names()),
             ("error_events", event::event_index_names()),
             ("feedback", feedback::feedback_index_names()),
+            (
+                "saved_queries",
+                BTreeSet::from([
+                    "_id_",
+                    "saved_queries_project_name_unique",
+                    "saved_queries_project_updated",
+                ]),
+            ),
+            (
+                "dashboards",
+                BTreeSet::from([
+                    "_id_",
+                    "dashboards_project_name_unique",
+                    "dashboards_project_updated",
+                ]),
+            ),
             ("logs", signals::signal_index_names("logs")),
             ("spans", signals::signal_index_names("spans")),
             (
@@ -628,6 +659,8 @@ impl MongoProjectStore {
             ("artifact_bundles", artifacts::artifact_bundle_validator()),
             ("error_events", event::event_validator()),
             ("feedback", feedback::feedback_validator()),
+            ("saved_queries", dashboards::saved_query_validator()),
+            ("dashboards", dashboards::dashboard_validator()),
             ("logs", signals::log_validator()),
             ("spans", signals::span_validator()),
             ("span_stats_hourly", signals::span_stats_validator()),

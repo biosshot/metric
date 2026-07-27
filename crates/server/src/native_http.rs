@@ -19,6 +19,7 @@ use metric_application::{
         BootstrapRequest, CreateApiTokenRequest, IdentityService, InviteUserRequest, LoginRequest,
         PasswordInput,
     },
+    dashboards::{DashboardInput, DashboardWidgetInput, SavedQueryInput},
     incident_capsule::{
         IncidentCapsuleError, IncidentCapsuleRequest, IncidentCapsuleService,
         IncidentEventSelection,
@@ -45,6 +46,10 @@ use metric_domain::{
         UserDisplayName, UserId,
     },
     blob::BlobObjectId,
+    dashboards::{
+        Dashboard, DashboardId, DashboardRefresh, DashboardRefreshInterval, DashboardVariables,
+        SavedQuery, SavedQueryId, WidgetShape,
+    },
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
     explore::{
         ExploreAggregate, ExploreAggregateKind, ExploreDataset, ExploreField, ExploreInterval,
@@ -187,6 +192,24 @@ impl IntoResponse for HttpApiError {
                             StatusCode::SERVICE_UNAVAILABLE
                         }
                     },
+                    NativeApiError::Dashboard(error) => match error {
+                        metric_application::dashboards::DashboardError::InvalidRequest
+                        | metric_application::dashboards::DashboardError::CostExceeded => {
+                            StatusCode::UNPROCESSABLE_ENTITY
+                        }
+                        metric_application::dashboards::DashboardError::NotFound => {
+                            StatusCode::NOT_FOUND
+                        }
+                        metric_application::dashboards::DashboardError::Conflict => {
+                            StatusCode::CONFLICT
+                        }
+                        metric_application::dashboards::DashboardError::Capacity => {
+                            StatusCode::TOO_MANY_REQUESTS
+                        }
+                        metric_application::dashboards::DashboardError::Unavailable => {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        }
+                    },
                 };
                 (status, error.code(), public_message(error))
             }
@@ -257,6 +280,26 @@ fn public_message(error: &NativeApiError) -> &'static str {
             }
             metric_application::explore::ExploreError::Unavailable => {
                 "Explore is temporarily unavailable"
+            }
+        },
+        NativeApiError::Dashboard(error) => match error {
+            metric_application::dashboards::DashboardError::InvalidRequest => {
+                "dashboard request is invalid"
+            }
+            metric_application::dashboards::DashboardError::NotFound => {
+                "dashboard resource was not found"
+            }
+            metric_application::dashboards::DashboardError::Conflict => {
+                "dashboard resource changed; reload and try again"
+            }
+            metric_application::dashboards::DashboardError::CostExceeded => {
+                "dashboard refresh exceeds its total cost budget"
+            }
+            metric_application::dashboards::DashboardError::Capacity => {
+                "dashboard refresh capacity is exhausted"
+            }
+            metric_application::dashboards::DashboardError::Unavailable => {
+                "dashboard service is temporarily unavailable"
             }
         },
         NativeApiError::Unavailable => "service is temporarily unavailable",
@@ -377,6 +420,30 @@ pub fn router(
         )
         .route("/api/v1/projects/{project_id}/logs", get(list_logs))
         .route("/api/v1/projects/{project_id}/explore", post(explore))
+        .route(
+            "/api/v1/projects/{project_id}/saved-queries",
+            get(list_saved_queries).post(create_saved_query),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/saved-queries/{saved_query_id}",
+            get(get_saved_query)
+                .patch(update_saved_query)
+                .delete(delete_saved_query),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/dashboards",
+            get(list_dashboards).post(create_dashboard),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/dashboards/{dashboard_id}",
+            get(get_dashboard)
+                .patch(update_dashboard)
+                .delete(delete_dashboard),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/dashboards/{dashboard_id}/refresh",
+            post(refresh_dashboard),
+        )
         .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
         .route(
             "/api/v1/projects/{project_id}/transactions",
@@ -528,35 +595,9 @@ async fn explore(
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
     let project_id = project_id_from(&project_id)?;
-    let dataset = parse_explore_dataset(&body.dataset)?;
-    let aggregates = body
-        .aggregates
-        .into_iter()
-        .map(parse_explore_aggregate)
-        .collect::<Result<Vec<_>, _>>()?;
-    let query = ExploreQuery {
-        dataset,
-        from: Timestamp::from_unix_millis(body.from).map_err(|_| HttpApiError::InvalidRequest)?,
-        until: Timestamp::from_unix_millis(body.until).map_err(|_| HttpApiError::InvalidRequest)?,
-        predicates: body
-            .predicates
-            .into_iter()
-            .map(parse_explore_predicate)
-            .collect::<Result<Vec<_>, _>>()?,
-        aggregates,
-        group_by: body
-            .group_by
-            .iter()
-            .map(|field| parse_explore_field(field))
-            .collect::<Result<Vec<_>, _>>()?,
-        interval: body
-            .interval
-            .as_deref()
-            .map(parse_explore_interval)
-            .transpose()?,
-        cursor: None,
-        limit: body.limit,
-    };
+    let cursor = body.cursor.clone();
+    let query = explore_query_from(body)?;
+    let dataset = query.dataset;
     let shape =
         if query.aggregates.len() == 1 && query.group_by.is_empty() && query.interval.is_none() {
             "number"
@@ -567,7 +608,7 @@ async fn explore(
         };
     let dataset_kind = query.dataset as u8;
     let (result, normalized, cost) = api(&state)?
-        .explore(&context, project_id, query, body.cursor.as_deref())
+        .explore(&context, project_id, query, cursor.as_deref())
         .await
         .map_err(HttpApiError::Api)?;
     let next_cursor = result
@@ -585,6 +626,36 @@ async fn explore(
         }).collect::<Vec<_>>(),
         "next_cursor": next_cursor,
     })))
+}
+
+fn explore_query_from(body: ExploreBody) -> Result<ExploreQuery, HttpApiError> {
+    Ok(ExploreQuery {
+        dataset: parse_explore_dataset(&body.dataset)?,
+        from: Timestamp::from_unix_millis(body.from).map_err(|_| HttpApiError::InvalidRequest)?,
+        until: Timestamp::from_unix_millis(body.until).map_err(|_| HttpApiError::InvalidRequest)?,
+        predicates: body
+            .predicates
+            .into_iter()
+            .map(parse_explore_predicate)
+            .collect::<Result<Vec<_>, _>>()?,
+        aggregates: body
+            .aggregates
+            .into_iter()
+            .map(parse_explore_aggregate)
+            .collect::<Result<Vec<_>, _>>()?,
+        group_by: body
+            .group_by
+            .iter()
+            .map(|field| parse_explore_field(field))
+            .collect::<Result<Vec<_>, _>>()?,
+        interval: body
+            .interval
+            .as_deref()
+            .map(parse_explore_interval)
+            .transpose()?,
+        cursor: None,
+        limit: body.limit,
+    })
 }
 
 fn parse_explore_dataset(value: &str) -> Result<ExploreDataset, HttpApiError> {
@@ -697,6 +768,369 @@ fn explore_json_value(value: ExploreValue) -> Value {
         ExploreValue::Bool(value) => Value::Bool(value),
         ExploreValue::Null => Value::Null,
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedQueryCreateBody {
+    name: String,
+    query: ExploreBody,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedQueryUpdateBody {
+    revision: u64,
+    name: String,
+    query: ExploreBody,
+}
+
+async fn list_saved_queries(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let values = api(&state)?
+        .list_saved_queries(&context, project_id_from(&project_id)?)
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": values.iter().map(saved_query_value).collect::<Vec<_>>()
+    })))
+}
+
+async fn get_saved_query(
+    State(state): State<NativeHttpState>,
+    Path((project_id, saved_query_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let value = api(&state)?
+        .saved_query(
+            &context,
+            project_id_from(&project_id)?,
+            SavedQueryId::parse(&saved_query_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(saved_query_value(&value)))
+}
+
+async fn create_saved_query(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<SavedQueryCreateBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let value = api(&state)?
+        .create_saved_query(
+            &context,
+            project_id_from(&project_id)?,
+            SavedQueryInput {
+                name: body.name.into(),
+                query: explore_query_from(body.query)?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok((StatusCode::CREATED, Json(saved_query_value(&value))))
+}
+
+async fn update_saved_query(
+    State(state): State<NativeHttpState>,
+    Path((project_id, saved_query_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<SavedQueryUpdateBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let value = api(&state)?
+        .update_saved_query(
+            &context,
+            project_id_from(&project_id)?,
+            SavedQueryId::parse(&saved_query_id).map_err(|_| HttpApiError::InvalidRequest)?,
+            body.revision,
+            SavedQueryInput {
+                name: body.name.into(),
+                query: explore_query_from(body.query)?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(saved_query_value(&value)))
+}
+
+async fn delete_saved_query(
+    State(state): State<NativeHttpState>,
+    Path((project_id, saved_query_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    api(&state)?
+        .delete_saved_query(
+            &context,
+            project_id_from(&project_id)?,
+            SavedQueryId::parse(&saved_query_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DashboardWidgetBody {
+    id: Option<String>,
+    title: String,
+    saved_query_id: String,
+    shape: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DashboardCreateBody {
+    name: String,
+    widgets: Vec<DashboardWidgetBody>,
+    refresh_interval: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DashboardUpdateBody {
+    revision: u64,
+    name: String,
+    widgets: Vec<DashboardWidgetBody>,
+    refresh_interval: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct DashboardRefreshBody {
+    environment: Option<String>,
+    release: Option<String>,
+}
+
+async fn list_dashboards(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let values = api(&state)?
+        .list_dashboards(&context, project_id_from(&project_id)?)
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": values.iter().map(dashboard_value).collect::<Vec<_>>()
+    })))
+}
+
+async fn get_dashboard(
+    State(state): State<NativeHttpState>,
+    Path((project_id, dashboard_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let value = api(&state)?
+        .dashboard(
+            &context,
+            project_id_from(&project_id)?,
+            DashboardId::parse(&dashboard_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(dashboard_value(&value)))
+}
+
+async fn create_dashboard(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<DashboardCreateBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let value = api(&state)?
+        .create_dashboard(
+            &context,
+            project_id_from(&project_id)?,
+            dashboard_input(body.name, body.widgets, body.refresh_interval)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok((StatusCode::CREATED, Json(dashboard_value(&value))))
+}
+
+async fn update_dashboard(
+    State(state): State<NativeHttpState>,
+    Path((project_id, dashboard_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<DashboardUpdateBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let value = api(&state)?
+        .update_dashboard(
+            &context,
+            project_id_from(&project_id)?,
+            DashboardId::parse(&dashboard_id).map_err(|_| HttpApiError::InvalidRequest)?,
+            body.revision,
+            dashboard_input(body.name, body.widgets, body.refresh_interval)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(dashboard_value(&value)))
+}
+
+async fn delete_dashboard(
+    State(state): State<NativeHttpState>,
+    Path((project_id, dashboard_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    api(&state)?
+        .delete_dashboard(
+            &context,
+            project_id_from(&project_id)?,
+            DashboardId::parse(&dashboard_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn refresh_dashboard(
+    State(state): State<NativeHttpState>,
+    Path((project_id, dashboard_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<DashboardRefreshBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let body = json_body(body)?;
+    let value = api(&state)?
+        .refresh_dashboard(
+            &context,
+            project_id_from(&project_id)?,
+            DashboardId::parse(&dashboard_id).map_err(|_| HttpApiError::InvalidRequest)?,
+            DashboardVariables {
+                environment: body.environment.map(Into::into),
+                release: body.release.map(Into::into),
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(dashboard_refresh_value(value)))
+}
+
+fn dashboard_input(
+    name: String,
+    widgets: Vec<DashboardWidgetBody>,
+    refresh_interval: String,
+) -> Result<DashboardInput, HttpApiError> {
+    Ok(DashboardInput {
+        name: name.into(),
+        widgets: widgets
+            .into_iter()
+            .map(|widget| {
+                Ok(DashboardWidgetInput {
+                    id: widget
+                        .id
+                        .as_deref()
+                        .map(metric_domain::dashboards::DashboardWidgetId::parse)
+                        .transpose()
+                        .map_err(|_| HttpApiError::InvalidRequest)?,
+                    title: widget.title.into(),
+                    saved_query_id: SavedQueryId::parse(&widget.saved_query_id)
+                        .map_err(|_| HttpApiError::InvalidRequest)?,
+                    shape: WidgetShape::parse(&widget.shape)
+                        .map_err(|_| HttpApiError::InvalidRequest)?,
+                })
+            })
+            .collect::<Result<Vec<_>, HttpApiError>>()?,
+        refresh_interval: DashboardRefreshInterval::parse(&refresh_interval)
+            .map_err(|_| HttpApiError::InvalidRequest)?,
+    })
+}
+
+fn saved_query_value(value: &SavedQuery) -> Value {
+    json!({
+        "id": value.id.to_string(),
+        "project_id": value.project_id.get(),
+        "name": value.name,
+        "query": explore_query_value(&value.query),
+        "revision": value.revision,
+        "created_by": value.created_by.get(),
+        "updated_by": value.updated_by.get(),
+        "created_at": value.created_at.unix_millis(),
+        "updated_at": value.updated_at.unix_millis(),
+    })
+}
+
+fn dashboard_value(value: &Dashboard) -> Value {
+    json!({
+        "id": value.id.to_string(),
+        "project_id": value.project_id.get(),
+        "name": value.name,
+        "widgets": value.widgets.iter().map(|widget| json!({
+            "id": widget.id.to_string(),
+            "title": widget.title,
+            "saved_query_id": widget.saved_query_id.to_string(),
+            "shape": widget.shape.as_str(),
+        })).collect::<Vec<_>>(),
+        "refresh_interval": value.refresh_interval.as_str(),
+        "revision": value.revision,
+        "created_by": value.created_by.get(),
+        "updated_by": value.updated_by.get(),
+        "created_at": value.created_at.unix_millis(),
+        "updated_at": value.updated_at.unix_millis(),
+    })
+}
+
+fn dashboard_refresh_value(value: DashboardRefresh) -> Value {
+    json!({
+        "dashboard_id": value.dashboard_id.to_string(),
+        "refreshed_at": value.refreshed_at.unix_millis(),
+        "total_cost": value.total_cost,
+        "widgets": value.widgets.into_iter().map(|widget| json!({
+            "widget_id": widget.widget_id.to_string(),
+            "cost": widget.cost,
+            "error_code": widget.error_code,
+            "items": widget.result.map(|result| result.rows.into_iter().map(|row| {
+                row.values.into_iter().map(|(key, value)| {
+                    (key.to_string(), explore_json_value(value))
+                }).collect::<serde_json::Map<_, _>>()
+            }).collect::<Vec<_>>()),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn explore_query_value(query: &ExploreQuery) -> Value {
+    json!({
+        "dataset": query.dataset.as_str(),
+        "from": query.from.unix_millis(),
+        "until": query.until.unix_millis(),
+        "predicates": query.predicates.iter().map(|predicate| json!({
+            "field": predicate.field.as_str(),
+            "op": match predicate.op {
+                ExplorePredicateOp::Exact => "exact",
+                ExplorePredicateOp::Present => "present",
+                ExplorePredicateOp::Range => "range",
+            },
+            "value": predicate.value.clone().map(explore_json_value),
+            "upper": predicate.upper.clone().map(explore_json_value),
+        })).collect::<Vec<_>>(),
+        "aggregates": query.aggregates.iter().map(|aggregate| json!({
+            "function": aggregate.kind.as_str(),
+            "field": aggregate.field.map(ExploreField::as_str),
+            "alias": aggregate.alias,
+        })).collect::<Vec<_>>(),
+        "group_by": query.group_by.iter().map(|field| field.as_str()).collect::<Vec<_>>(),
+        "interval": query.interval.map(ExploreInterval::as_str),
+        "limit": query.limit,
+    })
 }
 
 async fn get_feedback(
@@ -2424,6 +2858,8 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "release_health": state.required_ready,
             "user_feedback": state.required_ready,
             "unified_explore": state.required_ready,
+            "saved_queries": state.required_ready,
+            "dashboards": state.required_ready,
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -2442,6 +2878,14 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "maximum_rows": 100,
             "intervals": ["1m", "5m", "1h", "1d"],
             "raw_database_syntax": false,
+        },
+        "dashboards": {
+            "maximum_widgets": 8,
+            "maximum_total_cost": 25000,
+            "maximum_refresh_concurrency": 2,
+            "refresh_intervals": ["manual", "30s", "1m", "5m"],
+            "variables": ["project", "environment", "release"],
+            "result_cache": false,
         },
         "project_deletion": project_deletion,
         "debug_files": state.debug_files.map(|capability| json!({
@@ -3471,6 +3915,50 @@ mod tests {
                 RouteAccess::Permission(Permission::EventRead),
             ),
             (
+                "GET /projects/:id/saved-queries",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "POST /projects/:id/saved-queries",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "GET /projects/:id/saved-queries/:query",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "PATCH /projects/:id/saved-queries/:query",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "DELETE /projects/:id/saved-queries/:query",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "GET /projects/:id/dashboards",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "POST /projects/:id/dashboards",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "GET /projects/:id/dashboards/:dashboard",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "PATCH /projects/:id/dashboards/:dashboard",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "DELETE /projects/:id/dashboards/:dashboard",
+                RouteAccess::Permission(Permission::IssueWrite),
+            ),
+            (
+                "POST /projects/:id/dashboards/:dashboard/refresh",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
                 "GET /projects/:id/releases",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
@@ -3481,7 +3969,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 45);
+        assert_eq!(matrix.len(), 56);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)
