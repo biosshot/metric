@@ -1308,6 +1308,24 @@ pub trait InvestigationStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<EnvironmentPage, InvestigationStoreError>>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ExploreStoreError {
+    #[error("Explore query data is invalid")]
+    InvalidData,
+    #[error("Explore storage is temporarily unavailable")]
+    Unavailable,
+}
+
+/// Executes only an already validated, project-scoped Explore plan.
+///
+/// Raw backend expressions and collection names never cross this boundary.
+pub trait ExploreStore: Send + Sync + 'static {
+    fn execute(
+        &self,
+        plan: metric_domain::explore::ExplorePlan,
+    ) -> PortFuture<'_, Result<metric_domain::explore::ExploreResult, ExploreStoreError>>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogQuery {
     pub from_ns: i64,

@@ -33,6 +33,7 @@ use metric_application::{
     dispatcher::{
         BacklogGuardedEventSink, Dispatcher, DispatcherConfig, DispatcherStartError, DispatcherTask,
     },
+    explore::{ExploreConfig, ExploreError, ExploreService},
     finalizer::{Finalizer, FinalizerConfig, FinalizerError},
     incident_capsule::{
         IncidentCapsuleAccess, IncidentCapsuleConfig, IncidentCapsuleError, IncidentCapsuleService,
@@ -126,6 +127,8 @@ pub enum ServerError {
     Artifacts(#[from] ArtifactError),
     #[error(transparent)]
     Archive(#[from] ArchiveError),
+    #[error(transparent)]
+    Explore(#[from] ExploreError),
     #[error("external Symbolicator configuration is invalid")]
     Symbolicator,
 }
@@ -515,6 +518,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let feedback = std::sync::Arc::new(store.feedback_store());
         let feedback_sink: std::sync::Arc<dyn FeedbackSink> = feedback.clone();
         let feedback_store: std::sync::Arc<dyn FeedbackStore> = feedback;
+        let explore_store: std::sync::Arc<dyn metric_ports::ExploreStore> =
+            std::sync::Arc::new(store.explore_store());
+        let explore_service = std::sync::Arc::new(ExploreService::new(
+            explore_store,
+            ExploreConfig::default(),
+        )?);
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
@@ -529,6 +538,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_signal_store(std::sync::Arc::clone(&signal_store))
             .with_session_store(session_store)
             .with_feedback_store(feedback_store)
+            .with_explore(explore_service)
             .with_release_service(std::sync::Arc::clone(&release_service)),
         );
         let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =

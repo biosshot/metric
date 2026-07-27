@@ -25,7 +25,7 @@ use metric_application::{
     },
     native_api::{
         AttachmentView, EventListRequest, FeedbackListRequest, LogListRequest, NativeApiError,
-        NativeApiService, PerformanceListRequest, TransactionListRequest,
+        NativeApiService, PerformanceListRequest, TransactionListRequest, encode_explore_cursor,
     },
     observability::RequestId,
     projects::CreateProject,
@@ -46,6 +46,10 @@ use metric_domain::{
     },
     blob::BlobObjectId,
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
+    explore::{
+        ExploreAggregate, ExploreAggregateKind, ExploreDataset, ExploreField, ExploreInterval,
+        ExplorePredicate, ExplorePredicateOp, ExploreQuery, ExploreValue,
+    },
     feedback::{FeedbackRecord, FeedbackStatus},
     grouping::IssueId,
     inbound_filter::{
@@ -169,6 +173,20 @@ impl IntoResponse for HttpApiError {
                             StatusCode::SERVICE_UNAVAILABLE
                         }
                     },
+                    NativeApiError::Explore(error) => match error {
+                        metric_application::explore::ExploreError::InvalidQuery => {
+                            StatusCode::UNPROCESSABLE_ENTITY
+                        }
+                        metric_application::explore::ExploreError::CostExceeded => {
+                            StatusCode::UNPROCESSABLE_ENTITY
+                        }
+                        metric_application::explore::ExploreError::Capacity => {
+                            StatusCode::TOO_MANY_REQUESTS
+                        }
+                        metric_application::explore::ExploreError::Unavailable => {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        }
+                    },
                 };
                 (status, error.code(), public_message(error))
             }
@@ -229,6 +247,18 @@ fn public_message(error: &NativeApiError) -> &'static str {
         NativeApiError::Conflict => "request conflicts with current state",
         NativeApiError::RateLimited => "request is rate limited",
         NativeApiError::Search(_) => "search request cannot be completed",
+        NativeApiError::Explore(error) => match error {
+            metric_application::explore::ExploreError::InvalidQuery => "Explore query is invalid",
+            metric_application::explore::ExploreError::CostExceeded => {
+                "Explore query exceeds its cost budget"
+            }
+            metric_application::explore::ExploreError::Capacity => {
+                "Explore query capacity is exhausted"
+            }
+            metric_application::explore::ExploreError::Unavailable => {
+                "Explore is temporarily unavailable"
+            }
+        },
         NativeApiError::Unavailable => "service is temporarily unavailable",
     }
 }
@@ -346,6 +376,7 @@ pub fn router(
             get(get_feedback).patch(update_feedback_status),
         )
         .route("/api/v1/projects/{project_id}/logs", get(list_logs))
+        .route("/api/v1/projects/{project_id}/explore", post(explore))
         .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
         .route(
             "/api/v1/projects/{project_id}/transactions",
@@ -448,6 +479,224 @@ async fn list_feedback(
         "items": page.items.iter().map(feedback_value).collect::<Result<Vec<_>, _>>()?,
         "next_cursor": page.next_cursor,
     })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExploreBody {
+    dataset: String,
+    from: i64,
+    until: i64,
+    #[serde(default)]
+    predicates: Vec<ExplorePredicateBody>,
+    #[serde(default)]
+    aggregates: Vec<ExploreAggregateBody>,
+    #[serde(default)]
+    group_by: Vec<String>,
+    interval: Option<String>,
+    cursor: Option<String>,
+    #[serde(default = "default_explore_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplorePredicateBody {
+    field: String,
+    op: String,
+    value: Option<Value>,
+    upper: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExploreAggregateBody {
+    function: String,
+    field: Option<String>,
+    alias: Option<String>,
+}
+
+const fn default_explore_limit() -> usize {
+    50
+}
+
+async fn explore(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ExploreBody>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let project_id = project_id_from(&project_id)?;
+    let dataset = parse_explore_dataset(&body.dataset)?;
+    let aggregates = body
+        .aggregates
+        .into_iter()
+        .map(parse_explore_aggregate)
+        .collect::<Result<Vec<_>, _>>()?;
+    let query = ExploreQuery {
+        dataset,
+        from: Timestamp::from_unix_millis(body.from).map_err(|_| HttpApiError::InvalidRequest)?,
+        until: Timestamp::from_unix_millis(body.until).map_err(|_| HttpApiError::InvalidRequest)?,
+        predicates: body
+            .predicates
+            .into_iter()
+            .map(parse_explore_predicate)
+            .collect::<Result<Vec<_>, _>>()?,
+        aggregates,
+        group_by: body
+            .group_by
+            .iter()
+            .map(|field| parse_explore_field(field))
+            .collect::<Result<Vec<_>, _>>()?,
+        interval: body
+            .interval
+            .as_deref()
+            .map(parse_explore_interval)
+            .transpose()?,
+        cursor: None,
+        limit: body.limit,
+    };
+    let shape =
+        if query.aggregates.len() == 1 && query.group_by.is_empty() && query.interval.is_none() {
+            "number"
+        } else if query.interval.is_some() {
+            "timeseries"
+        } else {
+            "table"
+        };
+    let dataset_kind = query.dataset as u8;
+    let (result, normalized, cost) = api(&state)?
+        .explore(&context, project_id, query, body.cursor.as_deref())
+        .await
+        .map_err(HttpApiError::Api)?;
+    let next_cursor = result
+        .next
+        .map(|cursor| encode_explore_cursor(cursor, project_id, &normalized, dataset_kind));
+    Ok(Json(json!({
+        "shape": shape,
+        "dataset": dataset.as_str(),
+        "normalized": normalized,
+        "cost": cost,
+        "items": result.rows.into_iter().map(|row| {
+            row.values.into_iter().map(|(key, value)| {
+                (key.to_string(), explore_json_value(value))
+            }).collect::<serde_json::Map<_, _>>()
+        }).collect::<Vec<_>>(),
+        "next_cursor": next_cursor,
+    })))
+}
+
+fn parse_explore_dataset(value: &str) -> Result<ExploreDataset, HttpApiError> {
+    match value {
+        "errors" => Ok(ExploreDataset::Errors),
+        "logs" => Ok(ExploreDataset::Logs),
+        "spans" => Ok(ExploreDataset::Spans),
+        _ => Err(HttpApiError::InvalidRequest),
+    }
+}
+
+fn parse_explore_field(value: &str) -> Result<ExploreField, HttpApiError> {
+    match value {
+        "timestamp" => Ok(ExploreField::Timestamp),
+        "received_at" => Ok(ExploreField::ReceivedAt),
+        "level" => Ok(ExploreField::Level),
+        "platform" => Ok(ExploreField::Platform),
+        "issue_id" => Ok(ExploreField::IssueId),
+        "message" => Ok(ExploreField::Message),
+        "environment" => Ok(ExploreField::Environment),
+        "release" => Ok(ExploreField::Release),
+        "service" => Ok(ExploreField::Service),
+        "trace_id" => Ok(ExploreField::TraceId),
+        "span_id" => Ok(ExploreField::SpanId),
+        "duration_ms" => Ok(ExploreField::DurationMs),
+        "operation_class" => Ok(ExploreField::OperationClass),
+        "operation" => Ok(ExploreField::Operation),
+        "status" => Ok(ExploreField::Status),
+        "name" => Ok(ExploreField::Name),
+        "is_segment" => Ok(ExploreField::IsSegment),
+        _ => Err(HttpApiError::InvalidRequest),
+    }
+}
+
+fn parse_explore_predicate(value: ExplorePredicateBody) -> Result<ExplorePredicate, HttpApiError> {
+    Ok(ExplorePredicate {
+        field: parse_explore_field(&value.field)?,
+        op: match value.op.as_str() {
+            "exact" => ExplorePredicateOp::Exact,
+            "present" => ExplorePredicateOp::Present,
+            "range" => ExplorePredicateOp::Range,
+            _ => return Err(HttpApiError::InvalidRequest),
+        },
+        value: value.value.map(parse_explore_value).transpose()?,
+        upper: value.upper.map(parse_explore_value).transpose()?,
+    })
+}
+
+fn parse_explore_aggregate(value: ExploreAggregateBody) -> Result<ExploreAggregate, HttpApiError> {
+    let kind = match value.function.as_str() {
+        "count" => ExploreAggregateKind::Count,
+        "sum" => ExploreAggregateKind::Sum,
+        "min" => ExploreAggregateKind::Min,
+        "max" => ExploreAggregateKind::Max,
+        "avg" => ExploreAggregateKind::Avg,
+        "p50" => ExploreAggregateKind::P50,
+        "p75" => ExploreAggregateKind::P75,
+        "p90" => ExploreAggregateKind::P90,
+        "p95" => ExploreAggregateKind::P95,
+        "p99" => ExploreAggregateKind::P99,
+        _ => return Err(HttpApiError::InvalidRequest),
+    };
+    let field = value
+        .field
+        .as_deref()
+        .map(parse_explore_field)
+        .transpose()?;
+    let alias = value.alias.unwrap_or_else(|| match field {
+        Some(field) => format!("{}_{}", kind.as_str(), field.as_str()),
+        None => kind.as_str().to_owned(),
+    });
+    Ok(ExploreAggregate {
+        kind,
+        field,
+        alias: alias.into(),
+    })
+}
+
+fn parse_explore_interval(value: &str) -> Result<ExploreInterval, HttpApiError> {
+    match value {
+        "1m" => Ok(ExploreInterval::Minute),
+        "5m" => Ok(ExploreInterval::FiveMinutes),
+        "1h" => Ok(ExploreInterval::Hour),
+        "1d" => Ok(ExploreInterval::Day),
+        _ => Err(HttpApiError::InvalidRequest),
+    }
+}
+
+fn parse_explore_value(value: Value) -> Result<ExploreValue, HttpApiError> {
+    match value {
+        Value::String(value) => Ok(ExploreValue::String(value.into())),
+        Value::Bool(value) => Ok(ExploreValue::Bool(value)),
+        Value::Number(value) => value
+            .as_i64()
+            .map(ExploreValue::Integer)
+            .or_else(|| value.as_f64().map(ExploreValue::Number))
+            .ok_or(HttpApiError::InvalidRequest),
+        Value::Null => Ok(ExploreValue::Null),
+        Value::Array(_) | Value::Object(_) => Err(HttpApiError::InvalidRequest),
+    }
+}
+
+fn explore_json_value(value: ExploreValue) -> Value {
+    match value {
+        ExploreValue::String(value) => Value::String(value.into()),
+        ExploreValue::Number(value) => serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        ExploreValue::Integer(value) => Value::Number(value.into()),
+        ExploreValue::Bool(value) => Value::Bool(value),
+        ExploreValue::Null => Value::Null,
+    }
 }
 
 async fn get_feedback(
@@ -2174,6 +2423,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "sessions": state.required_ready,
             "release_health": state.required_ready,
             "user_feedback": state.required_ready,
+            "unified_explore": state.required_ready,
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),
@@ -2184,6 +2434,15 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "disk_spool": false,
         },
         "retention": retention,
+        "explore": {
+            "datasets": ["errors", "logs", "spans"],
+            "maximum_range_days": 30,
+            "maximum_predicates": 8,
+            "maximum_group_by": 2,
+            "maximum_rows": 100,
+            "intervals": ["1m", "5m", "1h", "1d"],
+            "raw_database_syntax": false,
+        },
         "project_deletion": project_deletion,
         "debug_files": state.debug_files.map(|capability| json!({
             "sentry_cli_chunk_upload": true,
@@ -3038,6 +3297,40 @@ mod tests {
     }
 
     #[test]
+    fn explore_body_is_typed_and_cannot_carry_project_scope_or_mongo_syntax() {
+        let accepted: ExploreBody = serde_json::from_value(json!({
+            "dataset": "logs",
+            "from": 1_700_000_000_000_i64,
+            "until": 1_700_003_600_000_i64,
+            "predicates": [{"field": "service", "op": "exact", "value": "api"}],
+            "aggregates": [{"function": "count"}],
+            "group_by": ["level"],
+            "interval": "1h",
+            "limit": 50
+        }))
+        .unwrap();
+        assert_eq!(accepted.dataset, "logs");
+        assert!(
+            serde_json::from_value::<ExploreBody>(json!({
+                "dataset": "logs",
+                "from": 1,
+                "until": 2,
+                "project_id": 999,
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ExploreBody>(json!({
+                "dataset": "logs",
+                "from": 1,
+                "until": 2,
+                "$match": {"p": 999},
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn every_native_route_has_a_pinned_permission_contract() {
         let matrix = [
             ("POST /auth/bootstrap", RouteAccess::Public),
@@ -3174,6 +3467,10 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
+                "POST /projects/:id/explore",
+                RouteAccess::Permission(Permission::EventRead),
+            ),
+            (
                 "GET /projects/:id/releases",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
@@ -3184,7 +3481,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 44);
+        assert_eq!(matrix.len(), 45);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

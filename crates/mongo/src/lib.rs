@@ -9,6 +9,7 @@ mod auth;
 mod debug_files;
 mod deletion;
 mod event;
+mod explore;
 mod feedback;
 mod finalizer;
 mod issue;
@@ -30,6 +31,7 @@ pub use deletion::{
 pub use event::{
     EventCodecConfig, EventCodecError, MongoEventStore, MongoPreparedEvent, decode_pending_event,
 };
+pub use explore::MongoExploreStore;
 pub use feedback::MongoFeedbackStore;
 pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finalized_event};
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
@@ -254,6 +256,11 @@ impl MongoProjectStore {
     #[must_use]
     pub fn feedback_store(&self) -> MongoFeedbackStore {
         MongoFeedbackStore::new(self.database.clone())
+    }
+
+    #[must_use]
+    pub fn explore_store(&self) -> MongoExploreStore {
+        MongoExploreStore::new(self.database.clone())
     }
 
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {

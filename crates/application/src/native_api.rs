@@ -11,6 +11,7 @@ use metric_domain::{
     auth::{Actor, AuditAction, AuthContext, Permission, RequestCorrelationId},
     blob::{BlobKey, BlobObjectId},
     deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
+    explore::{ExploreCursor, ExploreQuery, ExploreResult},
     feedback::{FeedbackAnchor, FeedbackRecord, FeedbackStatus},
     grouping::IssueId,
     issue::{
@@ -33,6 +34,7 @@ use thiserror::Error;
 use crate::{
     auth::{AuthError, IdentityService},
     deletion::{ProjectDeletionError, ProjectDeletionService},
+    explore::{ExploreError, ExploreService},
     issues::{IssueService, IssueServiceError},
     projects::{CreateProject, CreatedProject, ProjectService, ProjectServiceError},
     releases::{CreateDeployRequest, ReleaseError, ReleaseService},
@@ -65,6 +67,8 @@ pub enum NativeApiError {
     RateLimited,
     #[error(transparent)]
     Search(#[from] SearchError),
+    #[error(transparent)]
+    Explore(#[from] ExploreError),
     #[error("service is temporarily unavailable")]
     Unavailable,
 }
@@ -81,6 +85,7 @@ impl NativeApiError {
             Self::Conflict => "conflict",
             Self::RateLimited => "rate_limited",
             Self::Search(error) => error.code(),
+            Self::Explore(error) => error.code(),
             Self::Unavailable => "temporarily_unavailable",
         }
     }
@@ -156,6 +161,7 @@ pub struct NativeApiService {
     session_store: Option<Arc<dyn metric_ports::SessionStore>>,
     releases: Option<Arc<ReleaseService>>,
     feedback_store: Option<Arc<dyn FeedbackStore>>,
+    explore: Option<Arc<ExploreService>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +198,7 @@ impl NativeApiService {
             session_store: None,
             releases: None,
             feedback_store: None,
+            explore: None,
         }
     }
 
@@ -220,6 +227,54 @@ impl NativeApiService {
     pub fn with_feedback_store(mut self, feedback_store: Arc<dyn FeedbackStore>) -> Self {
         self.feedback_store = Some(feedback_store);
         self
+    }
+
+    #[must_use]
+    pub fn with_explore(mut self, explore: Arc<ExploreService>) -> Self {
+        self.explore = Some(explore);
+        self
+    }
+
+    pub async fn explore(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        mut query: ExploreQuery,
+        cursor: Option<&str>,
+    ) -> Result<(ExploreResult, Box<str>, u32), NativeApiError> {
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        query.cursor = None;
+        let initial = self
+            .explore
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .plan(project_id, query)?;
+        if let Some(value) = cursor {
+            query = initial.query;
+            query.cursor = Some(decode_explore_cursor(
+                value,
+                project_id,
+                &initial.normalized,
+                query.dataset as u8,
+            )?);
+        } else {
+            query = initial.query;
+        }
+        let plan = self
+            .explore
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .plan(project_id, query)?;
+        let normalized = plan.normalized.clone();
+        let cost = plan.cost;
+        let result = self
+            .explore
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .execute(plan)
+            .await?;
+        Ok((result, normalized, cost))
     }
 
     pub async fn feedback(
@@ -1489,6 +1544,60 @@ fn decode_signal_cursor(
                 .map_err(|_| NativeApiError::InvalidCursor)?,
         ),
         id: bytes[10..26]
+            .try_into()
+            .map_err(|_| NativeApiError::InvalidCursor)?,
+    })
+}
+
+fn explore_cursor_digest(project_id: ProjectId, normalized: &str, dataset: u8) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"metric/explore-cursor/v1");
+    hasher.update(&[dataset]);
+    hasher.update(&project_id.get().to_be_bytes());
+    hasher.update(normalized.as_bytes());
+    hasher.finalize().as_bytes()[..16]
+        .try_into()
+        .expect("BLAKE3 digest prefix")
+}
+
+#[must_use]
+pub fn encode_explore_cursor(
+    cursor: ExploreCursor,
+    project_id: ProjectId,
+    normalized: &str,
+    dataset: u8,
+) -> String {
+    let mut bytes = Vec::with_capacity(46);
+    bytes.push(1);
+    bytes.extend_from_slice(&cursor.time.to_be_bytes());
+    bytes.push(cursor.id_len);
+    bytes.extend_from_slice(&cursor.id);
+    bytes.extend_from_slice(&explore_cursor_digest(project_id, normalized, dataset));
+    hex::encode(bytes)
+}
+
+fn decode_explore_cursor(
+    value: &str,
+    project_id: ProjectId,
+    normalized: &str,
+    dataset: u8,
+) -> Result<ExploreCursor, NativeApiError> {
+    let bytes = hex::decode(value).map_err(|_| NativeApiError::InvalidCursor)?;
+    if bytes.len() != 46
+        || bytes[0] != 1
+        || !matches!(bytes[9], 16 | 20)
+        || bytes[30..] != explore_cursor_digest(project_id, normalized, dataset)
+    {
+        return Err(NativeApiError::InvalidCursor);
+    }
+    Ok(ExploreCursor {
+        time: i64::from_be_bytes(
+            bytes[1..9]
+                .try_into()
+                .map_err(|_| NativeApiError::InvalidCursor)?,
+        ),
+        id_len: bytes[9],
+        id: bytes[10..30]
             .try_into()
             .map_err(|_| NativeApiError::InvalidCursor)?,
     })

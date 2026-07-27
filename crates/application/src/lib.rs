@@ -7,6 +7,7 @@ pub mod blob_cleanup;
 pub mod debug_files;
 pub mod deletion;
 pub mod dispatcher;
+pub mod explore;
 pub mod finalizer;
 pub mod incident_capsule;
 pub mod ingest;

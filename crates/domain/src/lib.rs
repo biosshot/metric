@@ -8,6 +8,7 @@ pub mod blob;
 pub mod debug_files;
 pub mod deletion;
 pub mod event;
+pub mod explore;
 pub mod feedback;
 pub mod finalization;
 pub mod grouping;
