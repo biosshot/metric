@@ -19,14 +19,21 @@ Status as of 2026-07-27:
 | Phase 28 Signal Inbound Filters | Complete | ADR-0045 and Phase 28 report |
 | Phase 29 Releases and Deploys | Complete | ADR-0045 and Phase 29 report |
 | Phase 30 Sessions and Release Health | Complete | ADR-0045 and Phase 30 report |
-| Phase 31 User Feedback | Next | ADR-0045 |
-| Phases 32-36 lightweight product wave | Planned | ADR-0045 |
-| Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045 |
+| Phase 31 User Feedback | Complete | ADR-0045 and Phase 31 report |
+| Phase 32 Unified Explore | Complete | ADR-0045 and Phase 32 report |
+| Phase 33 Saved Queries and Dashboards | Complete | ADR-0045 and Phase 33 report |
+| Phase 34 Alerts and destinations | Complete | ADR-0045 and Phase 34 report |
+| Phase 35 Cron Monitoring | Complete | ADR-0045 and Phase 35 report |
+| Phase 36 Uptime Monitoring | Complete | ADR-0045 and Phase 36 report |
+| Phase 37 Application Metrics | Next | ADR-0046 |
+| Profiling and Session Replay | Desired, execution deferred and unnumbered | ADR-0040/0046 |
+| Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046 |
 
 Phase 27 is not complete and no production-ready claim follows from deferring it.
-By explicit owner decision, deferred Phase 27 remains incomplete. Phases 28-30 are
-complete, and Phase 31 is the next implementation phase.
-ADR-0045 numbers the selected lightweight product wave through Phase 36.
+By explicit owner decision, deferred Phase 27 remains incomplete. Phases 28-36 are
+complete, and Phase 37 Application Metrics is the next implementation phase.
+ADR-0045 owns the completed lightweight wave; ADR-0046 owns the post-Phase-36
+Metrics decision and the deferred Profiling/Replay boundary.
 
 ## Document precedence
 
@@ -52,6 +59,8 @@ current roadmap.
 | Performance aggregate | best-effort derived `span_stats_hourly`, rebuildable from terminal root Spans |
 | SDK Session | validate/scrub -> dedicated bounded SessionWriter -> compact lifecycle upsert |
 | Release Health | rebuildable `session_stats_hourly` derived from durable Sessions |
+| User Feedback | bounded accepted payload -> durable `feedback` record and exact telemetry links |
+| Cron/Uptime | bounded Scheduler execution -> durable `monitor_runs` -> existing notification outbox |
 
 Logs and Spans do not have a pending Processor backlog. Their successful HTTP
 response is issued only after every submitted terminal record is durable.
@@ -61,12 +70,12 @@ duplicate because its ID contains the server receive time.
 
 ## Current physical storage names
 
-The active schema generation is 15. The Error occurrence collection is
+The active schema generation is 17. The Error occurrence collection is
 `error_events`; `events` is only a legacy generation-7 physical name. Native HTTP
 routes may still contain `/events` because route names are product concepts, not
 MongoDB collection selectors.
 
-Current high-volume collections are:
+Current primary signal and product collections include:
 
 ```text
 error_events
@@ -78,10 +87,13 @@ span_stats_hourly
 deploys
 sessions
 session_stats_hourly
+feedback
+monitors
+monitor_runs
 ```
 
-Future collection names in ADR-0040 are reserved design decisions, not evidence that
-the corresponding product capability is enabled.
+`metric_buckets`, `profiles` and `replays` are future names only. ADR-0046 makes
+Application Metrics the next phase and keeps Profiling and Replay disabled.
 
 ## Current deployment boundary
 
@@ -107,5 +119,6 @@ the current release may claim production readiness.
   performance model.
 - `0044-production-readiness-program.md`: accepted but deferred Phase 27 and
   production launch gate.
-- `0045-lightweight-product-wave-phases-28-36.md`: completed Phases 28-30 and the
-  accepted Phase 31-36 sequence.
+- `0045-lightweight-product-wave-phases-28-36.md`: completed Phases 28-36.
+- `0046-application-metrics-and-deferred-blob-products.md`: accepted Phase 37
+  bucket model and the deferred Profiling/Replay boundary.

@@ -633,9 +633,12 @@ Exit gate:
 - scheduler overload delays checks visibly without affecting ingest readiness;
 - result retention and alert deduplication pass restart tests.
 
-## Deferred backlog group: metrics and high-volume Blob products
+## Post-Phase-36 Metrics and deferred high-volume Blob products
 
-### Backlog item — Metrics
+### Phase 37 — Application Metrics
+
+ADR-0046 supersedes the earlier unnumbered status and owns the exact compact bucket
+model, execution decision and exit gate below.
 
 Implement:
 
@@ -646,8 +649,10 @@ Implement:
 - cardinality budgets, denied-tag policy and explicit discard accounting;
 - Explore dataset and Dashboard/Alert integration.
 
-Raw measurements are combined before durable storage where idempotency permits; the
-durable model is a metric bucket, not an Event-shaped document.
+Raw measurements are combined before durable storage where idempotency permits. The
+durable model is one compact document per normalized series and time bucket, not an
+Event-shaped document, not one document per measurement and not one permanent
+lifetime document per counter.
 
 Exit gate:
 
@@ -656,7 +661,7 @@ Exit gate:
 - bucket merge contention and recovery baselines pass;
 - Metrics do not share the Span or Log queue.
 
-### Backlog item — Profiling
+### Deferred backlog item — Profiling
 
 Implement:
 
@@ -676,21 +681,23 @@ Exit gate:
 - profile processing cannot consume Symbolicator capacity reserved for Errors;
 - representative native/runtime SDK E2E and storage/load results pass.
 
-### Backlog item — Session Replay
+### Deferred backlog item — Session Replay
 
 Implement:
 
 - accepted replay event/recording items for selected browser SDKs;
 - Replay metadata/session index in `replays`;
 - immutable recording segments in BlobStore;
-- SDK-side and server-side privacy validation with safe defaults;
+- client-side privacy masking through pinned compatible Sentry SDK/rrweb versions;
+- no second DOM-aware server-side masking/privacy parser;
 - bounded segment ordering, gap handling and session finalization;
 - Replay player with links to Error, Feedback, Log and Trace context;
 - independent quotas, retention, archive and deletion.
 
 Exit gate:
 
-- DOM/text/input privacy corpus passes before capability enablement;
+- pinned browser SDK/rrweb masking configuration is documented and covered by E2E;
+- the UI states that server acceptance does not prove absence of sensitive data;
 - malformed/compression-bomb recordings fail within byte/CPU limits;
 - partial uploads and orphan cleanup pass crash/restart suites;
 - Replay bandwidth cannot consume Error/Log admission reservations;
@@ -841,7 +848,7 @@ The completed chain, deferred gate and selected product wave are:
 -> 25 Spans/Traces
 -> 26 Performance
 -> 27 Production readiness (accepted, execution deferred)
--> 28 Inbound Filters (next)
+-> 28 Inbound Filters
 -> 29 Releases/Deploys
 -> 30 Sessions/Release Health
 -> 31 Feedback
@@ -850,16 +857,17 @@ The completed chain, deferred gate and selected product wave are:
 -> 34 Alerts/Destinations
 -> 35 Cron
 -> 36 Uptime
+-> 37 Application Metrics (next)
 ```
 
-ADR-0045 owns the exact Phase 28-36 scope, exclusions and gates. The remaining
-unnumbered backlog keeps only capability dependencies:
+ADR-0045 owns the completed Phase 28-36 scope, exclusions and gates. ADR-0046 owns
+Phase 37. The remaining unnumbered backlog keeps only capability dependencies:
 
 - saved queries and Dashboards depend on Unified Explore;
 - query Alerts depend on a bounded query surface and the existing outbox;
 - Sessions/Feedback extend release and Error investigation independently;
 - Cron and Uptime share Scheduler but are otherwise independent;
-- Metrics may later extend Explore, Dashboards and Alerts;
+- Phase 37 Metrics extends Explore, Dashboards and Alerts;
 - Profiling and Replay depend on BlobStore and correlation contracts;
 - MCP and provider integrations remain removable application adapters;
 - online migrations and distributed roles are operations-driven and require separate

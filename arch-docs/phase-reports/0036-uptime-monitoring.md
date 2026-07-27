@@ -1,6 +1,9 @@
-# Phase 36 — Uptime Monitoring
+# Phase 36 report: Uptime Monitoring
 
-Status: implemented.
+- Date: 2026-07-27
+- Result: complete
+- Governing decision: ADR-0045
+- Module contract: `module-contracts/0036-uptime-monitoring-phase-36.md`
 
 ## Delivered
 

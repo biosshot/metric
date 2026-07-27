@@ -173,11 +173,12 @@ feature and surpass it in capability quality, operational reliability and raw
 performance. The performance headroom above shows the foundation is already
 there; the remaining gaps are a roadmap, not a ceiling.
 
-What is still missing today: sessions, profiles, replays, check-ins, StatsD
-metrics and user feedback are disabled. The runtime is a single `--role all`
-process: no split roles, sharding or online schema migrations, and the supplied
-compose file is a simple single-MongoDB deployment, not HA. Each of these is a
-planned increment, tracked in [`arch-docs/`](arch-docs/). The full current list:
+What is still missing today: Application Metrics, Profiling and Session Replay are
+disabled. Phase 37 Application Metrics is next; Profiling and Replay are desired but
+deliberately deferred. The runtime is a single `--role all` process: no split roles,
+sharding or online schema migrations, and the supplied compose file is a simple
+single-MongoDB deployment, not HA. Each boundary is tracked in
+[`arch-docs/`](arch-docs/). The full current list:
 [`docs/known-limits.md`](docs/known-limits.md).
 
 ## Support the project

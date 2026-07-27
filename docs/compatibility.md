@@ -1,8 +1,9 @@
 # Compatibility
 
-Metric version one claims Sentry compatibility only for the Error Event path and
-only for exact rows marked `pass` in
-`compatibility/sentry-sdk-matrix.toml`.
+Metric claims Sentry SDK compatibility only for exact executable rows and
+capabilities marked `pass` in `compatibility/sentry-sdk-matrix.toml`. A passing
+Error Event row does not implicitly claim Logs, Spans, Sessions, Feedback, Check-ins
+or any future signal for the same SDK.
 
 Currently verified:
 
@@ -29,8 +30,8 @@ python scripts/validate-compatibility.py --require-all
 The second command is the final release gate and intentionally fails while any
 required family remains untested.
 
-Sessions, profiles, replays, check-ins, StatsD metrics and feedback are disabled.
-Structured logs, transactions and spans are ingested through Sentry Envelopes.
-Native minidump, debug-file, Artifact Bundle, attachment,
-Incident Capsule, webhook and cold-archive capabilities are separate contracts and
-are advertised by `/api/v1/capabilities`.
+Structured logs, transactions, spans, Sessions, Feedback and Cron check-ins are
+implemented through their accepted compatibility contracts. Application Metrics,
+Profiling and Session Replay remain disabled. Native minidump, debug-file, Artifact
+Bundle, attachment, Incident Capsule, webhook and cold-archive capabilities are
+separate contracts and are advertised by `/api/v1/capabilities`.

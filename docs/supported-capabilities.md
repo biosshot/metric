@@ -15,6 +15,11 @@ Enabled core capabilities:
 - safe JSON/text attachments through the BlobStore;
 - project lifecycle, retention, deletion, audit, health and bounded Scheduler work;
 - Incident Capsule export;
+- releases, deploys, Sessions and Release Health;
+- User Feedback with exact Error/Trace/Replay identifiers when supplied;
+- Unified Explore, Saved Queries and project-shared Dashboards;
+- count-based Alerts with Telegram and SMTP Email destinations;
+- Cron and GET/HEAD Uptime Monitoring;
 - signed webhook notifications when configured.
 
 Optional capabilities:
@@ -28,10 +33,9 @@ Optional capabilities:
 
 Explicitly disabled:
 
-- profiles, sessions and replays;
-- check-ins;
-- StatsD metrics;
-- user feedback.
+- Application Metrics and StatsD metrics; Phase 37 is accepted but not implemented;
+- profiles; desired but deliberately deferred;
+- Session Replay; desired but deliberately deferred.
 
 An absent optional route is represented by capabilities rather than a placeholder
 success response.

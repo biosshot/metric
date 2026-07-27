@@ -33,5 +33,5 @@ through authorized API commands and local cache invalidation; there is no partia
 config hot reload.
 
 Use `--check-config` before startup and `--print-effective-config` for a redacted
-diagnostic. MongoDB schema generation 7 permits idempotent empty-database bootstrap
+diagnostic. MongoDB schema generation 17 permits idempotent empty-database bootstrap
 only; it is not a migration mechanism.

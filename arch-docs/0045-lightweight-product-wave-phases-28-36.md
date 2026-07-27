@@ -30,8 +30,9 @@ The selected wave is:
 | 35 | Cron Monitoring | Complete |
 | 36 | Uptime Monitoring | Complete |
 
-Metrics, Profiling, Replay, organization workflow, provider integrations, MCP,
-online migrations and horizontal scaling remain unnumbered backlog.
+ADR-0046 makes Application Metrics Phase 37. Profiling and Replay remain desired but
+deferred and unnumbered. Organization workflow, provider integrations, MCP, online
+migrations and horizontal scaling also remain unnumbered backlog.
 
 ## Shared implementation rules
 
@@ -659,6 +660,7 @@ The accepted order is sequential:
 -> 34 Alerts/Destinations
 -> 35 Cron
 -> 36 Uptime
+-> 37 Application Metrics (ADR-0046)
 ```
 
 Strict capability dependencies are:
@@ -672,11 +674,11 @@ Strict capability dependencies are:
 The sequential order is a delivery/test discipline, not permission to make earlier
 modules depend on future phases.
 
-## Deferred after Phase 36
+## Deferred or selected after Phase 36
 
-The following remain deliberately unnumbered:
+ADR-0046 removes Metrics from this unnumbered list and assigns it Phase 37. The
+following remain deliberately unnumbered:
 
-- Metrics;
 - Profiling;
 - Session Replay;
 - Issue collaboration, merge/split and custom grouping rules;
