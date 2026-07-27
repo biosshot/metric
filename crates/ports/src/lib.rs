@@ -43,6 +43,7 @@ use metric_domain::{
         CreateDeploy, CreateRelease, DeployId, DeployRecord, FinalizeRelease, ReleaseIssueSummary,
         ReleaseRecord,
     },
+    sessions::{ReleaseHealthBucket, SessionId, SessionRecord, SessionUpdate},
     signals::{
         LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SignalPage, SpanRecord,
         TraceId, TraceView,
@@ -1376,6 +1377,50 @@ pub trait SpanSink: Send + Sync + 'static {
         &self,
         records: Vec<SpanRecord>,
     ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+}
+
+/// Dedicated durable Session admission boundary.
+pub trait SessionSink: Send + Sync + 'static {
+    fn persist_sessions(
+        &self,
+        updates: Vec<SessionUpdate>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+}
+
+/// Session source-of-truth boundary. It is intentionally separate from SignalStore
+/// because one SDK Session receives deterministic lifecycle upserts.
+pub trait SessionStore: Send + Sync + 'static {
+    fn persist_sessions(
+        &self,
+        updates: Vec<SessionUpdate>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+
+    fn load_session(
+        &self,
+        project_id: ProjectId,
+        session_id: SessionId,
+    ) -> PortFuture<'_, Result<SessionRecord, SignalStoreError>>;
+
+    fn terminalize_stale_sessions(
+        &self,
+        now: Timestamp,
+        maximum_active_age: Duration,
+    ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
+
+    fn release_health(
+        &self,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        from: Timestamp,
+        until: Timestamp,
+    ) -> PortFuture<'_, Result<Vec<ReleaseHealthBucket>, SignalStoreError>>;
+
+    fn rebuild_session_stats(
+        &self,
+        project_id: ProjectId,
+        from: Timestamp,
+        until: Timestamp,
+    ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
 }
 
 /// Signal-specific durable and query boundary. Raw MongoDB filters never cross it.

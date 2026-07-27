@@ -718,6 +718,7 @@ mod tests {
     fn snapshot(project: i32) -> ProjectSnapshot {
         ProjectSnapshot {
             project_id: ProjectId::new(project).unwrap(),
+            organization_id: metric_domain::OrganizationId::new(1).unwrap(),
             state: ProjectAcceptanceState::Active,
             key_state: ProjectKeyState::Active,
             scrub_policy: ScrubPolicy {

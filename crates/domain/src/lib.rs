@@ -15,6 +15,7 @@ pub mod issue;
 pub mod notifications;
 pub mod processing;
 pub mod releases;
+pub mod sessions;
 pub mod signals;
 pub mod symbolication;
 
@@ -486,6 +487,7 @@ pub struct ItemCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectSnapshot {
     pub project_id: ProjectId,
+    pub organization_id: OrganizationId,
     pub state: ProjectAcceptanceState,
     pub key_state: ProjectKeyState,
     pub scrub_policy: ScrubPolicy,

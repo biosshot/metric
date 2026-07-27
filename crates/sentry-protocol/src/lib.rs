@@ -38,8 +38,8 @@ pub struct ParsedEnvelope {
     /// The single Error item that owns dependent attachment items. "Primary" is an
     /// Envelope relationship, not a claim that Errors are the only telemetry signal.
     pub primary: Option<RawEvent>,
-    /// Independently durable telemetry items: Logs, Transactions and standalone
-    /// Spans. Errors are excluded only because they occupy the dependency-root role.
+    /// Independently durable telemetry items: Logs, Transactions, standalone Spans
+    /// and application Sessions. Errors occupy the dependency-root role.
     pub signals: Vec<RawSignal>,
     pub attachments: Vec<RawAttachment>,
     pub discarded: Vec<DiscardedItem>,
@@ -51,6 +51,7 @@ pub enum RawSignalKind {
     Log,
     Transaction,
     Span,
+    Session,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -549,7 +550,8 @@ fn classify_item(kind: &str) -> ItemClass {
         "client_report" => ItemClass::ClientReport,
         "log" => ItemClass::Signal(RawSignalKind::Log),
         "transaction" => ItemClass::Signal(RawSignalKind::Transaction),
-        "session" | "sessions" => ItemClass::Disabled(DisabledCategory::Session),
+        "session" => ItemClass::Signal(RawSignalKind::Session),
+        "sessions" => ItemClass::Disabled(DisabledCategory::Session),
         "profile" | "profile_chunk" => ItemClass::Disabled(DisabledCategory::Profile),
         "replay_event" | "replay_recording" => ItemClass::Disabled(DisabledCategory::Replay),
         "check_in" => ItemClass::Disabled(DisabledCategory::CheckIn),
@@ -592,14 +594,17 @@ mod tests {
     }
 
     #[test]
-    fn structured_logs_transactions_and_streamed_spans_are_signal_items() {
+    fn structured_logs_transactions_spans_and_sessions_are_signal_items() {
         for (kind, expected) in [
             ("log", RawSignalKind::Log),
             ("transaction", RawSignalKind::Transaction),
             ("span", RawSignalKind::Span),
+            ("session", RawSignalKind::Session),
         ] {
             let payload = if kind == "log" {
                 r#"{"version":2,"items":[{"timestamp":1,"level":"info","body":"ready"}]}"#
+            } else if kind == "session" {
+                r#"{"sid":"01234567-89ab-cdef-0123-456789abcdef","started":"2026-01-01T00:00:00Z","status":"ok","attrs":{"release":"backend@1"}}"#
             } else {
                 r#"{"trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef"}"#
             };

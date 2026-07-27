@@ -21,6 +21,7 @@ pub mod projects;
 pub mod releases;
 pub mod scheduler;
 pub mod search;
+pub mod session_writer;
 pub mod shutdown;
 pub mod span_writer;
 pub mod symbolication;

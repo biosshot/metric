@@ -9,13 +9,14 @@ use std::{
 
 use metric_domain::{
     AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
+    sessions::SessionUpdate,
     signals::{LogRecord, SpanRecord},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, IngestOutcome, LogSink, OutcomeSink,
-    PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource, SignalStoreError,
-    SpanSink, SymbolicationBackend, SymbolicationBackendError,
+    PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource, SessionSink,
+    SignalStoreError, SpanSink, SymbolicationBackend, SymbolicationBackendError,
 };
 
 #[derive(Clone)]
@@ -150,6 +151,35 @@ impl SpanSink for FakeSpanSink {
                 .lock()
                 .expect("fake Span sink lock poisoned")
                 .extend(records);
+            Ok(outcomes)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeSessionSink(Arc<Mutex<Vec<SessionUpdate>>>);
+
+impl FakeSessionSink {
+    #[must_use]
+    pub fn updates(&self) -> Vec<SessionUpdate> {
+        self.0
+            .lock()
+            .expect("fake Session sink lock poisoned")
+            .clone()
+    }
+}
+
+impl SessionSink for FakeSessionSink {
+    fn persist_sessions(
+        &self,
+        updates: Vec<SessionUpdate>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
+        Box::pin(async move {
+            let outcomes = vec![DurableOutcome::Accepted; updates.len()];
+            self.0
+                .lock()
+                .expect("fake Session sink lock poisoned")
+                .extend(updates);
             Ok(outcomes)
         })
     }

@@ -85,6 +85,9 @@ pub struct RetentionCapability {
     pub logs_days: u32,
     pub spans_days: u32,
     pub span_stats_hourly_days: u32,
+    pub sessions_days: u32,
+    pub session_stats_hourly_days: u32,
+    pub session_active_max_hours: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -364,6 +367,10 @@ pub fn router(
         .route(
             "/api/v1/projects/{project_id}/releases/{release_id}/issues",
             get(list_release_issues),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/releases/{release_id}/health",
+            get(release_health),
         )
         .route(
             "/api/v1/projects/{project_id}/environments",
@@ -1901,6 +1908,77 @@ async fn list_release_issues(
     })))
 }
 
+async fn release_health(
+    State(state): State<NativeHttpState>,
+    Path((project_id, release_id)): Path<(String, String)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let values = api(&state)?
+        .release_health(
+            &context,
+            project_id_from(&project_id)?,
+            metric_domain::finalization::ReleaseId::from_bytes(hex_16(&release_id)?),
+            optional_query_timestamp(&query, "from")?,
+            optional_query_timestamp(&query, "until")?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    let mut release_users = metric_domain::sessions::UserSketch::default();
+    let mut release_crashed_users = metric_domain::sessions::UserSketch::default();
+    for bucket in &values {
+        release_users.merge(bucket.user_sketch);
+        release_crashed_users.merge(bucket.crashed_user_sketch);
+    }
+    let release_users = release_users.estimate();
+    let release_crashed_users = release_crashed_users.estimate();
+    Ok(Json(json!({
+        "items": values
+            .iter()
+            .map(|bucket| Ok(json!({
+                "hour": timestamp_string(bucket.hour)?,
+                "environment_id": hex::encode(bucket.environment_id.as_bytes()),
+                "environment": bucket.environment,
+                "sessions": bucket.sessions,
+                "crashed": bucket.crashed,
+                "abnormal": bucket.abnormal,
+                "exited": bucket.exited,
+                "crash_free_sessions": if bucket.sessions == 0 {
+                    100.0
+                } else {
+                    100.0 * (bucket.sessions.saturating_sub(bucket.crashed) as f64)
+                        / bucket.sessions as f64
+                },
+                "approximate_users": bucket.approximate_users,
+                "approximate_crashed_users": bucket.approximate_crashed_users,
+                "crash_free_users": if bucket.approximate_users == 0 {
+                    100.0
+                } else {
+                    100.0 * (bucket.approximate_users.saturating_sub(
+                        bucket.approximate_crashed_users
+                    ) as f64) / bucket.approximate_users as f64
+                },
+            })))
+            .collect::<Result<Vec<_>, HttpApiError>>()?,
+        "approximate_users": true,
+        "users": release_users,
+        "crashed_users": release_crashed_users,
+        "crash_free_users": if release_users == 0 {
+            100.0
+        } else {
+            100.0 * (release_users.saturating_sub(release_crashed_users) as f64)
+                / release_users as f64
+        },
+        "user_sketch_bytes": metric_domain::sessions::USER_SKETCH_BYTES,
+        "user_sketch_standard_error_percent":
+            metric_domain::sessions::USER_SKETCH_STANDARD_ERROR_PERCENT,
+        "user_sketch_saturation_estimate":
+            metric_domain::sessions::USER_SKETCH_SATURATION_ESTIMATE,
+    })))
+}
+
 async fn list_environments(
     State(state): State<NativeHttpState>,
     Path(project_id): Path<String>,
@@ -1932,6 +2010,9 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "logs_days": policy.logs_days,
             "spans_days": policy.spans_days,
             "span_stats_hourly_days": policy.span_stats_hourly_days,
+            "sessions_days": policy.sessions_days,
+            "session_stats_hourly_days": policy.session_stats_hourly_days,
+            "session_active_max_hours": policy.session_active_max_hours,
             "clock": "received_at",
             "gradual_policy_reduction": true,
         })
@@ -1975,6 +2056,8 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "spans": state.required_ready,
             "virtual_traces": state.required_ready,
             "performance_insights": state.required_ready,
+            "sessions": state.required_ready,
+            "release_health": state.required_ready,
             "external_symbolicator": state
                 .debug_files
                 .is_some_and(|capability| capability.external_symbolicator),

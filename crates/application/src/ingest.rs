@@ -8,9 +8,12 @@ use metric_domain::{
         AttachmentFilename, BlobChecksum, BlobContentType, BlobKey, BlobKind, BlobObjectId,
         EventAttachment,
     },
+    finalization::{derive_environment_id, derive_release_id},
     inbound_filter::{
         InboundFilterField, InboundFilterFields, InboundFilterMatch, InboundFilterSignal,
     },
+    releases::validate_version,
+    sessions::{SessionId, SessionState, SessionUpdate},
     signals::{
         LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
         SpanRecordId, TraceId,
@@ -19,11 +22,12 @@ use metric_domain::{
 use metric_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
     IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink, ProjectResolveError, ProjectResolver,
-    RandomSource, SignalStoreError, SpanSink,
+    RandomSource, SessionSink, SignalStoreError, SpanSink,
 };
 use serde_json::{Map, Value};
 use sha2::Sha256;
 use thiserror::Error;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::Semaphore;
 
 use crate::{observability::Metrics, shutdown::ShutdownSignal};
@@ -117,6 +121,7 @@ pub enum PendingSignalKind {
     Log,
     Transaction,
     Span,
+    Session,
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +269,7 @@ pub struct IngestService {
     minidump_config: MinidumpIngestConfig,
     log_sink: Option<Arc<dyn LogSink>>,
     span_sink: Option<Arc<dyn SpanSink>>,
+    session_sink: Option<Arc<dyn SessionSink>>,
 }
 
 impl IngestService {
@@ -290,6 +296,7 @@ impl IngestService {
             minidump_config: MinidumpIngestConfig::default(),
             log_sink: None,
             span_sink: None,
+            session_sink: None,
         }
     }
 
@@ -302,6 +309,12 @@ impl IngestService {
     #[must_use]
     pub fn with_log_sink(mut self, log_sink: Arc<dyn LogSink>) -> Self {
         self.log_sink = Some(log_sink);
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_sink(mut self, session_sink: Arc<dyn SessionSink>) -> Self {
+        self.session_sink = Some(session_sink);
         self
     }
 
@@ -479,6 +492,7 @@ impl IngestService {
         let received_at = self.clock.now();
         let mut logs = Vec::new();
         let mut spans = Vec::new();
+        let mut sessions = Vec::new();
         let mut disabled_categories = Vec::new();
         for signal in signals {
             if signal.raw_json.len() > snapshot.limits.max_event_bytes.get() as usize {
@@ -532,6 +546,9 @@ impl IngestService {
                         }
                     }
                 }
+                PendingSignalKind::Session => {
+                    sessions.push(normalize_session(snapshot, received_at, &signal.raw_json)?);
+                }
                 PendingSignalKind::Log
                 | PendingSignalKind::Transaction
                 | PendingSignalKind::Span => {
@@ -539,6 +556,7 @@ impl IngestService {
                         PendingSignalKind::Log => "log",
                         PendingSignalKind::Transaction => "transaction",
                         PendingSignalKind::Span => "span",
+                        PendingSignalKind::Session => "session",
                     });
                     self.outcome_sink.record(IngestOutcome {
                         kind: IngestOutcomeKind::Unsupported,
@@ -548,7 +566,7 @@ impl IngestService {
                 }
             }
         }
-        if logs.is_empty() && spans.is_empty() {
+        if logs.is_empty() && spans.is_empty() && sessions.is_empty() {
             disabled_categories.sort_unstable();
             disabled_categories.dedup();
             return Ok(disabled_categories);
@@ -580,6 +598,21 @@ impl IngestService {
             self.outcome_sink.record(IngestOutcome {
                 kind: IngestOutcomeKind::Accepted,
                 reason: "span",
+                quantity,
+            });
+        }
+        if !sessions.is_empty() {
+            let sink = self
+                .session_sink
+                .as_ref()
+                .ok_or_else(|| IngestError::unavailable("session_storage_unavailable"))?;
+            let quantity = u64::try_from(sessions.len()).unwrap_or(u64::MAX);
+            sink.persist_sessions(sessions)
+                .await
+                .map_err(map_signal_store_error)?;
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Accepted,
+                reason: "session",
                 quantity,
             });
         }
@@ -1298,6 +1331,109 @@ fn normalize_logs(
     Ok(records)
 }
 
+fn normalize_session(
+    snapshot: &ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    payload: &[u8],
+) -> Result<SessionUpdate, IngestError> {
+    let mut value: Value = serde_json::from_slice(payload)
+        .map_err(|_| IngestError::invalid("invalid_session_json"))?;
+    scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| IngestError::invalid("invalid_session_json"))?;
+    let sdk_id = object
+        .get("sid")
+        .and_then(Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .filter(|value| !value.is_nil())
+        .ok_or_else(|| IngestError::invalid("invalid_session_id"))?;
+    let attributes = object.get("attrs").and_then(Value::as_object);
+    let release = attribute_string(attributes, "release")
+        .ok_or_else(|| IngestError::invalid("missing_session_release"))?;
+    validate_version(release).map_err(|_| IngestError::invalid("invalid_session_release"))?;
+    let environment = attribute_string(attributes, "environment").unwrap_or("production");
+    if environment.is_empty() || environment.len() > 64 {
+        return Err(IngestError::invalid("invalid_session_environment"));
+    }
+    let started_at = parse_session_timestamp(
+        object
+            .get("started")
+            .ok_or_else(|| IngestError::invalid("missing_session_started"))?,
+    )?;
+    let updated_at = object
+        .get("timestamp")
+        .map(parse_session_timestamp)
+        .transpose()?
+        .unwrap_or(received_at);
+    let state = match object.get("status").and_then(Value::as_str).unwrap_or("ok") {
+        "started" | "ok" => SessionState::Ok,
+        "exited" => SessionState::Exited,
+        "crashed" => SessionState::Crashed,
+        "abnormal" => SessionState::Abnormal,
+        _ => return Err(IngestError::invalid("invalid_session_status")),
+    };
+    let sequence = object.get("seq").and_then(Value::as_u64);
+    let duration_ms = object
+        .get("duration")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0 && *value <= i64::MAX as f64 / 1_000.0)
+        .map(|seconds| (seconds * 1_000.0).round() as u64);
+    let user_digest = object
+        .get("did")
+        .and_then(Value::as_str)
+        .or_else(|| attribute_string(attributes, "user_id"))
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let mut mac = Hmac::<Sha256>::new_from_slice(snapshot.scrub_policy.hmac_key.expose())
+                .expect("HMAC accepts fixed-size key");
+            mac.update(b"metric/session-user/v1");
+            mac.update(value.as_bytes());
+            let digest = mac.finalize().into_bytes();
+            let mut bounded = [0; 16];
+            bounded.copy_from_slice(&digest[..16]);
+            bounded
+        });
+    let update = SessionUpdate {
+        id: SessionId::derive(snapshot.project_id, *sdk_id.as_bytes()),
+        project_id: snapshot.project_id,
+        release_id: derive_release_id(snapshot.organization_id, release),
+        environment_id: derive_environment_id(snapshot.project_id, environment),
+        started_at,
+        updated_at,
+        state,
+        sequence,
+        duration_ms,
+        user_digest,
+    };
+    update
+        .validate()
+        .map_err(|_| IngestError::invalid("invalid_session_lifecycle"))?;
+    Ok(update)
+}
+
+fn parse_session_timestamp(value: &Value) -> Result<metric_domain::Timestamp, IngestError> {
+    let milliseconds = if let Some(seconds) = value.as_f64() {
+        if !seconds.is_finite()
+            || seconds < i64::MIN as f64 / 1_000.0
+            || seconds > i64::MAX as f64 / 1_000.0
+        {
+            return Err(IngestError::invalid("invalid_session_timestamp"));
+        }
+        (seconds * 1_000.0).round() as i64
+    } else {
+        let text = value
+            .as_str()
+            .ok_or_else(|| IngestError::invalid("invalid_session_timestamp"))?;
+        let parsed = OffsetDateTime::parse(text, &Rfc3339)
+            .map_err(|_| IngestError::invalid("invalid_session_timestamp"))?;
+        i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000)
+            .map_err(|_| IngestError::invalid("invalid_session_timestamp"))?
+    };
+    metric_domain::Timestamp::from_unix_millis(milliseconds)
+        .map_err(|_| IngestError::invalid("invalid_session_timestamp"))
+}
+
 fn normalize_transaction(
     snapshot: &ProjectSnapshot,
     received_at: metric_domain::Timestamp,
@@ -1702,6 +1838,7 @@ mod tests {
     fn snapshot() -> ProjectSnapshot {
         ProjectSnapshot {
             project_id: ProjectId::new(42).unwrap(),
+            organization_id: metric_domain::OrganizationId::new(1).unwrap(),
             state: ProjectAcceptanceState::Active,
             key_state: ProjectKeyState::Active,
             scrub_policy: ScrubPolicy {
@@ -1720,6 +1857,38 @@ mod tests {
             inbound_filters: Default::default(),
             grouping_revision: 1,
         }
+    }
+
+    #[test]
+    fn pinned_node_session_is_compact_and_project_scoped() {
+        let update = normalize_session(
+            &snapshot(),
+            metric_domain::Timestamp::from_unix_millis(1_767_225_601_000).unwrap(),
+            br#"{
+                "sid":"01234567-89ab-cdef-0123-456789abcdef",
+                "init":true,
+                "started":"2026-01-01T00:00:00Z",
+                "timestamp":"2026-01-01T00:00:01Z",
+                "status":"crashed",
+                "errors":1,
+                "seq":2,
+                "did":"bounded-user",
+                "attrs":{"release":"backend@1.2.3","environment":"production"}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(update.project_id, ProjectId::new(42).unwrap());
+        assert_eq!(update.state, SessionState::Crashed);
+        assert_eq!(update.sequence, Some(2));
+        assert!(update.user_digest.is_some());
+        assert_eq!(
+            update.release_id,
+            derive_release_id(snapshot().organization_id, "backend@1.2.3")
+        );
+        assert_eq!(
+            update.environment_id,
+            derive_environment_id(snapshot().project_id, "production")
+        );
     }
 
     #[test]

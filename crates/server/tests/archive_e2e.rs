@@ -10,15 +10,18 @@ use metric_blob::{LocalBlobConfig, LocalBlobStore};
 use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, SecretBytes, Timestamp,
     blob::BlobKey,
+    finalization::{EnvironmentId, ReleaseId},
+    sessions::{SessionId, SessionState, SessionUpdate},
     signals::{
         LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
         SpanRecordId, TraceId,
     },
 };
 use metric_mongo::{
-    EventCodecConfig, MongoEventStore, MongoProjectStore, MongoSignalStore, SignalRetention,
+    EventCodecConfig, MongoEventStore, MongoProjectStore, MongoSignalStore, SessionRetention,
+    SignalRetention,
 };
-use metric_ports::{BlobStore, Clock, EventStore, EventWriteStatus, SignalStore};
+use metric_ports::{BlobStore, Clock, EventStore, EventWriteStatus, SessionStore, SignalStore};
 use mongodb::{
     Client, Database,
     bson::{Binary, Document, doc, spec::BinarySubtype},
@@ -117,6 +120,26 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
             body: SignalBody::new(br#"{"body":"archive log"}"#.as_slice()),
         }])
         .await?;
+    let session_id = SessionId::derive(event.project_id, [5; 16]);
+    control
+        .session_store(SessionRetention {
+            sessions_days: 0,
+            session_stats_hourly_days: 400,
+            archive: true,
+        })
+        .persist_sessions(vec![SessionUpdate {
+            id: session_id,
+            project_id: event.project_id,
+            release_id: ReleaseId::from_bytes([6; 16]),
+            environment_id: EnvironmentId::from_bytes([7; 16]),
+            started_at: Timestamp::from_unix_millis(now.unix_millis() - 1_000)?,
+            updated_at: now,
+            state: SessionState::Exited,
+            sequence: Some(1),
+            duration_ms: Some(1_000),
+            user_digest: Some([8; 16]),
+        }])
+        .await?;
     let span_record_id = SpanRecordId::deterministic(event.project_id, trace_id, span_id);
     signals
         .persist_spans(vec![SpanRecord {
@@ -167,8 +190,8 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
         },
     )?;
     let report = service.run_once().await?;
-    assert_eq!(report.claimed_records, 3);
-    assert_eq!(report.archived_records, 3);
+    assert_eq!(report.claimed_records, 4);
+    assert_eq!(report.archived_records, 4);
     assert!(report.stored_bytes > 0);
 
     let mut manifests = database
@@ -191,7 +214,12 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
     }
     assert_eq!(
         kinds,
-        std::collections::BTreeSet::from(["event".to_owned(), "log".to_owned(), "span".to_owned()])
+        std::collections::BTreeSet::from([
+            "event".to_owned(),
+            "log".to_owned(),
+            "session".to_owned(),
+            "span".to_owned(),
+        ])
     );
 
     let hot = database
@@ -208,6 +236,7 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
     for (collection, id) in [
         ("logs", log_id.as_bytes()),
         ("spans", span_record_id.as_bytes()),
+        ("sessions", session_id.as_bytes()),
     ] {
         let hot = database
             .collection::<Document>(collection)

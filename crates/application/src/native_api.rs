@@ -144,6 +144,7 @@ pub struct NativeApiService {
     deletion: Option<Arc<ProjectDeletionService>>,
     blob_store: Option<Arc<dyn BlobStore>>,
     signal_store: Option<Arc<dyn SignalStore>>,
+    session_store: Option<Arc<dyn metric_ports::SessionStore>>,
     releases: Option<Arc<ReleaseService>>,
 }
 
@@ -178,6 +179,7 @@ impl NativeApiService {
             deletion: None,
             blob_store: None,
             signal_store: None,
+            session_store: None,
             releases: None,
         }
     }
@@ -185,6 +187,15 @@ impl NativeApiService {
     #[must_use]
     pub fn with_signal_store(mut self, signal_store: Arc<dyn SignalStore>) -> Self {
         self.signal_store = Some(signal_store);
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_store(
+        mut self,
+        session_store: Arc<dyn metric_ports::SessionStore>,
+    ) -> Self {
+        self.session_store = Some(session_store);
         self
     }
 
@@ -953,6 +964,33 @@ impl NativeApiService {
             )
             .await
             .map_err(map_release_error)
+    }
+
+    pub async fn release_health(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
+    ) -> Result<Vec<metric_domain::sessions::ReleaseHealthBucket>, NativeApiError> {
+        self.release(context, project_id, release_id).await?;
+        let until = until.unwrap_or_else(|| self.clock.now());
+        let from = from.unwrap_or_else(|| {
+            Timestamp::from_unix_millis(
+                until
+                    .unix_millis()
+                    .saturating_sub(7_i64 * 24 * 60 * 60 * 1_000),
+            )
+            .expect("seven-day subtraction remains in the timestamp range")
+        });
+        validate_time_range(from, until)?;
+        self.session_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .release_health(project_id, release_id, from, until)
+            .await
+            .map_err(map_signal_error)
     }
 
     pub async fn environments(

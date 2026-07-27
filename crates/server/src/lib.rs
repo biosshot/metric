@@ -52,6 +52,10 @@ use metric_application::{
     releases::ReleaseService,
     scheduler::{Scheduler, SchedulerConfig, SchedulerStartError, SchedulerTask},
     search::{SearchConfig, SearchService},
+    session_writer::{
+        SessionMaintenanceTask, SessionWriter, SessionWriterConfig, SessionWriterStartError,
+        SessionWriterTask, start_session_maintenance,
+    },
     shutdown::ShutdownRoot,
     span_writer::{SpanWriter, SpanWriterConfig, SpanWriterStartError, SpanWriterTask},
     symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
@@ -63,7 +67,7 @@ use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, Mong
 use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
     LogSink, OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError,
-    RandomSource, SignalStore, SpanSink,
+    RandomSource, SessionSink, SessionStore, SignalStore, SpanSink,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -92,6 +96,8 @@ pub enum ServerError {
     LogWriter(#[from] LogWriterStartError),
     #[error(transparent)]
     SpanWriter(#[from] SpanWriterStartError),
+    #[error(transparent)]
+    SessionWriter(#[from] SessionWriterStartError),
     #[error(transparent)]
     Dispatcher(#[from] DispatcherStartError),
     #[error(transparent)]
@@ -129,9 +135,12 @@ struct RuntimeModules {
     event_sink: std::sync::Arc<dyn EventSink>,
     log_sink: Option<std::sync::Arc<dyn LogSink>>,
     span_sink: Option<std::sync::Arc<dyn SpanSink>>,
+    session_sink: Option<std::sync::Arc<dyn SessionSink>>,
     writer_task: Option<MongoWriterTask>,
     log_writer_task: Option<LogWriterTask>,
     span_writer_task: Option<SpanWriterTask>,
+    session_writer_task: Option<SessionWriterTask>,
+    session_maintenance_task: Option<SessionMaintenanceTask>,
     dispatcher_task: Option<DispatcherTask>,
     scheduler_task: Option<SchedulerTask>,
     archive_task: Option<ArchiveTask>,
@@ -228,9 +237,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         event_sink,
         log_sink,
         span_sink,
+        session_sink,
         writer_task,
         log_writer_task,
         span_writer_task,
+        session_writer_task,
+        session_maintenance_task,
         dispatcher_task,
         scheduler_task,
         archive_task,
@@ -471,6 +483,33 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         )?;
         let span_sink: std::sync::Arc<dyn SpanSink> = span_writer;
+        let session_store: std::sync::Arc<dyn SessionStore> =
+            std::sync::Arc::new(store.session_store(metric_mongo::SessionRetention {
+                sessions_days: config.retention.sessions_days,
+                session_stats_hourly_days: config.retention.session_stats_hourly_days,
+                archive: config.archive.enabled,
+            }));
+        let (session_writer, session_writer_task) = SessionWriter::start(
+            std::sync::Arc::clone(&session_store),
+            SessionWriterConfig {
+                channel_capacity: config.ingest.max_waiting_for_storage,
+                max_wait: config.ingest.batch.max_wait.get(),
+                max_updates: config.ingest.batch.max_documents,
+                operation_timeout: config.ingest.request_timeout.get(),
+                shutdown_drain: config.server.shutdown_grace.get(),
+            },
+            shutdown.signal(),
+        )?;
+        let session_sink: std::sync::Arc<dyn SessionSink> = session_writer;
+        let session_maintenance_task = start_session_maintenance(
+            std::sync::Arc::clone(&session_store),
+            std::sync::Arc::clone(&clock),
+            std::time::Duration::from_secs(
+                u64::from(config.retention.session_active_max_hours) * 60 * 60,
+            ),
+            config.scheduler.maintenance_interval.get(),
+            shutdown.signal(),
+        );
         let native_api_service = std::sync::Arc::new(
             NativeApiService::new(
                 std::sync::Arc::clone(&identity_service),
@@ -483,6 +522,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_project_deletion(deletion_service)
             .with_blob_store(std::sync::Arc::clone(&blob_store))
             .with_signal_store(std::sync::Arc::clone(&signal_store))
+            .with_session_store(session_store)
             .with_release_service(std::sync::Arc::clone(&release_service)),
         );
         let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =
@@ -694,9 +734,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             event_sink,
             log_sink: Some(log_sink),
             span_sink: Some(span_sink),
+            session_sink: Some(session_sink),
             writer_task: Some(writer_task),
             log_writer_task: Some(log_writer_task),
             span_writer_task: Some(span_writer_task),
+            session_writer_task: Some(session_writer_task),
+            session_maintenance_task: Some(session_maintenance_task),
             dispatcher_task: Some(dispatcher_task),
             scheduler_task: Some(scheduler_task),
             archive_task,
@@ -721,9 +764,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             log_sink: None,
             span_sink: None,
+            session_sink: None,
             writer_task: None,
             log_writer_task: None,
             span_writer_task: None,
+            session_writer_task: None,
+            session_maintenance_task: None,
             dispatcher_task: None,
             scheduler_task: None,
             archive_task: None,
@@ -771,10 +817,15 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(span_sink) = span_sink {
         ingest_service = ingest_service.with_span_sink(span_sink);
     }
+    if let Some(session_sink) = session_sink {
+        ingest_service = ingest_service.with_session_sink(session_sink);
+    }
     let ingest = std::sync::Arc::new(ingest_service);
     let required_ready = writer_task.is_some()
         && log_writer_task.is_some()
         && span_writer_task.is_some()
+        && session_writer_task.is_some()
+        && session_maintenance_task.is_some()
         && dispatcher_task.is_some()
         && scheduler_task.is_some()
         && notification_task.is_some()
@@ -792,6 +843,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     logs_days: config.retention.logs_days,
                     spans_days: config.retention.spans_days,
                     span_stats_hourly_days: config.retention.span_stats_hourly_days,
+                    sessions_days: config.retention.sessions_days,
+                    session_stats_hourly_days: config.retention.session_stats_hourly_days,
+                    session_active_max_hours: config.retention.session_active_max_hours,
                 }),
                 project_deletion: required_ready.then_some(
                     native_http::ProjectDeletionCapability {
@@ -881,6 +935,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = span_writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = session_writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = session_maintenance_task {
         task.wait().await;
     }
     if let Some(task) = dispatcher_task {

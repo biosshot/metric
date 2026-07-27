@@ -77,6 +77,8 @@ async fn main() -> std::io::Result<()> {
     let config = benchmark_config();
     let snapshot = ProjectSnapshot {
         project_id: ProjectId::new(42).expect("constant project is valid"),
+        organization_id: metric_domain::OrganizationId::new(1)
+            .expect("constant organization is valid"),
         state: ProjectAcceptanceState::Active,
         key_state: ProjectKeyState::Active,
         scrub_policy: ScrubPolicy {

@@ -57,6 +57,7 @@ fn config() -> IngestConfig {
 fn snapshot() -> ProjectSnapshot {
     ProjectSnapshot {
         project_id: ProjectId::new(42).unwrap(),
+        organization_id: metric_domain::OrganizationId::new(1).unwrap(),
         state: ProjectAcceptanceState::Active,
         key_state: ProjectKeyState::Active,
         scrub_policy: ScrubPolicy {
@@ -557,7 +558,7 @@ async fn mixed_disabled_item_preserves_error_and_returns_category_backoff() {
 async fn unsupported_only_envelope_is_handled_without_durable_event() {
     let root = ShutdownRoot::new();
     let sink = FakeEventSink::accepting();
-    let body = "{}\n{\"type\":\"session\",\"length\":2}\n{}";
+    let body = "{}\n{\"type\":\"sessions\",\"length\":2}\n{}";
     let response = test_app(config(), sink.clone(), &root)
         .oneshot(request(body))
         .await

@@ -141,6 +141,9 @@ issue_stats_hourly_days = 400
 logs_days = 30
 spans_days = 30
 span_stats_hourly_days = 90
+sessions_days = 7
+session_stats_hourly_days = 400
+session_active_max_hours = 24
 
 [project_deletion]
 grace_period = "24h"

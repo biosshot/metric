@@ -419,6 +419,7 @@ fn map_request(
                     RawSignalKind::Log => PendingSignalKind::Log,
                     RawSignalKind::Transaction => PendingSignalKind::Transaction,
                     RawSignalKind::Span => PendingSignalKind::Span,
+                    RawSignalKind::Session => PendingSignalKind::Session,
                 },
                 raw_json: signal.bytes,
             })

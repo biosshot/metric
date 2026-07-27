@@ -24,8 +24,8 @@ use metric_domain::{
 use metric_ports::{BlobStore, IngestOutcomeKind};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
-    FakeEventSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver, FakeSpanSink, FixedClock,
-    FixedRandom,
+    FakeEventSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver, FakeSessionSink,
+    FakeSpanSink, FixedClock, FixedRandom,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -52,6 +52,7 @@ struct RunningHarness {
     outcomes: FakeOutcomeSink,
     logs: FakeLogSink,
     spans: FakeSpanSink,
+    sessions: FakeSessionSink,
     blob: LocalBlobStore,
     blob_directory: PathBuf,
     address: std::net::SocketAddr,
@@ -72,6 +73,42 @@ async fn real_node_sdk_sends_an_attachment_event() {
     exercise_real_node_sdk("send-attachment.mjs", NodeFixture::Attachment)
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Node.js and npm ci in sdk-tests/node"]
+async fn real_node_sdk_sends_session_lifecycle_and_crash_state() {
+    let sender = workspace().join("sdk-tests/node/send-sessions.mjs");
+    let harness = start_harness(Router::new()).await.unwrap();
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let output =
+        tokio::task::spawn_blocking(move || Command::new("node").arg(sender).arg(dsn).output())
+            .await
+            .unwrap()
+            .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        output.status.success(),
+        "Node SDK failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let updates = harness.sessions.updates();
+    assert!(
+        updates.len() >= 3,
+        "expected lifecycle updates, got {updates:?}"
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.state == metric_domain::sessions::SessionState::Exited)
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.state == metric_domain::sessions::SessionState::Crashed)
+    );
+    assert!(updates.iter().all(|update| update.user_digest.is_some()));
+    stop_harness(harness).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -517,11 +554,13 @@ async fn start_harness_with_policy(
     let outcomes = FakeOutcomeSink::default();
     let logs = FakeLogSink::default();
     let spans = FakeSpanSink::default();
+    let sessions = FakeSessionSink::default();
     let (app, blob, blob_directory) = test_app(
         sink.clone(),
         outcomes.clone(),
         logs.clone(),
         spans.clone(),
+        sessions.clone(),
         policy,
         &root,
     )
@@ -540,6 +579,7 @@ async fn start_harness_with_policy(
         outcomes,
         logs,
         spans,
+        sessions,
         blob,
         blob_directory,
         address,
@@ -713,6 +753,7 @@ async fn test_app(
     outcomes: FakeOutcomeSink,
     logs: FakeLogSink,
     spans: FakeSpanSink,
+    sessions: FakeSessionSink,
     policy: InboundFilterPolicy,
     root: &ShutdownRoot,
 ) -> (Router, LocalBlobStore, PathBuf) {
@@ -749,6 +790,7 @@ async fn test_app(
                 DsnKey::parse(KEY_TEXT).unwrap(),
                 ProjectSnapshot {
                     project_id: ProjectId::new(42).unwrap(),
+                    organization_id: metric_domain::OrganizationId::new(1).unwrap(),
                     state: ProjectAcceptanceState::Active,
                     key_state: ProjectKeyState::Active,
                     scrub_policy: ScrubPolicy {
@@ -777,7 +819,8 @@ async fn test_app(
         )
         .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default())
         .with_log_sink(Arc::new(logs))
-        .with_span_sink(Arc::new(spans)),
+        .with_span_sink(Arc::new(spans))
+        .with_session_sink(Arc::new(sessions)),
     );
     (
         http::router(

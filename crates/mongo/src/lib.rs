@@ -14,6 +14,7 @@ mod issue;
 mod maintenance;
 mod notifications;
 mod releases;
+mod sessions;
 mod signals;
 
 pub use api::MongoInvestigationStore;
@@ -33,6 +34,7 @@ pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue
 pub use maintenance::MongoMaintenanceStore;
 pub use notifications::MongoNotificationStore;
 pub use releases::MongoReleaseStore;
+pub use sessions::{MongoSessionStore, SessionRetention};
 pub use signals::{MongoSignalStore, SignalRetention};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
@@ -57,9 +59,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 11;
+pub const SCHEMA_GENERATION: i32 = 12;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 16] = [
+const SCHEMA_MODULES: [&str; 17] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -76,8 +78,9 @@ const SCHEMA_MODULES: [&str; 16] = [
     "signal_cold_archive_v1",
     "signal_inbound_filters_v1",
     "releases_deploys_v1",
+    "sessions_release_health_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 29] = [
+const REQUIRED_COLLECTIONS: [&str; 31] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -103,6 +106,8 @@ const REQUIRED_COLLECTIONS: [&str; 29] = [
     "projects",
     "releases",
     "schema_meta",
+    "session_stats_hourly",
+    "sessions",
     "span_stats_hourly",
     "spans",
     "users",
@@ -237,6 +242,11 @@ impl MongoProjectStore {
         MongoSignalStore::with_retention(self.database.clone(), retention)
     }
 
+    #[must_use]
+    pub fn session_store(&self, retention: SessionRetention) -> MongoSessionStore {
+        MongoSessionStore::from_database(self.database.clone(), retention)
+    }
+
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
@@ -310,6 +320,13 @@ impl MongoProjectStore {
             .await?;
         self.create_validated_collection("span_stats_hourly", signals::span_stats_validator())
             .await?;
+        self.create_validated_collection("sessions", sessions::session_validator())
+            .await?;
+        self.create_validated_collection(
+            "session_stats_hourly",
+            sessions::session_stats_validator(),
+        )
+        .await?;
         self.create_validated_collection("issues", issue::issue_validator())
             .await?;
         self.create_validated_collection("issue_activities", issue::issue_activity_validator())
@@ -399,6 +416,7 @@ impl MongoProjectStore {
         }
         event::create_event_indexes(&self.database).await?;
         signals::create_signal_indexes(&self.database).await?;
+        sessions::create_session_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
         releases::create_deploy_indexes(&self.database).await?;
@@ -1242,6 +1260,20 @@ fn decode_snapshot(
     let burst = optional_positive_u32(limits, "burst")?;
     Ok(ProjectSnapshot {
         project_id,
+        organization_id: OrganizationId::new(
+            project
+                .get_i64("organization_id")
+                .ok()
+                .and_then(|value| u64::try_from(value).ok())
+                .or_else(|| {
+                    project
+                        .get_i32("organization_id")
+                        .ok()
+                        .and_then(|value| u64::try_from(value).ok())
+                })
+                .ok_or(ProjectStoreError::InvalidData)?,
+        )
+        .map_err(|_| ProjectStoreError::InvalidData)?,
         state,
         key_state,
         scrub_policy: ScrubPolicy {

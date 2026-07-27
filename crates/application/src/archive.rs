@@ -335,6 +335,9 @@ fn encode_batch(kind: ArchiveKind, records: &ArchiveRecords) -> Result<Vec<u8>, 
         (ArchiveKind::Event, ArchiveRecords::Events(events)) => encode_parquet(events),
         (ArchiveKind::Log, ArchiveRecords::Logs(logs)) => encode_signal_parquet(kind, logs),
         (ArchiveKind::Span, ArchiveRecords::Spans(spans)) => encode_signal_parquet(kind, spans),
+        (ArchiveKind::Session, ArchiveRecords::Sessions(sessions)) => {
+            encode_signal_parquet(kind, sessions)
+        }
         _ => Err(ArchiveError::InvalidData),
     }
 }
@@ -431,8 +434,10 @@ pub fn encode_signal_parquet(
     kind: ArchiveKind,
     records: &[ArchiveSignal],
 ) -> Result<Vec<u8>, ArchiveError> {
-    if !matches!(kind, ArchiveKind::Log | ArchiveKind::Span)
-        || records.is_empty()
+    if !matches!(
+        kind,
+        ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session
+    ) || records.is_empty()
         || records.len() > MAXIMUM_EVENTS
         || records.iter().any(|record| {
             serde_json::from_slice::<serde_json::Value>(&record.canonical_payload).is_err()
@@ -443,6 +448,10 @@ pub fn encode_signal_parquet(
     let (schema_name, version) = match kind {
         ArchiveKind::Log => ("metric_log_archive_v1", LOG_ARCHIVE_SCHEMA_VERSION),
         ArchiveKind::Span => ("metric_span_archive_v1", SPAN_ARCHIVE_SCHEMA_VERSION),
+        ArchiveKind::Session => (
+            "metric_session_archive_v1",
+            metric_domain::archive::SESSION_ARCHIVE_SCHEMA_VERSION,
+        ),
         ArchiveKind::Event => return Err(ArchiveError::InvalidData),
     };
     let schema = Arc::new(
@@ -578,7 +587,10 @@ mod tests {
 
     use bytes::Bytes;
     use metric_domain::{EventId, EventKey, ProjectId, Timestamp, grouping::IssueId};
-    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use parquet::{
+        file::reader::{FileReader, SerializedFileReader},
+        record::RowAccessor,
+    };
 
     use super::*;
 
@@ -610,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn log_and_span_parquet_preserve_canonical_signal_rows() {
+    fn log_span_and_session_parquet_preserve_canonical_rows() {
         let project_id = ProjectId::new(7).unwrap();
         let records = [
             ArchiveSignal {
@@ -628,7 +640,7 @@ mod tests {
                 canonical_payload: br#"{"op":"db.query"}"#.as_slice().into(),
             },
         ];
-        for kind in [ArchiveKind::Log, ArchiveKind::Span] {
+        for kind in [ArchiveKind::Log, ArchiveKind::Span, ArchiveKind::Session] {
             let bytes = encode_signal_parquet(kind, &records).unwrap();
             assert_eq!(&bytes[..4], b"PAR1");
             assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
@@ -641,6 +653,15 @@ mod tests {
                     .columns()
                     .iter()
                     .all(|column| matches!(column.compression(), Compression::ZSTD(_)))
+            );
+            let recovered = reader
+                .get_row_iter(None)
+                .unwrap()
+                .map(|row| row.unwrap().get_string(4).unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                recovered,
+                [r#"{"body":"archived"}"#, r#"{"op":"db.query"}"#]
             );
         }
         assert_eq!(

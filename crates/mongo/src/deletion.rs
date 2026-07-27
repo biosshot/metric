@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 29] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 31] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -85,6 +85,16 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 29] = [
     DatasetRegistration {
         code: 13,
         name: "span_stats_hourly",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 14,
+        name: "sessions",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 15,
+        name: "session_stats_hourly",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -190,7 +200,7 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 29] = [
 ];
 
 /// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 7] = [
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 8] = [
     DatasetRegistration {
         code: 90,
         name: "blob:projects/{project_id}/events",
@@ -217,6 +227,11 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 7] = [
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
+        code: 95,
+        name: "blob:projects/{project_id}/archives/sessions",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
         code: 0,
         name: "blob:debug-chunks/{organization_id}",
         ownership: DatasetOwnership::OrganizationShared,
@@ -228,8 +243,8 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 7] = [
     },
 ];
 
-const PURGE_CODES: [u16; 19] = [
-    10, 11, 12, 13, 20, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66, 68, 70,
+const PURGE_CODES: [u16; 21] = [
+    10, 11, 12, 13, 14, 15, 20, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66, 68, 70,
 ];
 
 impl MongoProjectStore {
@@ -513,6 +528,14 @@ impl MongoProjectStore {
             }
             13 => {
                 self.delete_owned_batch("span_stats_hourly", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            14 => {
+                self.delete_owned_batch("sessions", "p", project_id, cursor, batch_size)
+                    .await
+            }
+            15 => {
+                self.delete_owned_batch("session_stats_hourly", "p", project_id, cursor, batch_size)
                     .await
             }
             20 => {
