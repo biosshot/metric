@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, time::Instant};
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     EventKey, OrganizationId, ProjectId, Timestamp,
     archive::ArchiveSegmentId,
@@ -11,7 +12,6 @@ use metric_domain::{
     grouping::IssueId,
 };
 use metric_ports::{FinalizationStore, FinalizationStoreError, IssueStoreError, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -675,9 +675,10 @@ fn release_pipeline(
             "project_ids": { "$setUnion": [{ "$ifNull": ["$project_ids", []] }, [project_id.get()]] },
             "first_seen": { "$cond": ["$_fk_first", first_at, "$first_seen"] },
             "first_event_id": { "$cond": ["$_fk_first", first_key, "$first_event_id"] },
-            "last_seen": { "$cond": ["$_fk_latest", latest_at, "$last_seen"] },
+            "last_seen": { "$cond": ["$_fk_latest", latest_at.clone(), "$last_seen"] },
             "latest_event_id": { "$cond": ["$_fk_latest", latest_key, "$latest_event_id"] },
             "created_at": { "$ifNull": ["$created_at", date(first.received_at)] },
+            "activity_at": { "$max": [{ "$ifNull": ["$activity_at", latest_at.clone()] }, latest_at] },
             "source": { "$ifNull": ["$source", "event"] },
         } },
         doc! { "$unset": ["_fk_first", "_fk_latest"] },
@@ -865,30 +866,56 @@ pub(crate) fn release_validator() -> Document {
     doc! { "$and": [
         { "$jsonSchema": {
             "bsonType": "object",
-            "required": ["_id", "organization_id", "version", "status", "project_ids", "first_seen", "last_seen", "first_event_id", "latest_event_id", "created_at", "source"],
+            "required": ["_id", "organization_id", "version", "status", "project_ids", "created_at", "activity_at", "source"],
             "additionalProperties": false,
             "properties": {
                 "_id": { "bsonType": "binData" },
                 "organization_id": { "bsonType": "long", "minimum": 1 },
                 "version": { "bsonType": "string", "minLength": 1 },
                 "status": { "enum": ["open", "archived"] },
-                "project_ids": { "bsonType": "array", "minItems": 1, "items": { "bsonType": "int", "minimum": 1 } },
+                "project_ids": { "bsonType": "array", "minItems": 1, "maxItems": 256, "items": { "bsonType": "int", "minimum": 1 } },
                 "first_seen": { "bsonType": "date" },
                 "last_seen": { "bsonType": "date" },
                 "first_event_id": { "bsonType": "binData" },
                 "latest_event_id": { "bsonType": "binData" },
                 "created_at": { "bsonType": "date" },
+                "activity_at": { "bsonType": "date" },
                 "released_at": { "bsonType": "date" },
                 "ref": { "bsonType": "string", "minLength": 1 },
                 "url": { "bsonType": "string", "minLength": 1 },
+                "repositories": {
+                    "bsonType": "array",
+                    "maxItems": 16,
+                    "items": {
+                        "bsonType": "object",
+                        "required": ["repository"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "repository": { "bsonType": "string", "minLength": 1 },
+                            "commit_from": { "bsonType": "string", "minLength": 1 },
+                            "commit_to": { "bsonType": "string", "minLength": 1 },
+                        },
+                    },
+                },
+                "explicit": { "enum": [true] },
                 "source": { "enum": ["event", "api"] },
             },
         } },
         { "$expr": { "$and": [
             { "$eq": [{ "$binarySize": "$_id" }, 16] },
-            { "$eq": [{ "$binarySize": "$first_event_id" }, 20] },
-            { "$eq": [{ "$binarySize": "$latest_event_id" }, 20] },
+            { "$cond": [{ "$ne": [{ "$type": "$first_event_id" }, "missing"] }, { "$eq": [{ "$binarySize": "$first_event_id" }, 20] }, true] },
+            { "$cond": [{ "$ne": [{ "$type": "$latest_event_id" }, "missing"] }, { "$eq": [{ "$binarySize": "$latest_event_id" }, 20] }, true] },
             { "$lte": [{ "$strLenBytes": "$version" }, 200] },
+            { "$cond": [{ "$ne": [{ "$type": "$ref" }, "missing"] }, { "$lte": [{ "$strLenBytes": "$ref" }, 200] }, true] },
+            { "$cond": [{ "$ne": [{ "$type": "$url" }, "missing"] }, { "$lte": [{ "$strLenBytes": "$url" }, 2048] }, true] },
+            { "$eq": [
+                { "$ne": [{ "$type": "$first_seen" }, "missing"] },
+                { "$ne": [{ "$type": "$first_event_id" }, "missing"] },
+            ] },
+            { "$eq": [
+                { "$ne": [{ "$type": "$last_seen" }, "missing"] },
+                { "$ne": [{ "$type": "$latest_event_id" }, "missing"] },
+            ] },
         ] } },
     ] }
 }
@@ -1032,12 +1059,12 @@ fn hourly_indexes() -> [IndexModel; 3] {
 fn release_indexes() -> [IndexModel; 2] {
     [
         named_index(
-            doc! { "organization_id": 1, "last_seen": -1, "_id": -1 },
+            doc! { "organization_id": 1, "activity_at": -1, "_id": -1 },
             "release_organization_timeline",
             None,
         ),
         named_index(
-            doc! { "organization_id": 1, "project_ids": 1, "last_seen": -1, "_id": -1 },
+            doc! { "organization_id": 1, "project_ids": 1, "activity_at": -1, "_id": -1 },
             "release_project_timeline",
             None,
         ),

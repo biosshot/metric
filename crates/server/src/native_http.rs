@@ -29,6 +29,7 @@ use metric_application::{
     },
     observability::RequestId,
     projects::CreateProject,
+    releases::CreateDeployRequest,
     search::SearchError,
 };
 use metric_domain::{
@@ -344,7 +345,26 @@ pub fn router(
             "/api/v1/projects/{project_id}/performance",
             get(get_performance),
         )
-        .route("/api/v1/projects/{project_id}/releases", get(list_releases))
+        .route(
+            "/api/v1/projects/{project_id}/releases",
+            get(list_releases).post(create_release),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/releases/{release_id}",
+            get(get_release),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/releases/{release_id}/finalize",
+            post(finalize_release),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/releases/{release_id}/deploys",
+            get(list_release_deploys).post(create_release_deploy),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/releases/{release_id}/issues",
+            get(list_release_issues),
+        )
         .route(
             "/api/v1/projects/{project_id}/environments",
             get(list_environments),
@@ -1692,6 +1712,195 @@ async fn list_releases(
     })))
 }
 
+#[derive(Debug, Deserialize)]
+struct ReleaseRepositoryBody {
+    repository: String,
+    commit_from: Option<String>,
+    commit_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateReleaseBody {
+    version: String,
+    url: Option<String>,
+    reference: Option<String>,
+    #[serde(default)]
+    repositories: Vec<ReleaseRepositoryBody>,
+}
+
+async fn create_release(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<CreateReleaseBody>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let release = api(&state)?
+        .create_release(
+            &context,
+            project_id_from(&project_id)?,
+            body.version.into_boxed_str(),
+            body.url.map(String::into_boxed_str),
+            body.reference.map(String::into_boxed_str),
+            body.repositories
+                .into_iter()
+                .map(|value| metric_domain::releases::RepositoryReference {
+                    repository: value.repository.into_boxed_str(),
+                    commit_from: value.commit_from.map(String::into_boxed_str),
+                    commit_to: value.commit_to.map(String::into_boxed_str),
+                })
+                .collect(),
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(release_record_value(&release)?))
+}
+
+async fn get_release(
+    State(state): State<NativeHttpState>,
+    Path((project_id, release_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let release = api(&state)?
+        .release(
+            &context,
+            project_id_from(&project_id)?,
+            metric_domain::finalization::ReleaseId::from_bytes(hex_16(&release_id)?),
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(release_record_value(&release)?))
+}
+
+#[derive(Debug, Deserialize)]
+struct FinalizeReleaseBody {
+    released_at: Option<String>,
+}
+
+async fn finalize_release(
+    State(state): State<NativeHttpState>,
+    Path((project_id, release_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<FinalizeReleaseBody>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let release = api(&state)?
+        .finalize_release(
+            &context,
+            project_id_from(&project_id)?,
+            metric_domain::finalization::ReleaseId::from_bytes(hex_16(&release_id)?),
+            body.released_at
+                .as_deref()
+                .map(parse_timestamp)
+                .transpose()?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(release_record_value(&release)?))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDeployBody {
+    environment: String,
+    name: Option<String>,
+    url: Option<String>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+}
+
+async fn create_release_deploy(
+    State(state): State<NativeHttpState>,
+    Path((project_id, release_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<CreateDeployBody>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let operation_id = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(hex_16)
+        .transpose()?
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let deploy = api(&state)?
+        .create_deploy(
+            &context,
+            project_id_from(&project_id)?,
+            metric_domain::finalization::ReleaseId::from_bytes(hex_16(&release_id)?),
+            CreateDeployRequest {
+                operation_id,
+                environment: body.environment.into_boxed_str(),
+                name: body.name.map(String::into_boxed_str),
+                url: body.url.map(String::into_boxed_str),
+                started_at: body
+                    .started_at
+                    .as_deref()
+                    .map(parse_timestamp)
+                    .transpose()?,
+                finished_at: body
+                    .finished_at
+                    .as_deref()
+                    .map(parse_timestamp)
+                    .transpose()?,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(deploy_value(&deploy)?))
+}
+
+async fn list_release_deploys(
+    State(state): State<NativeHttpState>,
+    Path((project_id, release_id)): Path<(String, String)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let values = api(&state)?
+        .release_deploys(
+            &context,
+            project_id_from(&project_id)?,
+            metric_domain::finalization::ReleaseId::from_bytes(hex_16(&release_id)?),
+            query_limit(&query)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": values.iter().map(deploy_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": null,
+    })))
+}
+
+async fn list_release_issues(
+    State(state): State<NativeHttpState>,
+    Path((project_id, release_id)): Path<(String, String)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let kind = match query.get("kind").map(String::as_str).unwrap_or("new") {
+        "new" => metric_ports::ReleaseIssueKind::New,
+        "regressed" => metric_ports::ReleaseIssueKind::Regressed,
+        _ => return Err(HttpApiError::InvalidRequest),
+    };
+    let values = api(&state)?
+        .release_issues(
+            &context,
+            project_id_from(&project_id)?,
+            metric_domain::finalization::ReleaseId::from_bytes(hex_16(&release_id)?),
+            kind,
+            query_limit(&query)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": values.iter().map(release_issue_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": null,
+    })))
+}
+
 async fn list_environments(
     State(state): State<NativeHttpState>,
     Path(project_id): Path<String>,
@@ -2323,6 +2532,12 @@ fn issue_value(issue: &IssueSnapshot) -> Result<Value, HttpApiError> {
         "assignee": issue.assignee.map(actor_value),
         "first_release": issue.first_release.as_ref().map(|value| value.as_str()),
         "last_release": issue.last_release.as_ref().map(|value| value.as_str()),
+        "regression": issue.regression.as_ref().map(|value| Ok::<_, HttpApiError>(json!({
+            "time": timestamp_string(value.at)?,
+            "event_id": value.event_id.to_string(),
+            "count": value.count.get(),
+            "release": value.release.as_ref().map(|release| release.as_str()),
+        }))).transpose()?,
         "grouping": {
             "strategy": issue.grouping.strategy.as_str(),
             "summary": issue.grouping.explanation.summary,
@@ -2437,8 +2652,62 @@ fn release_value(release: &ReleaseView) -> Result<Value, HttpApiError> {
     Ok(json!({
         "id": hex::encode(release.id.as_bytes()),
         "version": release.version,
-        "first_seen": timestamp_string(release.first_seen)?,
-        "last_seen": timestamp_string(release.last_seen)?,
+        "activity_at": timestamp_string(release.activity_at)?,
+        "first_seen": release.first_seen.map(timestamp_string).transpose()?,
+        "last_seen": release.last_seen.map(timestamp_string).transpose()?,
+        "released_at": release.released_at.map(timestamp_string).transpose()?,
+        "explicit": release.explicit,
+    }))
+}
+
+fn release_record_value(
+    release: &metric_domain::releases::ReleaseRecord,
+) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "id": hex::encode(release.id.as_bytes()),
+        "version": release.version,
+        "project_ids": release.project_ids.iter().map(|value| value.get().to_string()).collect::<Vec<_>>(),
+        "created_at": timestamp_string(release.created_at)?,
+        "activity_at": timestamp_string(release.activity_at)?,
+        "released_at": release.released_at.map(timestamp_string).transpose()?,
+        "first_seen": release.first_seen.map(timestamp_string).transpose()?,
+        "last_seen": release.last_seen.map(timestamp_string).transpose()?,
+        "first_event_id": release.first_event_id.map(|value| value.to_string()),
+        "latest_event_id": release.latest_event_id.map(|value| value.to_string()),
+        "url": release.url,
+        "reference": release.reference,
+        "repositories": release.repositories.iter().map(|value| json!({
+            "repository": value.repository,
+            "commit_from": value.commit_from,
+            "commit_to": value.commit_to,
+        })).collect::<Vec<_>>(),
+        "explicit": release.explicit,
+    }))
+}
+
+fn deploy_value(deploy: &metric_domain::releases::DeployRecord) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "id": deploy.id.to_string(),
+        "release_id": hex::encode(deploy.release_id.as_bytes()),
+        "environment": deploy.environment,
+        "name": deploy.name,
+        "url": deploy.url,
+        "started_at": timestamp_string(deploy.started_at)?,
+        "finished_at": deploy.finished_at.map(timestamp_string).transpose()?,
+        "created_at": timestamp_string(deploy.created_at)?,
+    }))
+}
+
+fn release_issue_value(
+    issue: &metric_domain::releases::ReleaseIssueSummary,
+) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "id": issue.issue_id.to_string(),
+        "title": issue.title.as_str(),
+        "first_seen": timestamp_string(issue.first_seen)?,
+        "last_seen": timestamp_string(issue.last_seen)?,
+        "first_release": issue.first_release.as_ref().map(|value| value.as_str()),
+        "last_release": issue.last_release.as_ref().map(|value| value.as_str()),
     }))
 }
 

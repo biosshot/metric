@@ -5,6 +5,7 @@ pub mod debug_http;
 pub mod http;
 pub mod ingest_http;
 pub mod native_http;
+pub mod release_http;
 pub mod web_http;
 pub mod webhook;
 
@@ -48,6 +49,7 @@ use metric_application::{
         IssuePreparerStage, Processor, ProcessorConfig, ProcessorConfigError,
     },
     projects::{ProjectCacheConfig, ProjectService, ProjectServiceError},
+    releases::ReleaseService,
     scheduler::{Scheduler, SchedulerConfig, SchedulerStartError, SchedulerTask},
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
@@ -137,6 +139,7 @@ struct RuntimeModules {
     finalizer_batch_task: Option<FinalizerBatchTask>,
     identity_service: Option<std::sync::Arc<IdentityService>>,
     native_api_service: Option<std::sync::Arc<NativeApiService>>,
+    release_service: Option<std::sync::Arc<ReleaseService>>,
     incident_capsule_service: Option<std::sync::Arc<IncidentCapsuleService>>,
     notification_task: Option<NotificationTask>,
     project_deletion_task: Option<ProjectDeletionTask>,
@@ -235,6 +238,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         finalizer_batch_task,
         identity_service,
         native_api_service,
+        release_service,
         incident_capsule_service,
         notification_task,
         project_deletion_task,
@@ -401,6 +405,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         ));
         let investigation: std::sync::Arc<dyn metric_ports::InvestigationStore> =
             std::sync::Arc::new(store.investigation_store(event_codec, issue_codec));
+        let release_store: std::sync::Arc<dyn metric_ports::ReleaseStore> =
+            std::sync::Arc::new(store.release_store(issue_codec));
+        let release_service = std::sync::Arc::new(ReleaseService::new(
+            release_store,
+            std::sync::Arc::clone(&clock),
+        ));
         let search = std::sync::Arc::new(
             SearchService::new(
                 std::sync::Arc::clone(&investigation),
@@ -472,7 +482,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             )
             .with_project_deletion(deletion_service)
             .with_blob_store(std::sync::Arc::clone(&blob_store))
-            .with_signal_store(std::sync::Arc::clone(&signal_store)),
+            .with_signal_store(std::sync::Arc::clone(&signal_store))
+            .with_release_service(std::sync::Arc::clone(&release_service)),
         );
         let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =
             std::sync::Arc::new(store.debug_file_store(metric_mongo::DebugFileQuota::default()));
@@ -693,6 +704,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batch_task: Some(finalizer_batch_task),
             identity_service: Some(identity_service),
             native_api_service: Some(native_api_service),
+            release_service: Some(release_service),
             incident_capsule_service: Some(incident_capsule_service),
             notification_task: Some(notification_task),
             project_deletion_task: Some(project_deletion_task),
@@ -719,6 +731,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             finalizer_batch_task: None,
             identity_service: None,
             native_api_service: None,
+            release_service: None,
             incident_capsule_service: None,
             notification_task: None,
             project_deletion_task: None,
@@ -804,6 +817,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             debug_file_service,
             artifact_service,
             runtime_private_source_signer,
+        ))
+        .merge(release_http::router(
+            identity_service.clone(),
+            release_service,
         ))
         .merge(web_http::router());
     let app = http::router_with_readiness(

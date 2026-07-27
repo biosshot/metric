@@ -12,8 +12,8 @@ use metric_domain::{
         IssueTitle,
     },
 };
-use metric_mongo::{IssueCodecConfig, MongoIssueStore, MongoProjectStore};
-use metric_ports::{IssueStore, IssueStoreError};
+use metric_mongo::{IssueCodecConfig, MongoIssueStore, MongoProjectStore, MongoReleaseStore};
+use metric_ports::{IssueStore, IssueStoreError, ReleaseIssueKind, ReleaseStore};
 use mongodb::{Client, Database, bson::doc};
 
 #[tokio::test]
@@ -44,6 +44,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     for expected in [
         "issue_project_timeline",
         "issue_status_timeline",
+        "issue_release_new_timeline",
+        "issue_release_regression_timeline",
         "issue_notification_ready",
         "issue_title_text",
     ] {
@@ -67,6 +69,18 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         2,
         "accepted retry drift"
     );
+    let releases = MongoReleaseStore::from_database(database.clone(), IssueCodecConfig::default());
+    let new = releases
+        .list_release_issues(
+            first.project_id,
+            "1.0.0".into(),
+            ReleaseIssueKind::New,
+            None,
+            10,
+        )
+        .await?;
+    assert_eq!(new.len(), 1);
+    assert_eq!(new[0].issue_id, first.issue_id);
 
     let latest_missing = occurrence(1, 2, 2_000, 3_000, None);
     let updated = store.apply_occurrence(latest_missing).await?;
@@ -124,11 +138,34 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let no_regression = store.apply_occurrence(accepted_before_resolve).await?;
     assert_eq!(no_regression.issue.status, IssueStatus::Resolved);
     let regression = store
-        .apply_occurrence(occurrence(1, 51, 12_000, 10_001, None))
+        .apply_occurrence(occurrence(1, 51, 12_000, 10_001, Some("2.0.0")))
         .await?;
     assert_eq!(regression.kind, IssueMutationKind::Regressed);
     assert_eq!(regression.issue.status, IssueStatus::Open);
     assert_eq!(regression.issue.regression.as_ref().unwrap().count.get(), 1);
+    assert_eq!(
+        regression
+            .issue
+            .regression
+            .as_ref()
+            .unwrap()
+            .release
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "2.0.0"
+    );
+    let regressed = releases
+        .list_release_issues(
+            first.project_id,
+            "2.0.0".into(),
+            ReleaseIssueKind::Regressed,
+            None,
+            10,
+        )
+        .await?;
+    assert_eq!(regressed.len(), 1);
+    assert_eq!(regressed[0].issue_id, first.issue_id);
 
     let resolve_again = command(&first, 2, 20_000, actor, IssueCommandAction::Resolve);
     assert!(store.apply_command(resolve_again).await?.applied);
@@ -209,6 +246,18 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     assert!(results.len() <= 10);
     assert_plan_uses(database, timeline_explain(), "issue_project_timeline").await?;
     assert_plan_uses(database, title_explain(), "issue_title_text").await?;
+    assert_plan_uses(
+        database,
+        release_new_explain(),
+        "issue_release_new_timeline",
+    )
+    .await?;
+    assert_plan_uses(
+        database,
+        release_regression_explain(),
+        "issue_release_regression_timeline",
+    )
+    .await?;
 
     let collision = occurrence(90, 1, 50_000, 50_000, None);
     store.apply_occurrence(collision.clone()).await?;
@@ -389,6 +438,30 @@ fn title_explain() -> mongodb::bson::Document {
             },
             "projection": { "_id": 1, "t": 1, "s": 1, "l": 1, "c": 1 },
             "sort": { "score": { "$meta": "textScore" }, "_id": 1 },
+            "limit": 100_i64,
+        },
+        "verbosity": "queryPlanner",
+    }
+}
+
+fn release_new_explain() -> mongodb::bson::Document {
+    doc! {
+        "explain": {
+            "find": "issues",
+            "filter": { "p": 7_i32, "fr": "1.0.0" },
+            "sort": { "f": -1, "_id": -1 },
+            "limit": 100_i64,
+        },
+        "verbosity": "queryPlanner",
+    }
+}
+
+fn release_regression_explain() -> mongodb::bson::Document {
+    doc! {
+        "explain": {
+            "find": "issues",
+            "filter": { "p": 7_i32, "d.r": "2.0.0" },
+            "sort": { "d.t": -1, "_id": -1 },
             "limit": 100_i64,
         },
         "verbosity": "queryPlanner",

@@ -18,6 +18,7 @@ pub mod notifications;
 pub mod observability;
 pub mod processor;
 pub mod projects;
+pub mod releases;
 pub mod scheduler;
 pub mod search;
 pub mod shutdown;

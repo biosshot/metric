@@ -18,12 +18,13 @@ use metric_domain::{
         GroupingStrategy, derive_issue_id,
     },
     issue::{IssueCulprit, IssueGroupingDetail, IssueOccurrence, IssueRelease, IssueTitle},
+    releases::{CreateDeploy, CreateRelease, derive_deploy_id},
 };
 use metric_mongo::{
     EventCodecConfig, IssueCodecConfig, MongoEventStore, MongoFinalizationStore, MongoProjectStore,
-    decode_finalized_event,
+    MongoReleaseStore, decode_finalized_event,
 };
-use metric_ports::{EventStore, EventWriteStatus, FinalizationStore, ProjectStore};
+use metric_ports::{EventStore, EventWriteStatus, FinalizationStore, ProjectStore, ReleaseStore};
 use mongodb::{
     Client, Database,
     bson::{Bson, Document, doc},
@@ -128,6 +129,45 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     assert_eq!(release.get_array("project_ids")?, &[Bson::Int32(7)]);
     assert_eq!(release.get_binary_generic("first_event_id")?.len(), 20);
     assert!(!release.contains_key("expire_at"));
+    let release_store =
+        MongoReleaseStore::from_database(database.clone(), IssueCodecConfig::default());
+    let explicit = release_store
+        .create_release(CreateRelease {
+            organization_id: OrganizationId::new(42)?,
+            project_ids: vec![ProjectId::new(7)?],
+            version: "backend@1.0".into(),
+            url: Some("https://ci.example/build/1".into()),
+            reference: None,
+            repositories: Vec::new(),
+            created_at: Timestamp::from_unix_millis(1_700_000_250_000)?,
+        })
+        .await?;
+    assert_eq!(explicit.id, release_id);
+    assert!(explicit.explicit);
+    assert_eq!(
+        database
+            .collection::<Document>("releases")
+            .count_documents(doc! { "_id": binary(release_id.as_bytes()) })
+            .await?,
+        1
+    );
+    let deploy_id = derive_deploy_id(OrganizationId::new(42)?, release_id, [3; 16]);
+    let deploy = CreateDeploy {
+        deploy_id,
+        organization_id: OrganizationId::new(42)?,
+        release_id,
+        project_ids: vec![ProjectId::new(7)?],
+        environment: "production".into(),
+        name: Some("rollout".into()),
+        url: None,
+        started_at: Timestamp::from_unix_millis(1_700_000_300_000)?,
+        finished_at: Some(Timestamp::from_unix_millis(1_700_000_360_000)?),
+        created_at: Timestamp::from_unix_millis(1_700_000_300_000)?,
+    };
+    assert_eq!(
+        release_store.create_deploy(deploy.clone()).await?,
+        release_store.create_deploy(deploy).await?
+    );
     let environment_id = derive_environment_id(ProjectId::new(7)?, "production");
     assert!(
         database
@@ -216,6 +256,12 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     )
     .await?;
     assert_plan_uses(database, release_explain(), "release_organization_timeline").await?;
+    assert_plan_uses(
+        database,
+        deploy_explain(release_id),
+        "deploy_project_release_timeline",
+    )
+    .await?;
     assert_plan_uses(
         database,
         environment_explain(),
@@ -524,7 +570,15 @@ fn stats_explain(issue_id: metric_domain::grouping::IssueId) -> Document {
 }
 
 fn release_explain() -> Document {
-    doc! { "explain": { "find": "releases", "filter": { "organization_id": 42_i64 }, "sort": { "last_seen": -1, "_id": -1 } }, "verbosity": "queryPlanner" }
+    doc! { "explain": { "find": "releases", "filter": { "organization_id": 42_i64 }, "sort": { "activity_at": -1, "_id": -1 } }, "verbosity": "queryPlanner" }
+}
+
+fn deploy_explain(release_id: metric_domain::finalization::ReleaseId) -> Document {
+    doc! { "explain": { "find": "deploys", "filter": {
+        "organization_id": 42_i64,
+        "project_ids": 7_i32,
+        "release_id": binary(release_id.as_bytes()),
+    }, "sort": { "started_at": -1, "_id": -1 } }, "verbosity": "queryPlanner" }
 }
 
 fn environment_explain() -> Document {

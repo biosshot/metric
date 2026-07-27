@@ -14,6 +14,7 @@ pub mod inbound_filter;
 pub mod issue;
 pub mod notifications;
 pub mod processing;
+pub mod releases;
 pub mod signals;
 pub mod symbolication;
 

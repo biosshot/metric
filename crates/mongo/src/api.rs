@@ -2,6 +2,7 @@
 
 use std::num::NonZeroU64;
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     EventKey, OrganizationId, ProjectId, Timestamp,
     api::{
@@ -16,7 +17,6 @@ use metric_domain::{
     issue::{ActorRef, IssueActivityId, IssueStatus},
 };
 use metric_ports::{InvestigationStore, InvestigationStoreError, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -93,12 +93,14 @@ impl MongoInvestigationStore {
         }
         let has_more = items.len() > query.limit;
         items.truncate(query.limit);
-        let next = has_more.then(|| items.last()).flatten().map(|issue| {
-            metric_domain::api::IssueAnchor {
-                last_seen: issue.last_seen,
-                issue_id: issue.issue_id,
-            }
-        });
+        let next =
+            has_more
+                .then(|| items.last())
+                .flatten()
+                .map(|issue| metric_domain::api::IssueAnchor {
+                    last_seen: issue.last_seen,
+                    issue_id: issue.issue_id,
+                });
         Ok(IssuePage { items, next })
     }
 
@@ -374,13 +376,13 @@ impl MongoInvestigationStore {
         };
         append_catalog_anchor(
             &mut filter,
-            before.map(|value| (value.last_seen, value.id.as_bytes())),
+            before.map(|value| (value.activity_at, value.id.as_bytes())),
         );
         let mut cursor = self
             .database
             .collection::<Document>("releases")
             .find(filter)
-            .sort(doc! { "last_seen": -1, "_id": -1 })
+            .sort(doc! { "activity_at": -1, "_id": -1 })
             .limit(i64::try_from(limit.saturating_add(1)).unwrap_or(101))
             .await
             .map_err(unavailable)?;
@@ -392,8 +394,11 @@ impl MongoInvestigationStore {
                     .get_str("version")
                     .map_err(|_| InvestigationStoreError::InvalidData)?
                     .into(),
-                first_seen: timestamp(&document, "first_seen")?,
-                last_seen: timestamp(&document, "last_seen")?,
+                activity_at: timestamp(&document, "activity_at")?,
+                first_seen: optional_timestamp(&document, "first_seen")?,
+                last_seen: optional_timestamp(&document, "last_seen")?,
+                released_at: optional_timestamp(&document, "released_at")?,
+                explicit: document.get_bool("explicit").unwrap_or(false),
             });
         }
         let has_more = items.len() > limit;
@@ -402,7 +407,7 @@ impl MongoInvestigationStore {
             .then(|| items.last())
             .flatten()
             .map(|value| ReleaseAnchor {
-                last_seen: value.last_seen,
+                activity_at: value.activity_at,
                 id: value.id,
             });
         Ok(ReleasePage { items, next })
@@ -639,6 +644,19 @@ fn timestamp(document: &Document, field: &str) -> Result<Timestamp, Investigatio
             .timestamp_millis(),
     )
     .map_err(|_| InvestigationStoreError::InvalidData)
+}
+
+fn optional_timestamp(
+    document: &Document,
+    field: &str,
+) -> Result<Option<Timestamp>, InvestigationStoreError> {
+    match document.get(field) {
+        None => Ok(None),
+        Some(Bson::DateTime(value)) => Timestamp::from_unix_millis(value.timestamp_millis())
+            .map(Some)
+            .map_err(|_| InvestigationStoreError::InvalidData),
+        Some(_) => Err(InvestigationStoreError::InvalidData),
+    }
 }
 
 fn date(timestamp: Timestamp) -> DateTime {

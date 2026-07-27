@@ -182,7 +182,20 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             "first_event_id": generic_binary(&[1; 20]),
             "latest_event_id": generic_binary(&[2; 20]),
             "created_at": DateTime::from_millis(1_000),
+            "activity_at": DateTime::from_millis(2_000),
             "source": "event",
+        })
+        .await?;
+    database
+        .collection::<mongodb::bson::Document>("deploys")
+        .insert_one(doc! {
+            "_id": generic_binary(&[8; 16]),
+            "organization_id": 1_i64,
+            "release_id": generic_binary(&[7; 16]),
+            "project_ids": [42_i32, 43_i32],
+            "environment": "production",
+            "started_at": DateTime::from_millis(2_000),
+            "created_at": DateTime::from_millis(2_000),
         })
         .await?;
 
@@ -193,7 +206,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 
     // A new adapter instance simulates process restart while the durable job remains.
     let mut late_inflight_inserted = false;
-    for _ in 0..40 {
+    for _ in 0..44 {
         // Recreate the adapter before every bounded step: every persisted phase/cursor
         // must be sufficient to resume after a process crash.
         let restarted =
@@ -251,6 +264,12 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .await?
         .unwrap();
     assert_eq!(shared_release.get_array("project_ids")?, &[43_i32.into()]);
+    let shared_deploy = database
+        .collection::<mongodb::bson::Document>("deploys")
+        .find_one(doc! { "_id": generic_binary(&[8; 16]) })
+        .await?
+        .unwrap();
+    assert_eq!(shared_deploy.get_array("project_ids")?, &[43_i32.into()]);
     assert_eq!(
         store.load_project_by_id(ProjectId::new(43)?).await?.state,
         ProjectAcceptanceState::Active

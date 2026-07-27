@@ -207,13 +207,15 @@ pub enum Permission {
     ArtifactRead,
     ArtifactWrite,
     ArtifactDelete,
+    ReleaseRead,
+    ReleaseWrite,
     OrganizationAdmin,
     OrganizationOwner,
     OrganizationDelete,
 }
 
 impl Permission {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::EventRead,
         Self::IssueRead,
         Self::IncidentExport,
@@ -226,6 +228,8 @@ impl Permission {
         Self::ArtifactRead,
         Self::ArtifactWrite,
         Self::ArtifactDelete,
+        Self::ReleaseRead,
+        Self::ReleaseWrite,
         Self::OrganizationAdmin,
         Self::OrganizationOwner,
         Self::OrganizationDelete,
@@ -246,6 +250,8 @@ impl Permission {
             Self::ArtifactRead => "artifact:read",
             Self::ArtifactWrite => "artifact:write",
             Self::ArtifactDelete => "artifact:delete",
+            Self::ReleaseRead => "release:read",
+            Self::ReleaseWrite => "release:write",
             Self::OrganizationAdmin => "organization:admin",
             Self::OrganizationOwner => "organization:owner",
             Self::OrganizationDelete => "organization:delete",
@@ -261,7 +267,7 @@ impl Permission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PermissionSet(u16);
+pub struct PermissionSet(u32);
 
 impl PermissionSet {
     #[must_use]
@@ -279,6 +285,7 @@ impl PermissionSet {
             Permission::ProjectRead,
             Permission::DebugFileRead,
             Permission::ArtifactRead,
+            Permission::ReleaseRead,
         ];
         for permission in viewer {
             set.insert(permission);
@@ -296,6 +303,7 @@ impl PermissionSet {
                 Permission::DebugFileDelete,
                 Permission::ArtifactWrite,
                 Permission::ArtifactDelete,
+                Permission::ReleaseWrite,
                 Permission::OrganizationAdmin,
             ] {
                 set.insert(permission);
@@ -318,12 +326,12 @@ impl PermissionSet {
     }
 
     pub fn insert(&mut self, permission: Permission) {
-        self.0 |= 1_u16 << permission as u8;
+        self.0 |= 1_u32 << permission as u8;
     }
 
     #[must_use]
     pub const fn contains(self, permission: Permission) -> bool {
-        self.0 & (1_u16 << permission as u8) != 0
+        self.0 & (1_u32 << permission as u8) != 0
     }
 
     #[must_use]

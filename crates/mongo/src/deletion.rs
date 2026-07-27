@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 28] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 29] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -105,6 +105,11 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 28] = [
     DatasetRegistration {
         code: 58,
         name: "artifact_bundles",
+        ownership: DatasetOwnership::OrganizationShared,
+    },
+    DatasetRegistration {
+        code: 59,
+        name: "deploys",
         ownership: DatasetOwnership::OrganizationShared,
     },
     DatasetRegistration {
@@ -223,8 +228,8 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 7] = [
     },
 ];
 
-const PURGE_CODES: [u16; 18] = [
-    10, 11, 12, 13, 20, 30, 40, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70,
+const PURGE_CODES: [u16; 19] = [
+    10, 11, 12, 13, 20, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66, 68, 70,
 ];
 
 impl MongoProjectStore {
@@ -568,8 +573,12 @@ impl MongoProjectStore {
                 )
                 .await
             }
+            59 => {
+                self.detach_project_association_batch("deploys", project_id, cursor, batch_size)
+                    .await
+            }
             60 => {
-                self.detach_release_batch(project_id, cursor, batch_size)
+                self.detach_project_association_batch("releases", project_id, cursor, batch_size)
                     .await
             }
             62 => {
@@ -663,13 +672,14 @@ impl MongoProjectStore {
             .await
     }
 
-    async fn detach_release_batch(
+    async fn detach_project_association_batch(
         &self,
+        collection_name: &str,
         project_id: ProjectId,
         cursor: Option<Bson>,
         batch_size: usize,
     ) -> Result<(), ProjectDeletionStoreError> {
-        let collection = self.database.collection::<Document>("releases");
+        let collection = self.database.collection::<Document>(collection_name);
         let mut filter = doc! { "project_ids": project_id.get() };
         if let Some(cursor) = cursor {
             filter.insert("_id", doc! { "$gt": cursor });

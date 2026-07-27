@@ -13,6 +13,7 @@ mod finalizer;
 mod issue;
 mod maintenance;
 mod notifications;
+mod releases;
 mod signals;
 
 pub use api::MongoInvestigationStore;
@@ -31,6 +32,7 @@ pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finali
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 pub use maintenance::MongoMaintenanceStore;
 pub use notifications::MongoNotificationStore;
+pub use releases::MongoReleaseStore;
 pub use signals::{MongoSignalStore, SignalRetention};
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
@@ -55,9 +57,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 10;
+pub const SCHEMA_GENERATION: i32 = 11;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 15] = [
+const SCHEMA_MODULES: [&str; 16] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -73,8 +75,9 @@ const SCHEMA_MODULES: [&str; 15] = [
     "performance_insights_v1",
     "signal_cold_archive_v1",
     "signal_inbound_filters_v1",
+    "releases_deploys_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 28] = [
+const REQUIRED_COLLECTIONS: [&str; 29] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -85,6 +88,7 @@ const REQUIRED_COLLECTIONS: [&str; 28] = [
     "error_events",
     "debug_files",
     "debug_uploads",
+    "deploys",
     "issue_activities",
     "issues",
     "issue_stats_hourly",
@@ -191,6 +195,11 @@ impl MongoProjectStore {
         issue_codec: IssueCodecConfig,
     ) -> MongoInvestigationStore {
         MongoInvestigationStore::from_database(self.database.clone(), event_codec, issue_codec)
+    }
+
+    #[must_use]
+    pub fn release_store(&self, issue_codec: IssueCodecConfig) -> MongoReleaseStore {
+        MongoReleaseStore::from_database(self.database.clone(), issue_codec)
     }
 
     #[must_use]
@@ -321,6 +330,8 @@ impl MongoProjectStore {
         .await?;
         self.create_validated_collection("releases", finalizer::release_validator())
             .await?;
+        self.create_validated_collection("deploys", releases::deploy_validator())
+            .await?;
         self.create_validated_collection("environments", finalizer::environment_validator())
             .await?;
         auth::create_auth_collections(&self.database).await
@@ -390,6 +401,7 @@ impl MongoProjectStore {
         signals::create_signal_indexes(&self.database).await?;
         issue::create_issue_indexes(&self.database).await?;
         finalizer::create_finalization_indexes(&self.database).await?;
+        releases::create_deploy_indexes(&self.database).await?;
         auth::create_auth_indexes(&self.database).await?;
         for collection in [
             "notification_destinations",
@@ -441,6 +453,9 @@ impl MongoProjectStore {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !finalizer::validate_finalization_indexes(&self.database).await? {
+            return Err(MongoBootstrapError::IncompatibleSchema);
+        }
+        if !releases::validate_deploy_indexes(&self.database).await? {
             return Err(MongoBootstrapError::IncompatibleSchema);
         }
         if !auth::validate_auth_indexes(&self.database).await? {
@@ -515,6 +530,7 @@ impl MongoProjectStore {
                 finalizer::finalization_index_names("issue_stats_hourly"),
             ),
             ("releases", finalizer::finalization_index_names("releases")),
+            ("deploys", releases::deploy_index_names()),
             (
                 "environments",
                 finalizer::finalization_index_names("environments"),
@@ -575,6 +591,7 @@ impl MongoProjectStore {
             ("issue_activities", issue::issue_activity_validator()),
             ("issue_stats_hourly", finalizer::hourly_validator()),
             ("releases", finalizer::release_validator()),
+            ("deploys", releases::deploy_validator()),
             ("environments", finalizer::environment_validator()),
             ("users", auth::user_validator()),
             ("organization_memberships", auth::membership_validator()),

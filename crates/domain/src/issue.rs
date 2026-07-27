@@ -153,6 +153,7 @@ pub struct RegressionSummary {
     pub at: Timestamp,
     pub event_id: EventId,
     pub count: NonZeroU64,
+    pub release: Option<IssueRelease>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

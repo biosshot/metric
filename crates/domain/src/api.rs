@@ -125,7 +125,7 @@ pub struct IssueStatBucket {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReleaseAnchor {
-    pub last_seen: Timestamp,
+    pub activity_at: Timestamp,
     pub id: ReleaseId,
 }
 
@@ -133,8 +133,11 @@ pub struct ReleaseAnchor {
 pub struct ReleaseView {
     pub id: ReleaseId,
     pub version: Box<str>,
-    pub first_seen: Timestamp,
-    pub last_seen: Timestamp,
+    pub activity_at: Timestamp,
+    pub first_seen: Option<Timestamp>,
+    pub last_seen: Option<Timestamp>,
+    pub released_at: Option<Timestamp>,
+    pub explicit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

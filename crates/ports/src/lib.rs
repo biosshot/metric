@@ -39,6 +39,10 @@ use metric_domain::{
         NotificationDeliveryId, NotificationDestination,
     },
     processing::{PendingEvent, ProcessingFailure, ProcessingProject, ProcessingStateChange},
+    releases::{
+        CreateDeploy, CreateRelease, DeployId, DeployRecord, FinalizeRelease, ReleaseIssueSummary,
+        ReleaseRecord,
+    },
     signals::{
         LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SignalPage, SpanRecord,
         TraceId, TraceView,
@@ -855,6 +859,79 @@ pub trait FinalizationStore: Send + Sync + 'static {
         batch: FinalizeBatch,
         policy: FinalizationPolicy,
     ) -> PortFuture<'_, Result<FinalizeResult, FinalizationStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ReleaseStoreError {
+    #[error("release or deploy does not exist")]
+    NotFound,
+    #[error("release or deploy conflicts with existing data")]
+    Conflict,
+    #[error("release or deploy request is invalid")]
+    InvalidData,
+    #[error("release or deploy storage is temporarily unavailable")]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseIssueKind {
+    New,
+    Regressed,
+}
+
+/// Bounded control-plane persistence for explicit Releases and Deploys.
+pub trait ReleaseStore: Send + Sync + 'static {
+    fn resolve_projects(
+        &self,
+        organization_slug: Box<str>,
+        project_slugs: Vec<Box<str>>,
+    ) -> PortFuture<'_, Result<(metric_domain::OrganizationId, Vec<ProjectId>), ReleaseStoreError>>;
+
+    fn create_release(
+        &self,
+        command: CreateRelease,
+    ) -> PortFuture<'_, Result<ReleaseRecord, ReleaseStoreError>>;
+
+    fn finalize_release(
+        &self,
+        command: FinalizeRelease,
+    ) -> PortFuture<'_, Result<ReleaseRecord, ReleaseStoreError>>;
+
+    fn load_release(
+        &self,
+        organization_id: metric_domain::OrganizationId,
+        release_id: metric_domain::finalization::ReleaseId,
+    ) -> PortFuture<'_, Result<ReleaseRecord, ReleaseStoreError>>;
+
+    fn create_deploy(
+        &self,
+        command: CreateDeploy,
+    ) -> PortFuture<'_, Result<DeployRecord, ReleaseStoreError>>;
+
+    fn finish_deploy(
+        &self,
+        organization_id: metric_domain::OrganizationId,
+        deploy_id: DeployId,
+        finished_at: Timestamp,
+    ) -> PortFuture<'_, Result<DeployRecord, ReleaseStoreError>>;
+
+    fn list_deploys(
+        &self,
+        organization_id: metric_domain::OrganizationId,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        before: Option<(Timestamp, DeployId)>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<DeployRecord>, ReleaseStoreError>>;
+
+    fn list_release_issues(
+        &self,
+        project_id: ProjectId,
+        release: Box<str>,
+        kind: ReleaseIssueKind,
+        before: Option<(Timestamp, IssueId)>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ReleaseIssueSummary>, ReleaseStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

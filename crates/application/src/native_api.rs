@@ -16,6 +16,7 @@ use metric_domain::{
         ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueSnapshot,
         IssueStatus,
     },
+    releases::{DeployRecord, ReleaseIssueSummary, ReleaseRecord, RepositoryReference},
     signals::{
         LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SpanRecord, TraceId,
         TraceView,
@@ -32,6 +33,7 @@ use crate::{
     deletion::{ProjectDeletionError, ProjectDeletionService},
     issues::{IssueService, IssueServiceError},
     projects::{CreateProject, CreatedProject, ProjectService, ProjectServiceError},
+    releases::{CreateDeployRequest, ReleaseError, ReleaseService},
     search::{
         CursorKind, SearchError, SearchResultPage, SearchService, cursor_digest, decode_cursor,
         encode_cursor,
@@ -142,6 +144,7 @@ pub struct NativeApiService {
     deletion: Option<Arc<ProjectDeletionService>>,
     blob_store: Option<Arc<dyn BlobStore>>,
     signal_store: Option<Arc<dyn SignalStore>>,
+    releases: Option<Arc<ReleaseService>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +178,7 @@ impl NativeApiService {
             deletion: None,
             blob_store: None,
             signal_store: None,
+            releases: None,
         }
     }
 
@@ -182,6 +186,16 @@ impl NativeApiService {
     pub fn with_signal_store(mut self, signal_store: Arc<dyn SignalStore>) -> Self {
         self.signal_store = Some(signal_store);
         self
+    }
+
+    #[must_use]
+    pub fn with_release_service(mut self, releases: Arc<ReleaseService>) -> Self {
+        self.releases = Some(releases);
+        self
+    }
+
+    fn release_service(&self) -> Result<&ReleaseService, NativeApiError> {
+        self.releases.as_deref().ok_or(NativeApiError::Unavailable)
     }
 
     pub async fn list_logs(
@@ -802,7 +816,7 @@ impl NativeApiService {
         cursor: Option<&str>,
         limit: Option<usize>,
     ) -> Result<NativePage<metric_domain::api::ReleaseView>, NativeApiError> {
-        self.authorize(context, project_id, Permission::ProjectRead)
+        self.authorize(context, project_id, Permission::ReleaseRead)
             .await?;
         let digest = cursor_digest(project_id, "releases:newest", CursorKind::Release);
         let before = cursor
@@ -822,13 +836,123 @@ impl NativeApiService {
             next_cursor: page.next.map(|anchor| {
                 encode_cursor(
                     CursorKind::Release,
-                    anchor.last_seen,
+                    anchor.activity_at,
                     &anchor.id.as_bytes(),
                     digest,
                 )
             }),
             items: page.items,
         })
+    }
+
+    pub async fn release(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+    ) -> Result<ReleaseRecord, NativeApiError> {
+        self.authorize(context, project_id, Permission::ReleaseRead)
+            .await?;
+        let release = self
+            .release_service()?
+            .load(context, release_id)
+            .await
+            .map_err(map_release_error)?;
+        if !release.project_ids.contains(&project_id) {
+            return Err(NativeApiError::NotFound);
+        }
+        Ok(release)
+    }
+
+    pub async fn create_release(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        version: Box<str>,
+        url: Option<Box<str>>,
+        reference: Option<Box<str>>,
+        repositories: Vec<RepositoryReference>,
+    ) -> Result<ReleaseRecord, NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::ReleaseWrite)
+            .await?;
+        self.release_service()?
+            .create(
+                context,
+                vec![project_id],
+                version,
+                url,
+                reference,
+                repositories,
+            )
+            .await
+            .map_err(map_release_error)
+    }
+
+    pub async fn finalize_release(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        released_at: Option<Timestamp>,
+    ) -> Result<ReleaseRecord, NativeApiError> {
+        let release = self.release(context, project_id, release_id).await?;
+        self.authorize_mutation(context, project_id, Permission::ReleaseWrite)
+            .await?;
+        self.release_service()?
+            .finalize(context, release.id, released_at)
+            .await
+            .map_err(map_release_error)
+    }
+
+    pub async fn create_deploy(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        request: CreateDeployRequest,
+    ) -> Result<DeployRecord, NativeApiError> {
+        let release = self.release(context, project_id, release_id).await?;
+        self.authorize_mutation(context, project_id, Permission::ReleaseWrite)
+            .await?;
+        self.release_service()?
+            .create_deploy(context, release.id, vec![project_id], request)
+            .await
+            .map_err(map_release_error)
+    }
+
+    pub async fn release_deploys(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        limit: Option<usize>,
+    ) -> Result<Vec<DeployRecord>, NativeApiError> {
+        self.release(context, project_id, release_id).await?;
+        self.release_service()?
+            .deploys(context, project_id, release_id, page_size(limit)?)
+            .await
+            .map_err(map_release_error)
+    }
+
+    pub async fn release_issues(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        release_id: metric_domain::finalization::ReleaseId,
+        kind: metric_ports::ReleaseIssueKind,
+        limit: Option<usize>,
+    ) -> Result<Vec<ReleaseIssueSummary>, NativeApiError> {
+        let release = self.release(context, project_id, release_id).await?;
+        self.release_service()?
+            .issues(
+                context,
+                project_id,
+                release.version,
+                kind,
+                page_size(limit)?,
+            )
+            .await
+            .map_err(map_release_error)
     }
 
     pub async fn environments(
@@ -1212,10 +1336,10 @@ fn decode_activity_anchor(value: &str, digest: [u8; 16]) -> Result<ActivityAncho
 }
 
 fn decode_release_anchor(value: &str, digest: [u8; 16]) -> Result<ReleaseAnchor, NativeApiError> {
-    let (last_seen, id) =
+    let (activity_at, id) =
         decode_cursor(value, CursorKind::Release, 16, digest).map_err(map_cursor_error)?;
     Ok(ReleaseAnchor {
-        last_seen,
+        activity_at,
         id: metric_domain::finalization::ReleaseId::from_bytes(
             id.try_into().map_err(|_| NativeApiError::InvalidCursor)?,
         ),
@@ -1256,6 +1380,16 @@ fn map_signal_error(error: SignalStoreError) -> NativeApiError {
         SignalStoreError::InvalidData
         | SignalStoreError::Capacity
         | SignalStoreError::Unavailable => NativeApiError::Unavailable,
+    }
+}
+
+fn map_release_error(error: ReleaseError) -> NativeApiError {
+    match error {
+        ReleaseError::InvalidRequest => NativeApiError::InvalidRequest,
+        ReleaseError::Forbidden => NativeApiError::Forbidden,
+        ReleaseError::NotFound => NativeApiError::NotFound,
+        ReleaseError::Conflict => NativeApiError::Conflict,
+        ReleaseError::Unavailable => NativeApiError::Unavailable,
     }
 }
 

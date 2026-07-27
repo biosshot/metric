@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, num::NonZeroU64, time::Instant};
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     EventId, ProjectId, Timestamp,
     grouping::{
@@ -15,7 +16,6 @@ use metric_domain::{
     },
 };
 use metric_ports::{IssueStore, IssueStoreError, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
@@ -371,6 +371,12 @@ fn occurrence_pipeline(
     let latest_release = release_pair(latest_occurrence.release.as_ref());
     let regression_event = Bson::Binary(binary(regression_occurrence.event_id.as_bytes()));
     let regression_received = Bson::DateTime(date(regression_occurrence.received_at));
+    let regression_release = regression_occurrence
+        .release
+        .as_ref()
+        .map_or(Bson::String("$$REMOVE".to_owned()), |release| {
+            Bson::String(release.as_str().to_owned())
+        });
     let new_transition = doc! {
         "i": binary(notification_transition_id(
             summary.project_id,
@@ -431,8 +437,8 @@ fn occurrence_pipeline(
     ] };
     let regression = doc! { "$cond": [
         { "$gt": [regression_count.clone(), 1_i64] },
-        { "t": regression_received.clone(), "e": regression_event.clone(), "c": regression_count },
-        { "t": regression_received.clone(), "e": regression_event.clone() },
+        { "t": regression_received.clone(), "e": regression_event.clone(), "c": regression_count, "r": regression_release.clone() },
+        { "t": regression_received.clone(), "e": regression_event.clone(), "r": regression_release },
     ] };
     vec![
         doc! { "$set": {
@@ -793,6 +799,7 @@ fn decode_regression(document: &Document) -> Result<RegressionSummary, IssueCode
         at: decode_date(document, "t")?,
         event_id: EventId::from_bytes(fixed_binary::<16>(document, "e")?),
         count,
+        release: optional_release(document, "r")?,
     })
 }
 
@@ -1025,6 +1032,7 @@ pub(crate) fn issue_validator() -> Document {
                         "t": { "bsonType": "date" },
                         "e": { "bsonType": "binData" },
                         "c": { "bsonType": "long", "minimum": 2 },
+                        "r": { "bsonType": "string", "minLength": 1 },
                     },
                 },
                 "fr": { "bsonType": "string", "minLength": 1 },
@@ -1078,6 +1086,11 @@ pub(crate) fn issue_validator() -> Document {
             { "$cond": [
                 { "$ne": [{ "$type": "$w" }, "missing"] },
                 { "$eq": [{ "$binarySize": "$w.a" }, 17] },
+                true,
+            ] },
+            { "$cond": [
+                { "$ne": [{ "$type": "$d.r" }, "missing"] },
+                { "$lte": [{ "$strLenBytes": "$d.r" }, 200] },
                 true,
             ] },
             { "$not": [{ "$and": [
@@ -1137,6 +1150,8 @@ pub(crate) fn issue_index_names() -> BTreeSet<&'static str> {
         "_id_",
         "issue_notification_ready",
         "issue_project_timeline",
+        "issue_release_new_timeline",
+        "issue_release_regression_timeline",
         "issue_status_timeline",
         "issue_title_text",
     ])
@@ -1178,7 +1193,7 @@ pub(crate) async fn validate_issue_indexes(database: &Database) -> Result<bool, 
     Ok(issues_valid && activities_valid)
 }
 
-fn issue_indexes() -> [IndexModel; 4] {
+fn issue_indexes() -> [IndexModel; 6] {
     [
         named_index(
             doc! { "p": 1, "l": -1, "_id": -1 },
@@ -1189,6 +1204,16 @@ fn issue_indexes() -> [IndexModel; 4] {
             doc! { "p": 1, "s": 1, "l": -1, "_id": -1 },
             "issue_status_timeline",
             None,
+        ),
+        named_index(
+            doc! { "p": 1, "fr": 1, "f": -1, "_id": -1 },
+            "issue_release_new_timeline",
+            Some(doc! { "fr": { "$exists": true } }),
+        ),
+        named_index(
+            doc! { "p": 1, "d.r": 1, "d.t": -1, "_id": -1 },
+            "issue_release_regression_timeline",
+            Some(doc! { "d.r": { "$exists": true } }),
         ),
         named_index(
             doc! { "j": 1, "_id": 1 },
