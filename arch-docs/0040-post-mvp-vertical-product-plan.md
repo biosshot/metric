@@ -46,12 +46,13 @@ Status as of 2026-07-27:
 | 31 | User Feedback | Complete |
 | 32-33 | Lightweight product wave | Complete |
 | 34 | Alerts and notification destinations | Complete |
-| 35-36 | Lightweight product wave | Planned in ADR-0045 |
+| 35 | Cron Monitoring | Complete |
+| 36 | Uptime Monitoring | Planned in ADR-0045 |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
-Phase 28-34 evidence is published in their corresponding reports; Phase 35 is next.
+Phase 28-35 evidence is published in their corresponding reports; Phase 36 is next.
 
 ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
 decision deferred execution of Phase 27 without completing it. ADR-0045 now owns the

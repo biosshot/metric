@@ -27,7 +27,7 @@ The selected wave is:
 | 32 | Unified Explore | Complete |
 | 33 | Saved Queries and Dashboards | Complete |
 | 34 | Alerts and notification destinations | Complete |
-| 35 | Cron Monitoring | Planned |
+| 35 | Cron Monitoring | Complete |
 | 36 | Uptime Monitoring | Planned |
 
 Metrics, Profiling, Replay, organization workflow, provider integrations, MCP,
