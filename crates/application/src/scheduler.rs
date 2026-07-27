@@ -7,12 +7,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::FutureExt;
 use metric_domain::Timestamp;
 use metric_ports::{
     Clock, MaintenanceCursor, MaintenanceDisposition, MaintenanceRequest, MaintenanceStore,
     MaintenanceStoreError, MaintenanceTask,
 };
-use futures_util::FutureExt;
 use thiserror::Error;
 use tokio::time::{MissedTickBehavior, interval, timeout};
 

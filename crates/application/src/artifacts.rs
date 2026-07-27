@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::shutdown::ShutdownSignal;
+use futures_util::{StreamExt, TryStreamExt};
 use metric_domain::{
     OrganizationId, ProjectId, Timestamp,
     artifacts::{
@@ -24,7 +25,6 @@ use metric_ports::{
     ArtifactStore, ArtifactStoreError, BlobReadSession, BlobStore, BlobStoreError, Clock,
     RandomSource,
 };
-use futures_util::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use sha1::{Digest as _, Sha1};
 use thiserror::Error;

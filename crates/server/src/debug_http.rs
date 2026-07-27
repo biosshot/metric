@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use flate2::read::GzDecoder;
 use metric_application::{
     artifacts::{ArtifactError, ArtifactService, AssembleArtifact, AssembleArtifactState},
     auth::IdentityService,
@@ -22,7 +23,6 @@ use metric_domain::{
     debug_files::{CodeId, DebugFileId, DebugId},
 };
 use metric_symbolication::PrivateSourceSigner;
-use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 

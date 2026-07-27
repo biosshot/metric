@@ -434,10 +434,8 @@ mod tests {
             &self,
             _project_id: ProjectId,
             _query: SegmentQuery,
-        ) -> PortFuture<
-            '_,
-            Result<SignalPage<metric_domain::signals::SpanRecord>, SignalStoreError>,
-        > {
+        ) -> PortFuture<'_, Result<SignalPage<metric_domain::signals::SpanRecord>, SignalStoreError>>
+        {
             Box::pin(async { Err(SignalStoreError::NotFound) })
         }
 
@@ -455,10 +453,8 @@ mod tests {
             &self,
             _project_id: ProjectId,
             _query: PerformanceQuery,
-        ) -> PortFuture<
-            '_,
-            Result<Vec<metric_domain::signals::PerformanceBucket>, SignalStoreError>,
-        > {
+        ) -> PortFuture<'_, Result<Vec<metric_domain::signals::PerformanceBucket>, SignalStoreError>>
+        {
             Box::pin(async { Ok(Vec::new()) })
         }
 

@@ -36,9 +36,7 @@ use metric_domain::{
     processing::{PendingEvent, ProcessingErrorCode},
     symbolication::SymbolicationResult,
 };
-use metric_mongo::{
-    EventCodecConfig, IssueCodecConfig, MongoProjectStore, decode_pending_event,
-};
+use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoProjectStore, decode_pending_event};
 use metric_ports::{
     AcceptedEventHandoff, DurableOutcome, EventBacklog, EventPrepareError, EventSink, EventStore,
     EventStoreError, EventWriteStatus, PortFuture, ProjectResolver, ProjectStore, WorkHandler,

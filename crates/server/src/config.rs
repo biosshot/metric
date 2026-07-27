@@ -1,11 +1,11 @@
 use std::{env, fmt, fs, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, ValueEnum};
-use metric_domain::{BoundedDuration, ByteSize};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
+use metric_domain::{BoundedDuration, ByteSize};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

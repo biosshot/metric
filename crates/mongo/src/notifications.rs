@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     EventId, ProjectId, Timestamp,
     grouping::IssueId,
@@ -16,7 +17,6 @@ use metric_domain::{
     },
 };
 use metric_ports::{NotificationStore, NotificationStoreError, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},

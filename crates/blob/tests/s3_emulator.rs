@@ -384,10 +384,8 @@ async fn shared_conformance(store: Arc<dyn BlobStore>) {
 
 #[tokio::test]
 async fn local_and_s3_emulator_share_blobstore_conformance() {
-    let root = std::env::temp_dir().join(format!(
-        "metric-blob-conformance-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("metric-blob-conformance-{}", uuid::Uuid::new_v4()));
     let local: Arc<dyn BlobStore> = Arc::new(
         LocalBlobStore::new(
             &root,
@@ -460,8 +458,7 @@ async fn s3_emulator_retries_multipart_and_maps_missing_and_permission_failures(
 #[ignore = "selected real-compatible matrix; requires METRIC_S3_TEST_* credentials"]
 async fn selected_real_compatible_service_matrix() {
     let endpoint = std::env::var("METRIC_S3_TEST_ENDPOINT").ok();
-    let region =
-        std::env::var("METRIC_S3_TEST_REGION").unwrap_or_else(|_| "us-east-1".to_owned());
+    let region = std::env::var("METRIC_S3_TEST_REGION").unwrap_or_else(|_| "us-east-1".to_owned());
     let bucket = std::env::var("METRIC_S3_TEST_BUCKET")
         .expect("METRIC_S3_TEST_BUCKET is required for the selected matrix");
     let access_key_id = std::env::var("METRIC_S3_TEST_ACCESS_KEY_ID")

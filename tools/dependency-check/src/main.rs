@@ -49,11 +49,7 @@ const CRATES: &[(&str, &str, &[&str])] = &[
     (
         "metric-testkit",
         "crates/testkit",
-        &[
-            "metric-application",
-            "metric-domain",
-            "metric-ports",
-        ],
+        &["metric-application", "metric-domain", "metric-ports"],
     ),
 ];
 

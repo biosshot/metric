@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, time::Duration};
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectAcceptanceState, ProjectId, ScrubbedEventPayload,
     Timestamp,
@@ -15,7 +16,6 @@ use metric_ports::{
     PortFuture, PreparedEvent, ProcessingProjectError, ProcessingProjectStore,
     ProcessingStateError, ProcessingStateStore,
 };
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},

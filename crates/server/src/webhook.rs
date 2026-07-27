@@ -6,6 +6,8 @@ use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit,
     aead::{Aead, Payload},
 };
+use futures_util::StreamExt;
+use hmac::{Hmac, Mac};
 use metric_domain::{
     SecretBytes,
     notifications::{ClaimedNotificationDelivery, SealedWebhookSecret},
@@ -13,8 +15,6 @@ use metric_domain::{
 use metric_ports::{
     PortFuture, WebhookDeliveryAdapter, WebhookDeliveryError, WebhookDeliveryReceipt,
 };
-use futures_util::StreamExt;
-use hmac::{Hmac, Mac};
 use reqwest::{
     Client,
     header::{HeaderMap, HeaderName, HeaderValue},

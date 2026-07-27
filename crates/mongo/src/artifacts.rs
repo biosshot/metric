@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     OrganizationId, ProjectId, Timestamp,
     api::ProjectView,
@@ -12,7 +13,6 @@ use metric_domain::{
     finalization::ReleaseId,
 };
 use metric_ports::{ArtifactStore, ArtifactStoreError, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},

@@ -413,10 +413,7 @@ mod tests {
             .unwrap();
         assert_eq!(prepared.search_tokens.len(), 3);
         let body: Value = serde_json::from_slice(prepared.payload.as_bytes()).unwrap();
-        assert_eq!(
-            body["_metric"]["symbolication"]["status"],
-            "not_required"
-        );
+        assert_eq!(body["_metric"]["symbolication"]["status"], "not_required");
         let result = finalizer.finalize(vec![prepared]).await.unwrap();
         assert_eq!(result.finalized, 1);
         assert_eq!(

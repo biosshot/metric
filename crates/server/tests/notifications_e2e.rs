@@ -12,6 +12,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::post,
 };
+use hmac::{Hmac, Mac};
 use metric_application::notifications::{NotificationConfig, NotificationDispatcher};
 use metric_domain::{
     EventId, ProjectId, SecretBytes, Timestamp,
@@ -31,7 +32,6 @@ use metric_ports::{
     WebhookDeliveryReceipt,
 };
 use metric_server::webhook::{ReqwestWebhookAdapter, WebhookAdapterConfig, WebhookSecretBox};
-use hmac::{Hmac, Mac};
 use mongodb::{Client, Database, bson::doc};
 use sha2::Sha256;
 use tokio::sync::{mpsc, oneshot};

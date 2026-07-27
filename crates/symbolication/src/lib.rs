@@ -8,6 +8,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::StreamExt;
+use hmac::{Hmac, Mac};
 use metric_domain::{
     ProjectId,
     symbolication::{
@@ -17,8 +19,6 @@ use metric_domain::{
     },
 };
 use metric_ports::{PortFuture, SymbolicationBackend, SymbolicationBackendError};
-use futures_util::StreamExt;
-use hmac::{Hmac, Mac};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;

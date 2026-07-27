@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::{StreamExt, stream};
 use metric_domain::{
     EventId, EventKey, ProjectId, Timestamp,
     api::{EventView, IssueActivityKind, IssueActivityView, IssueStatBucket},
@@ -17,7 +18,6 @@ use metric_domain::{
     issue::{ActorKind, ActorRef, IssueSnapshot, IssueStatus},
 };
 use metric_ports::{Clock, InvestigationStore, InvestigationStoreError};
-use futures_util::{StreamExt, stream};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -540,8 +540,7 @@ impl IncidentCapsuleService {
 }
 
 fn observe_generation(outcome: &'static str, started: Instant) {
-    metrics::counter!("metric_incident_capsule_exports_total", "outcome" => outcome)
-        .increment(1);
+    metrics::counter!("metric_incident_capsule_exports_total", "outcome" => outcome).increment(1);
     metrics::histogram!("metric_incident_capsule_generation_seconds")
         .record(started.elapsed().as_secs_f64());
 }

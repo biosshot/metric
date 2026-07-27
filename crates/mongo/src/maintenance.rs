@@ -2,12 +2,12 @@
 
 use std::time::{Duration, Instant};
 
+use futures_util::TryStreamExt;
 use metric_domain::Timestamp;
 use metric_ports::{
     MaintenanceCursor, MaintenanceDisposition, MaintenanceRequest, MaintenanceResult,
     MaintenanceStore, MaintenanceStoreError, MaintenanceTask, PortFuture,
 };
-use futures_util::TryStreamExt;
 use mongodb::{
     Database,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},

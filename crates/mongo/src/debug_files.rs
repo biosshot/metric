@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     OrganizationId, ProjectId, Timestamp,
     api::ProjectView,
@@ -9,7 +10,6 @@ use metric_domain::{
     },
 };
 use metric_ports::{DebugFileStore, DebugFileStoreError, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},

@@ -16,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use futures_util::{TryStreamExt, future};
 use metric_application::{
     ingest::{
         DisabledCategory, DiscardedItem, IngestError, IngestErrorKind, IngestRequest, IngestResult,
@@ -26,15 +27,12 @@ use metric_application::{
     shutdown::ShutdownSignal,
 };
 use metric_domain::{DsnKey, EventId, ProjectId};
-use metric_ports::{
-    BlobChunkSource, BlobStoreError, IngestOutcome, IngestOutcomeKind, PortFuture,
-};
+use metric_ports::{BlobChunkSource, BlobStoreError, IngestOutcome, IngestOutcomeKind, PortFuture};
 use metric_sentry_protocol::{
     AttachmentLimits, EnvelopeLimits, ParsedEnvelope, ProtocolError, ProtocolErrorKind,
     RawSignalKind, parse_envelope_with_attachments, parse_query_auth, parse_store_event,
     parse_x_sentry_auth,
 };
-use futures_util::{TryStreamExt, future};
 use serde::Serialize;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},

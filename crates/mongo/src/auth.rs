@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::TryStreamExt;
 use metric_domain::{
     DisplayName, OrganizationId, OrganizationIdentity, ProjectId, Slug, Timestamp,
     api::{ApiTokenView, AuditLogView, OrganizationMemberView},
@@ -16,7 +17,6 @@ use metric_domain::{
     },
 };
 use metric_ports::{AuthStore, AuthStoreError, BootstrapTokenInstall, PortFuture};
-use futures_util::TryStreamExt;
 use mongodb::{
     Database, IndexModel,
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},

@@ -10,9 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::FutureExt;
 use metric_domain::{AcceptedEvent, EventKey, processing::PendingEvent};
 use metric_ports::{AcceptedEventHandoff, Clock, EventBacklog, EventBacklogError, WorkHandler};
-use futures_util::FutureExt;
 use thiserror::Error;
 use tokio::{
     sync::mpsc,
@@ -527,9 +527,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
     use metric_domain::{EventId, ProjectId, ScrubbedEventPayload, Timestamp};
-    use metric_ports::{
-        BacklogObservation, DurableOutcome, EventSink, EventSinkError, PortFuture,
-    };
+    use metric_ports::{BacklogObservation, DurableOutcome, EventSink, EventSinkError, PortFuture};
     use tokio::sync::Notify;
 
     use super::*;

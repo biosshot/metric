@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::{FutureExt, future::Shared};
 use metric_domain::{
     AcceptedEvent, ProjectAcceptanceState, ProjectId, Timestamp,
     event::NormalizedEvent,
@@ -25,7 +26,6 @@ use metric_ports::{
     Clock, PortFuture, ProcessingProjectError, ProcessingProjectStore, ProcessingStateError,
     ProcessingStateStore, SymbolicationBackend,
 };
-use futures_util::{FutureExt, future::Shared};
 use thiserror::Error;
 use tokio::{
     sync::{Semaphore, mpsc, oneshot},

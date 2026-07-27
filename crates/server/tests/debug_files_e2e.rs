@@ -37,9 +37,7 @@ use metric_ports::{
     RandomSource, SymbolicationBackend,
 };
 use metric_server::debug_http;
-use metric_symbolication::{
-    ExternalSymbolicator, ExternalSymbolicatorConfig, PrivateSourceSigner,
-};
+use metric_symbolication::{ExternalSymbolicator, ExternalSymbolicatorConfig, PrivateSourceSigner};
 use metric_testkit::FixedClock;
 use mongodb::{Client, Database, bson::doc};
 use sha1::{Digest as _, Sha1};
@@ -127,9 +125,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
             setup_secret: setup,
             email: metric_domain::auth::EmailAddress::parse("owner@example.com")?,
             user_display_name: metric_domain::auth::UserDisplayName::new("Owner")?,
-            password: metric_application::auth::PasswordInput::new(
-                "correct horse battery staple",
-            )?,
+            password: metric_application::auth::PasswordInput::new("correct horse battery staple")?,
             organization_slug: Slug::new("auth-org")?,
             organization_name: DisplayName::new("Auth Org")?,
             request_id: metric_domain::BoundedId::new("phase17-bootstrap")?,
