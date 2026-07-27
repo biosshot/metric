@@ -314,6 +314,50 @@ export interface ExploreResult {
   next_cursor: string | null;
 }
 
+export interface SavedQuery {
+  id: string;
+  project_id: string;
+  name: string;
+  query: ExploreRequest;
+  revision: number;
+  created_by: string;
+  updated_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DashboardWidget {
+  id: string;
+  title: string;
+  saved_query_id: string;
+  shape: ExploreShape;
+}
+
+export interface Dashboard {
+  id: string;
+  project_id: string;
+  name: string;
+  widgets: DashboardWidget[];
+  refresh_interval: 'manual' | '30s' | '1m' | '5m';
+  revision: number;
+  created_by: string;
+  updated_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DashboardRefresh {
+  dashboard_id: string;
+  refreshed_at: number;
+  total_cost: number;
+  widgets: Array<{
+    widget_id: string;
+    cost: number | null;
+    error_code: string | null;
+    items: Array<Record<string, ExploreScalar>> | null;
+  }>;
+}
+
 export type FeedbackStatus = 'open' | 'resolved' | 'spam';
 
 export interface FeedbackAttachment {
@@ -464,6 +508,14 @@ export interface CapabilityDocument {
     maximum_rows: number;
     intervals: string[];
     raw_database_syntax: false;
+  };
+  dashboards: {
+    maximum_widgets: number;
+    maximum_total_cost: number;
+    maximum_refresh_concurrency: number;
+    refresh_intervals: string[];
+    variables: string[];
+    result_cache: false;
   };
 }
 

@@ -84,6 +84,9 @@ interface ApiState {
   policyRevisionSeen?: boolean;
   createdProjectBody?: Record<string, unknown>;
   requestedProjects?: string[];
+  savedQueries?: Array<Record<string, any>>;
+  dashboards?: Array<Record<string, any>>;
+  dashboardVariableSeen?: boolean;
 }
 
 async function installApi(page: Page, state: ApiState): Promise<void> {
@@ -251,6 +254,115 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       cost: 198,
       items: [{ count: 17 }],
       next_cursor: null,
+    });
+  }
+  if (path === '/api/v1/projects/42/saved-queries') {
+    state.savedQueries ??= [];
+    if (request.method() === 'POST') {
+      state.csrfSeen = request.headers()['x-csrf-token'] === 'c'.repeat(64);
+      const body = request.postDataJSON() as { name: string; query: Record<string, unknown> };
+      const saved = {
+        id: `${state.savedQueries.length + 1}`.padStart(32, '0'),
+        project_id: '42',
+        name: body.name,
+        query: body.query,
+        revision: 1,
+        created_by: '8',
+        updated_by: '8',
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      };
+      state.savedQueries.push(saved);
+      return json(saved, 201);
+    }
+    return json({ items: state.savedQueries });
+  }
+  const savedMatch = path.match(/^\/api\/v1\/projects\/42\/saved-queries\/([0-9a-f]+)$/);
+  if (savedMatch) {
+    state.savedQueries ??= [];
+    const index = state.savedQueries.findIndex((item) => item.id === savedMatch[1]);
+    if (request.method() === 'DELETE') {
+      if (index >= 0) state.savedQueries.splice(index, 1);
+      return route.fulfill({ status: 204 });
+    }
+    if (request.method() === 'PATCH' && index >= 0) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.savedQueries[index] = {
+        ...state.savedQueries[index],
+        ...body,
+        revision: Number(body.revision) + 1,
+      };
+      return json(state.savedQueries[index]);
+    }
+    return index >= 0 ? json(state.savedQueries[index]) : json({}, 404);
+  }
+  if (path === '/api/v1/projects/42/dashboards') {
+    state.dashboards ??= [];
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as {
+        name: string;
+        widgets: Array<Record<string, unknown>>;
+        refresh_interval: string;
+      };
+      const dashboard = {
+        id: `${state.dashboards.length + 101}`.padStart(32, '0'),
+        project_id: '42',
+        name: body.name,
+        widgets: body.widgets.map((widget, index) => ({
+          ...widget,
+          id: `${index + 201}`.padStart(32, '0'),
+        })),
+        refresh_interval: body.refresh_interval,
+        revision: 1,
+        created_by: '8',
+        updated_by: '8',
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      };
+      state.dashboards.push(dashboard);
+      return json(dashboard, 201);
+    }
+    return json({ items: state.dashboards });
+  }
+  const dashboardMatch = path.match(/^\/api\/v1\/projects\/42\/dashboards\/([0-9a-f]+)$/);
+  if (dashboardMatch) {
+    state.dashboards ??= [];
+    const index = state.dashboards.findIndex((item) => item.id === dashboardMatch[1]);
+    if (request.method() === 'DELETE') {
+      if (index >= 0) state.dashboards.splice(index, 1);
+      return route.fulfill({ status: 204 });
+    }
+    if (request.method() === 'PATCH' && index >= 0) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.dashboards[index] = {
+        ...state.dashboards[index],
+        ...body,
+        revision: Number(body.revision) + 1,
+      };
+      return json(state.dashboards[index]);
+    }
+    return index >= 0 ? json(state.dashboards[index]) : json({}, 404);
+  }
+  const refreshMatch = path.match(
+    /^\/api\/v1\/projects\/42\/dashboards\/([0-9a-f]+)\/refresh$/,
+  );
+  if (refreshMatch) {
+    const body = request.postDataJSON() as { environment?: string; release?: string };
+    state.dashboardVariableSeen = body.environment === 'production';
+    const dashboard = state.dashboards?.find((item) => item.id === refreshMatch[1]);
+    return json({
+      dashboard_id: dashboard?.id,
+      refreshed_at: Date.now(),
+      total_cost: 198,
+      widgets: (dashboard?.widgets ?? []).map((widget: Record<string, any>) => {
+        const exists = state.savedQueries?.some((item) => item.id === widget.saved_query_id);
+        return {
+          widget_id: widget.id,
+          cost: exists ? 198 : null,
+          error_code: exists ? null : 'saved_query_missing',
+          items: exists ? [{ count: 23 }] : null,
+        };
+      }),
     });
   }
   if (path === '/api/v1/capabilities') {
@@ -449,6 +561,47 @@ test('Explore submits a typed bounded query and renders a number result', async 
   await expect(page.getByText('Estimated cost')).toContainText('198');
 });
 
+test('Dashboard lifecycle applies variables and keeps partial widget failures visible', async ({
+  page,
+}) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+    savedQueries: [],
+    dashboards: [],
+  };
+  await installApi(page, state);
+  await login(page);
+  await page.getByRole('link', { name: 'Dashboards' }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboards', exact: true })).toBeVisible();
+
+  await page.getByPlaceholder('Production log volume').fill('Production log volume');
+  await page.getByRole('button', { name: 'Save query' }).click();
+  await expect(page.getByLabel('Saved query name')).toHaveValue('Production log volume');
+
+  await page.getByPlaceholder('Service health').fill('Service health');
+  await page.getByRole('combobox', { name: 'Saved query' }).click();
+  await page.getByRole('option', { name: /Production log volume/ }).click();
+  await page.getByRole('button', { name: 'Add' }).click();
+  await page.getByRole('button', { name: 'Create dashboard' }).click();
+  await expect(page.getByLabel('Dashboard name')).toHaveValue('Service health');
+
+  await page.getByPlaceholder('All environments').fill('production');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expect(page.locator('.dashboard-widget__number')).toContainText('23');
+  expect(state.dashboardVariableSeen).toBe(true);
+  expect(state.csrfSeen).toBe(true);
+
+  await page.locator('.saved-query-list article').getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expect(page.getByText('saved_query_missing')).toBeVisible();
+
+  await page.locator('.dashboard-card').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.getByRole('heading', { name: 'No dashboards yet' })).toBeVisible();
+});
+
 test('all routes have no serious accessibility violations at desktop and narrow widths', async ({
   page,
 }) => {
@@ -487,6 +640,7 @@ test('all routes have no serious accessibility violations at desktop and narrow 
     { name: 'issue-detail', url: `/issues/${issue.id}`, heading: issue.title },
     { name: 'event-detail', url: `/events/${event.event_id}`, heading: '120 frames' },
     { name: 'explore', url: '/explore', heading: 'Unified Explore' },
+    { name: 'dashboards', url: '/dashboards', heading: 'Dashboards' },
     { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
     { name: 'project-settings', url: '/project/settings', heading: 'Project settings' },
     { name: 'system-status', url: '/system', heading: 'System status' },

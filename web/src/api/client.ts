@@ -5,6 +5,8 @@ import type {
   ComponentStatus,
   CreatedInvitation,
   CreatedApiToken,
+  Dashboard,
+  DashboardRefresh,
   CreateProjectInput,
   CreateProjectResponse,
   Event,
@@ -31,6 +33,7 @@ import type {
   ReleaseIssue,
   ReleaseHealth,
   ReleaseSummary,
+  SavedQuery,
   Deploy,
   Span,
   StructuredLog,
@@ -58,6 +61,12 @@ const messages: Record<string, string> = {
   explore_cost_exceeded: 'This Explore query is too expensive. Shorten the range or grouping.',
   explore_capacity: 'Explore is busy. Wait briefly and retry.',
   explore_unavailable: 'Explore storage is temporarily unavailable.',
+  dashboard_invalid_request: 'The saved query or dashboard configuration is invalid.',
+  dashboard_not_found: 'The saved query or dashboard no longer exists.',
+  dashboard_conflict: 'This shared dashboard changed. Reload it before saving.',
+  dashboard_cost_exceeded: 'This dashboard exceeds its total query-cost budget.',
+  dashboard_capacity: 'Dashboard refresh capacity is busy. Wait briefly and retry.',
+  dashboard_unavailable: 'Dashboard storage is temporarily unavailable.',
 };
 
 export class ApiError extends Error {
@@ -352,6 +361,59 @@ export const api = {
     request<ExploreResult>(`/api/v1/projects/${projectId}/explore`, {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+  savedQueries: (projectId: string) =>
+    request<{ items: SavedQuery[] }>(`/api/v1/projects/${projectId}/saved-queries`),
+  createSavedQuery: (projectId: string, name: string, query: ExploreRequest) =>
+    request<SavedQuery>(`/api/v1/projects/${projectId}/saved-queries`, {
+      method: 'POST',
+      body: JSON.stringify({ name, query }),
+    }),
+  updateSavedQuery: (projectId: string, value: SavedQuery) =>
+    request<SavedQuery>(`/api/v1/projects/${projectId}/saved-queries/${value.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ revision: value.revision, name: value.name, query: value.query }),
+    }),
+  deleteSavedQuery: (projectId: string, id: string) =>
+    request<void>(`/api/v1/projects/${projectId}/saved-queries/${id}`, {
+      method: 'DELETE',
+    }),
+  dashboards: (projectId: string) =>
+    request<{ items: Dashboard[] }>(`/api/v1/projects/${projectId}/dashboards`),
+  createDashboard: (
+    projectId: string,
+    input: {
+      name: string;
+      widgets: Array<{ title: string; saved_query_id: string; shape: string }>;
+      refresh_interval: string;
+    },
+  ) =>
+    request<Dashboard>(`/api/v1/projects/${projectId}/dashboards`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updateDashboard: (projectId: string, value: Dashboard) =>
+    request<Dashboard>(`/api/v1/projects/${projectId}/dashboards/${value.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        revision: value.revision,
+        name: value.name,
+        widgets: value.widgets,
+        refresh_interval: value.refresh_interval,
+      }),
+    }),
+  deleteDashboard: (projectId: string, id: string) =>
+    request<void>(`/api/v1/projects/${projectId}/dashboards/${id}`, {
+      method: 'DELETE',
+    }),
+  refreshDashboard: (
+    projectId: string,
+    id: string,
+    variables: { environment?: string; release?: string },
+  ) =>
+    request<DashboardRefresh>(`/api/v1/projects/${projectId}/dashboards/${id}/refresh`, {
+      method: 'POST',
+      body: JSON.stringify(variables),
     }),
   feedback: (projectId: string, status?: string, cursor?: string | null) =>
     request<Page<Feedback>>(
