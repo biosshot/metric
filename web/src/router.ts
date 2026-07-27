@@ -18,6 +18,7 @@ import FeedbackView from './views/FeedbackView.vue';
 import FeedbackDetailView from './views/FeedbackDetailView.vue';
 import ExploreView from './views/ExploreView.vue';
 import DashboardsView from './views/DashboardsView.vue';
+import AlertsView from './views/AlertsView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -33,6 +34,7 @@ export const router = createRouter({
     { path: '/performance', name: 'performance', component: PerformanceView },
     { path: '/explore', name: 'explore', component: ExploreView },
     { path: '/dashboards', name: 'dashboards', component: DashboardsView },
+    { path: '/alerts', name: 'alerts', component: AlertsView },
     { path: '/feedback', name: 'feedback', component: FeedbackView },
     { path: '/feedback/:feedbackId', name: 'feedback-item', component: FeedbackDetailView },
     { path: '/releases', name: 'releases', component: ReleasesView },

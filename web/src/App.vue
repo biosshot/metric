@@ -131,6 +131,10 @@ async function logout(): Promise<void> {
           <AppIcon name="dashboard" :size="18" />
           Dashboards
         </RouterLink>
+        <RouterLink to="/alerts" @click="navigationOpen = false">
+          <AppIcon name="alerts" :size="18" />
+          Alerts
+        </RouterLink>
         <RouterLink to="/feedback" @click="navigationOpen = false">
           <AppIcon name="message" :size="18" />
           Feedback

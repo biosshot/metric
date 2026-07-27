@@ -358,6 +358,58 @@ export interface DashboardRefresh {
   }>;
 }
 
+export type NotificationDestinationKind = 'telegram' | 'smtp_email';
+
+export interface NotificationDestination {
+  id: string;
+  project_id: string;
+  kind: NotificationDestinationKind;
+  endpoint: string;
+  has_secret: true;
+  smtp: {
+    port: number;
+    security: 'starttls' | 'tls';
+    username: string;
+    from: string;
+    recipients: string[];
+  } | null;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AlertRule {
+  id: string;
+  project_id: string;
+  name: string;
+  enabled: boolean;
+  triggers: Array<'new_issue' | 'regression' | 'resolved'>;
+  aggregate: {
+    dataset: 'errors' | 'logs' | 'spans';
+    lookback_minutes: number;
+    evaluation_interval_minutes: number;
+    threshold: number;
+    environment: string | null;
+    release: string | null;
+    notify_resolved: boolean;
+  } | null;
+  destination_ids: string[];
+  cooldown_minutes: number;
+  storm_limit_per_hour: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface NotificationDelivery {
+  id: string;
+  destination_id: string;
+  status: 'pending' | 'delivered' | 'dead';
+  attempts: number;
+  last_error: string | null;
+  created_at: number;
+  delivered_at: number | null;
+}
+
 export type FeedbackStatus = 'open' | 'resolved' | 'spam';
 
 export interface FeedbackAttachment {

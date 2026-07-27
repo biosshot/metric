@@ -7,6 +7,7 @@ import type {
   CreatedApiToken,
   Dashboard,
   DashboardRefresh,
+  AlertRule,
   CreateProjectInput,
   CreateProjectResponse,
   Event,
@@ -19,6 +20,8 @@ import type {
   IssueActivity,
   IssueStatistic,
   LoginResponse,
+  NotificationDestination,
+  NotificationDelivery,
   Organization,
   OrganizationAuditRecord,
   OrganizationMember,
@@ -414,6 +417,31 @@ export const api = {
     request<DashboardRefresh>(`/api/v1/projects/${projectId}/dashboards/${id}/refresh`, {
       method: 'POST',
       body: JSON.stringify(variables),
+    }),
+  notificationDestinations: (projectId: string) =>
+    request<{ items: NotificationDestination[] }>(
+      `/api/v1/projects/${projectId}/notification-destinations`,
+    ),
+  putNotificationDestination: (projectId: string, input: Record<string, unknown>) =>
+    request<NotificationDestination>(`/api/v1/projects/${projectId}/notification-destinations`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  testNotificationDestination: (projectId: string, destinationId: string) =>
+    request<NotificationDelivery>(
+      `/api/v1/projects/${projectId}/notification-destinations/${destinationId}/test`,
+      { method: 'POST' },
+    ),
+  notificationDeliveries: (projectId: string) =>
+    request<{ items: NotificationDelivery[] }>(
+      `/api/v1/projects/${projectId}/notification-deliveries`,
+    ),
+  alertRules: (projectId: string) =>
+    request<{ items: AlertRule[] }>(`/api/v1/projects/${projectId}/alert-rules`),
+  putAlertRule: (projectId: string, input: Record<string, unknown>) =>
+    request<AlertRule>(`/api/v1/projects/${projectId}/alert-rules`, {
+      method: 'POST',
+      body: JSON.stringify(input),
     }),
   feedback: (projectId: string, status?: string, cursor?: string | null) =>
     request<Page<Feedback>>(
