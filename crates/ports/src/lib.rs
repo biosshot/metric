@@ -862,6 +862,7 @@ pub trait NotificationStore: Send + Sync + 'static {
         last_triggered_at: Timestamp,
         storm_window_started_at: Timestamp,
         storm_count: u32,
+        threshold_met: bool,
         deliveries: Vec<NotificationDelivery>,
     ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
 
@@ -1630,6 +1631,13 @@ pub trait MonitorStore: Send + Sync + 'static {
         batch_size: usize,
     ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
 
+    fn claim_due_uptime(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<MonitorDefinition>, SignalStoreError>>;
+
     fn pending_monitor_alerts(
         &self,
         limit: usize,
@@ -1640,6 +1648,20 @@ pub trait MonitorStore: Send + Sync + 'static {
         run_id: MonitorRunId,
         evaluated_at: Timestamp,
     ) -> PortFuture<'_, Result<(), SignalStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UptimeCheckResult {
+    pub http_status: Option<u16>,
+    pub failure: Option<metric_domain::monitors::UptimeFailure>,
+    pub duration_ms: u64,
+}
+
+pub trait UptimeCheckExecutor: Send + Sync + 'static {
+    fn execute(
+        &self,
+        monitor: MonitorDefinition,
+    ) -> PortFuture<'_, Result<UptimeCheckResult, SignalStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

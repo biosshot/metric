@@ -631,10 +631,16 @@ impl MonitorAlertEvaluator {
                 rule.enabled
                     && rule.monitor.as_ref().is_some_and(|monitor| {
                         monitor.monitor_id == run.monitor_id
-                            && monitor.outcomes.contains(&run.status)
+                            && (monitor.outcomes.contains(&run.status)
+                                || (run.status
+                                    == metric_domain::monitors::MonitorRunStatus::Success
+                                    && run.http_status.is_some()
+                                    && rule.threshold_met
+                                    && monitor.notify_resolved))
                     })
             }) {
-                self.expand_monitor_rule(&rule, run, now).await?;
+                let resolving = run.status == metric_domain::monitors::MonitorRunStatus::Success;
+                self.expand_monitor_rule(&rule, run, now, resolving).await?;
             }
             self.monitors
                 .mark_monitor_alert_evaluated(run.id, now)
@@ -649,6 +655,7 @@ impl MonitorAlertEvaluator {
         rule: &AlertRule,
         run: &MonitorRun,
         now: Timestamp,
+        resolving: bool,
     ) -> Result<(), NotificationError> {
         let window_expired = rule.storm_window_started_at.is_none_or(|started| {
             now.unix_millis().saturating_sub(started.unix_millis()) >= 3_600_000
@@ -663,10 +670,12 @@ impl MonitorAlertEvaluator {
             now.unix_millis().saturating_sub(last.unix_millis())
                 >= i64::from(rule.cooldown_minutes) * 60_000
         });
-        if !cooldown_elapsed || storm_count >= rule.storm_limit_per_hour {
+        if !resolving && (!cooldown_elapsed || storm_count >= rule.storm_limit_per_hour) {
             return Ok(());
         }
-        storm_count = storm_count.saturating_add(1);
+        if !resolving {
+            storm_count = storm_count.saturating_add(1);
+        }
         let transition_id = IssueTransitionId::from_bytes(run.id.as_bytes());
         let mut deliveries = Vec::with_capacity(rule.destination_ids.len());
         for destination_id in rule.destination_ids.iter().copied() {
@@ -678,7 +687,7 @@ impl MonitorAlertEvaluator {
                 rule_id: rule.id,
                 action_id: destination_id,
                 destination_id,
-                payload: monitor_payload(rule, run, now)?,
+                payload: monitor_payload(rule, run, now, resolving)?,
                 status: NotificationDeliveryStatus::Pending,
                 attempts: 0,
                 next_attempt_at: now,
@@ -689,7 +698,14 @@ impl MonitorAlertEvaluator {
             });
         }
         self.store
-            .complete_monitor_alert(rule.id, now, window_started, storm_count, deliveries)
+            .complete_monitor_alert(
+                rule.id,
+                now,
+                window_started,
+                storm_count,
+                !resolving,
+                deliveries,
+            )
             .await?;
         Ok(())
     }
@@ -720,15 +736,19 @@ fn monitor_payload(
     rule: &AlertRule,
     run: &MonitorRun,
     now: Timestamp,
+    resolving: bool,
 ) -> Result<NotificationPayload, NotificationError> {
     NotificationPayload::new(
         serde_json::to_vec(&json!({
             "schema": 1,
-            "kind": "cron_monitor",
+            "kind": if run.http_status.is_some() || run.uptime_failure.is_some() { "uptime_monitor" } else { "cron_monitor" },
+            "state": if resolving { "resolved" } else { "firing" },
             "rule": rule.name.as_str(),
             "monitor_id": run.monitor_id.to_string(),
             "run_id": run.id.to_string(),
             "status": run.status.as_str(),
+            "http_status": run.http_status,
+            "failure": run.uptime_failure.map(|value| value.as_str()),
             "started_at": run.started_at.unix_millis(),
             "detected_at": now.unix_millis(),
         }))

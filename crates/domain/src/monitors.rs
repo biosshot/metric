@@ -1,9 +1,10 @@
-//! Bounded reliability-monitor identities, schedules and Cron run lifecycle.
+//! Bounded Cron/Uptime reliability-monitor identities, schedules and run lifecycle.
 
 use std::fmt;
 
 use thiserror::Error;
 use time::{OffsetDateTime, Weekday};
+use url::Url;
 
 use crate::{
     ProjectId, Timestamp,
@@ -17,6 +18,13 @@ pub const MAX_MONITOR_SCHEDULE_BYTES: usize = 128;
 pub const MAX_MONITOR_INTERVAL_MINUTES: u32 = 366 * 24 * 60;
 pub const MAX_MONITOR_MARGIN_SECONDS: u32 = 24 * 60 * 60;
 pub const MAX_MONITOR_RUNTIME_SECONDS: u32 = 7 * 24 * 60 * 60;
+pub const MAX_UPTIME_ENDPOINT_BYTES: usize = 2_048;
+pub const MAX_UPTIME_HEADERS: usize = 16;
+pub const MAX_UPTIME_HEADER_NAME_BYTES: usize = 64;
+pub const MAX_UPTIME_HEADER_VALUE_BYTES: usize = 2_048;
+pub const MAX_UPTIME_HEADERS_BYTES: usize = 8 * 1_024;
+pub const MAX_UPTIME_TIMEOUT_SECONDS: u32 = 120;
+pub const MAX_UPTIME_REDIRECTS: u8 = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MonitorId([u8; 16]);
@@ -36,6 +44,18 @@ impl MonitorId {
     pub fn derive(project_id: ProjectId, slug: &str, environment: &str) -> Self {
         Self(hash16(
             b"metric/cron-monitor/v1",
+            &[
+                &project_id.get().to_be_bytes(),
+                slug.as_bytes(),
+                environment.as_bytes(),
+            ],
+        ))
+    }
+
+    #[must_use]
+    pub fn derive_uptime(project_id: ProjectId, slug: &str, environment: &str) -> Self {
+        Self(hash16(
+            b"metric/uptime-monitor/v1",
             &[
                 &project_id.get().to_be_bytes(),
                 slug.as_bytes(),
@@ -83,6 +103,17 @@ impl MonitorRunId {
     pub fn missed(monitor_id: MonitorId, scheduled_for: Timestamp) -> Self {
         Self(hash16(
             b"metric/cron-run/missed/v1",
+            &[
+                &monitor_id.as_bytes(),
+                &scheduled_for.unix_millis().to_be_bytes(),
+            ],
+        ))
+    }
+
+    #[must_use]
+    pub fn uptime(monitor_id: MonitorId, scheduled_for: Timestamp) -> Self {
+        Self(hash16(
+            b"metric/uptime-run/v1",
             &[
                 &monitor_id.as_bytes(),
                 &scheduled_for.unix_millis().to_be_bytes(),
@@ -145,6 +176,265 @@ impl MonitorRunStatus {
 pub enum MonitorRunSource {
     Sdk,
     Scheduler,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UptimeMethod {
+    Get,
+    Head,
+}
+
+impl UptimeMethod {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, MonitorValueError> {
+        match value {
+            "GET" | "get" => Ok(Self::Get),
+            "HEAD" | "head" => Ok(Self::Head),
+            _ => Err(MonitorValueError::InvalidConfig),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct UptimeEndpoint(Box<str>);
+
+impl UptimeEndpoint {
+    pub fn new(value: impl Into<Box<str>>) -> Result<Self, MonitorValueError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > MAX_UPTIME_ENDPOINT_BYTES
+            || value.chars().any(char::is_control)
+        {
+            return Err(MonitorValueError::InvalidEndpoint);
+        }
+        let parsed = Url::parse(&value).map_err(|_| MonitorValueError::InvalidEndpoint)?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(MonitorValueError::InvalidEndpoint);
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn host_key(&self) -> Result<Box<str>, MonitorValueError> {
+        let parsed = Url::parse(&self.0).map_err(|_| MonitorValueError::InvalidEndpoint)?;
+        Ok(format!(
+            "{}:{}",
+            parsed
+                .host_str()
+                .ok_or(MonitorValueError::InvalidEndpoint)?
+                .to_ascii_lowercase(),
+            parsed
+                .port_or_known_default()
+                .ok_or(MonitorValueError::InvalidEndpoint)?
+        )
+        .into_boxed_str())
+    }
+
+    #[must_use]
+    pub fn redacted(&self) -> Box<str> {
+        let Ok(mut parsed) = Url::parse(&self.0) else {
+            return "<invalid-url>".into();
+        };
+        if parsed.query().is_some() {
+            let keys = parsed
+                .query_pairs()
+                .map(|(key, _)| key.into_owned())
+                .collect::<Vec<_>>();
+            parsed.set_query(None);
+            {
+                let mut query = parsed.query_pairs_mut();
+                for key in keys {
+                    query.append_pair(&key, "<redacted>");
+                }
+            }
+        }
+        parsed.to_string().into_boxed_str()
+    }
+}
+
+impl fmt::Debug for UptimeEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("UptimeEndpoint(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct SealedUptimeHeaderValue(Box<[u8]>);
+
+impl SealedUptimeHeaderValue {
+    pub fn new(value: impl Into<Box<[u8]>>) -> Result<Self, MonitorValueError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > MAX_UPTIME_HEADER_VALUE_BYTES + 64 {
+            return Err(MonitorValueError::InvalidHeader);
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn expose_ciphertext(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SealedUptimeHeaderValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SealedUptimeHeaderValue(<redacted>)")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UptimeHeader {
+    pub name: Box<str>,
+    pub value: SealedUptimeHeaderValue,
+    pub sensitive: bool,
+}
+
+impl UptimeHeader {
+    pub fn validate(&self) -> Result<(), MonitorValueError> {
+        if self.name.is_empty()
+            || self.name.len() > MAX_UPTIME_HEADER_NAME_BYTES
+            || !self
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            || forbidden_uptime_header(&self.name)
+            || self.sensitive != sensitive_uptime_header(&self.name)
+        {
+            return Err(MonitorValueError::InvalidHeader);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UptimeMonitorConfig {
+    pub endpoint: UptimeEndpoint,
+    pub method: UptimeMethod,
+    pub expected_status_min: u16,
+    pub expected_status_max: u16,
+    pub timeout_seconds: u32,
+    pub max_redirects: u8,
+    pub headers: Box<[UptimeHeader]>,
+}
+
+impl UptimeMonitorConfig {
+    pub fn validate(&self) -> Result<(), MonitorValueError> {
+        if self.headers.len() > MAX_UPTIME_HEADERS
+            || !(100..=599).contains(&self.expected_status_min)
+            || !(self.expected_status_min..=599).contains(&self.expected_status_max)
+            || !(1..=MAX_UPTIME_TIMEOUT_SECONDS).contains(&self.timeout_seconds)
+            || self.max_redirects > MAX_UPTIME_REDIRECTS
+        {
+            return Err(MonitorValueError::InvalidConfig);
+        }
+        let mut names = std::collections::BTreeSet::new();
+        let mut total = 0_usize;
+        for header in &self.headers {
+            header.validate()?;
+            if !names.insert(header.name.as_ref()) {
+                return Err(MonitorValueError::InvalidHeader);
+            }
+            total = total
+                .checked_add(header.name.len())
+                .and_then(|value| value.checked_add(header.value.expose_ciphertext().len()))
+                .ok_or(MonitorValueError::InvalidHeader)?;
+        }
+        if total > MAX_UPTIME_HEADERS_BYTES + self.headers.len() * 64 {
+            return Err(MonitorValueError::InvalidHeader);
+        }
+        Ok(())
+    }
+}
+
+#[must_use]
+pub fn sensitive_uptime_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "proxy-authorization"
+            | "cookie"
+            | "set-cookie"
+            | "x-api-key"
+            | "x-auth-token"
+    ) || name.contains("token")
+        || name.contains("secret")
+        || name.contains("api-key")
+}
+
+#[must_use]
+pub fn forbidden_uptime_header(name: &str) -> bool {
+    matches!(
+        name,
+        "host"
+            | "content-length"
+            | "transfer-encoding"
+            | "connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "upgrade"
+            | "forwarded"
+            | "via"
+    ) || name.starts_with("proxy-")
+        || name.starts_with("x-forwarded-")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UptimeFailure {
+    Dns,
+    ForbiddenAddress,
+    Connect,
+    Timeout,
+    Redirect,
+    TooManyRedirects,
+    ResponseTooLarge,
+    UnexpectedStatus,
+}
+
+impl UptimeFailure {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dns => "dns",
+            Self::ForbiddenAddress => "forbidden_address",
+            Self::Connect => "connect",
+            Self::Timeout => "timeout",
+            Self::Redirect => "redirect",
+            Self::TooManyRedirects => "too_many_redirects",
+            Self::ResponseTooLarge => "response_too_large",
+            Self::UnexpectedStatus => "unexpected_status",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, MonitorValueError> {
+        match value {
+            "dns" => Ok(Self::Dns),
+            "forbidden_address" => Ok(Self::ForbiddenAddress),
+            "connect" => Ok(Self::Connect),
+            "timeout" => Ok(Self::Timeout),
+            "redirect" => Ok(Self::Redirect),
+            "too_many_redirects" => Ok(Self::TooManyRedirects),
+            "response_too_large" => Ok(Self::ResponseTooLarge),
+            "unexpected_status" => Ok(Self::UnexpectedStatus),
+            _ => Err(MonitorValueError::InvalidRun),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +551,7 @@ pub struct MonitorDefinition {
     pub managed_by_web: bool,
     pub revision: u64,
     pub config: MonitorConfig,
+    pub uptime: Option<UptimeMonitorConfig>,
     pub next_expected_at: Timestamp,
     pub last_run_id: Option<MonitorRunId>,
     pub last_status: Option<MonitorRunStatus>,
@@ -275,10 +566,22 @@ impl MonitorDefinition {
         validate_text(&self.name, MAX_MONITOR_NAME_BYTES)?;
         validate_text(&self.environment, MAX_MONITOR_ENVIRONMENT_BYTES)?;
         self.config.validate()?;
+        if self
+            .uptime
+            .as_ref()
+            .is_some_and(|uptime| uptime.validate().is_err())
+        {
+            return Err(MonitorValueError::InvalidConfig);
+        }
         if self.revision == 0 || self.updated_at < self.created_at {
             return Err(MonitorValueError::InvalidConfig);
         }
         Ok(())
+    }
+
+    #[must_use]
+    pub const fn is_uptime(&self) -> bool {
+        self.uptime.is_some()
     }
 }
 
@@ -298,6 +601,8 @@ pub struct MonitorRun {
     pub release_id: Option<ReleaseId>,
     pub timeout_at: Option<Timestamp>,
     pub delete_at: Option<Timestamp>,
+    pub http_status: Option<u16>,
+    pub uptime_failure: Option<UptimeFailure>,
 }
 
 impl MonitorRun {
@@ -310,6 +615,11 @@ impl MonitorRun {
                 .duration_ms
                 .is_some_and(|value| value > i64::MAX as u64)
             || matches!(self.source, MonitorRunSource::Sdk) != self.check_in_id.is_some()
+            || self
+                .http_status
+                .is_some_and(|status| !(100..=599).contains(&status))
+            || (self.http_status.is_some() || self.uptime_failure.is_some())
+                && (self.source != MonitorRunSource::Scheduler || !self.status.is_terminal())
         {
             return Err(MonitorValueError::InvalidRun);
         }
@@ -375,6 +685,10 @@ pub enum MonitorValueError {
     InvalidRun,
     #[error("monitor timestamp is invalid")]
     InvalidTime,
+    #[error("Uptime endpoint is invalid")]
+    InvalidEndpoint,
+    #[error("Uptime header is invalid")]
+    InvalidHeader,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,5 +889,31 @@ mod tests {
             config.timeout_at(scheduled).unwrap().unix_millis(),
             scheduled.unix_millis() + 600_000
         );
+    }
+
+    #[test]
+    fn uptime_configuration_is_bounded_and_redacts_query_values() {
+        let endpoint =
+            UptimeEndpoint::new("https://example.com/health?token=secret&region=eu").unwrap();
+        assert_eq!(
+            endpoint.redacted().as_ref(),
+            "https://example.com/health?token=%3Credacted%3E&region=%3Credacted%3E"
+        );
+        assert!(UptimeEndpoint::new("file:///etc/passwd").is_err());
+        assert!(UptimeEndpoint::new("https://user:secret@example.com").is_err());
+
+        for forbidden in [
+            "host",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "proxy-authorization",
+            "x-forwarded-for",
+        ] {
+            assert!(forbidden_uptime_header(forbidden));
+        }
+        assert!(sensitive_uptime_header("authorization"));
+        assert!(sensitive_uptime_header("x-service-token"));
+        assert!(!sensitive_uptime_header("accept-language"));
     }
 }

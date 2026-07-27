@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "uptime-monitor-run-durable-writer-phase-36",
+    "source_commit": "fd591194e196981d1e93b95db378576feb5a5786",
+    "generated_at": "2026-07-27T14:58:00.834Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "2000 distinct terminal Uptime runs; compact BSON; status and latency; batches of 200",
+    "storage": "local MongoDB direct connection; debug profile; unique database dropped by test"
+  },
+  "metrics": {
+    "runs": 2000,
+    "batch": 200,
+    "elapsed_ms": 371,
+    "durable_rps": 5382.78,
+    "minimum_durable_rps": 100
+  }
+}

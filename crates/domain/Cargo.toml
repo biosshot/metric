@@ -13,6 +13,7 @@ hex.workspace = true
 humantime.workspace = true
 thiserror.workspace = true
 time.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

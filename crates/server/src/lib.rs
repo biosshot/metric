@@ -7,6 +7,7 @@ pub mod ingest_http;
 pub mod native_http;
 pub mod notification_delivery;
 pub mod release_http;
+pub mod uptime;
 pub mod web_http;
 pub mod webhook;
 
@@ -66,6 +67,7 @@ use metric_application::{
     shutdown::ShutdownRoot,
     span_writer::{SpanWriter, SpanWriterConfig, SpanWriterStartError, SpanWriterTask},
     symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
+    uptime::{UptimeScheduler, UptimeSchedulerConfig, UptimeSchedulerError},
     writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
 };
 use metric_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
@@ -112,6 +114,8 @@ pub enum ServerError {
     Dispatcher(#[from] DispatcherStartError),
     #[error(transparent)]
     Scheduler(#[from] SchedulerStartError),
+    #[error(transparent)]
+    UptimeScheduler(#[from] UptimeSchedulerError),
     #[error(transparent)]
     IncidentCapsule(#[from] IncidentCapsuleError),
     #[error(transparent)]
@@ -173,6 +177,7 @@ struct RuntimeModules {
     notification_task: Option<NotificationTask>,
     aggregate_alert_task: Option<tokio::task::JoinHandle<()>>,
     monitor_alert_task: Option<tokio::task::JoinHandle<()>>,
+    uptime_task: Option<tokio::task::JoinHandle<()>>,
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
@@ -282,6 +287,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         notification_task,
         aggregate_alert_task,
         monitor_alert_task,
+        uptime_task,
         project_deletion_task,
         blob_cleanup_task,
         debug_file_service,
@@ -339,7 +345,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             std::sync::Arc::new(
                 notification_delivery::ProviderDeliveryAdapter::new(
                     webhook_adapter,
-                    webhook_secret_box,
+                    webhook_secret_box.clone(),
                     notification_delivery::ProviderAdapterConfig {
                         timeout: config.notifications.timeout.get(),
                         max_response_bytes: config.notifications.maximum_response_bytes,
@@ -574,6 +580,21 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         )?;
         let monitor_sink: std::sync::Arc<dyn MonitorSink> = monitor_writer;
+        let uptime_task = Some(
+            UptimeScheduler::new(
+                std::sync::Arc::clone(&monitor_store),
+                std::sync::Arc::new(uptime::ReqwestUptimeExecutor::new(
+                    webhook_secret_box.clone(),
+                )),
+                std::sync::Arc::clone(&clock),
+                UptimeSchedulerConfig {
+                    poll_interval: config.scheduler.backlog_interval.get(),
+                    retention_days: config.retention.monitor_runs_days,
+                    ..UptimeSchedulerConfig::default()
+                },
+            )?
+            .start(shutdown.signal()),
+        );
         let feedback = std::sync::Arc::new(store.feedback_store());
         let feedback_sink: std::sync::Arc<dyn FeedbackSink> = feedback.clone();
         let feedback_store: std::sync::Arc<dyn FeedbackStore> = feedback;
@@ -864,6 +885,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             notification_task: Some(notification_task),
             aggregate_alert_task,
             monitor_alert_task,
+            uptime_task,
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
             debug_file_service: Some(debug_file_service),
@@ -901,6 +923,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             notification_task: None,
             aggregate_alert_task: None,
             monitor_alert_task: None,
+            uptime_task: None,
             project_deletion_task: None,
             blob_cleanup_task: None,
             debug_file_service: None,
@@ -1067,6 +1090,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         let _ = task.await;
     }
     if let Some(task) = monitor_alert_task {
+        let _ = task.await;
+    }
+    if let Some(task) = uptime_task {
         let _ = task.await;
     }
     if let Some(task) = project_deletion_task {

@@ -15,6 +15,24 @@ const session = useSessionStore();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const selectedMonitorId = ref('');
+const kindOptions: SelectOption[] = [
+  {
+    value: 'cron',
+    label: 'Cron check-in',
+    description: 'SDK reports job state.',
+    icon: 'monitors',
+  },
+  {
+    value: 'uptime',
+    label: 'Uptime HTTP',
+    description: 'Faultkeep performs a safe GET or HEAD.',
+    icon: 'activity',
+  },
+];
+const methodOptions: SelectOption[] = [
+  { value: 'GET', label: 'GET', description: 'Read a bounded response.', icon: 'activity' },
+  { value: 'HEAD', label: 'HEAD', description: 'Headers only.', icon: 'activity' },
+];
 const scheduleTypeOptions: SelectOption[] = [
   {
     value: 'crontab',
@@ -30,6 +48,7 @@ const scheduleTypeOptions: SelectOption[] = [
   },
 ];
 const form = reactive<MonitorInput>({
+  kind: 'cron',
   slug: '',
   name: '',
   environment: 'production',
@@ -38,6 +57,13 @@ const form = reactive<MonitorInput>({
   schedule: '*/5 * * * *',
   checkin_margin_seconds: 60,
   max_runtime_seconds: 900,
+  endpoint: 'https://example.com/health',
+  method: 'GET',
+  expected_status_min: 200,
+  expected_status_max: 399,
+  timeout_seconds: 10,
+  max_redirects: 3,
+  headers: [],
 });
 
 const monitors = useQuery({
@@ -75,6 +101,10 @@ const saveMonitor = useMutation({
       name: form.name.trim(),
       environment: form.environment.trim(),
       schedule: form.schedule.trim(),
+      schedule_type: form.kind === 'uptime' ? 'interval' : form.schedule_type,
+      headers: form.headers
+        .filter((header) => header.name.trim() && header.value)
+        .map((header) => ({ name: header.name.trim(), value: header.value })),
     }),
   onSuccess: async (monitor) => {
     selectedMonitorId.value = monitor.id;
@@ -89,11 +119,35 @@ function edit(monitor: CronMonitor): void {
     name: monitor.name,
     environment: monitor.environment,
     enabled: monitor.enabled,
+    kind: monitor.kind,
     schedule_type: monitor.schedule_type,
     schedule: monitor.schedule,
     checkin_margin_seconds: monitor.checkin_margin_seconds,
     max_runtime_seconds: monitor.max_runtime_seconds,
+    endpoint: monitor.uptime?.endpoint ?? 'https://example.com/health',
+    method: monitor.uptime?.method ?? 'GET',
+    expected_status_min: monitor.uptime?.expected_status_min ?? 200,
+    expected_status_max: monitor.uptime?.expected_status_max ?? 399,
+    timeout_seconds: monitor.uptime?.timeout_seconds ?? 10,
+    max_redirects: monitor.uptime?.max_redirects ?? 3,
+    headers: monitor.uptime?.headers.map((header) => ({ name: header.name, value: '' })) ?? [],
   });
+}
+
+function addHeader(): void {
+  if (form.headers.length < 16) form.headers.push({ name: '', value: '' });
+}
+
+function removeHeader(index: number): void {
+  form.headers.splice(index, 1);
+}
+
+function setKind(kind: MonitorInput['kind']): void {
+  form.kind = kind;
+  if (kind === 'uptime' && form.schedule_type === 'crontab') {
+    form.schedule_type = 'interval';
+    form.schedule = '5';
+  }
 }
 
 function timestamp(value: string | null): string {
@@ -116,8 +170,8 @@ function duration(value: number | null): string {
     <header class="page-header">
       <div>
         <p class="eyebrow">{{ session.selectedProject?.slug }} / scheduled jobs</p>
-        <h1>Cron monitors</h1>
-        <p>See successful, failed, timed-out, and missed job executions without hidden state.</p>
+        <h1>Monitors</h1>
+        <p>Track SDK cron jobs and safe server-originated HTTP uptime checks.</p>
       </div>
     </header>
 
@@ -149,6 +203,12 @@ function duration(value: number | null): string {
         </div>
       </div>
       <div class="form-grid form-grid--three">
+        <BaseSelect
+          :model-value="form.kind"
+          :options="kindOptions"
+          label="Monitor type"
+          @update:model-value="setKind($event as MonitorInput['kind'])"
+        />
         <label>
           Name
           <input v-model.trim="form.name" maxlength="128" required placeholder="Nightly backup" />
@@ -162,7 +222,7 @@ function duration(value: number | null): string {
           <input v-model.trim="form.environment" maxlength="64" required placeholder="production" />
         </label>
       </div>
-      <div class="form-grid">
+      <div v-if="form.kind === 'cron'" class="form-grid">
         <BaseSelect
           :model-value="form.schedule_type"
           :options="scheduleTypeOptions"
@@ -178,20 +238,117 @@ function duration(value: number | null): string {
           />
         </label>
       </div>
-      <div class="form-grid form-grid--three">
+      <div v-else class="form-grid">
         <label>
+          Public HTTP(S) endpoint
+          <input v-model.trim="form.endpoint" type="url" maxlength="2048" required />
+          <small
+            >Private, loopback, link-local and metadata addresses are rejected on every hop.</small
+          >
+        </label>
+        <BaseSelect
+          :model-value="form.method ?? 'GET'"
+          :options="methodOptions"
+          label="Method"
+          @update:model-value="form.method = $event as 'GET' | 'HEAD'"
+        />
+      </div>
+      <div class="form-grid form-grid--three">
+        <label v-if="form.kind === 'cron'">
           Check-in margin, seconds
           <input v-model.number="form.checkin_margin_seconds" type="number" min="0" required />
         </label>
-        <label>
+        <label v-if="form.kind === 'cron'">
           Maximum runtime, seconds
           <input v-model.number="form.max_runtime_seconds" type="number" min="1" required />
         </label>
         <label class="check-control monitor-form__enabled">
           <input v-model="form.enabled" type="checkbox" />
-          <span><strong>Enabled</strong><small>Detect timeouts and missed runs.</small></span>
+          <span><strong>Enabled</strong><small>Pause without deleting history.</small></span>
         </label>
       </div>
+      <template v-if="form.kind === 'uptime'">
+        <div class="form-grid form-grid--three">
+          <label
+            >Expected from<input
+              v-model.number="form.expected_status_min"
+              type="number"
+              min="100"
+              max="599"
+              required
+          /></label>
+          <label
+            >Expected through<input
+              v-model.number="form.expected_status_max"
+              type="number"
+              min="100"
+              max="599"
+              required
+          /></label>
+          <label
+            >Timeout, seconds<input
+              v-model.number="form.timeout_seconds"
+              type="number"
+              min="1"
+              max="120"
+              required
+          /></label>
+        </div>
+        <div class="form-grid">
+          <label
+            >Interval, minutes<input v-model.trim="form.schedule" required placeholder="5"
+          /></label>
+          <label
+            >Maximum redirects<input
+              v-model.number="form.max_redirects"
+              type="number"
+              min="0"
+              max="3"
+              required
+          /></label>
+        </div>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Write-only custom headers</p>
+            <p>Values are sealed. A blank value removes that header when you save.</p>
+          </div>
+          <button
+            class="button button--secondary button--fit"
+            type="button"
+            :disabled="form.headers.length >= 16"
+            @click="addHeader"
+          >
+            <AppIcon name="plus" :size="16" /> Add header
+          </button>
+        </div>
+        <div
+          v-for="(header, index) in form.headers"
+          :key="index"
+          class="form-grid form-grid--three"
+        >
+          <label
+            >Header name<input
+              v-model.trim="header.name"
+              maxlength="64"
+              placeholder="authorization"
+          /></label>
+          <label
+            >Secret value<input
+              v-model="header.value"
+              type="password"
+              maxlength="2048"
+              autocomplete="new-password"
+              placeholder="Write-only"
+          /></label>
+          <button
+            class="button button--secondary button--fit"
+            type="button"
+            @click="removeHeader(index)"
+          >
+            <AppIcon name="delete" :size="16" /> Remove
+          </button>
+        </div>
+      </template>
       <button
         class="button button--primary button--fit"
         type="submit"
@@ -222,7 +379,10 @@ function duration(value: number | null): string {
           <span class="monitor-card__icon"><AppIcon name="monitors" /></span>
           <span class="monitor-card__copy">
             <strong>{{ monitor.name }}</strong>
-            <small>{{ monitor.slug }} · {{ monitor.environment }}</small>
+            <small
+              >{{ monitor.kind === 'uptime' ? 'Uptime' : 'Cron' }} · {{ monitor.slug }} ·
+              {{ monitor.environment }}</small
+            >
           </span>
           <StatusBadge
             :status="monitor.enabled ? (monitor.last_status ?? 'waiting') : 'disabled'"
@@ -270,6 +430,10 @@ function duration(value: number | null): string {
                 <template v-if="run.scheduled_for">
                   · scheduled {{ timestamp(run.scheduled_for) }}
                 </template>
+              </p>
+              <p v-if="run.http_status || run.uptime_failure">
+                <span v-if="run.http_status">HTTP {{ run.http_status }}</span>
+                <span v-if="run.uptime_failure"> · {{ run.uptime_failure }}</span>
               </p>
             </div>
           </li>

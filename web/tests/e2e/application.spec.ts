@@ -87,6 +87,9 @@ interface ApiState {
   savedQueries?: Array<Record<string, any>>;
   dashboards?: Array<Record<string, any>>;
   dashboardVariableSeen?: boolean;
+  monitors?: Array<Record<string, any>>;
+  monitorRuns?: Array<Record<string, any>>;
+  alertRules?: Array<Record<string, any>>;
 }
 
 async function installApi(page: Page, state: ApiState): Promise<void> {
@@ -363,6 +366,121 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       }),
     });
   }
+  if (path === '/api/v1/projects/42/monitors') {
+    state.monitors ??= [];
+    if (request.method() === 'POST') {
+      state.csrfSeen = request.headers()['x-csrf-token'] === 'c'.repeat(64);
+      const body = request.postDataJSON() as Record<string, any>;
+      const monitor = {
+        id: '36'.repeat(16),
+        project_id: '42',
+        ...body,
+        managed_by: 'web',
+        revision: 1,
+        kind: body.kind,
+        uptime:
+          body.kind === 'uptime'
+            ? {
+                endpoint: body.endpoint,
+                method: body.method,
+                expected_status_min: body.expected_status_min,
+                expected_status_max: body.expected_status_max,
+                timeout_seconds: body.timeout_seconds,
+                max_redirects: body.max_redirects,
+                headers: body.headers.map((header: { name: string }) => ({
+                  name: header.name,
+                  sensitive: header.name === 'authorization',
+                  has_value: true,
+                })),
+              }
+            : null,
+        next_expected_at: '2026-07-27T15:10:00Z',
+        last_run_id: null,
+        last_status: 'success',
+        last_check_in_at: '2026-07-27T15:05:00Z',
+        created_at: '2026-07-27T15:00:00Z',
+        updated_at: '2026-07-27T15:00:00Z',
+      };
+      state.monitors = [monitor];
+      state.monitorRuns = [
+        {
+          id: '37'.repeat(16),
+          monitor_id: monitor.id,
+          status: 'error',
+          source: 'scheduler',
+          scheduled_for: '2026-07-27T15:00:00Z',
+          started_at: '2026-07-27T15:00:00Z',
+          finished_at: '2026-07-27T15:00:01Z',
+          duration_ms: 812,
+          received_at: '2026-07-27T15:00:01Z',
+          release_id: null,
+          http_status: 503,
+          uptime_failure: 'unexpected_status',
+        },
+        {
+          id: '38'.repeat(16),
+          monitor_id: monitor.id,
+          status: 'success',
+          source: 'scheduler',
+          scheduled_for: '2026-07-27T15:05:00Z',
+          started_at: '2026-07-27T15:05:00Z',
+          finished_at: '2026-07-27T15:05:00Z',
+          duration_ms: 93,
+          received_at: '2026-07-27T15:05:00Z',
+          release_id: null,
+          http_status: 200,
+          uptime_failure: null,
+        },
+      ];
+      return json(monitor);
+    }
+    return json({ items: state.monitors });
+  }
+  if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}/runs`) {
+    return json({ items: state.monitorRuns ?? [] });
+  }
+  if (path === '/api/v1/projects/42/notification-destinations') {
+    return json({
+      items: [
+        {
+          id: '39'.repeat(16),
+          project_id: '42',
+          kind: 'telegram',
+          endpoint: 'metric-alerts',
+          enabled: true,
+          smtp: null,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+        },
+      ],
+    });
+  }
+  if (path === '/api/v1/projects/42/alert-rules') {
+    state.alertRules ??= [];
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as Record<string, any>;
+      const rule = {
+        id: '40'.repeat(16),
+        project_id: '42',
+        ...body,
+        aggregate: null,
+        monitor: {
+          monitor_id: body.monitor_id,
+          outcomes: body.monitor_outcomes,
+          notify_resolved: body.notify_resolved,
+        },
+        threshold_met: false,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      };
+      state.alertRules = [rule];
+      return json(rule, 201);
+    }
+    return json({ items: state.alertRules });
+  }
+  if (path === '/api/v1/projects/42/notification-deliveries') {
+    return json({ items: [] });
+  }
   if (path === '/api/v1/capabilities') {
     return json({
       api_version: 'v1',
@@ -439,6 +557,48 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in to Metric' })).toBeVisible();
   expect(state.logoutCsrfSeen).toBe(true);
+});
+
+test('uptime monitor lifecycle shows history and configures recovery alerts', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+    monitors: [],
+    monitorRuns: [],
+    alertRules: [],
+  };
+  await installApi(page, state);
+  await login(page);
+
+  await page.getByRole('link', { name: 'Monitors', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Monitor type' }).click();
+  await page.getByRole('option', { name: /^Uptime HTTP/ }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Public API');
+  await page.getByLabel('Slug', { exact: true }).fill('public-api');
+  await page.getByLabel('Public HTTP(S) endpoint').fill('https://status.example.com/health');
+  await page.getByRole('button', { name: 'Add header' }).click();
+  await page.getByLabel('Header name').fill('authorization');
+  await page.getByLabel('Secret value').fill('Bearer secret');
+  await page.getByRole('button', { name: 'Save monitor' }).click();
+
+  await expect(page.getByText('Uptime · public-api · production')).toBeVisible();
+  await expect(page.getByText('HTTP 503')).toBeVisible();
+  await expect(page.getByText('unexpected_status')).toBeVisible();
+  await expect(page.getByText('HTTP 200')).toBeVisible();
+  expect(state.csrfSeen).toBe(true);
+
+  await page.getByRole('link', { name: 'Alerts', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Rule type' }).click();
+  await page.getByRole('option', { name: /^Monitor outcome/ }).click();
+  await page.getByLabel('Rule name').fill('Public API availability');
+  await page.getByRole('combobox', { name: 'Monitor' }).click();
+  await page.getByRole('option', { name: /^Public API/ }).click();
+  await page.getByRole('button', { name: /Telegram/ }).click();
+  await page.getByRole('button', { name: 'Create rule' }).click();
+  await expect(page.getByText('Public API availability')).toBeVisible();
+  expect(state.alertRules?.[0]?.monitor.notify_resolved).toBe(true);
 });
 
 test('first setup creates a project and reaches an actionable SDK DSN', async ({ page }) => {

@@ -66,7 +66,10 @@ use metric_domain::{
     issue::{
         ActorKind, ActorRef, IssueCommandAction, IssueNotificationKind, IssueSnapshot, IssueStatus,
     },
-    monitors::{MonitorDefinition, MonitorId, MonitorRun},
+    monitors::{
+        MonitorDefinition, MonitorId, MonitorRun, UptimeEndpoint, UptimeHeader, UptimeMethod,
+        UptimeMonitorConfig, sensitive_uptime_header,
+    },
     notifications::{
         AggregateAlert, AlertRule, AlertRuleId, MAX_EMAIL_ADDRESS_BYTES, MAX_SMTP_HOST_BYTES,
         MonitorAlert, NotificationDestination, NotificationDestinationId,
@@ -614,6 +617,8 @@ async fn list_feedback(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MonitorBody {
+    #[serde(default)]
+    kind: Option<String>,
     slug: String,
     name: String,
     environment: String,
@@ -623,6 +628,27 @@ struct MonitorBody {
     schedule: String,
     checkin_margin_seconds: u32,
     max_runtime_seconds: u32,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    expected_status_min: Option<u16>,
+    #[serde(default)]
+    expected_status_max: Option<u16>,
+    #[serde(default)]
+    timeout_seconds: Option<u32>,
+    #[serde(default)]
+    max_redirects: Option<u8>,
+    #[serde(default)]
+    headers: Vec<UptimeHeaderBody>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UptimeHeaderBody {
+    name: String,
+    value: String,
 }
 
 async fn list_monitors(
@@ -654,6 +680,39 @@ async fn put_monitor(
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, true).await?;
     let body = json_body(body)?;
+    let uptime = if body.kind.as_deref() == Some("uptime") {
+        let secret_box = state
+            .notification_secret_box
+            .as_ref()
+            .ok_or(HttpApiError::Unavailable)?;
+        let configured_headers = body
+            .headers
+            .into_iter()
+            .map(|header| {
+                let name = header.name.trim().to_ascii_lowercase();
+                Ok(UptimeHeader {
+                    sensitive: sensitive_uptime_header(&name),
+                    name: name.into_boxed_str(),
+                    value: secret_box
+                        .seal_uptime_header(header.value.as_bytes())
+                        .map_err(|_| HttpApiError::InvalidRequest)?,
+                })
+            })
+            .collect::<Result<Vec<_>, HttpApiError>>()?;
+        Some(UptimeMonitorConfig {
+            endpoint: UptimeEndpoint::new(body.endpoint.ok_or(HttpApiError::InvalidRequest)?)
+                .map_err(|_| HttpApiError::InvalidRequest)?,
+            method: UptimeMethod::parse(body.method.as_deref().unwrap_or("GET"))
+                .map_err(|_| HttpApiError::InvalidRequest)?,
+            expected_status_min: body.expected_status_min.unwrap_or(200),
+            expected_status_max: body.expected_status_max.unwrap_or(399),
+            timeout_seconds: body.timeout_seconds.unwrap_or(10),
+            max_redirects: body.max_redirects.unwrap_or(3),
+            headers: configured_headers.into_boxed_slice(),
+        })
+    } else {
+        None
+    };
     let monitor = api(&state)?
         .upsert_monitor(
             &context,
@@ -667,6 +726,7 @@ async fn put_monitor(
                 schedule: body.schedule.into(),
                 checkin_margin_seconds: body.checkin_margin_seconds,
                 max_runtime_seconds: body.max_runtime_seconds,
+                uptime,
             },
         )
         .await
@@ -1536,6 +1596,7 @@ async fn put_alert_rule(
                         _ => Err(HttpApiError::InvalidRequest),
                     })
                     .collect::<Result<Box<[_]>, _>>()?,
+                notify_resolved: body.notify_resolved.unwrap_or(true),
             })
         })
         .transpose()?;
@@ -1622,6 +1683,7 @@ fn alert_rule_value(rule: &AlertRule) -> Value {
         "monitor": rule.monitor.as_ref().map(|monitor| json!({
             "monitor_id": monitor.monitor_id.to_string(),
             "outcomes": monitor.outcomes.iter().map(|outcome| outcome.as_str()).collect::<Vec<_>>(),
+            "notify_resolved": monitor.notify_resolved,
         })),
         "cooldown_minutes": rule.cooldown_minutes,
         "storm_limit_per_hour": rule.storm_limit_per_hour,
@@ -4028,6 +4090,20 @@ fn monitor_value(monitor: &MonitorDefinition) -> Result<Value, HttpApiError> {
         "last_check_in_at": monitor.last_check_in_at.map(timestamp_string).transpose()?,
         "created_at": timestamp_string(monitor.created_at)?,
         "updated_at": timestamp_string(monitor.updated_at)?,
+        "kind": if monitor.is_uptime() { "uptime" } else { "cron" },
+        "uptime": monitor.uptime.as_ref().map(|uptime| json!({
+            "endpoint": uptime.endpoint.redacted(),
+            "method": uptime.method.as_str(),
+            "expected_status_min": uptime.expected_status_min,
+            "expected_status_max": uptime.expected_status_max,
+            "timeout_seconds": uptime.timeout_seconds,
+            "max_redirects": uptime.max_redirects,
+            "headers": uptime.headers.iter().map(|header| json!({
+                "name": header.name,
+                "sensitive": header.sensitive,
+                "has_value": true,
+            })).collect::<Vec<_>>(),
+        })),
     }))
 }
 
@@ -4046,6 +4122,8 @@ fn monitor_run_value(run: &MonitorRun) -> Result<Value, HttpApiError> {
         "duration_ms": run.duration_ms,
         "received_at": timestamp_string(run.received_at)?,
         "release_id": run.release_id.map(|value| hex::encode(value.as_bytes())),
+        "http_status": run.http_status,
+        "uptime_failure": run.uptime_failure.map(|value| value.as_str()),
     }))
 }
 

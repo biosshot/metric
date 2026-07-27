@@ -2031,6 +2031,8 @@ fn normalize_check_in(
         release_id,
         timeout_at,
         delete_at: Some(delete_at),
+        http_status: None,
+        uptime_failure: None,
     };
     let update = MonitorUpdate { definition, run };
     update
@@ -2123,6 +2125,7 @@ fn normalize_monitor_definition(
         managed_by_web: false,
         revision: 1,
         config: monitor_config,
+        uptime: None,
         next_expected_at,
         last_run_id: None,
         last_status: None,

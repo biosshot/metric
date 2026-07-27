@@ -28,4 +28,5 @@ pub mod session_writer;
 pub mod shutdown;
 pub mod span_writer;
 pub mod symbolication;
+pub mod uptime;
 pub mod writer;

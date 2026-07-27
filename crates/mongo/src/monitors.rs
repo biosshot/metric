@@ -9,7 +9,8 @@ use metric_domain::{
     monitors::{
         MonitorAnchor, MonitorConfig, MonitorDefinition, MonitorId, MonitorPage, MonitorRun,
         MonitorRunAnchor, MonitorRunId, MonitorRunPage, MonitorRunSource, MonitorRunStatus,
-        MonitorSchedule, MonitorUpdate,
+        MonitorSchedule, MonitorUpdate, SealedUptimeHeaderValue, UptimeEndpoint, UptimeFailure,
+        UptimeHeader, UptimeMethod, UptimeMonitorConfig,
     },
 };
 use metric_ports::{DurableOutcome, MonitorStore, PortFuture, SignalStoreError};
@@ -235,13 +236,22 @@ impl MongoMonitorStore {
                 .schedule
                 .next_after(run.received_at)
                 .map_err(|_| SignalStoreError::InvalidData)?;
-            let due = monitor
-                .config
-                .missed_at(next)
-                .map_err(|_| SignalStoreError::InvalidData)?;
+            let due = if monitor.is_uptime() {
+                next
+            } else {
+                monitor
+                    .config
+                    .missed_at(next)
+                    .map_err(|_| SignalStoreError::InvalidData)?
+            };
             set.insert("f", date(next));
             set.insert("d", date(due));
         }
+        let update = if monitor.is_uptime() && run.status.is_terminal() {
+            doc! { "$set": set, "$unset": { "y": "" } }
+        } else {
+            doc! { "$set": set }
+        };
         self.database
             .collection::<Document>("monitors")
             .update_one(
@@ -252,7 +262,7 @@ impl MongoMonitorStore {
                         { "h": { "$lte": date(run.received_at) } },
                     ],
                 },
-                doc! { "$set": set },
+                update,
             )
             .await
             .map_err(unavailable)?;
@@ -460,7 +470,7 @@ impl MongoMonitorStore {
         let mut cursor = self
             .database
             .collection::<Document>("monitors")
-            .find(doc! { "a": true, "d": { "$lte": date(now) } })
+            .find(doc! { "k": 0, "a": true, "d": { "$lte": date(now) } })
             .with_options(options)
             .await
             .map_err(unavailable)?;
@@ -482,6 +492,8 @@ impl MongoMonitorStore {
                 release_id: None,
                 timeout_at: None,
                 delete_at: Some(add_days(now, self.retention.runs_days)?),
+                http_status: None,
+                uptime_failure: None,
             };
             self.database
                 .collection::<Document>("monitor_runs")
@@ -525,6 +537,62 @@ impl MongoMonitorStore {
         Ok(changed)
     }
 
+    async fn claim_uptime_inner(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+        limit: usize,
+    ) -> Result<Vec<MonitorDefinition>, SignalStoreError> {
+        if limit == 0 || limit > 1_000 || lease_until <= now {
+            return Err(SignalStoreError::InvalidData);
+        }
+        let options = FindOptions::builder()
+            .sort(doc! { "d": 1, "_id": 1 })
+            .limit(i64::try_from(limit).map_err(|_| SignalStoreError::InvalidData)?)
+            .build();
+        let mut cursor = self
+            .database
+            .collection::<Document>("monitors")
+            .find(doc! {
+                "k": 1,
+                "a": true,
+                "d": { "$lte": date(now) },
+                "$or": [{ "y": { "$exists": false } }, { "y": { "$lte": date(now) } }],
+            })
+            .with_options(options)
+            .await
+            .map_err(unavailable)?;
+        let mut candidates = Vec::with_capacity(limit);
+        while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+            candidates.push((
+                MonitorId::from_bytes(id16(&document, "_id")?),
+                timestamp(&document, "d")?,
+            ));
+        }
+        let collection = self.database.collection::<Document>("monitors");
+        let mut claimed = Vec::with_capacity(candidates.len());
+        for (id, due) in candidates {
+            if let Some(document) = collection
+                .find_one_and_update(
+                    doc! {
+                        "_id": binary(id.as_bytes()),
+                        "k": 1,
+                        "a": true,
+                        "d": date(due),
+                        "$or": [{ "y": { "$exists": false } }, { "y": { "$lte": date(now) } }],
+                    },
+                    doc! { "$set": { "y": date(lease_until) } },
+                )
+                .return_document(mongodb::options::ReturnDocument::After)
+                .await
+                .map_err(unavailable)?
+            {
+                claimed.push(decode_monitor(&document)?);
+            }
+        }
+        Ok(claimed)
+    }
+
     async fn pending_alerts_inner(
         &self,
         limit: usize,
@@ -536,11 +604,14 @@ impl MongoMonitorStore {
             .database
             .collection::<Document>("monitor_runs")
             .find(doc! {
-                "s": { "$in": [
-                    status_tag(MonitorRunStatus::Error),
-                    status_tag(MonitorRunStatus::Timeout),
-                    status_tag(MonitorRunStatus::Missed),
-                ]},
+                "$or": [
+                    { "s": { "$in": [
+                        status_tag(MonitorRunStatus::Error),
+                        status_tag(MonitorRunStatus::Timeout),
+                        status_tag(MonitorRunStatus::Missed),
+                    ]}},
+                    { "s": status_tag(MonitorRunStatus::Success), "a": { "$exists": true } },
+                ],
                 "z": { "$exists": false },
             })
             .sort(doc! { "r": 1, "_id": 1 })
@@ -613,6 +684,15 @@ impl MonitorStore for MongoMonitorStore {
         Box::pin(self.missed_inner(now, batch_size))
     }
 
+    fn claim_due_uptime(
+        &self,
+        now: Timestamp,
+        lease_until: Timestamp,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<MonitorDefinition>, SignalStoreError>> {
+        Box::pin(self.claim_uptime_inner(now, lease_until, limit))
+    }
+
     fn pending_monitor_alerts(
         &self,
         limit: usize,
@@ -658,13 +738,17 @@ fn encode_monitor(monitor: &MonitorDefinition) -> Result<Document, SignalStoreEr
         MonitorSchedule::Interval { .. } => 0,
         MonitorSchedule::Crontab { .. } => 1,
     };
-    let due = monitor
-        .config
-        .missed_at(monitor.next_expected_at)
-        .map_err(|_| SignalStoreError::InvalidData)?;
+    let due = if monitor.is_uptime() {
+        monitor.next_expected_at
+    } else {
+        monitor
+            .config
+            .missed_at(monitor.next_expected_at)
+            .map_err(|_| SignalStoreError::InvalidData)?
+    };
     let mut document = doc! {
         "p": monitor.project_id.get(),
-        "k": 0,
+        "k": if monitor.is_uptime() { 1 } else { 0 },
         "l": monitor.slug.as_ref(),
         "n": monitor.name.as_ref(),
         "e": binary(monitor.environment_id.as_bytes()),
@@ -683,6 +767,34 @@ fn encode_monitor(monitor: &MonitorDefinition) -> Result<Document, SignalStoreEr
         "i": date(monitor.created_at),
         "o": date(monitor.updated_at),
     };
+    if let Some(uptime) = &monitor.uptime {
+        let headers = uptime
+            .headers
+            .iter()
+            .map(|header| {
+                doc! {
+                    "n": header.name.as_ref(),
+                    "v": Binary {
+                        subtype: BinarySubtype::Generic,
+                        bytes: header.value.expose_ciphertext().to_vec(),
+                    },
+                    "s": header.sensitive,
+                }
+            })
+            .collect::<Vec<_>>();
+        document.insert(
+            "b",
+            doc! {
+                "u": uptime.endpoint.as_str(),
+                "m": uptime.method.as_str(),
+                "l": i32::from(uptime.expected_status_min),
+                "h": i32::from(uptime.expected_status_max),
+                "t": i64::from(uptime.timeout_seconds),
+                "r": i32::from(uptime.max_redirects),
+                "c": headers,
+            },
+        );
+    }
     if let Some(value) = monitor.last_run_id {
         document.insert("u", binary(value.as_bytes()));
     }
@@ -718,6 +830,11 @@ fn decode_monitor(document: &Document) -> Result<MonitorDefinition, SignalStoreE
         _ => return Err(SignalStoreError::InvalidData),
     }
     .map_err(|_| SignalStoreError::InvalidData)?;
+    let uptime = document
+        .get_document("b")
+        .ok()
+        .map(decode_uptime)
+        .transpose()?;
     let monitor = MonitorDefinition {
         id: MonitorId::from_bytes(id16(document, "_id")?),
         project_id: project_id(document)?,
@@ -752,6 +869,7 @@ fn decode_monitor(document: &Document) -> Result<MonitorDefinition, SignalStoreE
             )
             .map_err(|_| SignalStoreError::InvalidData)?,
         },
+        uptime,
         next_expected_at: timestamp(document, "f")?,
         last_run_id: optional_id16(document, "u")?.map(MonitorRunId::from_bytes),
         last_status: document.get_i32("s").ok().map(parse_status).transpose()?,
@@ -763,6 +881,65 @@ fn decode_monitor(document: &Document) -> Result<MonitorDefinition, SignalStoreE
         .validate()
         .map_err(|_| SignalStoreError::InvalidData)?;
     Ok(monitor)
+}
+
+fn decode_uptime(document: &Document) -> Result<UptimeMonitorConfig, SignalStoreError> {
+    let headers = document
+        .get_array("c")
+        .map_err(|_| SignalStoreError::InvalidData)?
+        .iter()
+        .map(|value| {
+            let header = value.as_document().ok_or(SignalStoreError::InvalidData)?;
+            Ok(UptimeHeader {
+                name: text(header, "n")?,
+                value: SealedUptimeHeaderValue::new(
+                    header
+                        .get_binary_generic("v")
+                        .map_err(|_| SignalStoreError::InvalidData)?
+                        .to_vec(),
+                )
+                .map_err(|_| SignalStoreError::InvalidData)?,
+                sensitive: header
+                    .get_bool("s")
+                    .map_err(|_| SignalStoreError::InvalidData)?,
+            })
+        })
+        .collect::<Result<Vec<_>, SignalStoreError>>()?;
+    Ok(UptimeMonitorConfig {
+        endpoint: UptimeEndpoint::new(text(document, "u")?)
+            .map_err(|_| SignalStoreError::InvalidData)?,
+        method: UptimeMethod::parse(
+            document
+                .get_str("m")
+                .map_err(|_| SignalStoreError::InvalidData)?,
+        )
+        .map_err(|_| SignalStoreError::InvalidData)?,
+        expected_status_min: u16::try_from(
+            document
+                .get_i32("l")
+                .map_err(|_| SignalStoreError::InvalidData)?,
+        )
+        .map_err(|_| SignalStoreError::InvalidData)?,
+        expected_status_max: u16::try_from(
+            document
+                .get_i32("h")
+                .map_err(|_| SignalStoreError::InvalidData)?,
+        )
+        .map_err(|_| SignalStoreError::InvalidData)?,
+        timeout_seconds: u32::try_from(
+            document
+                .get_i64("t")
+                .map_err(|_| SignalStoreError::InvalidData)?,
+        )
+        .map_err(|_| SignalStoreError::InvalidData)?,
+        max_redirects: u8::try_from(
+            document
+                .get_i32("r")
+                .map_err(|_| SignalStoreError::InvalidData)?,
+        )
+        .map_err(|_| SignalStoreError::InvalidData)?,
+        headers: headers.into_boxed_slice(),
+    })
 }
 
 fn encode_run(run: &MonitorRun) -> Result<Document, SignalStoreError> {
@@ -799,6 +976,12 @@ fn encode_run(run: &MonitorRun) -> Result<Document, SignalStoreError> {
     }
     if let Some(value) = run.delete_at {
         document.insert("x", date(value));
+    }
+    if let Some(value) = run.http_status {
+        document.insert("a", i32::from(value));
+    }
+    if let Some(value) = run.uptime_failure {
+        document.insert("b", value.as_str());
     }
     Ok(document)
 }
@@ -853,6 +1036,17 @@ fn decode_run(document: &Document) -> Result<MonitorRun, SignalStoreError> {
         release_id: optional_id16(document, "l")?.map(ReleaseId::from_bytes),
         timeout_at: optional_timestamp(document, "t")?,
         delete_at: optional_timestamp(document, "x")?,
+        http_status: document
+            .get_i32("a")
+            .ok()
+            .map(|value| u16::try_from(value).map_err(|_| SignalStoreError::InvalidData))
+            .transpose()?,
+        uptime_failure: document
+            .get_str("b")
+            .ok()
+            .map(UptimeFailure::parse)
+            .transpose()
+            .map_err(|_| SignalStoreError::InvalidData)?,
     };
     run.validate().map_err(|_| SignalStoreError::InvalidData)?;
     Ok(run)
@@ -865,16 +1059,17 @@ pub fn monitor_validator() -> Document {
         "additionalProperties": false,
         "properties": {
             "_id": bin16_schema(), "p": { "bsonType": "int", "minimum": 1 },
-            "k": { "bsonType": "int", "enum": [0] },
+            "k": { "bsonType": "int", "enum": [0, 1] },
             "l": { "bsonType": "string", "maxLength": 64 },
             "n": { "bsonType": "string", "maxLength": 128 },
             "e": bin16_schema(), "v": { "bsonType": "string", "maxLength": 64 },
             "a": { "bsonType": "bool" }, "w": { "bsonType": "bool" },
             "r": { "bsonType": "long", "minimum": 1 },
-            "c": { "bsonType": "object" },
+            "c": { "bsonType": "object" }, "b": { "bsonType": "object" },
             "f": { "bsonType": "date" }, "d": { "bsonType": "date" },
             "u": bin16_schema(), "s": { "bsonType": "int", "minimum": 0, "maximum": 4 },
             "h": { "bsonType": "date" }, "i": { "bsonType": "date" }, "o": { "bsonType": "date" },
+            "y": { "bsonType": "date" },
         }
     }}
 }
@@ -894,6 +1089,8 @@ pub fn monitor_run_validator() -> Document {
             "r": { "bsonType": "date" }, "l": bin16_schema(),
             "t": { "bsonType": "date" }, "x": { "bsonType": "date" },
             "z": { "bsonType": "date" },
+            "a": { "bsonType": "int", "minimum": 100, "maximum": 599 },
+            "b": { "bsonType": "string" },
         }
     }}
 }
@@ -934,11 +1131,14 @@ pub fn monitor_run_indexes() -> Vec<IndexModel> {
             "monitor_run_alert",
             false,
             Some(doc! {
-                "s": { "$in": [
-                    status_tag(MonitorRunStatus::Error),
-                    status_tag(MonitorRunStatus::Timeout),
-                    status_tag(MonitorRunStatus::Missed),
-                ]},
+                "$or": [
+                    { "s": { "$in": [
+                        status_tag(MonitorRunStatus::Error),
+                        status_tag(MonitorRunStatus::Timeout),
+                        status_tag(MonitorRunStatus::Missed),
+                    ]}},
+                    { "s": status_tag(MonitorRunStatus::Success), "a": { "$exists": true } },
+                ],
                 "z": Bson::Null,
             }),
         ),
@@ -1138,6 +1338,7 @@ mod tests {
                 checkin_margin_seconds: 60,
                 max_runtime_seconds: 900,
             },
+            uptime: None,
             next_expected_at: instant(1_700_000_100_000),
             last_run_id: None,
             last_status: None,
@@ -1160,6 +1361,8 @@ mod tests {
             release_id: None,
             timeout_at: None,
             delete_at: Some(instant(1_707_776_001_000)),
+            http_status: None,
+            uptime_failure: None,
         };
         (monitor, run)
     }

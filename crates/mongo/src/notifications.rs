@@ -497,6 +497,7 @@ impl MongoNotificationStore {
         last_triggered_at: Timestamp,
         storm_window_started_at: Timestamp,
         storm_count: u32,
+        threshold_met: bool,
         deliveries: Vec<NotificationDelivery>,
     ) -> Result<(), NotificationStoreError> {
         for delivery in deliveries {
@@ -510,6 +511,7 @@ impl MongoNotificationStore {
                     "lt": date(last_triggered_at),
                     "sw": date(storm_window_started_at),
                     "sc": i64::from(storm_count),
+                    "tm": threshold_met,
                     "u": date(last_triggered_at),
                 }},
             )
@@ -704,6 +706,7 @@ impl NotificationStore for MongoNotificationStore {
         last_triggered_at: Timestamp,
         storm_window_started_at: Timestamp,
         storm_count: u32,
+        threshold_met: bool,
         deliveries: Vec<NotificationDelivery>,
     ) -> PortFuture<'_, Result<(), NotificationStoreError>> {
         Box::pin(self.complete_monitor_alert_inner(
@@ -711,6 +714,7 @@ impl NotificationStore for MongoNotificationStore {
             last_triggered_at,
             storm_window_started_at,
             storm_count,
+            threshold_met,
             deliveries,
         ))
     }
@@ -812,6 +816,7 @@ fn encode_rule(rule: &AlertRule) -> Document {
             doc! {
                 "i": binary(monitor.monitor_id.as_bytes()),
                 "o": monitor.outcomes.iter().copied().map(monitor_status_tag).collect::<Vec<_>>(),
+                "n": monitor.notify_resolved,
             },
         );
     }
@@ -922,6 +927,7 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
                         _ => Err(NotificationStoreError::InvalidData),
                     })
                     .collect::<Result<Box<[_]>, _>>()?,
+                notify_resolved: value.get_bool("n").unwrap_or(false),
             })
         })
         .transpose()?;

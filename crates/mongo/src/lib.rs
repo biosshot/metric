@@ -67,7 +67,7 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 16;
+pub const SCHEMA_GENERATION: i32 = 17;
 const SCHEMA_ID: &str = "metric.schema";
 const SCHEMA_MODULES: [&str; 20] = [
     "project_identity_v1",

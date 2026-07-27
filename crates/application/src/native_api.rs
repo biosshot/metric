@@ -24,6 +24,7 @@ use metric_domain::{
     },
     monitors::{
         MonitorConfig, MonitorDefinition, MonitorId, MonitorPage, MonitorRunPage, MonitorSchedule,
+        UptimeMonitorConfig,
     },
     releases::{DeployRecord, ReleaseIssueSummary, ReleaseRecord, RepositoryReference},
     signals::{
@@ -169,6 +170,7 @@ pub struct MonitorInput {
     pub schedule: Box<str>,
     pub checkin_margin_seconds: u32,
     pub max_runtime_seconds: u32,
+    pub uptime: Option<UptimeMonitorConfig>,
 }
 
 pub struct NativeApiService {
@@ -319,7 +321,11 @@ impl NativeApiService {
         config
             .validate()
             .map_err(|_| NativeApiError::InvalidRequest)?;
-        let id = MonitorId::derive(project_id, &input.slug, &input.environment);
+        let id = if input.uptime.is_some() {
+            MonitorId::derive_uptime(project_id, &input.slug, &input.environment)
+        } else {
+            MonitorId::derive(project_id, &input.slug, &input.environment)
+        };
         let previous = self
             .monitor_store()?
             .load_monitor(project_id, id)
@@ -342,6 +348,7 @@ impl NativeApiService {
                 .as_ref()
                 .map_or(1, |value| value.revision.saturating_add(1)),
             config,
+            uptime: input.uptime,
             next_expected_at,
             last_run_id: previous.as_ref().and_then(|value| value.last_run_id),
             last_status: previous.as_ref().and_then(|value| value.last_status),

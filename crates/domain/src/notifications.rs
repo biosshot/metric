@@ -283,6 +283,7 @@ impl AlertRule {
 pub struct MonitorAlert {
     pub monitor_id: MonitorId,
     pub outcomes: Box<[MonitorRunStatus]>,
+    pub notify_resolved: bool,
 }
 
 impl MonitorAlert {
@@ -518,6 +519,7 @@ mod tests {
                     MonitorRunStatus::Missed,
                 ]
                 .into_boxed_slice(),
+                notify_resolved: true,
             }
             .validate()
             .is_ok()
@@ -526,6 +528,7 @@ mod tests {
             MonitorAlert {
                 monitor_id,
                 outcomes: vec![MonitorRunStatus::Success].into_boxed_slice(),
+                notify_resolved: true,
             }
             .validate()
             .is_err()

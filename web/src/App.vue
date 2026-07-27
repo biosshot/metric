@@ -137,7 +137,7 @@ async function logout(): Promise<void> {
         </RouterLink>
         <RouterLink to="/monitors" @click="navigationOpen = false">
           <AppIcon name="monitors" :size="18" />
-          Cron monitors
+          Monitors
         </RouterLink>
         <RouterLink to="/feedback" @click="navigationOpen = false">
           <AppIcon name="message" :size="18" />

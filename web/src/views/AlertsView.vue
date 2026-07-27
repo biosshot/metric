@@ -23,6 +23,7 @@ const monitorRule = reactive({
   error: true,
   timeout: true,
   missed: true,
+  notify_resolved: true,
 });
 const aggregateRule = reactive({
   dataset: 'errors',
@@ -67,7 +68,7 @@ const securityOptions: SelectOption[] = [
 const ruleKindOptions: SelectOption[] = [
   { value: 'issue', label: 'Issue transition', icon: 'bug' },
   { value: 'aggregate', label: 'Explore threshold', icon: 'gauge' },
-  { value: 'monitor', label: 'Cron monitor outcome', icon: 'monitors' },
+  { value: 'monitor', label: 'Monitor outcome', icon: 'monitors' },
 ];
 const datasetOptions: SelectOption[] = [
   { value: 'errors', label: 'Errors', icon: 'bug' },
@@ -161,7 +162,12 @@ const saveRule = useMutation({
         ruleKind.value === 'aggregate' && aggregateRule.dataset !== 'errors'
           ? aggregateRule.release
           : null,
-      notify_resolved: ruleKind.value === 'aggregate' ? aggregateRule.notify_resolved : null,
+      notify_resolved:
+        ruleKind.value === 'aggregate'
+          ? aggregateRule.notify_resolved
+          : ruleKind.value === 'monitor'
+            ? monitorRule.notify_resolved
+            : null,
       cooldown_minutes: aggregateRule.cooldown_minutes,
       storm_limit_per_hour: aggregateRule.storm_limit_per_hour,
       monitor_id: ruleKind.value === 'monitor' ? monitorRule.monitor_id : null,
@@ -472,7 +478,7 @@ function toggleDestination(id: string): void {
             <BaseSelect
               :model-value="monitorRule.monitor_id"
               :options="monitorOptions"
-              label="Cron monitor"
+              label="Monitor"
               @update:model-value="monitorRule.monitor_id = $event"
             />
             <div class="alert-trigger-grid">
@@ -492,6 +498,13 @@ function toggleDestination(id: string): void {
                 >
               </label>
             </div>
+            <label class="choice-card">
+              <input v-model="monitorRule.notify_resolved" type="checkbox" />
+              <span
+                ><strong>Recovery notification</strong
+                ><small>Notify when a failing Uptime monitor becomes healthy.</small></span
+              >
+            </label>
           </template>
         </div>
         <div class="destination-choice-list">

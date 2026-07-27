@@ -9,7 +9,8 @@ use metric_domain::{
     finalization::EnvironmentId,
     monitors::{
         MonitorConfig, MonitorDefinition, MonitorId, MonitorRun, MonitorRunId, MonitorRunSource,
-        MonitorRunStatus, MonitorSchedule, MonitorUpdate,
+        MonitorRunStatus, MonitorSchedule, MonitorUpdate, UptimeEndpoint, UptimeMethod,
+        UptimeMonitorConfig,
     },
 };
 use metric_mongo::{MongoProjectStore, MonitorRetention};
@@ -67,6 +68,8 @@ async fn durable_monitor_run_writer_reports_rps() {
                         release_id: None,
                         timeout_at: None,
                         delete_at: Some(timestamp(received_at.unix_millis() + 30 * 86_400_000)),
+                        http_status: None,
+                        uptime_failure: None,
                     },
                 }
             })
@@ -78,6 +81,72 @@ async fn durable_monitor_run_writer_reports_rps() {
                 .iter()
                 .all(|outcome| *outcome == DurableOutcome::Accepted)
         );
+    }
+    let elapsed = started.elapsed();
+    let rps = RUNS as f64 / elapsed.as_secs_f64();
+    println!(
+        "{{\"runs\":{RUNS},\"batch\":{BATCH},\"elapsed_ms\":{},\"rps\":{rps:.2}}}",
+        elapsed.as_millis()
+    );
+    assert!(rps > 100.0);
+    database.drop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "performance evidence; requires METRIC_TEST_MONGODB_URI"]
+async fn durable_uptime_run_writer_reports_rps() {
+    const RUNS: u128 = 2_000;
+    const BATCH: usize = 200;
+
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await.unwrap();
+    let store = control.monitor_store(MonitorRetention { runs_days: 30 });
+    let project_id = ProjectId::new(42).unwrap();
+    let base = timestamp(1_700_000_000_000);
+    let monitor_id = MonitorId::derive_uptime(project_id, "uptime-load", "performance");
+    let mut monitor = definition(project_id, monitor_id, "uptime-load", base, 10);
+    monitor.uptime = Some(UptimeMonitorConfig {
+        endpoint: UptimeEndpoint::new("https://example.com/health").unwrap(),
+        method: UptimeMethod::Get,
+        expected_status_min: 200,
+        expected_status_max: 399,
+        timeout_seconds: 10,
+        max_redirects: 3,
+        headers: Box::new([]),
+    });
+    store.upsert_monitor(monitor).await.unwrap();
+
+    let started = std::time::Instant::now();
+    for first in (0..RUNS).step_by(BATCH) {
+        let updates = (first..(first + BATCH as u128).min(RUNS))
+            .map(|sequence| {
+                let received_at = timestamp(base.unix_millis() + sequence as i64);
+                MonitorUpdate {
+                    definition: None,
+                    run: MonitorRun {
+                        id: MonitorRunId::uptime(monitor_id, received_at),
+                        project_id,
+                        monitor_id,
+                        check_in_id: None,
+                        status: MonitorRunStatus::Success,
+                        source: MonitorRunSource::Scheduler,
+                        scheduled_for: Some(received_at),
+                        started_at: received_at,
+                        finished_at: Some(received_at),
+                        duration_ms: Some(8),
+                        received_at,
+                        release_id: None,
+                        timeout_at: None,
+                        delete_at: Some(timestamp(received_at.unix_millis() + 30 * 86_400_000)),
+                        http_status: Some(200),
+                        uptime_failure: None,
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        let outcomes = store.persist_monitors(updates).await.unwrap();
+        assert_eq!(outcomes.len(), BATCH.min((RUNS - first) as usize));
     }
     let elapsed = started.elapsed();
     let rps = RUNS as f64 / elapsed.as_secs_f64();
@@ -119,6 +188,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         release_id: None,
         timeout_at: None,
         delete_at: Some(timestamp(base.unix_millis() + 30 * 86_400_000)),
+        http_status: None,
+        uptime_failure: None,
     };
     assert_eq!(
         store
@@ -256,6 +327,7 @@ fn definition(
             checkin_margin_seconds: 5,
             max_runtime_seconds,
         },
+        uptime: None,
         next_expected_at: timestamp(now.unix_millis() + 60_000),
         last_run_id: None,
         last_status: None,

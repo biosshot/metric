@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use metric_domain::{
     SecretBytes,
+    monitors::SealedUptimeHeaderValue,
     notifications::{
         ClaimedNotificationDelivery, NotificationDestinationKind, SealedWebhookSecret,
     },
@@ -28,6 +29,7 @@ use url::Url;
 const SECRET_VERSION: u8 = 1;
 const SECRET_NONCE_BYTES: usize = 12;
 const SECRET_AAD: &[u8] = b"metric/webhook-secret/v1";
+const UPTIME_HEADER_AAD: &[u8] = b"metric/uptime-header/v1";
 const SIGNATURE_HEADER: &str = "x-metric-signature";
 const TIMESTAMP_HEADER: &str = "x-metric-timestamp";
 
@@ -92,11 +94,52 @@ impl WebhookSecretBox {
         SealedWebhookSecret::new(sealed).map_err(|_| NotificationDeliveryError::InvalidSecret)
     }
 
+    pub fn seal_uptime_header(
+        &self,
+        value: &[u8],
+    ) -> Result<SealedUptimeHeaderValue, NotificationDeliveryError> {
+        self.seal_bytes(value, UPTIME_HEADER_AAD)
+            .and_then(|sealed| {
+                SealedUptimeHeaderValue::new(sealed)
+                    .map_err(|_| NotificationDeliveryError::InvalidSecret)
+            })
+    }
+
+    pub fn open_uptime_header(
+        &self,
+        sealed: &SealedUptimeHeaderValue,
+    ) -> Result<Vec<u8>, NotificationDeliveryError> {
+        self.open_bytes(sealed.expose_ciphertext(), UPTIME_HEADER_AAD)
+    }
+
     pub(crate) fn open(
         &self,
         sealed: &SealedWebhookSecret,
     ) -> Result<Vec<u8>, NotificationDeliveryError> {
-        let bytes = sealed.expose_ciphertext();
+        self.open_bytes(sealed.expose_ciphertext(), SECRET_AAD)
+    }
+
+    fn seal_bytes(&self, value: &[u8], aad: &[u8]) -> Result<Vec<u8>, NotificationDeliveryError> {
+        if value.is_empty() || value.len() > 4_096 {
+            return Err(NotificationDeliveryError::InvalidSecret);
+        }
+        let mut nonce = [0_u8; SECRET_NONCE_BYTES];
+        getrandom::fill(&mut nonce).map_err(|_| NotificationDeliveryError::InvalidSecret)?;
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                chacha20poly1305::Nonce::from_slice(&nonce),
+                Payload { msg: value, aad },
+            )
+            .map_err(|_| NotificationDeliveryError::InvalidSecret)?;
+        let mut sealed = Vec::with_capacity(1 + nonce.len() + ciphertext.len());
+        sealed.push(SECRET_VERSION);
+        sealed.extend_from_slice(&nonce);
+        sealed.extend_from_slice(&ciphertext);
+        Ok(sealed)
+    }
+
+    fn open_bytes(&self, bytes: &[u8], aad: &[u8]) -> Result<Vec<u8>, NotificationDeliveryError> {
         if bytes.len() <= 1 + SECRET_NONCE_BYTES || bytes[0] != SECRET_VERSION {
             return Err(NotificationDeliveryError::InvalidSecret);
         }
@@ -105,7 +148,7 @@ impl WebhookSecretBox {
                 chacha20poly1305::Nonce::from_slice(&bytes[1..1 + SECRET_NONCE_BYTES]),
                 Payload {
                     msg: &bytes[1 + SECRET_NONCE_BYTES..],
-                    aad: SECRET_AAD,
+                    aad,
                 },
             )
             .map_err(|_| NotificationDeliveryError::InvalidSecret)
@@ -279,6 +322,10 @@ pub(crate) fn forbidden_ip(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_unspecified()
                 || ip.octets()[0] == 0
+                || ip.octets()[0] >= 240
+                || matches!(ip.octets(), [100, 64..=127, _, _])
+                || matches!(ip.octets(), [198, 18..=19, _, _])
+                || matches!(ip.octets(), [169, 254, 169, 254])
         }
         IpAddr::V6(ip) => {
             ip.is_loopback()
@@ -286,6 +333,9 @@ pub(crate) fn forbidden_ip(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|ipv4| forbidden_ip(IpAddr::V4(ipv4)))
         }
     }
 }

@@ -398,6 +398,7 @@ export interface AlertRule {
   monitor: {
     monitor_id: string;
     outcomes: Array<'error' | 'timeout' | 'missed'>;
+    notify_resolved: boolean;
   } | null;
   destination_ids: string[];
   cooldown_minutes: number;
@@ -417,6 +418,7 @@ export interface CronMonitor {
   enabled: boolean;
   managed_by: 'web' | 'sdk';
   revision: number;
+  kind: 'cron' | 'uptime';
   schedule_type: 'interval' | 'crontab';
   schedule: string;
   checkin_margin_seconds: number;
@@ -427,6 +429,15 @@ export interface CronMonitor {
   last_check_in_at: string | null;
   created_at: string;
   updated_at: string;
+  uptime: {
+    endpoint: string;
+    method: 'GET' | 'HEAD';
+    expected_status_min: number;
+    expected_status_max: number;
+    timeout_seconds: number;
+    max_redirects: number;
+    headers: Array<{ name: string; sensitive: boolean; has_value: boolean }>;
+  } | null;
 }
 
 export interface MonitorRun {
@@ -440,9 +451,12 @@ export interface MonitorRun {
   duration_ms: number | null;
   received_at: string;
   release_id: string | null;
+  http_status: number | null;
+  uptime_failure: string | null;
 }
 
 export interface MonitorInput {
+  kind: 'cron' | 'uptime';
   slug: string;
   name: string;
   environment: string;
@@ -451,6 +465,13 @@ export interface MonitorInput {
   schedule: string;
   checkin_margin_seconds: number;
   max_runtime_seconds: number;
+  endpoint: string | null;
+  method: 'GET' | 'HEAD' | null;
+  expected_status_min: number | null;
+  expected_status_max: number | null;
+  timeout_seconds: number | null;
+  max_redirects: number | null;
+  headers: Array<{ name: string; value: string }>;
 }
 
 export interface NotificationDelivery {
