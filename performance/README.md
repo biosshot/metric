@@ -489,3 +489,20 @@ The artifact retains Log/Error RPS and p95/p99 plus TCP, total HTTP, 200, 429, 5
 other-status and dropped-iteration counters. Run no more than these two profiles in
 one Phase 24 pass. The short Windows baseline is a regression sentinel, not a
 production-capacity claim.
+
+## Phase 35 Cron Monitoring
+
+Phase 35 keeps one focused durable-storage regression test: 2,000 compact
+`monitor_runs`, written to real MongoDB in batches of 200. It reports durable RPS
+and includes the current-state projection cost without measuring unrelated HTTP
+ingest:
+
+```text
+node performance/run-cron-monitoring.mjs
+node performance/compare-cron-monitoring.mjs performance/baselines/cron-monitoring/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 20
+```
+
+The runner has a hard timeout and kills its Cargo child on expiry. The test uses a
+unique database and drops it before exit. Run it at most once per implementation
+pass; the retained local result is a same-machine regression sentinel, not a
+production capacity claim.

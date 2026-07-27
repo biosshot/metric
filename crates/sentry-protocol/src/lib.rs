@@ -41,9 +41,25 @@ pub struct ParsedEnvelope {
     /// Independently durable telemetry items: Logs, Transactions, standalone Spans
     /// and application Sessions. Errors occupy the dependency-root role.
     pub signals: Vec<RawSignal>,
+    /// Cron check-ins have an independent admission and storage lane.
+    pub check_ins: Vec<RawCheckIn>,
     pub attachments: Vec<RawAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawCheckIn {
+    pub bytes: Box<[u8]>,
+}
+
+impl std::fmt::Debug for RawCheckIn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawCheckIn")
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +255,7 @@ pub fn parse_envelope_with_attachments(
     let dsn = header.dsn.as_deref().map(parse_dsn).transpose()?;
     let mut primary = None;
     let mut signals = Vec::new();
+    let mut check_ins = Vec::new();
     let mut attachments = Vec::new();
     let mut attachment_bytes = 0_usize;
     let mut discarded = Vec::new();
@@ -347,6 +364,14 @@ pub fn parse_envelope_with_attachments(
                     bytes: payload.into(),
                 });
             }
+            ItemClass::CheckIn => {
+                if length > limits.max_event_bytes {
+                    return Err(ProtocolError::too_large("check_in_too_large"));
+                }
+                check_ins.push(RawCheckIn {
+                    bytes: payload.into(),
+                });
+            }
             ItemClass::Disabled(category) => discarded.push(DiscardedItem {
                 category: Some(category),
                 reason: "feature_disabled",
@@ -361,6 +386,7 @@ pub fn parse_envelope_with_attachments(
 
     if primary.is_none()
         && signals.is_empty()
+        && check_ins.is_empty()
         && discarded.is_empty()
         && client_report_quantity == 0
     {
@@ -371,6 +397,7 @@ pub fn parse_envelope_with_attachments(
         dsn,
         primary,
         signals,
+        check_ins,
         attachments,
         discarded,
         client_report_quantity,
@@ -538,6 +565,7 @@ fn parse_client_report(payload: &[u8]) -> Result<u64, ProtocolError> {
 enum ItemClass {
     Event,
     Signal(RawSignalKind),
+    CheckIn,
     ClientReport,
     Attachment,
     Disabled(DisabledCategory),
@@ -554,7 +582,7 @@ fn classify_item(kind: &str) -> ItemClass {
         "sessions" => ItemClass::Disabled(DisabledCategory::Session),
         "profile" | "profile_chunk" => ItemClass::Disabled(DisabledCategory::Profile),
         "replay_event" | "replay_recording" => ItemClass::Disabled(DisabledCategory::Replay),
-        "check_in" => ItemClass::Disabled(DisabledCategory::CheckIn),
+        "check_in" => ItemClass::CheckIn,
         "span" => ItemClass::Signal(RawSignalKind::Span),
         "statsd" | "metric_buckets" => ItemClass::Disabled(DisabledCategory::Statsd),
         "attachment" => ItemClass::Attachment,
@@ -636,6 +664,27 @@ mod tests {
             assert_eq!(parsed.signals[0].kind, expected);
             assert!(parsed.discarded.is_empty());
         }
+    }
+
+    #[test]
+    fn check_in_has_a_dedicated_bounded_item_lane() {
+        let payload = r#"{"check_in_id":"0123456789abcdef0123456789abcdef","monitor_slug":"nightly-backup","status":"ok","duration":1.25}"#;
+        let parsed = parse_envelope(
+            &envelope(
+                &format!(r#"{{"type":"check_in","length":{}}}"#, payload.len()),
+                payload,
+            ),
+            EnvelopeLimits {
+                max_items: 10,
+                max_event_bytes: 1_024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.check_ins.len(), 1);
+        assert_eq!(parsed.check_ins[0].bytes.as_ref(), payload.as_bytes());
+        assert!(parsed.primary.is_none());
+        assert!(parsed.signals.is_empty());
+        assert!(parsed.discarded.is_empty());
     }
 
     #[test]

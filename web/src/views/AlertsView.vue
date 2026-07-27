@@ -18,6 +18,12 @@ const ruleName = ref('');
 const ruleKind = ref('issue');
 const selectedDestinations = ref<string[]>([]);
 const triggers = reactive({ new_issue: true, regression: true, resolved: false });
+const monitorRule = reactive({
+  monitor_id: '',
+  error: true,
+  timeout: true,
+  missed: true,
+});
 const aggregateRule = reactive({
   dataset: 'errors',
   lookback_minutes: 15,
@@ -61,6 +67,7 @@ const securityOptions: SelectOption[] = [
 const ruleKindOptions: SelectOption[] = [
   { value: 'issue', label: 'Issue transition', icon: 'bug' },
   { value: 'aggregate', label: 'Explore threshold', icon: 'gauge' },
+  { value: 'monitor', label: 'Cron monitor outcome', icon: 'monitors' },
 ];
 const datasetOptions: SelectOption[] = [
   { value: 'errors', label: 'Errors', icon: 'bug' },
@@ -78,6 +85,19 @@ const rules = useQuery({
   queryFn: () => api.alertRules(projectId.value),
   enabled: computed(() => Boolean(projectId.value)),
 });
+const monitors = useQuery({
+  queryKey: computed(() => ['monitors', projectId.value]),
+  queryFn: () => api.monitors(projectId.value),
+  enabled: computed(() => Boolean(projectId.value)),
+});
+const monitorOptions = computed<SelectOption[]>(() =>
+  (monitors.data.value?.items ?? []).map((monitor) => ({
+    value: monitor.id,
+    label: monitor.name,
+    description: `${monitor.slug} · ${monitor.environment}`,
+    icon: 'monitors',
+  })),
+);
 const deliveries = useQuery({
   queryKey: computed(() => ['notification-deliveries', projectId.value]),
   queryFn: () => api.notificationDeliveries(projectId.value),
@@ -144,6 +164,15 @@ const saveRule = useMutation({
       notify_resolved: ruleKind.value === 'aggregate' ? aggregateRule.notify_resolved : null,
       cooldown_minutes: aggregateRule.cooldown_minutes,
       storm_limit_per_hour: aggregateRule.storm_limit_per_hour,
+      monitor_id: ruleKind.value === 'monitor' ? monitorRule.monitor_id : null,
+      monitor_outcomes:
+        ruleKind.value === 'monitor'
+          ? [
+              ...(monitorRule.error ? ['error'] : []),
+              ...(monitorRule.timeout ? ['timeout'] : []),
+              ...(monitorRule.missed ? ['missed'] : []),
+            ]
+          : [],
     }),
   onSuccess: async () => {
     ruleName.value = '';
@@ -359,7 +388,7 @@ function toggleDestination(id: string): void {
             >
           </label>
         </div>
-        <div v-else class="aggregate-rule-fields">
+        <div v-else-if="ruleKind === 'aggregate'" class="aggregate-rule-fields">
           <div class="form-grid form-grid--three">
             <BaseSelect
               :model-value="aggregateRule.dataset"
@@ -432,6 +461,39 @@ function toggleDestination(id: string): void {
             >
           </label>
         </div>
+        <div v-else class="aggregate-rule-fields">
+          <EmptyState
+            v-if="!monitorOptions.length"
+            icon="monitors"
+            title="Create a cron monitor first"
+            description="Monitor alerts reference a stable monitor definition."
+          />
+          <template v-else>
+            <BaseSelect
+              :model-value="monitorRule.monitor_id"
+              :options="monitorOptions"
+              label="Cron monitor"
+              @update:model-value="monitorRule.monitor_id = $event"
+            />
+            <div class="alert-trigger-grid">
+              <label class="choice-card">
+                <input v-model="monitorRule.error" type="checkbox" />
+                <span><strong>Error</strong><small>The job explicitly failed.</small></span>
+              </label>
+              <label class="choice-card">
+                <input v-model="monitorRule.timeout" type="checkbox" />
+                <span><strong>Timeout</strong><small>An active run exceeded runtime.</small></span>
+              </label>
+              <label class="choice-card">
+                <input v-model="monitorRule.missed" type="checkbox" />
+                <span
+                  ><strong>Missed</strong
+                  ><small>No check-in arrived within the margin.</small></span
+                >
+              </label>
+            </div>
+          </template>
+        </div>
         <div class="destination-choice-list">
           <button
             v-for="item in destinations.data.value?.items"
@@ -458,7 +520,10 @@ function toggleDestination(id: string): void {
             (ruleKind === 'issue' &&
               !triggers.new_issue &&
               !triggers.regression &&
-              !triggers.resolved)
+              !triggers.resolved) ||
+            (ruleKind === 'monitor' &&
+              (!monitorRule.monitor_id ||
+                (!monitorRule.error && !monitorRule.timeout && !monitorRule.missed)))
           "
         >
           <AppIcon name="save" :size="16" />
@@ -487,9 +552,11 @@ function toggleDestination(id: string): void {
             <strong>{{ rule.name }}</strong>
             <p>
               {{
-                rule.aggregate
-                  ? `${rule.aggregate.dataset} count ≥ ${rule.aggregate.threshold} / ${rule.aggregate.lookback_minutes}m`
-                  : rule.triggers.join(' · ').replaceAll('_', ' ')
+                rule.monitor
+                  ? `cron outcomes: ${rule.monitor.outcomes.join(' / ')}`
+                  : rule.aggregate
+                    ? `${rule.aggregate.dataset} count ≥ ${rule.aggregate.threshold} / ${rule.aggregate.lookback_minutes}m`
+                    : rule.triggers.join(' · ').replaceAll('_', ' ')
               }}
             </p>
           </div>

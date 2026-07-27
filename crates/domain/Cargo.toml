@@ -12,6 +12,7 @@ blake3.workspace = true
 hex.workspace = true
 humantime.workspace = true
 thiserror.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

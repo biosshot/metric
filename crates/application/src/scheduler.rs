@@ -18,13 +18,15 @@ use tokio::time::{MissedTickBehavior, interval, timeout};
 
 use crate::shutdown::ShutdownSignal;
 
-const TASKS: [MaintenanceTask; 6] = [
+const TASKS: [MaintenanceTask; 8] = [
     MaintenanceTask::RetryBacklog,
     MaintenanceTask::EventRetention,
     MaintenanceTask::HourlyRetention,
     MaintenanceTask::CounterReconciliation,
     MaintenanceTask::UploadExpiry,
     MaintenanceTask::BlobOrphanRegistration,
+    MaintenanceTask::MonitorTimeouts,
+    MaintenanceTask::MonitorMissed,
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -159,7 +161,9 @@ impl Scheduler {
 
     fn interval_for(&self, task: MaintenanceTask) -> Duration {
         match task {
-            MaintenanceTask::RetryBacklog => self.config.backlog_interval,
+            MaintenanceTask::RetryBacklog
+            | MaintenanceTask::MonitorTimeouts
+            | MaintenanceTask::MonitorMissed => self.config.backlog_interval,
             MaintenanceTask::CounterReconciliation => self.config.reconciliation_interval,
             MaintenanceTask::EventRetention
             | MaintenanceTask::HourlyRetention

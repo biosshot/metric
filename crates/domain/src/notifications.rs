@@ -4,6 +4,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::monitors::{MonitorId, MonitorRunStatus};
 use crate::{
     EventId, ProjectId, Timestamp,
     explore::ExploreDataset,
@@ -236,6 +237,7 @@ pub struct AlertRule {
     pub enabled: bool,
     pub triggers: Box<[IssueNotificationKind]>,
     pub aggregate: Option<AggregateAlert>,
+    pub monitor: Option<MonitorAlert>,
     pub destination_ids: Box<[NotificationDestinationId]>,
     pub cooldown_minutes: u32,
     pub storm_limit_per_hour: u32,
@@ -250,8 +252,10 @@ pub struct AlertRule {
 
 impl AlertRule {
     pub fn validate(&self) -> Result<(), NotificationValueError> {
-        if (self.triggers.is_empty() && self.aggregate.is_none()) || self.destination_ids.is_empty()
-        {
+        let kinds = usize::from(!self.triggers.is_empty())
+            + usize::from(self.aggregate.is_some())
+            + usize::from(self.monitor.is_some());
+        if kinds != 1 || self.destination_ids.is_empty() {
             return Err(NotificationValueError::EmptyRule);
         }
         if self.destination_ids.len() > MAX_RULE_DESTINATIONS {
@@ -264,8 +268,35 @@ impl AlertRule {
                 .aggregate
                 .as_ref()
                 .is_some_and(|aggregate| aggregate.validate().is_err())
+            || self
+                .monitor
+                .as_ref()
+                .is_some_and(|monitor| monitor.validate().is_err())
         {
             return Err(NotificationValueError::TooLarge);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorAlert {
+    pub monitor_id: MonitorId,
+    pub outcomes: Box<[MonitorRunStatus]>,
+}
+
+impl MonitorAlert {
+    pub fn validate(&self) -> Result<(), NotificationValueError> {
+        if self.outcomes.is_empty()
+            || self.outcomes.len() > 3
+            || self.outcomes.iter().any(|outcome| {
+                !matches!(
+                    outcome,
+                    MonitorRunStatus::Error | MonitorRunStatus::Timeout | MonitorRunStatus::Missed
+                )
+            })
+        {
+            return Err(NotificationValueError::EmptyRule);
         }
         Ok(())
     }
@@ -468,6 +499,33 @@ mod tests {
             AggregateAlert {
                 threshold: 0,
                 ..valid
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn monitor_alert_accepts_only_actionable_terminal_outcomes() {
+        let project_id = ProjectId::new(7).unwrap();
+        let monitor_id = MonitorId::derive(project_id, "nightly", "production");
+        assert!(
+            MonitorAlert {
+                monitor_id,
+                outcomes: vec![
+                    MonitorRunStatus::Error,
+                    MonitorRunStatus::Timeout,
+                    MonitorRunStatus::Missed,
+                ]
+                .into_boxed_slice(),
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            MonitorAlert {
+                monitor_id,
+                outcomes: vec![MonitorRunStatus::Success].into_boxed_slice(),
             }
             .validate()
             .is_err()

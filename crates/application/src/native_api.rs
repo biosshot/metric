@@ -16,10 +16,14 @@ use metric_domain::{
     deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
     explore::{ExploreCursor, ExploreQuery, ExploreResult},
     feedback::{FeedbackAnchor, FeedbackRecord, FeedbackStatus},
+    finalization::derive_environment_id,
     grouping::IssueId,
     issue::{
         ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueSnapshot,
         IssueStatus,
+    },
+    monitors::{
+        MonitorConfig, MonitorDefinition, MonitorId, MonitorPage, MonitorRunPage, MonitorSchedule,
     },
     releases::{DeployRecord, ReleaseIssueSummary, ReleaseRecord, RepositoryReference},
     signals::{
@@ -29,8 +33,8 @@ use metric_domain::{
 };
 use metric_ports::{
     BlobReadSession, BlobStore, BlobStoreError, Clock, FeedbackQuery, FeedbackStore,
-    FeedbackStoreError, InvestigationStore, InvestigationStoreError, LogQuery, PerformanceQuery,
-    SegmentQuery, SignalStore, SignalStoreError,
+    FeedbackStoreError, InvestigationStore, InvestigationStoreError, LogQuery, MonitorStore,
+    PerformanceQuery, SegmentQuery, SignalStore, SignalStoreError,
 };
 use thiserror::Error;
 
@@ -155,6 +159,18 @@ pub struct FeedbackListRequest<'a> {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorInput {
+    pub slug: Box<str>,
+    pub name: Box<str>,
+    pub environment: Box<str>,
+    pub enabled: bool,
+    pub schedule_type: Box<str>,
+    pub schedule: Box<str>,
+    pub checkin_margin_seconds: u32,
+    pub max_runtime_seconds: u32,
+}
+
 pub struct NativeApiService {
     identity: Arc<IdentityService>,
     projects: Arc<ProjectService>,
@@ -170,6 +186,7 @@ pub struct NativeApiService {
     feedback_store: Option<Arc<dyn FeedbackStore>>,
     explore: Option<Arc<ExploreService>>,
     dashboards: Option<Arc<DashboardService>>,
+    monitor_store: Option<Arc<dyn MonitorStore>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +225,7 @@ impl NativeApiService {
             feedback_store: None,
             explore: None,
             dashboards: None,
+            monitor_store: None,
         }
     }
 
@@ -236,6 +254,108 @@ impl NativeApiService {
     pub fn with_feedback_store(mut self, feedback_store: Arc<dyn FeedbackStore>) -> Self {
         self.feedback_store = Some(feedback_store);
         self
+    }
+
+    #[must_use]
+    pub fn with_monitor_store(mut self, monitor_store: Arc<dyn MonitorStore>) -> Self {
+        self.monitor_store = Some(monitor_store);
+        self
+    }
+
+    pub async fn monitors(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        limit: Option<usize>,
+    ) -> Result<MonitorPage, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        self.monitor_store()?
+            .list_monitors(project_id, None, page_size(limit)?)
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn monitor_runs(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+        limit: Option<usize>,
+    ) -> Result<MonitorRunPage, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        self.monitor_store()?
+            .list_monitor_runs(project_id, monitor_id, None, page_size(limit)?)
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn upsert_monitor(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        input: MonitorInput,
+    ) -> Result<MonitorDefinition, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectAdmin)
+            .await?;
+        let now = self.clock.now();
+        let schedule = match input.schedule_type.as_ref() {
+            "interval" => MonitorSchedule::interval(
+                input
+                    .schedule
+                    .parse()
+                    .map_err(|_| NativeApiError::InvalidRequest)?,
+            ),
+            "crontab" => MonitorSchedule::crontab(&input.schedule),
+            _ => return Err(NativeApiError::InvalidRequest),
+        }
+        .map_err(|_| NativeApiError::InvalidRequest)?;
+        let config = MonitorConfig {
+            schedule,
+            checkin_margin_seconds: input.checkin_margin_seconds,
+            max_runtime_seconds: input.max_runtime_seconds,
+        };
+        config
+            .validate()
+            .map_err(|_| NativeApiError::InvalidRequest)?;
+        let id = MonitorId::derive(project_id, &input.slug, &input.environment);
+        let previous = self
+            .monitor_store()?
+            .load_monitor(project_id, id)
+            .await
+            .ok();
+        let next_expected_at = config
+            .schedule
+            .next_after(now)
+            .map_err(|_| NativeApiError::InvalidRequest)?;
+        let monitor = MonitorDefinition {
+            id,
+            project_id,
+            slug: input.slug,
+            name: input.name,
+            environment_id: derive_environment_id(project_id, &input.environment),
+            environment: input.environment,
+            enabled: input.enabled,
+            managed_by_web: true,
+            revision: previous
+                .as_ref()
+                .map_or(1, |value| value.revision.saturating_add(1)),
+            config,
+            next_expected_at,
+            last_run_id: previous.as_ref().and_then(|value| value.last_run_id),
+            last_status: previous.as_ref().and_then(|value| value.last_status),
+            last_check_in_at: previous.as_ref().and_then(|value| value.last_check_in_at),
+            created_at: previous.as_ref().map_or(now, |value| value.created_at),
+            updated_at: now,
+        };
+        monitor
+            .validate()
+            .map_err(|_| NativeApiError::InvalidRequest)?;
+        self.monitor_store()?
+            .upsert_monitor(monitor)
+            .await
+            .map_err(map_signal_error)
     }
 
     #[must_use]
@@ -570,6 +690,12 @@ impl NativeApiService {
 
     fn feedback_store(&self) -> Result<&Arc<dyn FeedbackStore>, NativeApiError> {
         self.feedback_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)
+    }
+
+    fn monitor_store(&self) -> Result<&Arc<dyn MonitorStore>, NativeApiError> {
+        self.monitor_store
             .as_ref()
             .ok_or(NativeApiError::Unavailable)
     }

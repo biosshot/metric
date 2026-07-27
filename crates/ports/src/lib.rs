@@ -35,6 +35,10 @@ use metric_domain::{
         IssueCommand, IssueCommandResult, IssueMutationResult, IssueOccurrence, IssueSearchQuery,
         IssueSearchResult, IssueSnapshot,
     },
+    monitors::{
+        MonitorAnchor, MonitorDefinition, MonitorId, MonitorPage, MonitorRun, MonitorRunAnchor,
+        MonitorRunId, MonitorRunPage, MonitorUpdate,
+    },
     notifications::{
         AlertRule, ClaimedNotificationDelivery, IssueNotificationTransition, NotificationDelivery,
         NotificationDeliveryId, NotificationDestination,
@@ -852,6 +856,15 @@ pub trait NotificationStore: Send + Sync + 'static {
         delivery: NotificationDelivery,
     ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
 
+    fn complete_monitor_alert(
+        &self,
+        rule_id: metric_domain::notifications::AlertRuleId,
+        last_triggered_at: Timestamp,
+        storm_window_started_at: Timestamp,
+        storm_count: u32,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
     fn list_delivery_history(
         &self,
         project_id: ProjectId,
@@ -1013,6 +1026,8 @@ pub enum MaintenanceTask {
     CounterReconciliation,
     UploadExpiry,
     BlobOrphanRegistration,
+    MonitorTimeouts,
+    MonitorMissed,
 }
 
 impl MaintenanceTask {
@@ -1025,6 +1040,8 @@ impl MaintenanceTask {
             Self::CounterReconciliation => "counter_reconciliation",
             Self::UploadExpiry => "upload_expiry",
             Self::BlobOrphanRegistration => "blob_orphan_registration",
+            Self::MonitorTimeouts => "monitor_timeouts",
+            Self::MonitorMissed => "monitor_missed",
         }
     }
 }
@@ -1557,6 +1574,72 @@ pub trait SessionStore: Send + Sync + 'static {
         from: Timestamp,
         until: Timestamp,
     ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
+}
+
+/// Dedicated Cron check-in admission boundary. It has no shared queue or permits
+/// with Error, Log, Span or Session writers.
+pub trait MonitorSink: Send + Sync + 'static {
+    fn persist_monitors(
+        &self,
+        updates: Vec<MonitorUpdate>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+}
+
+/// Compact Cron definition/history and deadline boundary.
+pub trait MonitorStore: Send + Sync + 'static {
+    fn persist_monitors(
+        &self,
+        updates: Vec<MonitorUpdate>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+
+    fn upsert_monitor(
+        &self,
+        monitor: MonitorDefinition,
+    ) -> PortFuture<'_, Result<MonitorDefinition, SignalStoreError>>;
+
+    fn load_monitor(
+        &self,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+    ) -> PortFuture<'_, Result<MonitorDefinition, SignalStoreError>>;
+
+    fn list_monitors(
+        &self,
+        project_id: ProjectId,
+        before: Option<MonitorAnchor>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<MonitorPage, SignalStoreError>>;
+
+    fn list_monitor_runs(
+        &self,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+        before: Option<MonitorRunAnchor>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<MonitorRunPage, SignalStoreError>>;
+
+    fn terminalize_due_timeouts(
+        &self,
+        now: Timestamp,
+        batch_size: usize,
+    ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
+
+    fn materialize_due_missed(
+        &self,
+        now: Timestamp,
+        batch_size: usize,
+    ) -> PortFuture<'_, Result<u64, SignalStoreError>>;
+
+    fn pending_monitor_alerts(
+        &self,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<MonitorRun>, SignalStoreError>>;
+
+    fn mark_monitor_alert_evaluated(
+        &self,
+        run_id: MonitorRunId,
+        evaluated_at: Timestamp,
+    ) -> PortFuture<'_, Result<(), SignalStoreError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

@@ -10,9 +10,10 @@ use metric_domain::{
     explore::ExploreDataset,
     grouping::IssueId,
     issue::{IssueNotificationKind, IssueTitle, IssueTransitionId},
+    monitors::{MonitorId, MonitorRunStatus},
     notifications::{
         AggregateAlert, AlertRule, AlertRuleId, ClaimedNotificationDelivery,
-        IssueNotificationTransition, MAX_EMAIL_ADDRESS_BYTES, NotificationDelivery,
+        IssueNotificationTransition, MAX_EMAIL_ADDRESS_BYTES, MonitorAlert, NotificationDelivery,
         NotificationDeliveryId, NotificationDeliveryStatus, NotificationDestination,
         NotificationDestinationId, NotificationDestinationKind, NotificationPayload,
         NotificationText, RuleName, SealedWebhookSecret, SmtpDestination, SmtpSecurity,
@@ -490,6 +491,33 @@ impl MongoNotificationStore {
         Ok(())
     }
 
+    async fn complete_monitor_alert_inner(
+        &self,
+        rule_id: AlertRuleId,
+        last_triggered_at: Timestamp,
+        storm_window_started_at: Timestamp,
+        storm_count: u32,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> Result<(), NotificationStoreError> {
+        for delivery in deliveries {
+            self.enqueue_delivery_inner(delivery).await?;
+        }
+        self.database
+            .collection::<Document>("alert_rules")
+            .update_one(
+                doc! { "_id": binary(rule_id.as_bytes()) },
+                doc! { "$set": {
+                    "lt": date(last_triggered_at),
+                    "sw": date(storm_window_started_at),
+                    "sc": i64::from(storm_count),
+                    "u": date(last_triggered_at),
+                }},
+            )
+            .await
+            .map_err(|_| NotificationStoreError::Unavailable)?;
+        Ok(())
+    }
+
     async fn list_delivery_history_inner(
         &self,
         project_id: ProjectId,
@@ -670,6 +698,23 @@ impl NotificationStore for MongoNotificationStore {
         Box::pin(self.enqueue_delivery_inner(delivery))
     }
 
+    fn complete_monitor_alert(
+        &self,
+        rule_id: AlertRuleId,
+        last_triggered_at: Timestamp,
+        storm_window_started_at: Timestamp,
+        storm_count: u32,
+        deliveries: Vec<NotificationDelivery>,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>> {
+        Box::pin(self.complete_monitor_alert_inner(
+            rule_id,
+            last_triggered_at,
+            storm_window_started_at,
+            storm_count,
+            deliveries,
+        ))
+    }
+
     fn list_delivery_history(
         &self,
         project_id: ProjectId,
@@ -758,6 +803,15 @@ fn encode_rule(rule: &AlertRule) -> Document {
                 "e": aggregate.environment.as_ref().map(NotificationText::as_str),
                 "r": aggregate.release.as_ref().map(NotificationText::as_str),
                 "n": aggregate.notify_resolved,
+            },
+        );
+    }
+    if let Some(monitor) = &rule.monitor {
+        document.insert(
+            "h",
+            doc! {
+                "i": binary(monitor.monitor_id.as_bytes()),
+                "o": monitor.outcomes.iter().copied().map(monitor_status_tag).collect::<Vec<_>>(),
             },
         );
     }
@@ -851,6 +905,26 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
             })
         })
         .transpose()?;
+    let monitor = document
+        .get_document("h")
+        .ok()
+        .map(|value| {
+            Ok::<_, NotificationStoreError>(MonitorAlert {
+                monitor_id: MonitorId::from_bytes(id16(value, "i")?),
+                outcomes: value
+                    .get_array("o")
+                    .map_err(|_| NotificationStoreError::InvalidData)?
+                    .iter()
+                    .map(|value| match value.as_i32() {
+                        Some(2) => Ok(MonitorRunStatus::Error),
+                        Some(3) => Ok(MonitorRunStatus::Timeout),
+                        Some(4) => Ok(MonitorRunStatus::Missed),
+                        _ => Err(NotificationStoreError::InvalidData),
+                    })
+                    .collect::<Result<Box<[_]>, _>>()?,
+            })
+        })
+        .transpose()?;
     let rule = AlertRule {
         id: AlertRuleId::from_bytes(id16(document, "_id")?),
         project_id: ProjectId::new(
@@ -870,6 +944,7 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
             .map_err(|_| NotificationStoreError::InvalidData)?,
         triggers,
         aggregate,
+        monitor,
         destination_ids,
         cooldown_minutes: u32::try_from(document.get_i64("o").unwrap_or(0))
             .map_err(|_| NotificationStoreError::InvalidData)?,
@@ -1122,6 +1197,15 @@ fn trigger_name(kind: IssueNotificationKind) -> &'static str {
     }
 }
 
+fn monitor_status_tag(status: MonitorRunStatus) -> i32 {
+    match status {
+        MonitorRunStatus::Error => 2,
+        MonitorRunStatus::Timeout => 3,
+        MonitorRunStatus::Missed => 4,
+        MonitorRunStatus::InProgress | MonitorRunStatus::Success => -1,
+    }
+}
+
 fn destination_kind_name(kind: NotificationDestinationKind) -> &'static str {
     match kind {
         NotificationDestinationKind::Webhook => "webhook",
@@ -1226,6 +1310,7 @@ pub(crate) fn rule_validator() -> Document {
             "c": { "bsonType": "date" },
             "u": { "bsonType": "date" },
             "g": { "bsonType": "object" },
+            "h": { "bsonType": "object" },
             "o": { "bsonType": "long", "minimum": 0 },
             "b": { "bsonType": "long", "minimum": 1 },
             "sc": { "bsonType": "long", "minimum": 0 },

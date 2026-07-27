@@ -78,7 +78,11 @@ watch(projectId, () => {
 
 const createSaved = useMutation({
   mutationFn: () =>
-    api.createSavedQuery(projectId.value, savedName.value.trim(), buildQuery(savedDataset.value, savedShape.value)),
+    api.createSavedQuery(
+      projectId.value,
+      savedName.value.trim(),
+      buildQuery(savedDataset.value, savedShape.value),
+    ),
   onSuccess: async () => {
     savedName.value = '';
     await queryClient.invalidateQueries({ queryKey: ['saved-queries', projectId.value] });
@@ -126,7 +130,11 @@ function shapeFor(query: ExploreRequest): ExploreShape {
 
 function addWidget(): void {
   const saved = savedQueries.data.value?.items.find((item) => item.id === selectedSavedQuery.value);
-  if (!saved || draftWidgets.value.some((item) => item.id === saved.id) || draftWidgets.value.length >= 8)
+  if (
+    !saved ||
+    draftWidgets.value.some((item) => item.id === saved.id) ||
+    draftWidgets.value.length >= 8
+  )
     return;
   draftWidgets.value.push(saved);
   selectedSavedQuery.value = '';
@@ -231,7 +239,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <BaseSelect v-model="savedDataset" :options="datasetOptions" label="Dataset" />
           <BaseSelect v-model="savedShape" :options="shapeOptions" label="Result" />
         </div>
-        <button class="button button--primary" :disabled="createSaved.isPending.value" type="submit">
+        <button
+          class="button button--primary"
+          :disabled="createSaved.isPending.value"
+          type="submit"
+        >
           <AppIcon name="save" :size="17" />
           Save query
         </button>
@@ -271,7 +283,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             {{ saved.name }} <AppIcon name="close" :size="14" />
           </button>
         </div>
-        <BaseSelect v-model="refreshInterval" :options="refreshOptions" label="Refresh preference" />
+        <BaseSelect
+          v-model="refreshInterval"
+          :options="refreshOptions"
+          label="Refresh preference"
+        />
         <button
           class="button button--primary"
           type="submit"
@@ -313,9 +329,17 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
         <div v-else class="saved-query-list">
           <article v-for="saved in savedQueries.data.value.items" :key="saved.id">
             <div>
-              <input v-if="canWrite" v-model="saved.name" maxlength="120" aria-label="Saved query name" />
+              <input
+                v-if="canWrite"
+                v-model="saved.name"
+                maxlength="120"
+                aria-label="Saved query name"
+              />
               <strong v-else>{{ saved.name }}</strong>
-              <span>{{ saved.query.dataset }} · {{ shapeFor(saved.query) }} · revision {{ saved.revision }}</span>
+              <span
+                >{{ saved.query.dataset }} · {{ shapeFor(saved.query) }} · revision
+                {{ saved.revision }}</span
+              >
             </div>
             <div v-if="canWrite" class="compact-actions">
               <button class="button button--secondary" type="button" @click="saveSavedName(saved)">
@@ -373,7 +397,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               >
                 <AppIcon name="save" :size="15" /> Save
               </button>
-              <button class="button button--danger" type="button" @click="removeDashboard(dashboard)">
+              <button
+                class="button button--danger"
+                type="button"
+                @click="removeDashboard(dashboard)"
+              >
                 <AppIcon name="delete" :size="15" /> Delete
               </button>
             </div>
@@ -382,7 +410,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <div class="dashboard-variables">
             <label>
               <span>Environment</span>
-              <input v-model="environment[dashboard.id]" maxlength="256" placeholder="All environments" />
+              <input
+                v-model="environment[dashboard.id]"
+                maxlength="256"
+                placeholder="All environments"
+              />
             </label>
             <label>
               <span>Release</span>
@@ -423,13 +455,13 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                   <code>{{ widgetResult(dashboard.id, widget.id)?.error_code }}</code>
                 </div>
               </div>
-              <p v-else-if="!widgetResult(dashboard.id, widget.id)" class="dashboard-widget__waiting">
+              <p
+                v-else-if="!widgetResult(dashboard.id, widget.id)"
+                class="dashboard-widget__waiting"
+              >
                 Refresh to run this saved query.
               </p>
-              <strong
-                v-else-if="widget.shape === 'number'"
-                class="dashboard-widget__number"
-              >
+              <strong v-else-if="widget.shape === 'number'" class="dashboard-widget__number">
                 {{
                   Number(
                     Object.values(widgetResult(dashboard.id, widget.id)?.items?.[0] ?? {})[0] ?? 0,
@@ -453,7 +485,10 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                       v-for="(row, index) in widgetResult(dashboard.id, widget.id)?.items ?? []"
                       :key="index"
                     >
-                      <td v-for="column in columns(widgetResult(dashboard.id, widget.id)?.items)" :key="column">
+                      <td
+                        v-for="column in columns(widgetResult(dashboard.id, widget.id)?.items)"
+                        :key="column"
+                      >
                         {{ row[column] }}
                       </td>
                     </tr>

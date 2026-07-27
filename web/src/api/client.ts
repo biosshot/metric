@@ -8,6 +8,7 @@ import type {
   Dashboard,
   DashboardRefresh,
   AlertRule,
+  CronMonitor,
   CreateProjectInput,
   CreateProjectResponse,
   Event,
@@ -22,6 +23,8 @@ import type {
   LoginResponse,
   NotificationDestination,
   NotificationDelivery,
+  MonitorInput,
+  MonitorRun,
   Organization,
   OrganizationAuditRecord,
   OrganizationMember,
@@ -267,6 +270,7 @@ export const api = {
         transaction_enabled: policy.items.transaction,
         span_enabled: policy.items.span,
         feedback_enabled: policy.items.feedback,
+        check_in_enabled: policy.items.check_in,
         max_event_bytes: policy.limits.max_event_bytes,
         max_events_per_second: policy.limits.max_events_per_second,
         burst: policy.limits.burst,
@@ -302,6 +306,17 @@ export const api = {
     ),
   event: (projectId: string, eventId: string) =>
     request<Event>(`/api/v1/projects/${projectId}/events/${eventId}`),
+  monitors: (projectId: string) =>
+    request<{ items: CronMonitor[] }>(`/api/v1/projects/${projectId}/monitors?limit=100`),
+  putMonitor: (projectId: string, monitor: MonitorInput) =>
+    request<CronMonitor>(`/api/v1/projects/${projectId}/monitors`, {
+      method: 'POST',
+      body: JSON.stringify(monitor),
+    }),
+  monitorRuns: (projectId: string, monitorId: string) =>
+    request<{ items: MonitorRun[] }>(
+      `/api/v1/projects/${projectId}/monitors/${monitorId}/runs?limit=100`,
+    ),
   logs: (
     projectId: string,
     filters: {

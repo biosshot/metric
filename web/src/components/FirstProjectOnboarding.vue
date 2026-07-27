@@ -34,6 +34,7 @@ const project = reactive<CreateProjectInput>({
   transaction_enabled: true,
   span_enabled: true,
   feedback_enabled: true,
+  check_in_enabled: true,
   max_event_bytes: 1_048_576,
   max_events_per_second: null,
   burst: null,
@@ -199,6 +200,16 @@ const createProject = useMutation({
                 <strong>User Feedback</strong>
               </span>
               <small>Accept bounded reports from the Feedback SDK.</small>
+            </span>
+          </label>
+          <label class="check-control">
+            <input v-model="project.check_in_enabled" type="checkbox" />
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="monitors" :size="17" />
+                <strong>Cron check-ins</strong>
+              </span>
+              <small>Track scheduled jobs and missed executions.</small>
             </span>
           </label>
         </div>

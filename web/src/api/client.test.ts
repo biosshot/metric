@@ -131,6 +131,7 @@ describe('native API client', () => {
       transaction_enabled: true,
       span_enabled: true,
       feedback_enabled: true,
+      check_in_enabled: true,
       max_event_bytes: 1_048_576,
       max_events_per_second: null,
       burst: null,
@@ -160,6 +161,7 @@ describe('native API client', () => {
         transaction: true,
         span: true,
         feedback: true,
+        check_in: true,
       },
       limits: {
         max_event_bytes: 1_048_576,

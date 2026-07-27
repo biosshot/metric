@@ -6,7 +6,7 @@ use futures_util::TryStreamExt;
 use metric_domain::Timestamp;
 use metric_ports::{
     MaintenanceCursor, MaintenanceDisposition, MaintenanceRequest, MaintenanceResult,
-    MaintenanceStore, MaintenanceStoreError, MaintenanceTask, PortFuture,
+    MaintenanceStore, MaintenanceStoreError, MaintenanceTask, MonitorStore, PortFuture,
 };
 use mongodb::{
     Database,
@@ -42,6 +42,26 @@ impl MongoMaintenanceStore {
             MaintenanceTask::EventRetention => self.retain_events(request).await,
             MaintenanceTask::HourlyRetention => self.retain_hourly(request).await,
             MaintenanceTask::CounterReconciliation => self.reconcile_counters(request).await,
+            MaintenanceTask::MonitorTimeouts => {
+                let changed = crate::MongoMonitorStore::new(
+                    self.database.clone(),
+                    crate::MonitorRetention::default(),
+                )
+                .terminalize_due_timeouts(request.now, request.batch_size)
+                .await
+                .map_err(map_monitor_error)?;
+                Ok(completed(changed))
+            }
+            MaintenanceTask::MonitorMissed => {
+                let changed = crate::MongoMonitorStore::new(
+                    self.database.clone(),
+                    crate::MonitorRetention::default(),
+                )
+                .materialize_due_missed(request.now, request.batch_size)
+                .await
+                .map_err(map_monitor_error)?;
+                Ok(completed(changed))
+            }
             MaintenanceTask::UploadExpiry | MaintenanceTask::BlobOrphanRegistration => {
                 Ok(MaintenanceResult {
                     scanned: 0,
@@ -465,6 +485,24 @@ impl MongoMaintenanceStore {
             next_cursor,
             disposition: MaintenanceDisposition::Completed,
         })
+    }
+}
+
+fn completed(changed: u64) -> MaintenanceResult {
+    MaintenanceResult {
+        scanned: usize::try_from(changed).unwrap_or(usize::MAX),
+        changed: usize::try_from(changed).unwrap_or(usize::MAX),
+        next_cursor: None,
+        disposition: MaintenanceDisposition::Completed,
+    }
+}
+
+fn map_monitor_error(error: metric_ports::SignalStoreError) -> MaintenanceStoreError {
+    match error {
+        metric_ports::SignalStoreError::Unavailable | metric_ports::SignalStoreError::Capacity => {
+            MaintenanceStoreError::Unavailable
+        }
+        _ => MaintenanceStoreError::InvalidData,
     }
 }
 

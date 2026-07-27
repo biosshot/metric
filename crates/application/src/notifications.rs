@@ -16,6 +16,7 @@ use metric_domain::{
     },
     grouping::IssueId,
     issue::IssueTransitionId,
+    monitors::MonitorRun,
     notifications::{
         AlertRule, ClaimedNotificationDelivery, IssueNotificationTransition, NotificationDelivery,
         NotificationDeliveryStatus, NotificationDestination, NotificationPayload,
@@ -23,8 +24,8 @@ use metric_domain::{
     },
 };
 use metric_ports::{
-    Clock, NotificationDeliveryAdapter, NotificationDeliveryError, NotificationDeliveryReceipt,
-    NotificationStore, NotificationStoreError,
+    Clock, MonitorStore, NotificationDeliveryAdapter, NotificationDeliveryError,
+    NotificationDeliveryReceipt, NotificationStore, NotificationStoreError, SignalStoreError,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -584,6 +585,165 @@ pub struct AggregateAlertEvaluator {
     poll_interval: Duration,
     lease: Duration,
     limit: usize,
+}
+
+pub struct MonitorAlertEvaluator {
+    store: Arc<dyn NotificationStore>,
+    monitors: Arc<dyn MonitorStore>,
+    clock: Arc<dyn Clock>,
+    poll_interval: Duration,
+    batch_size: usize,
+}
+
+impl MonitorAlertEvaluator {
+    pub fn new(
+        store: Arc<dyn NotificationStore>,
+        monitors: Arc<dyn MonitorStore>,
+        clock: Arc<dyn Clock>,
+        poll_interval: Duration,
+        batch_size: usize,
+    ) -> Result<Self, NotificationError> {
+        if poll_interval.is_zero() || batch_size == 0 || batch_size > 1_000 {
+            return Err(NotificationError::InvalidConfiguration);
+        }
+        Ok(Self {
+            store,
+            monitors,
+            clock,
+            poll_interval,
+            batch_size,
+        })
+    }
+
+    pub async fn evaluate_once(&self) -> Result<usize, NotificationError> {
+        let runs = self
+            .monitors
+            .pending_monitor_alerts(self.batch_size)
+            .await
+            .map_err(map_monitor_store_error)?;
+        let now = self.clock.now();
+        for run in &runs {
+            let rules = self
+                .store
+                .list_rules(run.project_id, EXPANSION_RULE_LIMIT)
+                .await?;
+            for rule in rules.into_iter().filter(|rule| {
+                rule.enabled
+                    && rule.monitor.as_ref().is_some_and(|monitor| {
+                        monitor.monitor_id == run.monitor_id
+                            && monitor.outcomes.contains(&run.status)
+                    })
+            }) {
+                self.expand_monitor_rule(&rule, run, now).await?;
+            }
+            self.monitors
+                .mark_monitor_alert_evaluated(run.id, now)
+                .await
+                .map_err(map_monitor_store_error)?;
+        }
+        Ok(runs.len())
+    }
+
+    async fn expand_monitor_rule(
+        &self,
+        rule: &AlertRule,
+        run: &MonitorRun,
+        now: Timestamp,
+    ) -> Result<(), NotificationError> {
+        let window_expired = rule.storm_window_started_at.is_none_or(|started| {
+            now.unix_millis().saturating_sub(started.unix_millis()) >= 3_600_000
+        });
+        let window_started = if window_expired {
+            now
+        } else {
+            rule.storm_window_started_at.unwrap_or(now)
+        };
+        let mut storm_count = if window_expired { 0 } else { rule.storm_count };
+        let cooldown_elapsed = rule.last_triggered_at.is_none_or(|last| {
+            now.unix_millis().saturating_sub(last.unix_millis())
+                >= i64::from(rule.cooldown_minutes) * 60_000
+        });
+        if !cooldown_elapsed || storm_count >= rule.storm_limit_per_hour {
+            return Ok(());
+        }
+        storm_count = storm_count.saturating_add(1);
+        let transition_id = IssueTransitionId::from_bytes(run.id.as_bytes());
+        let mut deliveries = Vec::with_capacity(rule.destination_ids.len());
+        for destination_id in rule.destination_ids.iter().copied() {
+            deliveries.push(NotificationDelivery {
+                id: notification_delivery_id(transition_id, rule.id, destination_id),
+                project_id: run.project_id,
+                issue_id: IssueId::from_bytes(run.monitor_id.as_bytes()),
+                transition_id,
+                rule_id: rule.id,
+                action_id: destination_id,
+                destination_id,
+                payload: monitor_payload(rule, run, now)?,
+                status: NotificationDeliveryStatus::Pending,
+                attempts: 0,
+                next_attempt_at: now,
+                last_error: None,
+                created_at: now,
+                delivered_at: None,
+                delete_at: None,
+            });
+        }
+        self.store
+            .complete_monitor_alert(rule.id, now, window_started, storm_count, deliveries)
+            .await?;
+        Ok(())
+    }
+
+    pub fn start(self: Arc<Self>, shutdown: ShutdownSignal) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = interval(self.poll_interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    biased;
+                    () = shutdown.cancelled() => return,
+                    _ = ticker.tick() => {
+                        if self.evaluate_once().await.is_err() {
+                            metrics::counter!(
+                                "metric_monitor_alert_evaluations_total",
+                                "outcome" => "error"
+                            ).increment(1);
+                        }
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn monitor_payload(
+    rule: &AlertRule,
+    run: &MonitorRun,
+    now: Timestamp,
+) -> Result<NotificationPayload, NotificationError> {
+    NotificationPayload::new(
+        serde_json::to_vec(&json!({
+            "schema": 1,
+            "kind": "cron_monitor",
+            "rule": rule.name.as_str(),
+            "monitor_id": run.monitor_id.to_string(),
+            "run_id": run.id.to_string(),
+            "status": run.status.as_str(),
+            "started_at": run.started_at.unix_millis(),
+            "detected_at": now.unix_millis(),
+        }))
+        .map_err(|_| NotificationError::InvalidData)?,
+    )
+    .map_err(|_| NotificationError::InvalidData)
+}
+
+fn map_monitor_store_error(error: SignalStoreError) -> NotificationError {
+    match error {
+        SignalStoreError::Unavailable | SignalStoreError::Capacity => {
+            NotificationError::StorageUnavailable
+        }
+        _ => NotificationError::InvalidData,
+    }
 }
 
 impl AggregateAlertEvaluator {

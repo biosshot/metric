@@ -113,7 +113,9 @@ function timestamp(value: string | null): string {
         <span>
           <strong>{{ release.version }}</strong>
           <small>
-            {{ release.released_at ? `Finalized ${timestamp(release.released_at)}` : 'Open release' }}
+            {{
+              release.released_at ? `Finalized ${timestamp(release.released_at)}` : 'Open release'
+            }}
           </small>
         </span>
         <span class="release-card__seen">

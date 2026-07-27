@@ -41,11 +41,14 @@ use metric_application::{
         IncidentCapsuleAccess, IncidentCapsuleConfig, IncidentCapsuleError, IncidentCapsuleService,
     },
     log_writer::{LogWriter, LogWriterConfig, LogWriterStartError, LogWriterTask},
+    monitor_writer::{
+        MonitorWriter, MonitorWriterConfig, MonitorWriterStartError, MonitorWriterTask,
+    },
     native_api::NativeApiService,
     normalizer::{Normalizer, NormalizerConfigError, NormalizerLimits},
     notifications::{
-        AggregateAlertEvaluator, NotificationConfig, NotificationDispatcher, NotificationError,
-        NotificationTask,
+        AggregateAlertEvaluator, MonitorAlertEvaluator, NotificationConfig, NotificationDispatcher,
+        NotificationError, NotificationTask,
     },
     observability::{Metric, Metrics, Outcome},
     processor::{
@@ -70,8 +73,9 @@ use metric_domain::Timestamp;
 use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
-    FeedbackSink, FeedbackStore, LogSink, OutcomeSink, PortFuture, ProjectResolveError,
-    ProjectResolver, RandomError, RandomSource, SessionSink, SessionStore, SignalStore, SpanSink,
+    FeedbackSink, FeedbackStore, LogSink, MonitorSink, MonitorStore, OutcomeSink, PortFuture,
+    ProjectResolveError, ProjectResolver, RandomError, RandomSource, SessionSink, SessionStore,
+    SignalStore, SpanSink,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -102,6 +106,8 @@ pub enum ServerError {
     SpanWriter(#[from] SpanWriterStartError),
     #[error(transparent)]
     SessionWriter(#[from] SessionWriterStartError),
+    #[error(transparent)]
+    MonitorWriter(#[from] MonitorWriterStartError),
     #[error(transparent)]
     Dispatcher(#[from] DispatcherStartError),
     #[error(transparent)]
@@ -144,11 +150,13 @@ struct RuntimeModules {
     log_sink: Option<std::sync::Arc<dyn LogSink>>,
     span_sink: Option<std::sync::Arc<dyn SpanSink>>,
     session_sink: Option<std::sync::Arc<dyn SessionSink>>,
+    monitor_sink: Option<std::sync::Arc<dyn MonitorSink>>,
     feedback_sink: Option<std::sync::Arc<dyn FeedbackSink>>,
     writer_task: Option<MongoWriterTask>,
     log_writer_task: Option<LogWriterTask>,
     span_writer_task: Option<SpanWriterTask>,
     session_writer_task: Option<SessionWriterTask>,
+    monitor_writer_task: Option<MonitorWriterTask>,
     session_maintenance_task: Option<SessionMaintenanceTask>,
     dispatcher_task: Option<DispatcherTask>,
     scheduler_task: Option<SchedulerTask>,
@@ -164,6 +172,7 @@ struct RuntimeModules {
     notification_secret_box: Option<webhook::WebhookSecretBox>,
     notification_task: Option<NotificationTask>,
     aggregate_alert_task: Option<tokio::task::JoinHandle<()>>,
+    monitor_alert_task: Option<tokio::task::JoinHandle<()>>,
     project_deletion_task: Option<ProjectDeletionTask>,
     blob_cleanup_task: Option<BlobCleanupTask>,
     debug_file_service: Option<std::sync::Arc<DebugFileService>>,
@@ -251,11 +260,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         log_sink,
         span_sink,
         session_sink,
+        monitor_sink,
         feedback_sink,
         writer_task,
         log_writer_task,
         span_writer_task,
         session_writer_task,
+        monitor_writer_task,
         session_maintenance_task,
         dispatcher_task,
         scheduler_task,
@@ -270,6 +281,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         notification_secret_box,
         notification_task,
         aggregate_alert_task,
+        monitor_alert_task,
         project_deletion_task,
         blob_cleanup_task,
         debug_file_service,
@@ -546,6 +558,22 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             config.scheduler.maintenance_interval.get(),
             shutdown.signal(),
         );
+        let monitor_store: std::sync::Arc<dyn MonitorStore> =
+            std::sync::Arc::new(store.monitor_store(metric_mongo::MonitorRetention {
+                runs_days: config.retention.monitor_runs_days,
+            }));
+        let (monitor_writer, monitor_writer_task) = MonitorWriter::start(
+            std::sync::Arc::clone(&monitor_store),
+            MonitorWriterConfig {
+                channel_capacity: config.ingest.max_waiting_for_storage,
+                max_wait: config.ingest.batch.max_wait.get(),
+                max_updates: config.ingest.batch.max_documents,
+                operation_timeout: config.ingest.request_timeout.get(),
+                shutdown_drain: config.server.shutdown_grace.get(),
+            },
+            shutdown.signal(),
+        )?;
+        let monitor_sink: std::sync::Arc<dyn MonitorSink> = monitor_writer;
         let feedback = std::sync::Arc::new(store.feedback_store());
         let feedback_sink: std::sync::Arc<dyn FeedbackSink> = feedback.clone();
         let feedback_store: std::sync::Arc<dyn FeedbackStore> = feedback;
@@ -557,11 +585,21 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         )?);
         let aggregate_alert_task = Some(
             std::sync::Arc::new(AggregateAlertEvaluator::new(
-                notification_store,
+                std::sync::Arc::clone(&notification_store),
                 std::sync::Arc::clone(&explore_service),
                 std::sync::Arc::clone(&clock),
                 config.scheduler.poll_interval.get(),
                 config.notifications.attempt_lease.get(),
+                config.notifications.transition_batch_size.min(1_000),
+            )?)
+            .start(shutdown.signal()),
+        );
+        let monitor_alert_task = Some(
+            std::sync::Arc::new(MonitorAlertEvaluator::new(
+                std::sync::Arc::clone(&notification_store),
+                std::sync::Arc::clone(&monitor_store),
+                std::sync::Arc::clone(&clock),
+                config.scheduler.poll_interval.get(),
                 config.notifications.transition_batch_size.min(1_000),
             )?)
             .start(shutdown.signal()),
@@ -588,6 +626,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_blob_store(std::sync::Arc::clone(&blob_store))
             .with_signal_store(std::sync::Arc::clone(&signal_store))
             .with_session_store(session_store)
+            .with_monitor_store(monitor_store)
             .with_feedback_store(feedback_store)
             .with_explore(explore_service)
             .with_dashboards(dashboard_service)
@@ -803,11 +842,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             log_sink: Some(log_sink),
             span_sink: Some(span_sink),
             session_sink: Some(session_sink),
+            monitor_sink: Some(monitor_sink),
             feedback_sink: Some(feedback_sink),
             writer_task: Some(writer_task),
             log_writer_task: Some(log_writer_task),
             span_writer_task: Some(span_writer_task),
             session_writer_task: Some(session_writer_task),
+            monitor_writer_task: Some(monitor_writer_task),
             session_maintenance_task: Some(session_maintenance_task),
             dispatcher_task: Some(dispatcher_task),
             scheduler_task: Some(scheduler_task),
@@ -822,6 +863,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             notification_secret_box: Some(notification_secret_box),
             notification_task: Some(notification_task),
             aggregate_alert_task,
+            monitor_alert_task,
             project_deletion_task: Some(project_deletion_task),
             blob_cleanup_task: Some(blob_cleanup_task),
             debug_file_service: Some(debug_file_service),
@@ -837,11 +879,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             log_sink: None,
             span_sink: None,
             session_sink: None,
+            monitor_sink: None,
             feedback_sink: None,
             writer_task: None,
             log_writer_task: None,
             span_writer_task: None,
             session_writer_task: None,
+            monitor_writer_task: None,
             session_maintenance_task: None,
             dispatcher_task: None,
             scheduler_task: None,
@@ -856,6 +900,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             notification_secret_box: None,
             notification_task: None,
             aggregate_alert_task: None,
+            monitor_alert_task: None,
             project_deletion_task: None,
             blob_cleanup_task: None,
             debug_file_service: None,
@@ -896,6 +941,15 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(session_sink) = session_sink {
         ingest_service = ingest_service.with_session_sink(session_sink);
     }
+    if let Some(monitor_sink) = monitor_sink {
+        ingest_service = ingest_service.with_monitor_sink(
+            monitor_sink,
+            metric_application::ingest::MonitorIngestConfig {
+                retention_days: config.retention.monitor_runs_days,
+                ..metric_application::ingest::MonitorIngestConfig::default()
+            },
+        );
+    }
     if let Some(feedback_sink) = feedback_sink {
         ingest_service = ingest_service.with_feedback_sink(
             feedback_sink,
@@ -911,11 +965,13 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         && log_writer_task.is_some()
         && span_writer_task.is_some()
         && session_writer_task.is_some()
+        && monitor_writer_task.is_some()
         && session_maintenance_task.is_some()
         && dispatcher_task.is_some()
         && scheduler_task.is_some()
         && notification_task.is_some()
         && aggregate_alert_task.is_some()
+        && monitor_alert_task.is_some()
         && (!config.archive.enabled || archive_task.is_some());
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router(
@@ -934,6 +990,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     sessions_days: config.retention.sessions_days,
                     session_stats_hourly_days: config.retention.session_stats_hourly_days,
                     session_active_max_hours: config.retention.session_active_max_hours,
+                    monitor_runs_days: config.retention.monitor_runs_days,
                 }),
                 project_deletion: required_ready.then_some(
                     native_http::ProjectDeletionCapability {
@@ -1009,6 +1066,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(task) = aggregate_alert_task {
         let _ = task.await;
     }
+    if let Some(task) = monitor_alert_task {
+        let _ = task.await;
+    }
     if let Some(task) = project_deletion_task {
         task.wait().await;
     }
@@ -1031,6 +1091,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = session_writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = monitor_writer_task {
         task.wait().await;
     }
     if let Some(task) = session_maintenance_task {

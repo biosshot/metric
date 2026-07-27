@@ -84,6 +84,7 @@ export interface ProjectPolicy {
     transaction: boolean;
     span: boolean;
     feedback: boolean;
+    check_in: boolean;
   };
   limits: {
     max_event_bytes: number;
@@ -138,6 +139,7 @@ export interface CreateProjectInput {
   transaction_enabled: boolean;
   span_enabled: boolean;
   feedback_enabled: boolean;
+  check_in_enabled: boolean;
   max_event_bytes: number;
   max_events_per_second: number | null;
   burst: number | null;
@@ -393,11 +395,62 @@ export interface AlertRule {
     release: string | null;
     notify_resolved: boolean;
   } | null;
+  monitor: {
+    monitor_id: string;
+    outcomes: Array<'error' | 'timeout' | 'missed'>;
+  } | null;
   destination_ids: string[];
   cooldown_minutes: number;
   storm_limit_per_hour: number;
   created_at: number;
   updated_at: number;
+}
+
+export type MonitorRunStatus = 'in_progress' | 'success' | 'error' | 'timeout' | 'missed';
+
+export interface CronMonitor {
+  id: string;
+  project_id: string;
+  slug: string;
+  name: string;
+  environment: string;
+  enabled: boolean;
+  managed_by: 'web' | 'sdk';
+  revision: number;
+  schedule_type: 'interval' | 'crontab';
+  schedule: string;
+  checkin_margin_seconds: number;
+  max_runtime_seconds: number;
+  next_expected_at: string;
+  last_run_id: string | null;
+  last_status: MonitorRunStatus | null;
+  last_check_in_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MonitorRun {
+  id: string;
+  monitor_id: string;
+  status: MonitorRunStatus;
+  source: 'sdk' | 'scheduler';
+  scheduled_for: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  received_at: string;
+  release_id: string | null;
+}
+
+export interface MonitorInput {
+  slug: string;
+  name: string;
+  environment: string;
+  enabled: boolean;
+  schedule_type: 'interval' | 'crontab';
+  schedule: string;
+  checkin_margin_seconds: number;
+  max_runtime_seconds: number;
 }
 
 export interface NotificationDelivery {
@@ -542,6 +595,7 @@ export interface CapabilityDocument {
     sessions_days: number;
     session_stats_hourly_days: number;
     session_active_max_hours: number;
+    monitor_runs_days: number;
     clock: 'received_at';
     gradual_policy_reduction: boolean;
   } | null;

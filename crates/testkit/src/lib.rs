@@ -10,15 +10,16 @@ use std::{
 use metric_domain::{
     AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
     feedback::FeedbackRecord,
+    monitors::MonitorUpdate,
     sessions::SessionUpdate,
     signals::{LogRecord, SpanRecord},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
 };
 use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, FeedbackSink, FeedbackStoreError,
-    IngestOutcome, LogSink, OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver,
-    RandomError, RandomSource, SessionSink, SignalStoreError, SpanSink, SymbolicationBackend,
-    SymbolicationBackendError,
+    IngestOutcome, LogSink, MonitorSink, OutcomeSink, PortFuture, ProjectResolveError,
+    ProjectResolver, RandomError, RandomSource, SessionSink, SignalStoreError, SpanSink,
+    SymbolicationBackend, SymbolicationBackendError,
 };
 
 #[derive(Clone)]
@@ -181,6 +182,35 @@ impl SessionSink for FakeSessionSink {
             self.0
                 .lock()
                 .expect("fake Session sink lock poisoned")
+                .extend(updates);
+            Ok(outcomes)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeMonitorSink(Arc<Mutex<Vec<MonitorUpdate>>>);
+
+impl FakeMonitorSink {
+    #[must_use]
+    pub fn updates(&self) -> Vec<MonitorUpdate> {
+        self.0
+            .lock()
+            .expect("fake Monitor sink lock poisoned")
+            .clone()
+    }
+}
+
+impl MonitorSink for FakeMonitorSink {
+    fn persist_monitors(
+        &self,
+        updates: Vec<MonitorUpdate>,
+    ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>> {
+        Box::pin(async move {
+            let outcomes = vec![DurableOutcome::Accepted; updates.len()];
+            self.0
+                .lock()
+                .expect("fake Monitor sink lock poisoned")
                 .extend(updates);
             Ok(outcomes)
         })

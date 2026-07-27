@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "cron-monitor-run-durable-writer-phase-35",
+    "source_commit": "784a980dc2d33e496d2f2c26e6b8bd1453910e5e",
+    "generated_at": "2026-07-27T00:00:00.000Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "mongodb_version": "8.3.7",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "2000 distinct terminal SDK monitor runs; compact BSON; batches of 200; one current-state projection update per monitor and batch",
+    "storage": "local MongoDB direct connection; debug profile; TTL history and deterministic binary identities"
+  },
+  "metrics": {
+    "runs": 2000,
+    "batch": 200,
+    "elapsed_ms": 348,
+    "durable_rps": 5740.91,
+    "minimum_durable_rps": 100
+  }
+}

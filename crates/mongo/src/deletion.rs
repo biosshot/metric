@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 34] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 36] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -110,6 +110,16 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 34] = [
     DatasetRegistration {
         code: 18,
         name: "dashboards",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 19,
+        name: "monitors",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 21,
+        name: "monitor_runs",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -258,8 +268,9 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 8] = [
     },
 ];
 
-const PURGE_CODES: [u16; 24] = [
-    10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66, 68, 70,
+const PURGE_CODES: [u16; 26] = [
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66,
+    68, 70,
 ];
 
 impl MongoProjectStore {

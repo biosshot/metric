@@ -2004,6 +2004,97 @@ label small,
   font-size: 0.75rem;
 }
 
+.monitor-form {
+  margin-bottom: 1rem;
+}
+
+.monitor-form__enabled {
+  align-self: end;
+  min-height: 3.25rem;
+}
+
+.monitor-layout {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.25fr);
+  gap: 1rem;
+}
+
+.monitor-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.monitor-card {
+  display: grid;
+  width: 100%;
+  padding: 1rem;
+  border-color: var(--border);
+  color: var(--text);
+  text-align: left;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.monitor-card:hover,
+.monitor-card--selected {
+  border-color: var(--semantic-info);
+  background: var(--semantic-info-surface);
+}
+
+.monitor-card__icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.6rem;
+  background: var(--semantic-info-surface);
+  color: var(--semantic-info);
+  place-items: center;
+  grid-row: 1 / span 2;
+}
+
+.monitor-card__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.monitor-card small {
+  color: var(--text-muted);
+}
+
+.monitor-card > small {
+  grid-column: 2 / -1;
+}
+
+.monitor-history {
+  min-width: 0;
+}
+
+.monitor-run-list {
+  margin-top: 1rem;
+}
+
+.monitor-run__title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.monitor-run__title > span:last-child {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .monitor-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .event-identifiers {
   display: grid;
   min-width: min(360px, 100%);

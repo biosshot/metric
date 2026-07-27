@@ -25,8 +25,9 @@ use metric_application::{
         IncidentEventSelection,
     },
     native_api::{
-        AttachmentView, EventListRequest, FeedbackListRequest, LogListRequest, NativeApiError,
-        NativeApiService, PerformanceListRequest, TransactionListRequest, encode_explore_cursor,
+        AttachmentView, EventListRequest, FeedbackListRequest, LogListRequest, MonitorInput,
+        NativeApiError, NativeApiService, PerformanceListRequest, TransactionListRequest,
+        encode_explore_cursor,
     },
     notifications::{NotificationAdminService, NotificationError},
     observability::RequestId,
@@ -65,10 +66,12 @@ use metric_domain::{
     issue::{
         ActorKind, ActorRef, IssueCommandAction, IssueNotificationKind, IssueSnapshot, IssueStatus,
     },
+    monitors::{MonitorDefinition, MonitorId, MonitorRun},
     notifications::{
         AggregateAlert, AlertRule, AlertRuleId, MAX_EMAIL_ADDRESS_BYTES, MAX_SMTP_HOST_BYTES,
-        NotificationDestination, NotificationDestinationId, NotificationDestinationKind,
-        NotificationText, RuleName, SmtpDestination, SmtpSecurity, WebhookEndpoint,
+        MonitorAlert, NotificationDestination, NotificationDestinationId,
+        NotificationDestinationKind, NotificationText, RuleName, SmtpDestination, SmtpSecurity,
+        WebhookEndpoint,
     },
     signals::{LogId, LogRecord, LogSeverity, SpanRecord, TraceId},
 };
@@ -109,6 +112,7 @@ pub struct RetentionCapability {
     pub sessions_days: u32,
     pub session_stats_hourly_days: u32,
     pub session_active_max_hours: u32,
+    pub monitor_runs_days: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -446,6 +450,14 @@ pub fn router(
         .route("/api/v1/projects/{project_id}/events", get(list_events))
         .route("/api/v1/projects/{project_id}/feedback", get(list_feedback))
         .route(
+            "/api/v1/projects/{project_id}/monitors",
+            get(list_monitors).post(put_monitor),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/monitors/{monitor_id}/runs",
+            get(list_monitor_runs),
+        )
+        .route(
             "/api/v1/projects/{project_id}/feedback/{feedback_id}/attachments/{attachment_id}",
             get(download_feedback_attachment),
         )
@@ -596,6 +608,91 @@ async fn list_feedback(
     Ok(Json(json!({
         "items": page.items.iter().map(feedback_value).collect::<Result<Vec<_>, _>>()?,
         "next_cursor": page.next_cursor,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MonitorBody {
+    slug: String,
+    name: String,
+    environment: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    schedule_type: String,
+    schedule: String,
+    checkin_margin_seconds: u32,
+    max_runtime_seconds: u32,
+}
+
+async fn list_monitors(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let page = api(&state)?
+        .monitors(
+            &context,
+            project_id_from(&project_id)?,
+            query_limit(&query)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": page.items.iter().map(monitor_value).collect::<Result<Vec<_>, _>>()?
+    })))
+}
+
+async fn put_monitor(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<MonitorBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let monitor = api(&state)?
+        .upsert_monitor(
+            &context,
+            project_id_from(&project_id)?,
+            MonitorInput {
+                slug: body.slug.into(),
+                name: body.name.into(),
+                environment: body.environment.into(),
+                enabled: body.enabled,
+                schedule_type: body.schedule_type.into(),
+                schedule: body.schedule.into(),
+                checkin_margin_seconds: body.checkin_margin_seconds,
+                max_runtime_seconds: body.max_runtime_seconds,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(monitor_value(&monitor)?))
+}
+
+async fn list_monitor_runs(
+    State(state): State<NativeHttpState>,
+    Path((project_id, monitor_id)): Path<(String, String)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let page = api(&state)?
+        .monitor_runs(
+            &context,
+            project_id_from(&project_id)?,
+            MonitorId::from_bytes(hex_16(&monitor_id)?),
+            query_limit(&query)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": page.items.iter().map(monitor_run_value).collect::<Result<Vec<_>, _>>()?
     })))
 }
 
@@ -1190,6 +1287,9 @@ struct AlertRuleBody {
     notify_resolved: Option<bool>,
     cooldown_minutes: Option<u32>,
     storm_limit_per_hour: Option<u32>,
+    monitor_id: Option<String>,
+    #[serde(default)]
+    monitor_outcomes: Vec<String>,
 }
 
 async fn list_notification_destinations(
@@ -1420,6 +1520,25 @@ async fn put_alert_rule(
         })
         .transpose()?;
     let next_evaluation_at = aggregate.as_ref().map(|_| now);
+    let monitor = body
+        .monitor_id
+        .as_deref()
+        .map(|value| {
+            Ok::<_, HttpApiError>(MonitorAlert {
+                monitor_id: MonitorId::from_bytes(hex_16(value)?),
+                outcomes: body
+                    .monitor_outcomes
+                    .iter()
+                    .map(|value| match value.as_str() {
+                        "error" => Ok(metric_domain::monitors::MonitorRunStatus::Error),
+                        "timeout" => Ok(metric_domain::monitors::MonitorRunStatus::Timeout),
+                        "missed" => Ok(metric_domain::monitors::MonitorRunStatus::Missed),
+                        _ => Err(HttpApiError::InvalidRequest),
+                    })
+                    .collect::<Result<Box<[_]>, _>>()?,
+            })
+        })
+        .transpose()?;
     let rule = AlertRule {
         id,
         project_id,
@@ -1427,6 +1546,7 @@ async fn put_alert_rule(
         enabled: body.enabled,
         triggers,
         aggregate,
+        monitor,
         destination_ids,
         cooldown_minutes: body.cooldown_minutes.unwrap_or(5),
         storm_limit_per_hour: body.storm_limit_per_hour.unwrap_or(100),
@@ -1498,6 +1618,10 @@ fn alert_rule_value(rule: &AlertRule) -> Value {
             "environment": aggregate.environment.as_ref().map(NotificationText::as_str),
             "release": aggregate.release.as_ref().map(NotificationText::as_str),
             "notify_resolved": aggregate.notify_resolved,
+        })),
+        "monitor": rule.monitor.as_ref().map(|monitor| json!({
+            "monitor_id": monitor.monitor_id.to_string(),
+            "outcomes": monitor.outcomes.iter().map(|outcome| outcome.as_str()).collect::<Vec<_>>(),
         })),
         "cooldown_minutes": rule.cooldown_minutes,
         "storm_limit_per_hour": rule.storm_limit_per_hour,
@@ -2221,6 +2345,8 @@ struct ProjectBody {
     span_enabled: bool,
     #[serde(default = "default_true")]
     feedback_enabled: bool,
+    #[serde(default = "default_true")]
+    check_in_enabled: bool,
     #[serde(default = "default_event_bytes")]
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
@@ -2251,6 +2377,7 @@ async fn create_project(
                     transaction: body.transaction_enabled,
                     span: body.span_enabled,
                     feedback: body.feedback_enabled,
+                    check_in: body.check_in_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -2441,6 +2568,7 @@ struct PolicyBody {
     transaction_enabled: bool,
     span_enabled: bool,
     feedback_enabled: bool,
+    check_in_enabled: bool,
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
     burst: Option<u32>,
@@ -2479,6 +2607,7 @@ async fn update_project_policy(
                     transaction: body.transaction_enabled,
                     span: body.span_enabled,
                     feedback: body.feedback_enabled,
+                    check_in: body.check_in_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -3229,6 +3358,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "sessions_days": policy.sessions_days,
             "session_stats_hourly_days": policy.session_stats_hourly_days,
             "session_active_max_hours": policy.session_active_max_hours,
+            "monitor_runs_days": policy.monitor_runs_days,
             "clock": "received_at",
             "gradual_policy_reduction": true,
         })
@@ -3821,6 +3951,7 @@ fn policy_value(project: &ProjectView) -> Value {
             "transaction": project.items.transaction,
             "span": project.items.span,
             "feedback": project.items.feedback,
+            "check_in": project.items.check_in,
         },
         "limits": {
             "max_event_bytes": project.limits.max_event_bytes.get(),
@@ -3874,6 +4005,47 @@ fn feedback_value(feedback: &FeedbackRecord) -> Result<Value, HttpApiError> {
             "checksum": attachment.blob.checksum.to_string(),
         })).collect::<Vec<_>>(),
         "expires_at": timestamp_string(feedback.expires_at)?,
+    }))
+}
+
+fn monitor_value(monitor: &MonitorDefinition) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "id": monitor.id.to_string(),
+        "project_id": monitor.project_id.get().to_string(),
+        "slug": monitor.slug,
+        "name": monitor.name,
+        "environment": monitor.environment,
+        "enabled": monitor.enabled,
+        "managed_by": if monitor.managed_by_web { "web" } else { "sdk" },
+        "revision": monitor.revision,
+        "schedule_type": monitor.config.schedule.kind(),
+        "schedule": monitor.config.schedule.value(),
+        "checkin_margin_seconds": monitor.config.checkin_margin_seconds,
+        "max_runtime_seconds": monitor.config.max_runtime_seconds,
+        "next_expected_at": timestamp_string(monitor.next_expected_at)?,
+        "last_run_id": monitor.last_run_id.map(|value| value.to_string()),
+        "last_status": monitor.last_status.map(|value| value.as_str()),
+        "last_check_in_at": monitor.last_check_in_at.map(timestamp_string).transpose()?,
+        "created_at": timestamp_string(monitor.created_at)?,
+        "updated_at": timestamp_string(monitor.updated_at)?,
+    }))
+}
+
+fn monitor_run_value(run: &MonitorRun) -> Result<Value, HttpApiError> {
+    Ok(json!({
+        "id": run.id.to_string(),
+        "monitor_id": run.monitor_id.to_string(),
+        "status": run.status.as_str(),
+        "source": match run.source {
+            metric_domain::monitors::MonitorRunSource::Sdk => "sdk",
+            metric_domain::monitors::MonitorRunSource::Scheduler => "scheduler",
+        },
+        "scheduled_for": run.scheduled_for.map(timestamp_string).transpose()?,
+        "started_at": timestamp_string(run.started_at)?,
+        "finished_at": run.finished_at.map(timestamp_string).transpose()?,
+        "duration_ms": run.duration_ms,
+        "received_at": timestamp_string(run.received_at)?,
+        "release_id": run.release_id.map(|value| hex::encode(value.as_bytes())),
     }))
 }
 
@@ -4116,6 +4288,7 @@ mod tests {
                 transaction: true,
                 span: true,
                 feedback: true,
+                check_in: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: InboundFilterPolicy::new(vec![InboundFilterRule {
@@ -4130,7 +4303,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&project_value(&project).unwrap()).unwrap(),
-            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true,"check_in":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
         );
         assert!(
             inbound_filter_policy(vec![InboundFilterRuleBody {

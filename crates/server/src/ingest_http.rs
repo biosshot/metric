@@ -384,6 +384,7 @@ async fn process_request(
             dsn: None,
             primary: Some(parse_store_event(&decoded, state.config.max_event_bytes)?),
             signals: Vec::new(),
+            check_ins: Vec::new(),
             attachments: Vec::new(),
             discarded: Vec::new(),
             client_report_quantity: 0,
@@ -423,6 +424,11 @@ fn map_request(
                 },
                 raw_json: signal.bytes,
             })
+            .collect(),
+        check_ins: parsed
+            .check_ins
+            .into_iter()
+            .map(|check_in| check_in.bytes)
             .collect(),
         attachments: parsed
             .attachments

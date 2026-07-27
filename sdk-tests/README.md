@@ -55,6 +55,16 @@ node sdk-tests/node/send-signals.mjs
 The sender waits for both SDK buffers to flush and then closes the SDK, so it leaves
 no receiver or worker process behind.
 
+Verify Cron Monitoring with the same pinned real SDK:
+
+```powershell
+node sdk-tests/node/send-cron.mjs `
+  "http://<dsn-key>@localhost:4001/<project-id>" metric-node-cron
+```
+
+It sends one `in_progress` and one terminal `ok` check-in with an interval monitor
+configuration, flushes both envelopes, and terminates within a hard 15-second deadline.
+
 ## Browser SDK
 
 Install and bundle its isolated dependencies:

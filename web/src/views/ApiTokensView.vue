@@ -38,11 +38,7 @@ const tokens = useQuery({
 
 const createToken = useMutation({
   mutationFn: () =>
-    api.createToken(
-      tokenName.value,
-      tokenScopes.value,
-      `${expiresOn.value}T23:59:59Z`,
-    ),
+    api.createToken(tokenName.value, tokenScopes.value, `${expiresOn.value}T23:59:59Z`),
   onSuccess: async (token) => {
     createdToken.value = token;
     await queryClient.invalidateQueries({ queryKey: ['api-tokens'] });
@@ -115,7 +111,8 @@ function formatTimestamp(value: string | null): string {
           <p class="eyebrow">sentry-cli</p>
           <h2>{{ profileTitle }}</h2>
           <p class="muted">
-            Grants only <code>{{ tokenScopes.join(', ') }}</code>.
+            Grants only <code>{{ tokenScopes.join(', ') }}</code
+            >.
           </p>
         </div>
       </div>

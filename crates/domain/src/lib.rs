@@ -15,6 +15,7 @@ pub mod finalization;
 pub mod grouping;
 pub mod inbound_filter;
 pub mod issue;
+pub mod monitors;
 pub mod notifications;
 pub mod processing;
 pub mod releases;
@@ -486,6 +487,7 @@ pub struct ItemCapabilities {
     pub transaction: bool,
     pub span: bool,
     pub feedback: bool,
+    pub check_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

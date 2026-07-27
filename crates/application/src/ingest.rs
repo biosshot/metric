@@ -16,6 +16,10 @@ use metric_domain::{
     inbound_filter::{
         InboundFilterField, InboundFilterFields, InboundFilterMatch, InboundFilterSignal,
     },
+    monitors::{
+        MonitorConfig, MonitorDefinition, MonitorId, MonitorRun, MonitorRunId, MonitorRunSource,
+        MonitorRunStatus, MonitorSchedule, MonitorUpdate,
+    },
     releases::validate_version,
     sessions::{SessionId, SessionState, SessionUpdate},
     signals::{
@@ -25,8 +29,9 @@ use metric_domain::{
 };
 use metric_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
-    FeedbackSink, FeedbackStoreError, IngestOutcome, IngestOutcomeKind, LogSink, OutcomeSink,
-    ProjectResolveError, ProjectResolver, RandomSource, SessionSink, SignalStoreError, SpanSink,
+    FeedbackSink, FeedbackStoreError, IngestOutcome, IngestOutcomeKind, LogSink, MonitorSink,
+    OutcomeSink, ProjectResolveError, ProjectResolver, RandomSource, SessionSink, SignalStoreError,
+    SpanSink,
 };
 use serde_json::{Map, Value};
 use sha2::Sha256;
@@ -154,6 +159,7 @@ pub struct IngestRequest {
     pub primary: Option<PrimaryEvent>,
     /// Independent Log/Transaction/Span items, not an exhaustive signal taxonomy.
     pub signals: Vec<PendingSignal>,
+    pub check_ins: Vec<Box<[u8]>>,
     pub attachments: Vec<PendingAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
@@ -214,6 +220,23 @@ pub struct FeedbackIngestConfig {
     pub max_submissions_per_minute: u32,
     pub limiter_capacity: usize,
     pub allow_png_screenshots: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MonitorIngestConfig {
+    pub retention_days: u32,
+    pub max_check_ins_per_minute: u32,
+    pub limiter_capacity: usize,
+}
+
+impl Default for MonitorIngestConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 90,
+            max_check_ins_per_minute: 10_000,
+            limiter_capacity: 10_000,
+        }
+    }
 }
 
 impl Default for FeedbackIngestConfig {
@@ -316,6 +339,9 @@ pub struct IngestService {
     feedback_sink: Option<Arc<dyn FeedbackSink>>,
     feedback_config: FeedbackIngestConfig,
     feedback_rate: Mutex<HashMap<ProjectId, FeedbackRateWindow>>,
+    monitor_sink: Option<Arc<dyn MonitorSink>>,
+    monitor_config: MonitorIngestConfig,
+    monitor_rate: Mutex<HashMap<ProjectId, FeedbackRateWindow>>,
 }
 
 impl IngestService {
@@ -346,6 +372,9 @@ impl IngestService {
             feedback_sink: None,
             feedback_config: FeedbackIngestConfig::default(),
             feedback_rate: Mutex::new(HashMap::new()),
+            monitor_sink: None,
+            monitor_config: MonitorIngestConfig::default(),
+            monitor_rate: Mutex::new(HashMap::new()),
         }
     }
 
@@ -375,6 +404,17 @@ impl IngestService {
     ) -> Self {
         self.feedback_sink = Some(feedback_sink);
         self.feedback_config = config;
+        self
+    }
+
+    #[must_use]
+    pub fn with_monitor_sink(
+        mut self,
+        monitor_sink: Arc<dyn MonitorSink>,
+        config: MonitorIngestConfig,
+    ) -> Self {
+        self.monitor_sink = Some(monitor_sink);
+        self.monitor_config = config;
         self
     }
 
@@ -437,6 +477,7 @@ impl IngestService {
             .collect::<Vec<_>>();
 
         disabled_categories.extend(self.persist_signals(&snapshot, request.signals).await?);
+        disabled_categories.extend(self.persist_check_ins(&snapshot, request.check_ins).await?);
         disabled_categories.sort_unstable();
         disabled_categories.dedup();
 
@@ -675,6 +716,85 @@ impl IngestService {
             },
         );
         Ok(())
+    }
+
+    fn admit_monitor(
+        &self,
+        project_id: ProjectId,
+        received_at: metric_domain::Timestamp,
+    ) -> Result<(), IngestError> {
+        admit_window(
+            &self.monitor_rate,
+            project_id,
+            received_at,
+            self.monitor_config.max_check_ins_per_minute,
+            self.monitor_config.limiter_capacity,
+            "monitor_rate_limited",
+            "monitor_limiter_capacity",
+        )
+    }
+
+    async fn persist_check_ins(
+        &self,
+        snapshot: &ProjectSnapshot,
+        check_ins: Vec<Box<[u8]>>,
+    ) -> Result<Vec<&'static str>, IngestError> {
+        if check_ins.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !snapshot.items.check_in {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "feature_disabled",
+                quantity: u64::try_from(check_ins.len()).unwrap_or(u64::MAX),
+            });
+            return Ok(vec!["monitor"]);
+        }
+        let received_at = self.clock.now();
+        let mut updates = Vec::with_capacity(check_ins.len());
+        for payload in check_ins {
+            if payload.len() > snapshot.limits.max_event_bytes.get() as usize {
+                return Err(IngestError {
+                    kind: IngestErrorKind::TooLarge,
+                    code: "project_check_in_too_large",
+                });
+            }
+            self.admit_monitor(snapshot.project_id, received_at)?;
+            updates.push(normalize_check_in(
+                snapshot,
+                received_at,
+                &payload,
+                self.monitor_config,
+            )?);
+        }
+        let sink = self
+            .monitor_sink
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("monitor_storage_unavailable"))?;
+        let outcomes = sink
+            .persist_monitors(updates)
+            .await
+            .map_err(map_signal_store_error)?;
+        let accepted = outcomes
+            .iter()
+            .filter(|outcome| **outcome == DurableOutcome::Accepted)
+            .count();
+        let duplicate = outcomes.len().saturating_sub(accepted);
+        if accepted > 0 {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Accepted,
+                reason: "monitor",
+                quantity: accepted as u64,
+            });
+        }
+        if duplicate > 0 {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Duplicate,
+                reason: "monitor",
+                quantity: duplicate as u64,
+            });
+        }
+        Ok(Vec::new())
     }
 
     async fn persist_signals(
@@ -1811,6 +1931,223 @@ fn normalize_session(
     Ok(update)
 }
 
+fn normalize_check_in(
+    snapshot: &ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    payload: &[u8],
+    ingest: MonitorIngestConfig,
+) -> Result<MonitorUpdate, IngestError> {
+    let mut value: Value = serde_json::from_slice(payload)
+        .map_err(|_| IngestError::invalid("invalid_check_in_json"))?;
+    scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| IngestError::invalid("invalid_check_in_json"))?;
+    let check_in_id = object
+        .get("check_in_id")
+        .and_then(Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .filter(|value| !value.is_nil())
+        .ok_or_else(|| IngestError::invalid("invalid_check_in_id"))?;
+    let slug = object
+        .get("monitor_slug")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| IngestError::invalid("missing_monitor_slug"))?;
+    let environment = object
+        .get("environment")
+        .and_then(Value::as_str)
+        .unwrap_or("production");
+    let monitor_id = MonitorId::derive(snapshot.project_id, slug, environment);
+    let status = object
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| IngestError::invalid("missing_check_in_status"))
+        .and_then(|value| {
+            MonitorRunStatus::parse(value)
+                .map_err(|_| IngestError::invalid("invalid_check_in_status"))
+        })?;
+    if matches!(status, MonitorRunStatus::Timeout | MonitorRunStatus::Missed) {
+        return Err(IngestError::invalid("invalid_sdk_check_in_status"));
+    }
+    let duration_ms = object
+        .get("duration")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0 && *value <= i64::MAX as f64 / 1_000.0)
+        .map(|seconds| (seconds * 1_000.0).round() as u64);
+    let started_at = if status == MonitorRunStatus::InProgress {
+        received_at
+    } else {
+        let duration = duration_ms.unwrap_or(0).min(i64::MAX as u64) as i64;
+        metric_domain::Timestamp::from_unix_millis(
+            received_at.unix_millis().saturating_sub(duration),
+        )
+        .map_err(|_| IngestError::invalid("invalid_check_in_duration"))?
+    };
+    let definition = object
+        .get("monitor_config")
+        .map(|value| {
+            normalize_monitor_definition(
+                snapshot,
+                received_at,
+                monitor_id,
+                slug,
+                environment,
+                value,
+            )
+        })
+        .transpose()?;
+    let timeout_at = definition
+        .as_ref()
+        .filter(|_| status == MonitorRunStatus::InProgress)
+        .map(|definition| definition.config.timeout_at(started_at))
+        .transpose()
+        .map_err(|_| IngestError::invalid("invalid_monitor_runtime"))?;
+    let release_id = object
+        .get("release")
+        .and_then(Value::as_str)
+        .filter(|value| validate_version(value).is_ok())
+        .map(|value| derive_release_id(snapshot.organization_id, value));
+    let delete_at = metric_domain::Timestamp::from_unix_millis(
+        received_at.unix_millis().saturating_add(
+            i64::from(ingest.retention_days)
+                .saturating_mul(24 * 60 * 60)
+                .saturating_mul(1_000),
+        ),
+    )
+    .map_err(|_| IngestError::invalid("invalid_monitor_retention"))?;
+    let run = MonitorRun {
+        id: MonitorRunId::sdk(monitor_id, *check_in_id.as_bytes()),
+        project_id: snapshot.project_id,
+        monitor_id,
+        check_in_id: Some(*check_in_id.as_bytes()),
+        status,
+        source: MonitorRunSource::Sdk,
+        scheduled_for: None,
+        started_at,
+        finished_at: status.is_terminal().then_some(received_at),
+        duration_ms,
+        received_at,
+        release_id,
+        timeout_at,
+        delete_at: Some(delete_at),
+    };
+    let update = MonitorUpdate { definition, run };
+    update
+        .validate()
+        .map_err(|_| IngestError::invalid("invalid_check_in"))?;
+    Ok(update)
+}
+
+fn normalize_monitor_definition(
+    snapshot: &ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    monitor_id: MonitorId,
+    slug: &str,
+    environment: &str,
+    value: &Value,
+) -> Result<MonitorDefinition, IngestError> {
+    let config = value
+        .as_object()
+        .ok_or_else(|| IngestError::invalid("invalid_monitor_config"))?;
+    let timezone = config
+        .get("timezone")
+        .and_then(Value::as_str)
+        .unwrap_or("UTC");
+    if timezone != "UTC" {
+        return Err(IngestError::invalid("unsupported_monitor_timezone"));
+    }
+    let schedule = config
+        .get("schedule")
+        .and_then(Value::as_object)
+        .ok_or_else(|| IngestError::invalid("missing_monitor_schedule"))?;
+    let schedule_type = schedule
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| IngestError::invalid("missing_monitor_schedule_type"))?;
+    let schedule = match schedule_type {
+        "crontab" => MonitorSchedule::crontab(
+            schedule
+                .get("value")
+                .and_then(Value::as_str)
+                .ok_or_else(|| IngestError::invalid("invalid_monitor_schedule"))?,
+        ),
+        "interval" => {
+            let value = schedule
+                .get("value")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| IngestError::invalid("invalid_monitor_interval"))?;
+            let factor = match schedule.get("unit").and_then(Value::as_str) {
+                Some("minute") => 1,
+                Some("hour") => 60,
+                Some("day") => 24 * 60,
+                Some("week") => 7 * 24 * 60,
+                _ => return Err(IngestError::invalid("invalid_monitor_interval_unit")),
+            };
+            MonitorSchedule::interval(
+                value
+                    .checked_mul(factor)
+                    .ok_or_else(|| IngestError::invalid("invalid_monitor_interval"))?,
+            )
+        }
+        _ => return Err(IngestError::invalid("unsupported_monitor_schedule")),
+    }
+    .map_err(|_| IngestError::invalid("invalid_monitor_schedule"))?;
+    let checkin_margin_minutes = optional_u32(config, "checkin_margin")?.unwrap_or(1);
+    let max_runtime_minutes = optional_u32(config, "max_runtime")?.unwrap_or(30);
+    let monitor_config = MonitorConfig {
+        schedule,
+        checkin_margin_seconds: checkin_margin_minutes
+            .checked_mul(60)
+            .ok_or_else(|| IngestError::invalid("invalid_monitor_margin"))?,
+        max_runtime_seconds: max_runtime_minutes
+            .checked_mul(60)
+            .ok_or_else(|| IngestError::invalid("invalid_monitor_runtime"))?,
+    };
+    monitor_config
+        .validate()
+        .map_err(|_| IngestError::invalid("invalid_monitor_config"))?;
+    let next_expected_at = monitor_config
+        .schedule
+        .next_after(received_at)
+        .map_err(|_| IngestError::invalid("invalid_monitor_schedule"))?;
+    let definition = MonitorDefinition {
+        id: monitor_id,
+        project_id: snapshot.project_id,
+        slug: slug.into(),
+        name: slug.into(),
+        environment_id: derive_environment_id(snapshot.project_id, environment),
+        environment: environment.into(),
+        enabled: true,
+        managed_by_web: false,
+        revision: 1,
+        config: monitor_config,
+        next_expected_at,
+        last_run_id: None,
+        last_status: None,
+        last_check_in_at: None,
+        created_at: received_at,
+        updated_at: received_at,
+    };
+    definition
+        .validate()
+        .map_err(|_| IngestError::invalid("invalid_monitor_definition"))?;
+    Ok(definition)
+}
+
+fn optional_u32(object: &Map<String, Value>, key: &str) -> Result<Option<u32>, IngestError> {
+    object
+        .get(key)
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| IngestError::invalid("invalid_monitor_config"))
+        })
+        .transpose()
+}
+
 fn parse_session_timestamp(value: &Value) -> Result<metric_domain::Timestamp, IngestError> {
     let milliseconds = if let Some(seconds) = value.as_f64() {
         if !seconds.is_finite()
@@ -1831,6 +2168,46 @@ fn parse_session_timestamp(value: &Value) -> Result<metric_domain::Timestamp, In
     };
     metric_domain::Timestamp::from_unix_millis(milliseconds)
         .map_err(|_| IngestError::invalid("invalid_session_timestamp"))
+}
+
+fn admit_window(
+    storage: &Mutex<HashMap<ProjectId, FeedbackRateWindow>>,
+    project_id: ProjectId,
+    received_at: metric_domain::Timestamp,
+    maximum: u32,
+    capacity: usize,
+    rate_code: &'static str,
+    capacity_code: &'static str,
+) -> Result<(), IngestError> {
+    let mut windows = storage
+        .lock()
+        .map_err(|_| IngestError::unavailable("rate_limiter_unavailable"))?;
+    let now = received_at.unix_millis();
+    if let Some(window) = windows.get_mut(&project_id) {
+        if now.saturating_sub(window.opened_at) >= 60_000 {
+            *window = FeedbackRateWindow {
+                opened_at: now,
+                submissions: 1,
+            };
+            return Ok(());
+        }
+        if window.submissions >= maximum {
+            return Err(IngestError::rate_limited(rate_code));
+        }
+        window.submissions = window.submissions.saturating_add(1);
+        return Ok(());
+    }
+    if windows.len() >= capacity {
+        return Err(IngestError::rate_limited(capacity_code));
+    }
+    windows.insert(
+        project_id,
+        FeedbackRateWindow {
+            opened_at: now,
+            submissions: 1,
+        },
+    );
+    Ok(())
 }
 
 fn normalize_transaction(
@@ -2266,6 +2643,7 @@ mod tests {
                 transaction: true,
                 span: true,
                 feedback: true,
+                check_in: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: Default::default(),

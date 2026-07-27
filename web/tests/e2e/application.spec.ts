@@ -343,9 +343,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     }
     return index >= 0 ? json(state.dashboards[index]) : json({}, 404);
   }
-  const refreshMatch = path.match(
-    /^\/api\/v1\/projects\/42\/dashboards\/([0-9a-f]+)\/refresh$/,
-  );
+  const refreshMatch = path.match(/^\/api\/v1\/projects\/42\/dashboards\/([0-9a-f]+)\/refresh$/);
   if (refreshMatch) {
     const body = request.postDataJSON() as { environment?: string; release?: string };
     state.dashboardVariableSeen = body.environment === 'production';

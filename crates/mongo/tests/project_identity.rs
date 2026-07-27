@@ -237,6 +237,7 @@ fn project(id: i32, organization_id: u64, slug: &str) -> ProjectIdentity {
             transaction: true,
             span: true,
             feedback: true,
+            check_in: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

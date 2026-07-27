@@ -113,6 +113,7 @@ const policy = reactive<ProjectPolicy>({
     transaction: true,
     span: true,
     feedback: true,
+    check_in: true,
   },
   limits: { max_event_bytes: 1_048_576, max_events_per_second: null, burst: null },
   inbound_filters: [],
@@ -308,6 +309,14 @@ const cancelDeletion = useMutation({
             :disabled="!session.has('project:admin')"
           />
           <span><strong>User Feedback</strong><small>Accept Feedback SDK reports.</small></span>
+        </label>
+        <label class="check-control">
+          <input
+            v-model="policy.items.check_in"
+            type="checkbox"
+            :disabled="!session.has('project:admin')"
+          />
+          <span><strong>Cron check-ins</strong><small>Accept scheduled-job check-ins.</small></span>
         </label>
       </div>
       <section class="inbound-filter-section">

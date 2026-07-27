@@ -24,8 +24,8 @@ use metric_domain::{
 use metric_ports::{BlobStore, IngestOutcomeKind};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
-    FakeEventSink, FakeFeedbackSink, FakeLogSink, FakeOutcomeSink, FakeProjectResolver,
-    FakeSessionSink, FakeSpanSink, FixedClock, FixedRandom,
+    FakeEventSink, FakeFeedbackSink, FakeLogSink, FakeMonitorSink, FakeOutcomeSink,
+    FakeProjectResolver, FakeSessionSink, FakeSpanSink, FixedClock, FixedRandom,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -53,6 +53,7 @@ struct RunningHarness {
     logs: FakeLogSink,
     spans: FakeSpanSink,
     sessions: FakeSessionSink,
+    monitors: FakeMonitorSink,
     feedback: FakeFeedbackSink,
     blob: LocalBlobStore,
     blob_directory: PathBuf,
@@ -109,6 +110,49 @@ async fn real_node_sdk_sends_session_lifecycle_and_crash_state() {
             .any(|update| update.state == metric_domain::sessions::SessionState::Crashed)
     );
     assert!(updates.iter().all(|update| update.user_digest.is_some()));
+    stop_harness(harness).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Node.js and npm ci in sdk-tests/node"]
+async fn real_node_sdk_sends_cron_success_and_error_check_ins() {
+    let sender = workspace().join("sdk-tests/node/send-cron.mjs");
+    let harness = start_harness(Router::new()).await.unwrap();
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let output =
+        tokio::task::spawn_blocking(move || Command::new("node").arg(sender).arg(dsn).output())
+            .await
+            .unwrap()
+            .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        output.status.success(),
+        "Node SDK failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let updates = harness.monitors.updates();
+    assert!(
+        updates.iter().any(
+            |update| update.run.status == metric_domain::monitors::MonitorRunStatus::InProgress
+        )
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.run.status == metric_domain::monitors::MonitorRunStatus::Success)
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.run.status == metric_domain::monitors::MonitorRunStatus::Error)
+    );
+    assert!(
+        updates
+            .iter()
+            .filter(|update| update.definition.is_some())
+            .count()
+            >= 2
+    );
     stop_harness(harness).await.unwrap();
 }
 
@@ -668,6 +712,7 @@ async fn start_harness_with_policy(
     let spans = FakeSpanSink::default();
     let sessions = FakeSessionSink::default();
     let feedback = FakeFeedbackSink::default();
+    let monitors = FakeMonitorSink::default();
     let (app, blob, blob_directory) = test_app(
         sink.clone(),
         outcomes.clone(),
@@ -675,6 +720,7 @@ async fn start_harness_with_policy(
         spans.clone(),
         sessions.clone(),
         feedback.clone(),
+        monitors.clone(),
         policy,
         &root,
     )
@@ -694,6 +740,7 @@ async fn start_harness_with_policy(
         logs,
         spans,
         sessions,
+        monitors,
         feedback,
         blob,
         blob_directory,
@@ -871,6 +918,7 @@ async fn test_app(
     spans: FakeSpanSink,
     sessions: FakeSessionSink,
     feedback: FakeFeedbackSink,
+    monitors: FakeMonitorSink,
     policy: InboundFilterPolicy,
     root: &ShutdownRoot,
 ) -> (Router, LocalBlobStore, PathBuf) {
@@ -922,6 +970,7 @@ async fn test_app(
                         transaction: true,
                         span: true,
                         feedback: true,
+                        check_in: true,
                     },
                     limits: ProjectIngestLimits::default(),
                     inbound_filters: Arc::new(policy.compile().unwrap()),
@@ -939,6 +988,10 @@ async fn test_app(
         .with_log_sink(Arc::new(logs))
         .with_span_sink(Arc::new(spans))
         .with_session_sink(Arc::new(sessions))
+        .with_monitor_sink(
+            Arc::new(monitors),
+            metric_application::ingest::MonitorIngestConfig::default(),
+        )
         .with_feedback_sink(Arc::new(feedback), FeedbackIngestConfig::default()),
     );
     (
