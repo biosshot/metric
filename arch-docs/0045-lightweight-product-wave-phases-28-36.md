@@ -28,7 +28,7 @@ The selected wave is:
 | 33 | Saved Queries and Dashboards | Complete |
 | 34 | Alerts and notification destinations | Complete |
 | 35 | Cron Monitoring | Complete |
-| 36 | Uptime Monitoring | Planned |
+| 36 | Uptime Monitoring | Complete |
 
 Metrics, Profiling, Replay, organization workflow, provider integrations, MCP,
 online migrations and horizontal scaling remain unnumbered backlog.
