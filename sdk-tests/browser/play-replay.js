@@ -15,12 +15,35 @@ async function decodeRecording(buffer) {
   return JSON.parse(await new Response(stream).text());
 }
 
+function prepareEvents(events) {
+  const prepared = events.map((event) => {
+    const timestamp =
+      event?.type === 5 &&
+      event?.data?.tag === "performanceSpan" &&
+      event.timestamp >= 1_000_000_000 &&
+      event.timestamp < 10_000_000_000
+        ? event.timestamp * 1000
+        : event?.timestamp;
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      throw new Error("retrieved Replay has an invalid rrweb timestamp");
+    }
+    return timestamp === event.timestamp ? event : { ...event, timestamp };
+  });
+  const timestamps = prepared.map((event) => event.timestamp);
+  if (Math.max(...timestamps) - Math.min(...timestamps) > 24 * 60 * 60 * 1000) {
+    throw new Error("retrieved Replay exceeds the 24-hour timeline limit");
+  }
+  return prepared;
+}
+
 (async function playReplay() {
   try {
     const response = await fetch("/sdk-replay-recording");
     if (!response.ok)
       throw new Error(`Replay retrieval returned HTTP ${response.status}`);
-    const events = await decodeRecording(await response.arrayBuffer());
+    const events = prepareEvents(
+      await decodeRecording(await response.arrayBuffer()),
+    );
     if (!Array.isArray(events) || events.length < 2) {
       throw new Error("retrieved Replay has too few rrweb events");
     }

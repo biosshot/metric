@@ -9,6 +9,7 @@ import AppIcon from '../components/AppIcon.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import { api, ApiError } from '../api/client';
 import { useSessionStore } from '../stores/session';
+import { prepareReplayEvents } from './replayEvents';
 
 const MAX_PLAYER_SEGMENTS = 20;
 const MAX_PLAYER_EVENTS = 100_000;
@@ -74,6 +75,7 @@ async function loadPlayer(): Promise<void> {
       if (events.length > MAX_PLAYER_EVENTS) throw new Error('Replay exceeds the event limit.');
     }
     if (events.length < 2) throw new Error('Replay does not contain enough events to play.');
+    const playerEvents = prepareReplayEvents(events);
     await nextTick();
     if (!target.value) return;
     target.value.replaceChildren();
@@ -81,7 +83,7 @@ async function loadPlayer(): Promise<void> {
     player = new Player({
       target: target.value,
       props: {
-        events: events as never[],
+        events: playerEvents as never[],
         width: Math.min(1100, target.value.clientWidth || 1100),
         height: 620,
         autoPlay: false,
