@@ -20,6 +20,7 @@ import ExploreView from './views/ExploreView.vue';
 import DashboardsView from './views/DashboardsView.vue';
 import AlertsView from './views/AlertsView.vue';
 import MonitorsView from './views/MonitorsView.vue';
+import SettingsView from './views/SettingsView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -36,7 +37,7 @@ export const router = createRouter({
     { path: '/traces/:traceId', name: 'trace', component: TraceView },
     { path: '/performance', name: 'performance', component: PerformanceView },
     { path: '/explore', name: 'explore', component: ExploreView },
-    { path: '/alerts', name: 'alerts', component: AlertsView },
+    { path: '/alerts', redirect: '/settings/notifications' },
     { path: '/monitors', name: 'monitors', component: MonitorsView },
     {
       path: '/replays',
@@ -53,12 +54,22 @@ export const router = createRouter({
     { path: '/releases', name: 'releases', component: ReleasesView },
     { path: '/releases/:releaseId', name: 'release', component: ReleaseDetailView },
     { path: '/auth/setup', name: 'password-setup', component: AuthView },
-    { path: '/organization', name: 'organization', component: OrganizationView },
-    { path: '/account/tokens', redirect: '/organization' },
+    { path: '/organization', redirect: '/settings/organization' },
+    { path: '/account/tokens', redirect: '/settings/organization' },
     { path: '/project/setup', name: 'setup', component: ProjectSetupView },
-    { path: '/project/settings', redirect: '/settings' },
-    { path: '/settings', name: 'settings', component: ProjectSettingsView },
-    { path: '/system', name: 'system', component: SystemStatusView },
+    { path: '/project/settings', redirect: '/settings/project' },
+    {
+      path: '/settings',
+      component: SettingsView,
+      children: [
+        { path: '', redirect: '/settings/project' },
+        { path: 'project', name: 'settings-project', component: ProjectSettingsView },
+        { path: 'notifications', name: 'settings-notifications', component: AlertsView },
+        { path: 'organization', name: 'settings-organization', component: OrganizationView },
+        { path: 'system', name: 'settings-system', component: SystemStatusView },
+      ],
+    },
+    { path: '/system', redirect: '/settings/system' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
   scrollBehavior: () => ({ top: 0 }),

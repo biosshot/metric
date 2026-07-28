@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import type {
   Dashboard,
@@ -18,6 +19,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
+const route = useRoute();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const canWrite = computed(() => session.has('issue:write'));
@@ -30,7 +32,7 @@ const selectedSavedQuery = ref('');
 const selectedDashboardId = ref('');
 const refreshInterval = ref('manual');
 const draftWidgets = ref<SavedQuery[]>([]);
-const editing = ref(false);
+const editing = ref(route.query.edit === '1');
 const environment = reactive<Record<string, string>>({});
 const release = reactive<Record<string, string>>({});
 const refreshResults = reactive<Record<string, DashboardRefresh>>({});
@@ -93,6 +95,12 @@ watch(projectId, () => {
   editing.value = false;
   Object.keys(refreshResults).forEach((key) => delete refreshResults[key]);
 });
+watch(
+  () => route.query.edit,
+  (value) => {
+    if (value === '1') editing.value = true;
+  },
+);
 
 const createSaved = useMutation({
   mutationFn: () =>

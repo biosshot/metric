@@ -169,7 +169,11 @@ async function logout(): Promise<void> {
       </nav>
 
       <div class="sidebar__account">
-        <RouterLink class="sidebar__identity" to="/organization" @click="navigationOpen = false">
+        <RouterLink
+          class="sidebar__identity"
+          to="/settings/organization"
+          @click="navigationOpen = false"
+        >
           <strong>{{ session.identity?.role }}</strong>
           <span>Org {{ session.organizationId }}</span>
         </RouterLink>
@@ -185,13 +189,14 @@ async function logout(): Promise<void> {
       <FirstProjectOnboarding
         v-if="
           !session.selectedProject &&
-          !['system', 'organization'].includes(String($route.name)) &&
+          !['settings-system', 'settings-organization'].includes(String($route.name)) &&
           session.has('organization:admin')
         "
       />
       <EmptyState
         v-else-if="
-          !session.selectedProject && !['system', 'organization'].includes(String($route.name))
+          !session.selectedProject &&
+          !['settings-system', 'settings-organization'].includes(String($route.name))
         "
         icon="blocked"
         title="No accessible projects"

@@ -56,6 +56,10 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/project/setup", index.clone())
         .route_service("/project/settings", index.clone())
         .route_service("/settings", index.clone())
+        .route_service("/settings/project", index.clone())
+        .route_service("/settings/notifications", index.clone())
+        .route_service("/settings/organization", index.clone())
+        .route_service("/settings/system", index.clone())
         .route_service("/system", index)
         .route_service("/favicon.svg", ServeFile::new(root.join("favicon.svg")))
         .nest_service("/assets", ServeDir::new(root.join("assets")))
@@ -128,6 +132,10 @@ mod tests {
             "/account/tokens",
             "/auth/setup",
             "/settings",
+            "/settings/project",
+            "/settings/notifications",
+            "/settings/organization",
+            "/settings/system",
         ] {
             let response = router_with_root(&root)
                 .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())

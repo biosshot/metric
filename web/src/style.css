@@ -493,6 +493,89 @@ input[type='checkbox'] {
   padding: clamp(1.5rem, 4vw, 4.5rem);
 }
 
+.settings-shell__header {
+  margin-bottom: 1.5rem;
+}
+
+.settings-shell__header h1 {
+  margin-bottom: 0.35rem;
+}
+
+.settings-shell__header p:last-child {
+  max-width: 720px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.settings-shell__layout {
+  display: grid;
+  align-items: start;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: clamp(1.25rem, 3vw, 2.5rem);
+}
+
+.settings-navigation {
+  position: sticky;
+  top: 1.5rem;
+  display: grid;
+  gap: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.settings-navigation > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.settings-navigation > div + div {
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.settings-navigation span {
+  padding: 0.25rem 0.65rem;
+  color: var(--text-subtle);
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.settings-navigation a {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.58rem 0.65rem;
+  border-radius: var(--radius-small);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.settings-navigation a:hover {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.settings-navigation a.router-link-active {
+  background: var(--semantic-info-surface);
+  color: var(--text);
+}
+
+.settings-shell__content {
+  min-width: 0;
+}
+
+.settings-shell__content > section > .page-header:first-child,
+.settings-shell__content > .page-heading:first-child {
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -2787,6 +2870,22 @@ label small,
 }
 
 @media (max-width: 1050px) {
+  .settings-shell__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-navigation {
+    position: static;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settings-navigation > div + div {
+    padding-top: 0;
+    padding-left: 0.8rem;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+
   .signal-toolbar {
     grid-template-columns: 1fr 1fr;
   }
@@ -2921,6 +3020,17 @@ label small,
 
   .main-content {
     padding: 1rem;
+  }
+
+  .settings-navigation {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-navigation > div + div {
+    padding-top: 0.8rem;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
   .page-header,
