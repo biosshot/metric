@@ -66,6 +66,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             .list_replays(
                 project,
                 ReplayQuery {
+                    from: None,
+                    until: None,
                     before: None,
                     limit: 10,
                 },
@@ -80,6 +82,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             .list_replays(
                 ProjectId::new(43)?,
                 ReplayQuery {
+                    from: None,
+                    until: None,
                     before: None,
                     limit: 10,
                 },

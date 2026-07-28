@@ -311,9 +311,20 @@ export const api = {
         inbound_filters: policy.inbound_filters,
       }),
     }),
-  issues: (projectId: string, status?: string, cursor?: string | null) =>
+  issues: (
+    projectId: string,
+    status?: string,
+    cursor?: string | null,
+    range: { from?: number; until?: number } = {},
+  ) =>
     request<Page<Issue>>(
-      `/api/v1/projects/${projectId}/issues${query({ status, cursor, limit: 50 })}`,
+      `/api/v1/projects/${projectId}/issues${query({
+        status,
+        cursor,
+        from: range.from,
+        until: range.until,
+        limit: 50,
+      })}`,
     ),
   issue: (projectId: string, issueId: string) =>
     request<Issue>(`/api/v1/projects/${projectId}/issues/${issueId}`),
@@ -372,6 +383,8 @@ export const api = {
       release?: string;
       service?: string;
       traceId?: string;
+      from?: number;
+      until?: number;
       cursor?: string | null;
     } = {},
   ) =>
@@ -383,6 +396,8 @@ export const api = {
         release: filters.release,
         service: filters.service,
         trace_id: filters.traceId,
+        from: filters.from,
+        until: filters.until,
         cursor: filters.cursor,
         limit: 50,
       })}`,
@@ -395,6 +410,8 @@ export const api = {
       environment?: string;
       release?: string;
       service?: string;
+      from?: number;
+      until?: number;
       cursor?: string | null;
     } = {},
   ) =>
@@ -403,6 +420,8 @@ export const api = {
         environment: filters.environment,
         release: filters.release,
         service: filters.service,
+        from: filters.from,
+        until: filters.until,
         cursor: filters.cursor,
         limit: 50,
       })}`,
@@ -411,18 +430,32 @@ export const api = {
     request<Trace>(`/api/v1/projects/${projectId}/traces/${traceId}`),
   performance: (
     projectId: string,
-    filters: { environment?: string; release?: string; service?: string } = {},
+    filters: {
+      environment?: string;
+      release?: string;
+      service?: string;
+      from?: number;
+      until?: number;
+    } = {},
   ) =>
     request<{ items: PerformanceBucket[] }>(
       `/api/v1/projects/${projectId}/performance${query({
         environment: filters.environment,
         release: filters.release,
         service: filters.service,
+        from: filters.from,
+        until: filters.until,
         limit: 100,
       })}`,
     ),
-  replays: (projectId: string) =>
-    request<Page<Replay>>(`/api/v1/projects/${projectId}/replays?limit=50`),
+  replays: (projectId: string, range: { from?: number; until?: number } = {}) =>
+    request<Page<Replay>>(
+      `/api/v1/projects/${projectId}/replays${query({
+        from: range.from,
+        until: range.until,
+        limit: 50,
+      })}`,
+    ),
   replay: (projectId: string, replayId: string) =>
     request<Replay>(`/api/v1/projects/${projectId}/replays/${replayId}`),
   replaySegment: (projectId: string, replayId: string, segmentId: number) =>

@@ -457,7 +457,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   const refreshMatch = path.match(/^\/api\/v1\/projects\/42\/dashboards\/([0-9a-f]+)\/refresh$/);
   if (refreshMatch) {
     const body = request.postDataJSON() as { environment?: string; release?: string };
-    state.dashboardVariableSeen = body.environment === 'production';
+    state.dashboardVariableSeen = body.environment === undefined && body.release === undefined;
     const dashboard = state.dashboards?.find((item) => item.id === refreshMatch[1]);
     return json({
       dashboard_id: dashboard?.id,
@@ -691,7 +691,7 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await login(page);
 
   await page.getByRole('link', { name: 'Monitors', exact: true }).click();
-  await page.locator('.page-header').getByRole('button', { name: 'Create monitor' }).click();
+  await page.locator('.page-header').getByRole('button', { name: 'Manage monitors' }).click();
   await page.getByRole('combobox', { name: 'Monitor type' }).click();
   await page.getByRole('option', { name: /^Uptime HTTP/ }).click();
   await page.getByLabel('Name', { exact: true }).fill('Public API');
@@ -731,6 +731,7 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   expect(state.alertRules?.[0]?.monitor.notify_resolved).toBe(true);
 
   await page.goto('/monitors');
+  await page.getByRole('button', { name: 'Manage monitors' }).click();
   await page.getByRole('button', { name: 'Delete monitor' }).click();
   await page.getByRole('button', { name: 'Confirm delete' }).click();
   await expect(page.getByRole('heading', { name: 'No monitors yet' })).toBeVisible();
@@ -858,7 +859,7 @@ test('Explore submits a typed bounded query and renders a number result', async 
   await expect(page.getByText('Estimated cost')).toContainText('198');
 });
 
-test('Dashboard lifecycle applies variables and keeps partial widget failures visible', async ({
+test('Dashboard lifecycle loads current data and keeps partial widget failures visible', async ({
   page,
 }) => {
   const state: ApiState = {
@@ -895,8 +896,6 @@ test('Dashboard lifecycle applies variables and keeps partial widget failures vi
     page.getByRole('heading', { name: 'Service health', exact: true, level: 2 }),
   ).toBeVisible();
 
-  await page.getByPlaceholder('All environments').fill('production');
-  await page.getByRole('button', { name: 'Refresh' }).click();
   await expect(page.locator('.dashboard-widget__number')).toContainText('23');
   expect(state.dashboardVariableSeen).toBe(true);
   expect(state.csrfSeen).toBe(true);
@@ -1001,8 +1000,11 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(toolbarBox).not.toBeNull();
   expect(searchBox).not.toBeNull();
   expect(actionsBox).not.toBeNull();
-  expect(Math.abs(actionsBox!.x - (toolbarBox!.x + 12))).toBeLessThanOrEqual(2);
-  expect(actionsBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
+  expect(
+    Math.abs(toolbarBox!.x + toolbarBox!.width - (actionsBox!.x + actionsBox!.width) - 12),
+  ).toBeLessThanOrEqual(2);
+  expect(actionsBox!.y).toBeLessThan(searchBox!.y + searchBox!.height);
+  expect(actionsBox!.y + actionsBox!.height).toBeGreaterThan(searchBox!.y);
 
   await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();

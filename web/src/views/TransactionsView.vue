@@ -8,7 +8,9 @@ import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TraceSectionNav from '../components/TraceSectionNav.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
+import { timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -19,6 +21,9 @@ const release = ref(typeof route.query.release === 'string' ? route.query.releas
 const appliedService = ref('');
 const appliedEnvironment = ref('');
 const appliedRelease = ref(release.value);
+const range = ref('24h');
+const appliedRange = ref('24h');
+const appliedWindow = ref(timeWindow('24h'));
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -29,10 +34,14 @@ const transactions = useQuery({
     appliedService.value,
     appliedEnvironment.value,
     appliedRelease.value,
+    appliedRange.value,
+    appliedWindow.value.from,
+    appliedWindow.value.until,
     cursor.value,
   ]),
   queryFn: () =>
     api.transactions(projectId.value, {
+      ...appliedWindow.value,
       service: appliedService.value || undefined,
       environment: appliedEnvironment.value || undefined,
       release: appliedRelease.value || undefined,
@@ -50,6 +59,8 @@ function applyFilters(): void {
   appliedService.value = service.value.trim();
   appliedEnvironment.value = environment.value.trim();
   appliedRelease.value = release.value.trim();
+  appliedRange.value = range.value;
+  appliedWindow.value = timeWindow(range.value);
   cursor.value = null;
   history.value = [];
 }
@@ -58,6 +69,7 @@ function resetFilters(): void {
   service.value = '';
   environment.value = '';
   release.value = '';
+  range.value = '24h';
   applyFilters();
 }
 
@@ -92,6 +104,7 @@ function previousPage(): void {
         <span class="sr-only">Service</span>
         <input v-model="service" maxlength="256" placeholder="Service" />
       </label>
+      <TimeRangeSelect v-model="range" aria-label="Trace time range" />
       <label>
         <span class="sr-only">Environment</span>
         <input v-model="environment" maxlength="128" placeholder="Environment" />

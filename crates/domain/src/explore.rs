@@ -217,6 +217,9 @@ impl ExploreValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorePredicateOp {
     Exact,
+    Contains,
+    StartsWith,
+    EndsWith,
     Present,
     Range,
 }
@@ -372,6 +375,9 @@ pub fn normalize_query(query: &ExploreQuery) -> Box<str> {
             predicate.field.as_str(),
             match predicate.op {
                 ExplorePredicateOp::Exact => "eq",
+                ExplorePredicateOp::Contains => "contains",
+                ExplorePredicateOp::StartsWith => "starts_with",
+                ExplorePredicateOp::EndsWith => "ends_with",
                 ExplorePredicateOp::Present => "present",
                 ExplorePredicateOp::Range => "range",
             }

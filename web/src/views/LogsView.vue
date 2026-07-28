@@ -8,7 +8,9 @@ import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
+import { timeWindow } from '../lib/timeRange';
 import type { StructuredLog } from '../api/types';
 import { useSessionStore } from '../stores/session';
 
@@ -24,6 +26,9 @@ const environment = ref('');
 const appliedEnvironment = ref('');
 const release = ref(typeof route.query.release === 'string' ? route.query.release : '');
 const appliedRelease = ref(release.value);
+const range = ref('24h');
+const appliedRange = ref('24h');
+const appliedWindow = ref(timeWindow('24h'));
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -46,10 +51,14 @@ const logs = useQuery({
     appliedService.value,
     appliedEnvironment.value,
     appliedRelease.value,
+    appliedRange.value,
+    appliedWindow.value.from,
+    appliedWindow.value.until,
     cursor.value,
   ]),
   queryFn: () =>
     api.logs(projectId.value, {
+      ...appliedWindow.value,
       level: appliedLevel.value || undefined,
       message: submittedMessage.value || undefined,
       service: appliedService.value || undefined,
@@ -85,6 +94,8 @@ function search(): void {
   appliedService.value = service.value.trim();
   appliedEnvironment.value = environment.value.trim();
   appliedRelease.value = release.value.trim();
+  appliedRange.value = range.value;
+  appliedWindow.value = timeWindow(range.value);
   resetPage();
 }
 
@@ -94,6 +105,7 @@ function resetFilters(): void {
   service.value = '';
   environment.value = '';
   release.value = '';
+  range.value = '24h';
   search();
 }
 
@@ -153,6 +165,7 @@ function traceLink(log: StructuredLog): string | null {
         <input v-model="release" maxlength="256" placeholder="Release" />
       </label>
       <BaseSelect v-model="level" :options="levelOptions" aria-label="Log level" />
+      <TimeRangeSelect v-model="range" aria-label="Log time range" />
       <div class="signal-toolbar__actions">
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />

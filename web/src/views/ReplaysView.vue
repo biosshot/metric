@@ -6,16 +6,27 @@ import AppIcon from '../components/AppIcon.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
+import { timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const search = ref('');
 const submittedSearch = ref('');
+const range = ref('24h');
+const appliedRange = ref('24h');
+const appliedWindow = ref(timeWindow('24h'));
 const replays = useQuery({
-  queryKey: computed(() => ['replays', projectId.value]),
-  queryFn: () => api.replays(projectId.value),
+  queryKey: computed(() => [
+    'replays',
+    projectId.value,
+    appliedRange.value,
+    appliedWindow.value.from,
+    appliedWindow.value.until,
+  ]),
+  queryFn: () => api.replays(projectId.value, appliedWindow.value),
   enabled: computed(() => Boolean(projectId.value)),
 });
 const visibleReplays = computed(() => {
@@ -31,6 +42,8 @@ const visibleReplays = computed(() => {
 
 function submitSearch(): void {
   submittedSearch.value = search.value.trim();
+  appliedRange.value = range.value;
+  appliedWindow.value = timeWindow(range.value);
 }
 
 function clearSearch(): void {
@@ -75,6 +88,7 @@ function duration(milliseconds: number): string {
         />
         <small>Searches the latest 50 Replay manifests loaded for this project.</small>
       </label>
+      <TimeRangeSelect v-model="range" aria-label="Replay time range" />
       <div class="signal-toolbar__actions">
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />

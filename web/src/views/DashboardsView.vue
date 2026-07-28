@@ -27,14 +27,18 @@ const canWrite = computed(() => session.has('issue:write'));
 const savedName = ref('');
 const savedDataset = ref<ExploreDataset>('logs');
 const savedShape = ref<ExploreShape>('number');
+const savedField = ref('');
+const savedOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
+const savedValue = ref('');
+const savedRange = ref('24h');
+const editingSavedId = ref('');
 const dashboardName = ref('');
+const editingDashboardId = ref('');
 const selectedSavedQuery = ref('');
 const selectedDashboardId = ref('');
 const refreshInterval = ref('manual');
 const draftWidgets = ref<SavedQuery[]>([]);
 const editing = ref(route.query.edit === '1');
-const environment = reactive<Record<string, string>>({});
-const release = reactive<Record<string, string>>({});
 const refreshResults = reactive<Record<string, DashboardRefresh>>({});
 const lastAutoRefresh = reactive<Record<string, number>>({});
 
@@ -55,6 +59,66 @@ const refreshOptions: SelectOption[] = [
   { value: '1m', label: 'Every minute' },
   { value: '5m', label: 'Every 5 minutes' },
 ];
+const rangeOptions: SelectOption[] = [
+  { value: '24h', label: 'Last 24 hours', icon: 'history' },
+  { value: '7d', label: 'Last 7 days', icon: 'history' },
+  { value: '30d', label: 'Last 30 days', icon: 'history' },
+];
+const rangeMillis: Record<string, number> = {
+  '24h': 24 * 60 * 60 * 1_000,
+  '7d': 7 * 24 * 60 * 60 * 1_000,
+  '30d': 30 * 24 * 60 * 60 * 1_000,
+};
+const fieldOptionsByDataset: Record<ExploreDataset, SelectOption[]> = {
+  errors: [
+    { value: 'level', label: 'Level' },
+    { value: 'platform', label: 'Platform' },
+  ],
+  logs: [
+    { value: 'message', label: 'Message' },
+    { value: 'level', label: 'Level' },
+    { value: 'environment', label: 'Environment' },
+    { value: 'release', label: 'Release' },
+    { value: 'service', label: 'Service' },
+  ],
+  spans: [
+    { value: 'name', label: 'Name' },
+    { value: 'operation', label: 'Operation' },
+    { value: 'status', label: 'Status' },
+    { value: 'environment', label: 'Environment' },
+    { value: 'release', label: 'Release' },
+    { value: 'service', label: 'Service' },
+  ],
+  metrics: [
+    { value: 'name', label: 'Metric name' },
+    { value: 'metric_kind', label: 'Metric kind' },
+    { value: 'unit', label: 'Unit' },
+  ],
+};
+const widgetFieldOptions = computed<SelectOption[]>(() => [
+  { value: '', label: 'No filter' },
+  ...fieldOptionsByDataset[savedDataset.value],
+]);
+const operatorOptions: SelectOption[] = [
+  { value: 'exact', label: 'Equals' },
+  { value: 'contains', label: 'Contains' },
+  { value: 'starts_with', label: 'Starts with' },
+  { value: 'ends_with', label: 'Ends with' },
+];
+const exactOperatorOptions: SelectOption[] = [{ value: 'exact', label: 'Equals' }];
+const widgetTextFields = new Set([
+  'message',
+  'environment',
+  'release',
+  'service',
+  'name',
+  'operation',
+  'status',
+  'unit',
+]);
+const widgetOperatorOptions = computed(() =>
+  widgetTextFields.has(savedField.value) ? operatorOptions : exactOperatorOptions,
+);
 
 const savedQueries = useQuery({
   queryKey: computed(() => ['saved-queries', projectId.value]),
@@ -92,6 +156,10 @@ watch(projectId, () => {
   draftWidgets.value = [];
   selectedSavedQuery.value = '';
   selectedDashboardId.value = '';
+  editingSavedId.value = '';
+  editingDashboardId.value = '';
+  savedName.value = '';
+  dashboardName.value = '';
   editing.value = false;
   Object.keys(refreshResults).forEach((key) => delete refreshResults[key]);
 });
@@ -103,23 +171,34 @@ watch(
 );
 
 const createSaved = useMutation({
-  mutationFn: () =>
-    api.createSavedQuery(
-      projectId.value,
-      savedName.value.trim(),
-      buildQuery(savedDataset.value, savedShape.value),
-    ),
+  mutationFn: () => {
+    const existing = savedQueries.data.value?.items.find(
+      (saved) => saved.id === editingSavedId.value,
+    );
+    const query = buildQuery(savedDataset.value, savedShape.value);
+    return existing
+      ? api.updateSavedQuery(projectId.value, {
+          ...existing,
+          name: savedName.value.trim(),
+          query,
+        })
+      : api.createSavedQuery(projectId.value, savedName.value.trim(), query);
+  },
   onSuccess: async (saved) => {
-    if (!draftWidgets.value.some((item) => item.id === saved.id)) {
+    const draftIndex = draftWidgets.value.findIndex((item) => item.id === saved.id);
+    if (draftIndex >= 0) {
+      draftWidgets.value[draftIndex] = saved;
+    } else {
       draftWidgets.value.push(saved);
     }
     savedName.value = '';
+    editingSavedId.value = '';
     await queryClient.invalidateQueries({ queryKey: ['saved-queries', projectId.value] });
   },
 });
 const createDashboard = useMutation({
-  mutationFn: () =>
-    api.createDashboard(projectId.value, {
+  mutationFn: () => {
+    const input = {
       name: dashboardName.value.trim(),
       widgets: draftWidgets.value.map((saved) => ({
         title: saved.name,
@@ -127,12 +206,32 @@ const createDashboard = useMutation({
         shape: shapeFor(saved.query),
       })),
       refresh_interval: refreshInterval.value,
-    }),
+    };
+    const existing = dashboards.data.value?.items.find(
+      (dashboard) => dashboard.id === editingDashboardId.value,
+    );
+    if (!existing) return api.createDashboard(projectId.value, input);
+    return api.updateDashboard(projectId.value, {
+      ...existing,
+      name: input.name,
+      refresh_interval: input.refresh_interval as Dashboard['refresh_interval'],
+      widgets: input.widgets.map((widget) => ({
+        id:
+          existing.widgets.find((item) => item.saved_query_id === widget.saved_query_id)?.id ??
+          crypto.randomUUID().replaceAll('-', ''),
+        ...widget,
+        shape: widget.shape,
+      })),
+    });
+  },
   onSuccess: async (dashboard) => {
     dashboardName.value = '';
     draftWidgets.value = [];
     selectedDashboardId.value = dashboard.id;
+    editingDashboardId.value = '';
     editing.value = false;
+    delete refreshResults[dashboard.id];
+    await refresh(dashboard);
     await queryClient.invalidateQueries({ queryKey: ['dashboards', projectId.value] });
   },
 });
@@ -142,11 +241,21 @@ const mutation = useMutation({
 
 function buildQuery(dataset: ExploreDataset, shape: ExploreShape): ExploreRequest {
   const until = Date.now();
+  const predicates: ExploreRequest['predicates'] =
+    savedField.value && savedValue.value.trim()
+      ? [
+          {
+            field: savedField.value,
+            op: widgetTextFields.has(savedField.value) ? savedOperator.value : 'exact',
+            value: savedValue.value.trim(),
+          },
+        ]
+      : [];
   return {
     dataset,
-    from: until - 24 * 60 * 60 * 1000,
+    from: until - rangeMillis[savedRange.value],
     until,
-    predicates: [],
+    predicates,
     aggregates: shape === 'table' ? [] : [{ function: 'count', alias: 'count' }],
     group_by: [],
     interval: shape === 'timeseries' ? '1h' : undefined,
@@ -173,22 +282,31 @@ function addWidget(): void {
 
 async function refresh(dashboard: Dashboard): Promise<void> {
   const result = await mutation.mutateAsync(() =>
-    api.refreshDashboard(projectId.value, dashboard.id, {
-      environment: environment[dashboard.id]?.trim() || undefined,
-      release: release[dashboard.id]?.trim() || undefined,
-    }),
+    api.refreshDashboard(projectId.value, dashboard.id, {}),
   );
   refreshResults[dashboard.id] = result as DashboardRefresh;
   lastAutoRefresh[dashboard.id] = Date.now();
 }
 
-async function removeSaved(saved: SavedQuery): Promise<void> {
-  await mutation.mutateAsync(() => api.deleteSavedQuery(projectId.value, saved.id));
-  await queryClient.invalidateQueries({ queryKey: ['saved-queries', projectId.value] });
+function editSaved(saved: SavedQuery): void {
+  editing.value = true;
+  editingSavedId.value = saved.id;
+  savedName.value = saved.name;
+  savedDataset.value = saved.query.dataset;
+  savedShape.value = shapeFor(saved.query);
+  const predicate = saved.query.predicates[0];
+  savedField.value = predicate?.field ?? '';
+  savedOperator.value =
+    predicate?.op === 'contains' || predicate?.op === 'starts_with' || predicate?.op === 'ends_with'
+      ? predicate.op
+      : 'exact';
+  savedValue.value = typeof predicate?.value === 'string' ? predicate.value : '';
+  const age = saved.query.until - saved.query.from;
+  savedRange.value = age > rangeMillis['7d'] ? '30d' : age > rangeMillis['24h'] ? '7d' : '24h';
 }
 
-async function saveSavedName(saved: SavedQuery): Promise<void> {
-  await mutation.mutateAsync(() => api.updateSavedQuery(projectId.value, saved));
+async function removeSaved(saved: SavedQuery): Promise<void> {
+  await mutation.mutateAsync(() => api.deleteSavedQuery(projectId.value, saved.id));
   await queryClient.invalidateQueries({ queryKey: ['saved-queries', projectId.value] });
 }
 
@@ -198,9 +316,16 @@ async function removeDashboard(dashboard: Dashboard): Promise<void> {
   await queryClient.invalidateQueries({ queryKey: ['dashboards', projectId.value] });
 }
 
-async function saveDashboardName(dashboard: Dashboard): Promise<void> {
-  await mutation.mutateAsync(() => api.updateDashboard(projectId.value, dashboard));
-  await queryClient.invalidateQueries({ queryKey: ['dashboards', projectId.value] });
+function editDashboard(dashboard: Dashboard): void {
+  editing.value = true;
+  editingDashboardId.value = dashboard.id;
+  dashboardName.value = dashboard.name;
+  refreshInterval.value = dashboard.refresh_interval;
+  draftWidgets.value = dashboard.widgets
+    .map((widget) =>
+      savedQueries.data.value?.items.find((saved) => saved.id === widget.saved_query_id),
+    )
+    .filter((saved): saved is SavedQuery => Boolean(saved));
 }
 
 function widgetResult(dashboardId: string, widgetId: string) {
@@ -220,10 +345,19 @@ const refreshMillis: Record<Dashboard['refresh_interval'], number | null> = {
 watch(
   () => dashboards.data.value?.items,
   (items) => {
-    const now = Date.now();
-    for (const dashboard of items ?? []) lastAutoRefresh[dashboard.id] ??= now;
     if (items?.length && !items.some((dashboard) => dashboard.id === selectedDashboardId.value)) {
       selectedDashboardId.value = items[0].id;
+    }
+  },
+  { immediate: true },
+);
+watch(
+  visibleDashboards,
+  (items) => {
+    for (const dashboard of items) {
+      if (!refreshResults[dashboard.id] && !mutation.isPending.value) {
+        void refresh(dashboard).catch(() => undefined);
+      }
     }
   },
   { immediate: true },
@@ -231,7 +365,7 @@ watch(
 const autoRefreshTimer = window.setInterval(() => {
   if (mutation.isPending.value) return;
   const now = Date.now();
-  for (const dashboard of dashboards.data.value?.items ?? []) {
+  for (const dashboard of visibleDashboards.value) {
     const interval = refreshMillis[dashboard.refresh_interval];
     if (interval && now - (lastAutoRefresh[dashboard.id] ?? now) >= interval) {
       void refresh(dashboard).catch(() => undefined);
@@ -249,16 +383,6 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
         <h1>Dashboard</h1>
         <p>See the shared project view first. Open editing only when the view needs to change.</p>
       </div>
-      <button
-        v-if="canWrite"
-        class="button button--secondary"
-        type="button"
-        :aria-pressed="editing"
-        @click="editing = !editing"
-      >
-        <AppIcon :name="editing ? 'close' : 'settings'" :size="16" />
-        {{ editing ? 'Close editor' : 'Edit dashboard' }}
-      </button>
     </header>
 
     <ApiErrorPanel
@@ -270,9 +394,9 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       <form class="panel dashboard-builder" @submit.prevent="createSaved.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Widget</p>
-            <h2>Define a visible widget</h2>
-            <p>Choose the signal and presentation. Metric keeps the bounded query internally.</p>
+            <p class="eyebrow">Step 1 · Widget query</p>
+            <h2>{{ editingSavedId ? 'Edit widget' : 'Add a widget' }}</h2>
+            <p>Choose what to measure, narrow the signals, and save it to the widget library.</p>
           </div>
           <AppIcon name="explore" :size="20" />
         </div>
@@ -284,21 +408,36 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <BaseSelect v-model="savedDataset" :options="datasetOptions" label="Dataset" />
           <BaseSelect v-model="savedShape" :options="shapeOptions" label="Result" />
         </div>
+        <BaseSelect v-model="savedRange" :options="rangeOptions" label="Time window" />
+        <div class="dashboard-widget-filter">
+          <BaseSelect v-model="savedField" :options="widgetFieldOptions" label="Filter field" />
+          <BaseSelect
+            v-if="savedField"
+            v-model="savedOperator"
+            :options="widgetOperatorOptions"
+            label="Match"
+          />
+          <label v-if="savedField">
+            <span>Value</span>
+            <input v-model="savedValue" maxlength="256" required placeholder="Filter value" />
+          </label>
+        </div>
         <button
           class="button button--primary"
           :disabled="createSaved.isPending.value"
           type="submit"
         >
           <AppIcon name="save" :size="17" />
-          Add widget
+          {{ editingSavedId ? 'Save widget' : 'Add widget' }}
         </button>
       </form>
 
       <form class="panel dashboard-builder" @submit.prevent="createDashboard.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Dashboard editor</p>
-            <h2>Compose shared widgets</h2>
+            <p class="eyebrow">Step 2 · Dashboard</p>
+            <h2>{{ editingDashboardId ? 'Edit dashboard' : 'Arrange the shared view' }}</h2>
+            <p>Pick saved widgets, choose refresh frequency, and create the team view.</p>
           </div>
           <AppIcon name="dashboard" :size="20" />
         </div>
@@ -343,7 +482,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           :disabled="createDashboard.isPending.value || !draftWidgets.length"
         >
           <AppIcon name="plus" :size="17" />
-          Create dashboard
+          {{ editingDashboardId ? 'Save dashboard' : 'Create dashboard' }}
         </button>
       </form>
     </div>
@@ -364,8 +503,8 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       <section v-if="canWrite && editing" class="dashboard-section dashboard-section--definitions">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Advanced</p>
-            <h2>Reusable widget definitions</h2>
+            <p class="eyebrow">Widget library</p>
+            <h2>Saved widget queries</h2>
           </div>
           <span>{{ savedQueries.data.value?.items.length ?? 0 }} shared</span>
         </div>
@@ -391,8 +530,8 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               >
             </div>
             <div v-if="canWrite" class="compact-actions">
-              <button class="button button--secondary" type="button" @click="saveSavedName(saved)">
-                <AppIcon name="save" :size="15" /> Save
+              <button class="button button--secondary" type="button" @click="editSaved(saved)">
+                <AppIcon name="settings" :size="15" /> Edit
               </button>
               <button class="button button--danger" type="button" @click="removeSaved(saved)">
                 <AppIcon name="delete" :size="15" /> Delete
@@ -408,13 +547,25 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             <p class="eyebrow">Shared project view</p>
             <h2>{{ visibleDashboards[0]?.name || 'Project dashboard' }}</h2>
           </div>
-          <BaseSelect
-            v-if="dashboardOptions.length > 1"
-            v-model="selectedDashboardId"
-            class="dashboard-picker"
-            :options="dashboardOptions"
-            label="Dashboard"
-          />
+          <div class="compact-actions dashboard-view-actions">
+            <BaseSelect
+              v-if="dashboardOptions.length > 1"
+              v-model="selectedDashboardId"
+              class="dashboard-picker"
+              :options="dashboardOptions"
+              label="Dashboard"
+            />
+            <button
+              v-if="canWrite"
+              class="button button--secondary button--fit"
+              type="button"
+              :aria-pressed="editing"
+              @click="editing = !editing"
+            >
+              <AppIcon :name="editing ? 'close' : 'settings'" :size="16" />
+              {{ editing ? 'Close editor' : 'Edit dashboard' }}
+            </button>
+          </div>
         </div>
         <EmptyState
           v-if="!dashboards.data.value?.items.length"
@@ -440,13 +591,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
         >
           <header>
             <div>
-              <input
-                v-if="canWrite && editing"
-                v-model="dashboard.name"
-                maxlength="120"
-                aria-label="Dashboard name"
-              />
-              <h3 v-else>{{ dashboard.name }}</h3>
+              <h3>{{ dashboard.name }}</h3>
               <span
                 >{{ dashboard.widgets.length }} widget{{
                   dashboard.widgets.length === 1 ? '' : 's'
@@ -458,9 +603,9 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               <button
                 class="button button--secondary"
                 type="button"
-                @click="saveDashboardName(dashboard)"
+                @click="editDashboard(dashboard)"
               >
-                <AppIcon name="save" :size="15" /> Save
+                <AppIcon name="settings" :size="15" /> Edit widgets
               </button>
               <button
                 class="button button--danger"
@@ -472,28 +617,24 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             </div>
           </header>
 
-          <form class="dashboard-variables" @submit.prevent="refresh(dashboard)">
-            <label>
-              <span>Environment</span>
-              <input
-                v-model="environment[dashboard.id]"
-                maxlength="256"
-                placeholder="All environments"
-              />
-            </label>
-            <label>
-              <span>Release</span>
-              <input v-model="release[dashboard.id]" maxlength="256" placeholder="All releases" />
-            </label>
+          <div class="dashboard-refresh">
+            <span>
+              {{
+                refreshResults[dashboard.id]
+                  ? 'Live data loaded for each widget window.'
+                  : 'Loading current widget data…'
+              }}
+            </span>
             <button
-              class="button button--primary"
-              type="submit"
+              class="button button--secondary button--fit"
+              type="button"
               :disabled="mutation.isPending.value"
+              @click="refresh(dashboard)"
             >
               <AppIcon name="refresh" :size="16" />
               Refresh
             </button>
-          </form>
+          </div>
 
           <p v-if="refreshResults[dashboard.id]" class="dashboard-cost">
             Updated now · estimated cost {{ refreshResults[dashboard.id].total_cost }} / 25,000
@@ -523,7 +664,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 v-else-if="!widgetResult(dashboard.id, widget.id)"
                 class="dashboard-widget__waiting"
               >
-                Refresh to load this widget.
+                Loading current data…
               </p>
               <strong v-else-if="widget.shape === 'number'" class="dashboard-widget__number">
                 {{

@@ -1555,6 +1555,8 @@ pub trait MetricStore: Send + Sync + 'static {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayQuery {
+    pub from: Option<metric_domain::Timestamp>,
+    pub until: Option<metric_domain::Timestamp>,
     pub before: Option<ReplayCursor>,
     pub limit: usize,
 }

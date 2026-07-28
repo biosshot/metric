@@ -64,6 +64,16 @@ impl MongoInvestigationStore {
                 filter.insert("s", 2_i32);
             }
         }
+        if query.from.is_some() || query.until.is_some() {
+            let mut range = Document::new();
+            if let Some(from) = query.from {
+                range.insert("$gte", date(from));
+            }
+            if let Some(until) = query.until {
+                range.insert("$lt", date(until));
+            }
+            filter.insert("l", range);
+        }
         if let Some(anchor) = query.before {
             filter.insert(
                 "$or",

@@ -16,6 +16,7 @@ const session = useSessionStore();
 const dataset = ref<ExploreDataset>('errors');
 const mode = ref<ExploreMode>('table');
 const filterField = ref('');
+const filterOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
 const filterValue = ref('');
 const groupField = ref('');
 const interval = ref<'5m' | '1h' | '1d'>('1h');
@@ -105,6 +106,26 @@ const optionalGroups = computed<SelectOption[]>(() => [
   { value: '', label: 'No grouping' },
   ...groupFieldsByDataset[dataset.value],
 ]);
+const textOperators: SelectOption[] = [
+  { value: 'exact', label: 'Equals' },
+  { value: 'contains', label: 'Contains' },
+  { value: 'starts_with', label: 'Starts with' },
+  { value: 'ends_with', label: 'Ends with' },
+];
+const exactOperator: SelectOption[] = [{ value: 'exact', label: 'Equals' }];
+const textFields = new Set([
+  'message',
+  'environment',
+  'release',
+  'service',
+  'operation',
+  'status',
+  'name',
+  'unit',
+]);
+const operatorOptions = computed(() =>
+  textFields.has(filterField.value) ? textOperators : exactOperator,
+);
 
 const query = useMutation({
   mutationFn: (request: ExploreRequest) => api.explore(projectId.value, request),
@@ -123,6 +144,10 @@ function validSelection(options: SelectOption[], value: string): string {
 
 async function run(nextCursor: string | null = null): Promise<void> {
   filterField.value = validSelection(fieldsByDataset[dataset.value], filterField.value);
+  filterOperator.value = validSelection(
+    operatorOptions.value,
+    filterOperator.value,
+  ) as typeof filterOperator.value;
   groupField.value = validSelection(groupFieldsByDataset[dataset.value], groupField.value);
   cursor.value = nextCursor;
   const until = Date.now();
@@ -131,7 +156,7 @@ async function run(nextCursor: string | null = null): Promise<void> {
     const raw = filterValue.value.trim();
     predicates.push({
       field: filterField.value,
-      op: 'exact',
+      op: filterOperator.value,
       value: filterField.value === 'is_segment' ? raw === 'true' : raw,
     });
   }
@@ -180,6 +205,12 @@ function display(value: ExploreScalar, key: string): string {
       <BaseSelect v-model="dataset" :options="datasetOptions" label="Dataset" />
       <BaseSelect v-model="mode" :options="modeOptions" label="Result" />
       <BaseSelect v-model="filterField" :options="optionalFields" label="Exact filter" />
+      <BaseSelect
+        v-if="filterField"
+        v-model="filterOperator"
+        :options="operatorOptions"
+        label="Match"
+      />
       <label>
         <span>Value</span>
         <input

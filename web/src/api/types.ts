@@ -296,7 +296,7 @@ export interface ExploreRequest {
   until: number;
   predicates: Array<{
     field: string;
-    op: 'exact' | 'present' | 'range';
+    op: 'exact' | 'contains' | 'starts_with' | 'ends_with' | 'present' | 'range';
     value?: ExploreScalar;
     upper?: ExploreScalar;
   }>;

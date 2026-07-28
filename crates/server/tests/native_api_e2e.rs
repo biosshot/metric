@@ -111,6 +111,8 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
             ProjectId::new(42)?,
             IssueListQuery {
                 status: None,
+                from: None,
+                until: None,
                 before: None,
                 limit: 2,
             },
@@ -130,6 +132,8 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
             ProjectId::new(42)?,
             IssueListQuery {
                 status: None,
+                from: None,
+                until: None,
                 before: Some(anchor),
                 limit: 2,
             },
@@ -493,7 +497,17 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
     })
     .await?;
     let issues = native
-        .list_issues(&owner, created.project_id, None, None, Some(10))
+        .list_issues(
+            &owner,
+            created.project_id,
+            metric_application::native_api::IssueListRequest {
+                status: None,
+                from: None,
+                until: None,
+                cursor: None,
+                limit: Some(10),
+            },
+        )
         .await?;
     assert_eq!(issues.items.len(), 1);
     let sdk_event_id = EventId::parse("aa40a14691564910ae6eb2affdba35f9")?;

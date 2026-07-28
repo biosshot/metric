@@ -223,6 +223,8 @@ pub struct SearchStorageQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IssueListQuery {
     pub status: Option<IssueStatus>,
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
     pub before: Option<IssueAnchor>,
     pub limit: usize,
 }

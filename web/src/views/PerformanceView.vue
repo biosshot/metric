@@ -7,7 +7,9 @@ import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TraceSectionNav from '../components/TraceSectionNav.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
+import { timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -17,6 +19,9 @@ const release = ref('');
 const appliedService = ref('');
 const appliedEnvironment = ref('');
 const appliedRelease = ref('');
+const range = ref('24h');
+const appliedRange = ref('24h');
+const appliedWindow = ref(timeWindow('24h'));
 const projectId = computed(() => session.selectedProjectId ?? '');
 const performance = useQuery({
   queryKey: computed(() => [
@@ -25,9 +30,13 @@ const performance = useQuery({
     appliedService.value,
     appliedEnvironment.value,
     appliedRelease.value,
+    appliedRange.value,
+    appliedWindow.value.from,
+    appliedWindow.value.until,
   ]),
   queryFn: () =>
     api.performance(projectId.value, {
+      ...appliedWindow.value,
       service: appliedService.value || undefined,
       environment: appliedEnvironment.value || undefined,
       release: appliedRelease.value || undefined,
@@ -45,12 +54,15 @@ function applyFilters(): void {
   appliedService.value = service.value.trim();
   appliedEnvironment.value = environment.value.trim();
   appliedRelease.value = release.value.trim();
+  appliedRange.value = range.value;
+  appliedWindow.value = timeWindow(range.value);
 }
 
 function resetFilters(): void {
   service.value = '';
   environment.value = '';
   release.value = '';
+  range.value = '24h';
   applyFilters();
 }
 </script>
@@ -74,6 +86,7 @@ function resetFilters(): void {
         <span class="sr-only">Service</span>
         <input v-model="service" maxlength="256" placeholder="Service" />
       </label>
+      <TimeRangeSelect v-model="range" aria-label="Performance time range" />
       <label>
         <span class="sr-only">Environment</span>
         <input v-model="environment" maxlength="128" placeholder="Environment" />

@@ -119,6 +119,15 @@ pub struct EventListRequest<'a> {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct IssueListRequest<'a> {
+    pub status: Option<IssueStatus>,
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
+    pub cursor: Option<&'a str>,
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LogListRequest<'a> {
     pub from: Option<Timestamp>,
@@ -278,14 +287,21 @@ impl NativeApiService {
         &self,
         context: &AuthContext,
         project_id: ProjectId,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
         limit: Option<usize>,
     ) -> Result<ReplayPage, NativeApiError> {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
+        if let (Some(from), Some(until)) = (from, until) {
+            validate_time_range(from, until)?;
+        }
         self.replay_store()?
             .list_replays(
                 project_id,
                 ReplayQuery {
+                    from,
+                    until,
                     before: None,
                     limit: page_size(limit)?,
                 },
@@ -1195,14 +1211,27 @@ impl NativeApiService {
         &self,
         context: &AuthContext,
         project_id: ProjectId,
-        status: Option<IssueStatus>,
-        cursor: Option<&str>,
-        limit: Option<usize>,
+        request: IssueListRequest<'_>,
     ) -> Result<NativePage<IssueSnapshot>, NativeApiError> {
+        let IssueListRequest {
+            status,
+            from,
+            until,
+            cursor,
+            limit,
+        } = request;
         self.authorize(context, project_id, Permission::IssueRead)
             .await?;
         let limit = page_size(limit)?;
-        let normalized = format!("issues:status={}", status_name(status));
+        if let (Some(from), Some(until)) = (from, until) {
+            validate_time_range(from, until)?;
+        }
+        let normalized = format!(
+            "issues:status={}:from={}:until={}",
+            status_name(status),
+            from.map_or_else(|| "*".to_owned(), |value| value.unix_millis().to_string()),
+            until.map_or_else(|| "*".to_owned(), |value| value.unix_millis().to_string()),
+        );
         let digest = cursor_digest(project_id, &normalized, CursorKind::Issue);
         let before = cursor
             .map(|value| decode_issue_anchor(value, digest))
@@ -1213,6 +1242,8 @@ impl NativeApiService {
                 project_id,
                 IssueListQuery {
                     status,
+                    from,
+                    until,
                     before,
                     limit,
                 },

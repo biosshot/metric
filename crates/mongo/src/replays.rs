@@ -143,6 +143,16 @@ impl MongoReplayStore {
             return Err(SignalStoreError::InvalidData);
         }
         let mut filter = doc! { "p": project_id.get() };
+        if query.from.is_some() || query.until.is_some() {
+            let mut range = Document::new();
+            if let Some(from) = query.from {
+                range.insert("$gte", date(from));
+            }
+            if let Some(until) = query.until {
+                range.insert("$lt", date(until));
+            }
+            filter.insert("r", range);
+        }
         if let Some(before) = query.before {
             filter.insert(
                 "$or",

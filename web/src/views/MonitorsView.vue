@@ -16,7 +16,7 @@ const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const selectedMonitorId = ref('');
 const editorOpen = ref(false);
-const historyView = ref<'list' | 'chart'>('list');
+const historyView = ref<'list' | 'chart'>(storedHistoryView());
 const historyRange = ref('24h');
 const deleteConfirmationId = ref('');
 const customHistoryFrom = ref(localDateTime(Date.now() - 7 * 24 * 60 * 60 * 1_000));
@@ -96,6 +96,15 @@ const selectedMonitor = computed(
   () =>
     monitors.data.value?.items.find((monitor) => monitor.id === selectedMonitorId.value) ?? null,
 );
+const monitorDefinitionOptions = computed<SelectOption[]>(() => [
+  { value: '', label: 'New monitor', icon: 'plus' },
+  ...(monitors.data.value?.items ?? []).map((monitor) => ({
+    value: monitor.id,
+    label: monitor.name,
+    description: `${monitor.slug} · ${monitor.environment}`,
+    icon: 'monitors' as const,
+  })),
+]);
 const runs = useQuery({
   queryKey: computed(() => [
     'monitor-runs',
@@ -125,6 +134,13 @@ watch(
 );
 watch([selectedMonitorId, historyRange], () => {
   deleteConfirmationId.value = '';
+});
+watch(historyView, (value) => {
+  try {
+    window.localStorage.setItem('metric.monitor-history-view', value);
+  } catch {
+    // The history remains usable when browser storage is blocked.
+  }
 });
 
 const saveMonitor = useMutation({
@@ -177,6 +193,45 @@ function edit(monitor: CronMonitor): void {
     headers: monitor.uptime?.headers.map((header) => ({ name: header.name, value: '' })) ?? [],
   });
   editorOpen.value = true;
+}
+
+function toggleEditor(): void {
+  if (editorOpen.value) {
+    editorOpen.value = false;
+    return;
+  }
+  if (selectedMonitor.value) {
+    edit(selectedMonitor.value);
+  } else {
+    editorOpen.value = true;
+  }
+}
+
+function manageMonitor(monitorId: string): void {
+  if (!monitorId) {
+    selectedMonitorId.value = '';
+    Object.assign(form, {
+      kind: 'cron',
+      slug: '',
+      name: '',
+      environment: 'production',
+      enabled: true,
+      schedule_type: 'crontab',
+      schedule: '*/5 * * * *',
+      checkin_margin_seconds: 60,
+      max_runtime_seconds: 900,
+      endpoint: 'https://example.com/health',
+      method: 'GET',
+      expected_status_min: 200,
+      expected_status_max: 399,
+      timeout_seconds: 10,
+      max_redirects: 3,
+      headers: [],
+    });
+    return;
+  }
+  const monitor = monitors.data.value?.items.find((item) => item.id === monitorId);
+  if (monitor) edit(monitor);
 }
 
 function confirmDelete(monitorId: string): void {
@@ -249,6 +304,16 @@ function localDateTime(value: number): string {
   const date = new Date(value);
   return new Date(value - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
+
+function storedHistoryView(): 'list' | 'chart' {
+  try {
+    return window.localStorage.getItem('metric.monitor-history-view') === 'chart'
+      ? 'chart'
+      : 'list';
+  } catch {
+    return 'list';
+  }
+}
 </script>
 
 <template>
@@ -264,10 +329,10 @@ function localDateTime(value: number): string {
         class="button button--secondary"
         type="button"
         :aria-pressed="editorOpen"
-        @click="editorOpen = !editorOpen"
+        @click="toggleEditor"
       >
         <AppIcon :name="editorOpen ? 'close' : 'plus'" :size="16" />
-        {{ editorOpen ? 'Close editor' : 'Create monitor' }}
+        {{ editorOpen ? 'Close editor' : 'Manage monitors' }}
       </button>
     </header>
 
@@ -306,6 +371,12 @@ function localDateTime(value: number): string {
           </div>
         </div>
       </div>
+      <BaseSelect
+        :model-value="selectedMonitorId"
+        :options="monitorDefinitionOptions"
+        label="Monitor definition"
+        @update:model-value="manageMonitor"
+      />
       <div class="form-grid form-grid--three">
         <BaseSelect
           :model-value="form.kind"
@@ -453,14 +524,26 @@ function localDateTime(value: number): string {
           </button>
         </div>
       </template>
-      <button
-        class="button button--primary button--fit"
-        type="submit"
-        :disabled="saveMonitor.isPending.value"
-      >
-        <AppIcon name="save" :size="16" />
-        {{ saveMonitor.isPending.value ? 'Saving…' : 'Save monitor' }}
-      </button>
+      <div class="compact-actions monitor-form__actions">
+        <button
+          class="button button--primary button--fit"
+          type="submit"
+          :disabled="saveMonitor.isPending.value"
+        >
+          <AppIcon name="save" :size="16" />
+          {{ saveMonitor.isPending.value ? 'Saving…' : 'Save monitor' }}
+        </button>
+        <button
+          v-if="selectedMonitor"
+          class="button button--danger button--fit"
+          type="button"
+          :disabled="deleteMonitor.isPending.value"
+          @click="confirmDelete(selectedMonitor.id)"
+        >
+          <AppIcon name="delete" :size="15" />
+          {{ deleteConfirmationId === selectedMonitor.id ? 'Confirm delete' : 'Delete monitor' }}
+        </button>
+      </div>
     </form>
 
     <LoadingPanel
@@ -522,27 +605,6 @@ function localDateTime(value: number): string {
           </div>
           <div class="monitor-history__actions">
             <StatusBadge :status="selectedMonitor.last_status ?? 'waiting'" />
-            <button
-              v-if="session.has('project:admin')"
-              class="button button--secondary button--fit"
-              type="button"
-              @click="edit(selectedMonitor)"
-            >
-              <AppIcon name="settings" :size="15" />
-              Edit
-            </button>
-            <button
-              v-if="session.has('project:admin')"
-              class="button button--danger button--fit"
-              type="button"
-              :disabled="deleteMonitor.isPending.value"
-              @click="confirmDelete(selectedMonitor.id)"
-            >
-              <AppIcon name="delete" :size="15" />
-              {{
-                deleteConfirmationId === selectedMonitor.id ? 'Confirm delete' : 'Delete monitor'
-              }}
-            </button>
           </div>
         </div>
         <div class="monitor-history-controls">

@@ -10,6 +10,8 @@ import StatusBadge from '../components/StatusBadge.vue';
 import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import { timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 import type { Event, Issue, Page } from '../api/types';
 
@@ -22,6 +24,9 @@ const submittedStatus = ref('');
 const initialSearch = typeof route.query.q === 'string' ? route.query.q : '';
 const search = ref(initialSearch);
 const submittedSearch = ref(initialSearch);
+const range = ref('24h');
+const appliedRange = ref('24h');
+const appliedWindow = ref(timeWindow('24h'));
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const statusOptions: SelectOption[] = [
@@ -37,6 +42,9 @@ const queryKey = computed(() => [
   projectId.value,
   submittedStatus.value,
   submittedSearch.value,
+  appliedRange.value,
+  appliedWindow.value.from,
+  appliedWindow.value.until,
   cursor.value,
 ]);
 
@@ -45,7 +53,12 @@ const result = useQuery<InvestigationResult>({
   queryFn: () =>
     submittedSearch.value
       ? api.search(projectId.value, submittedSearch.value, cursor.value)
-      : api.issues(projectId.value, submittedStatus.value || undefined, cursor.value),
+      : api.issues(
+          projectId.value,
+          submittedStatus.value || undefined,
+          cursor.value,
+          appliedWindow.value,
+        ),
   enabled: computed(() => Boolean(projectId.value)),
 });
 const issueItems = computed(() =>
@@ -64,12 +77,17 @@ watch(projectId, () => resetPage(false));
 function submitSearch(): void {
   submittedSearch.value = search.value.trim();
   submittedStatus.value = status.value;
+  appliedRange.value = range.value;
+  appliedWindow.value = timeWindow(range.value);
   resetPage(false);
 }
 
 function clearSearch(): void {
   search.value = '';
   submittedSearch.value = '';
+  range.value = '24h';
+  appliedRange.value = '24h';
+  appliedWindow.value = timeWindow('24h');
   resetPage(false);
 }
 
@@ -140,6 +158,7 @@ function formatTime(value: string): string {
         :options="statusOptions"
         aria-label="Issue status"
       />
+      <TimeRangeSelect v-if="!submittedSearch" v-model="range" aria-label="Issue time range" />
       <div class="signal-toolbar__actions">
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />

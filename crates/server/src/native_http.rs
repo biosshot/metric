@@ -984,6 +984,9 @@ fn parse_explore_predicate(value: ExplorePredicateBody) -> Result<ExplorePredica
         field: parse_explore_field(&value.field)?,
         op: match value.op.as_str() {
             "exact" => ExplorePredicateOp::Exact,
+            "contains" => ExplorePredicateOp::Contains,
+            "starts_with" => ExplorePredicateOp::StartsWith,
+            "ends_with" => ExplorePredicateOp::EndsWith,
             "present" => ExplorePredicateOp::Present,
             "range" => ExplorePredicateOp::Range,
             _ => return Err(HttpApiError::InvalidRequest),
@@ -2040,6 +2043,9 @@ fn explore_query_value(query: &ExploreQuery) -> Value {
             "field": predicate.field.as_str(),
             "op": match predicate.op {
                 ExplorePredicateOp::Exact => "exact",
+                ExplorePredicateOp::Contains => "contains",
+                ExplorePredicateOp::StartsWith => "starts_with",
+                ExplorePredicateOp::EndsWith => "ends_with",
                 ExplorePredicateOp::Present => "present",
                 ExplorePredicateOp::Range => "range",
             },
@@ -3032,9 +3038,13 @@ async fn list_issues(
         .list_issues(
             &context,
             project_id_from(&project_id)?,
-            status,
-            query.get("cursor").map(String::as_str),
-            query_limit(&query)?,
+            metric_application::native_api::IssueListRequest {
+                status,
+                from: optional_query_timestamp(&query, "from")?,
+                until: optional_query_timestamp(&query, "until")?,
+                cursor: query.get("cursor").map(String::as_str),
+                limit: query_limit(&query)?,
+            },
         )
         .await
         .map_err(HttpApiError::Api)?;
@@ -3256,6 +3266,8 @@ async fn list_replays(
         .replays(
             &context,
             project_id_from(&project_id)?,
+            optional_query_timestamp(&query, "from")?,
+            optional_query_timestamp(&query, "until")?,
             query_limit(&query)?,
         )
         .await

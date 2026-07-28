@@ -439,6 +439,9 @@ fn encode_query(query: &ExploreQuery) -> Result<Document, DashboardStoreError> {
                 "field": predicate.field.as_str(),
                 "op": match predicate.op {
                     ExplorePredicateOp::Exact => "exact",
+                    ExplorePredicateOp::Contains => "contains",
+                    ExplorePredicateOp::StartsWith => "starts_with",
+                    ExplorePredicateOp::EndsWith => "ends_with",
                     ExplorePredicateOp::Present => "present",
                     ExplorePredicateOp::Range => "range",
                 },
@@ -486,6 +489,9 @@ fn decode_query(document: &Document) -> Result<ExploreQuery, DashboardStoreError
                     field: parse_field(required_str(value, "field")?)?,
                     op: match required_str(value, "op")? {
                         "exact" => ExplorePredicateOp::Exact,
+                        "contains" => ExplorePredicateOp::Contains,
+                        "starts_with" => ExplorePredicateOp::StartsWith,
+                        "ends_with" => ExplorePredicateOp::EndsWith,
                         "present" => ExplorePredicateOp::Present,
                         "range" => ExplorePredicateOp::Range,
                         _ => return Err(DashboardStoreError::InvalidData),

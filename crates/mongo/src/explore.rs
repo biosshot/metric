@@ -10,7 +10,7 @@ use metric_domain::explore::{
 use metric_ports::{ExploreStore, ExploreStoreError, PortFuture};
 use mongodb::{
     Database,
-    bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
+    bson::{Binary, Bson, DateTime, Document, Regex, doc, spec::BinarySubtype},
 };
 
 #[derive(Clone)]
@@ -163,6 +163,28 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
                     doc! { field: physical_value(dataset, predicate.field, value)? }
                 }
             }
+            ExplorePredicateOp::Contains
+            | ExplorePredicateOp::StartsWith
+            | ExplorePredicateOp::EndsWith => {
+                let ExploreValue::String(value) = predicate
+                    .value
+                    .as_ref()
+                    .ok_or(ExploreStoreError::InvalidData)?
+                else {
+                    return Err(ExploreStoreError::InvalidData);
+                };
+                let escaped = escape_regex(value);
+                let pattern = match predicate.op {
+                    ExplorePredicateOp::StartsWith => format!("^{escaped}"),
+                    ExplorePredicateOp::EndsWith => format!("{escaped}$"),
+                    ExplorePredicateOp::Contains => escaped,
+                    _ => unreachable!(),
+                };
+                doc! { field: Bson::RegularExpression(Regex {
+                    pattern,
+                    options: String::new(),
+                }) }
+            }
             ExplorePredicateOp::Range => {
                 let lower = predicate
                     .value
@@ -198,6 +220,20 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
         });
     }
     Ok(doc! { "$and": clauses })
+}
+
+fn escape_regex(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(
+            character,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '\\' | '|'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn aggregate_pipeline(
@@ -704,4 +740,14 @@ fn operation_class_code(value: &str) -> Option<i32> {
 
 fn unavailable(_: mongodb::error::Error) -> ExploreStoreError {
     ExploreStoreError::Unavailable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_regex;
+
+    #[test]
+    fn text_predicate_values_are_regex_literals() {
+        assert_eq!(escape_regex(r#"a.*(b)[c]\d$"#), r#"a\.\*\(b\)\[c\]\\d\$"#);
+    }
 }

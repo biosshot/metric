@@ -214,6 +214,13 @@ fn valid_predicate(
         ExplorePredicateOp::Exact => {
             value.is_some_and(|value| value_matches(dataset, field, value)) && upper.is_none()
         }
+        ExplorePredicateOp::Contains
+        | ExplorePredicateOp::StartsWith
+        | ExplorePredicateOp::EndsWith => {
+            text_searchable(field)
+                && matches!(value, Some(ExploreValue::String(value)) if !value.is_empty() && value.len() <= 256)
+                && upper.is_none()
+        }
         ExplorePredicateOp::Range => {
             field.numeric()
                 && value.is_some_and(|value| value_matches(dataset, field, value))
@@ -223,6 +230,20 @@ fn valid_predicate(
                     .is_some_and(|(lower, upper)| value_less_than(lower, upper))
         }
     }
+}
+
+const fn text_searchable(field: ExploreField) -> bool {
+    matches!(
+        field,
+        ExploreField::Message
+            | ExploreField::Environment
+            | ExploreField::Release
+            | ExploreField::Service
+            | ExploreField::Operation
+            | ExploreField::Status
+            | ExploreField::Name
+            | ExploreField::Unit
+    )
 }
 
 fn value_matches(
@@ -382,6 +403,36 @@ mod tests {
         assert_eq!(
             service().plan(ProjectId::new(1).unwrap(), query),
             Err(ExploreError::CostExceeded)
+        );
+    }
+
+    #[test]
+    fn bounded_text_matching_accepts_text_and_rejects_identifier_regexes() {
+        let mut query = ExploreQuery {
+            dataset: ExploreDataset::Logs,
+            from: Timestamp::from_unix_millis(0).unwrap(),
+            until: Timestamp::from_unix_millis(3_600_000).unwrap(),
+            predicates: vec![ExplorePredicate {
+                field: ExploreField::Message,
+                op: ExplorePredicateOp::Contains,
+                value: Some(ExploreValue::String("timeout".into())),
+                upper: None,
+            }],
+            aggregates: Vec::new(),
+            group_by: Vec::new(),
+            interval: None,
+            cursor: None,
+            limit: 50,
+        };
+        assert!(
+            service()
+                .plan(ProjectId::new(1).unwrap(), query.clone())
+                .is_ok()
+        );
+        query.predicates[0].field = ExploreField::TraceId;
+        assert_eq!(
+            service().plan(ProjectId::new(1).unwrap(), query),
+            Err(ExploreError::InvalidQuery)
         );
     }
 }
