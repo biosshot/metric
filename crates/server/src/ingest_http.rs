@@ -12,7 +12,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Extension, OriginalUri, Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -40,6 +40,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_util::io::StreamReader;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::IngestConfig;
 
@@ -92,6 +93,12 @@ pub fn router(
         .route("/api/{project_id}/store/", post(store_handler))
         .route("/api/{project_id}/minidump/", post(minidump_handler))
         .with_state(state)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::POST, Method::OPTIONS])
+                .allow_headers(Any),
+        )
 }
 
 async fn minidump_handler(

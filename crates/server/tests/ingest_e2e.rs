@@ -261,6 +261,44 @@ fn minimal_minidump() -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn public_ingest_accepts_browser_cross_origin_preflight_and_post() {
+    let root = ShutdownRoot::new();
+    let sink = FakeEventSink::accepting();
+    let app = test_app(config(), sink, &root);
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/42/envelope/")
+        .header(header::ORIGIN, "http://127.0.0.1:4173")
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+        .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(preflight).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "*"
+    );
+
+    let mut cross_origin = request(envelope(""));
+    cross_origin
+        .headers_mut()
+        .insert(header::ORIGIN, "http://127.0.0.1:4173".parse().unwrap());
+    let response = app.oneshot(cross_origin).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "*"
+    );
+}
+
+#[tokio::test]
 async fn valid_envelope_is_scrubbed_before_fake_durable_acceptance() {
     let root = ShutdownRoot::new();
     let sink = FakeEventSink::accepting();

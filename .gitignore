@@ -31,6 +31,7 @@ web/playwright-report/
 web/test-results/
 sdk-tests/*/node_modules/
 sdk-tests/*/dist/
+sdk-tests/browser/sdk-browser.js
 sdk-tests/*/.deps/
 sdk-tests/*/bin/
 sdk-tests/*/obj/

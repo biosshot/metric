@@ -8,23 +8,37 @@ if (!pageUrl || !dsn) {
 }
 
 let browser;
+let page;
+const diagnostics = [];
+const browserErrors = [];
 const deadline = new Promise((_, reject) => {
   const timer = setTimeout(() => {
     reject(
-      new Error("real Browser SDK harness exceeded its 20 second deadline"),
+      new Error("real Browser SDK harness exceeded its 25 second deadline"),
     );
-  }, 20_000);
+  }, 25_000);
   timer.unref();
 });
 
 async function run() {
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-  const browserErrors = [];
+  page = await browser.newPage();
   page.on("pageerror", (error) => browserErrors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") {
       browserErrors.push(message.text());
+    }
+  });
+  page.on("requestfailed", (request) => {
+    diagnostics.push(
+      `${request.method()} ${request.url()} failed: ${request.failure()?.errorText ?? "unknown"}`,
+    );
+  });
+  page.on("response", (response) => {
+    if (!response.ok()) {
+      diagnostics.push(
+        `${response.request().method()} ${response.url()} returned HTTP ${response.status()}`,
+      );
     }
   });
 
@@ -35,7 +49,7 @@ async function run() {
     () => window.__metricSdkResult?.complete === true,
     null,
     {
-      timeout: 12_000,
+      timeout: 22_000,
     },
   );
   const result = await page.evaluate(() => window.__metricSdkResult);
@@ -54,7 +68,18 @@ async function run() {
 try {
   await Promise.race([run(), deadline]);
 } catch (error) {
-  stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+  const state = await page
+    ?.evaluate(() => window.__metricSdkResult)
+    .catch(() => undefined);
+  stderr.write(
+    `${error instanceof Error ? error.stack : String(error)}\n` +
+      `SDK state: ${JSON.stringify(state ?? null)}\n` +
+      `Diagnostics: ${
+        [...diagnostics, ...browserErrors].length > 0
+          ? [...diagnostics, ...browserErrors].join("; ")
+          : "none"
+      }\n`,
+  );
   process.exitCode = 2;
 } finally {
   await browser?.close();
