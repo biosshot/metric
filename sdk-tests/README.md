@@ -100,6 +100,20 @@ with `rrweb-player` 2.1.1. A synthetic secret entered before the flush must not 
 in the decompressed recording. This proves the pinned client configuration, not a
 server-side DOM privacy guarantee.
 
+For a manual visible recording, build and serve the interactive demo:
+
+```powershell
+cd sdk-tests/browser
+npm ci
+npm run build
+python -m http.server 4173
+```
+
+Open `replay-demo.html?dsn=<URL-encoded DSN>`, interact with the counter, tabs, form,
+theme, modal and scroll area, then click **Flush Replay**. The page uses the same
+pinned official `@sentry/browser` package. Ordinary interface text remains visible,
+while input values are masked before transport.
+
 ## Python SDK
 
 `python/requirements.lock.txt` pins `sentry-sdk` 2.32.0 and its transport
