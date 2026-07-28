@@ -68,7 +68,9 @@ async fn security_headers(request: Request, next: Next) -> Response {
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
             "default-src 'self'; connect-src 'self'; img-src 'self' data:; \
-             script-src 'self'; style-src 'self'; object-src 'none'; \
+             script-src 'self'; style-src 'self'; \
+             style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; \
+             object-src 'none'; \
              base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         ),
     );
@@ -134,6 +136,18 @@ mod tests {
                     .get(header::X_CONTENT_TYPE_OPTIONS)
                     .unwrap(),
                 "nosniff"
+            );
+            let content_security_policy = response
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(content_security_policy.contains("script-src 'self'"));
+            assert!(
+                content_security_policy.contains(
+                    "style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'"
+                )
             );
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
             assert_eq!(body, "<main>Metric Web</main>");
