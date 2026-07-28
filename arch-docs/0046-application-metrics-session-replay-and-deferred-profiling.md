@@ -137,6 +137,10 @@ optional and cannot block the Error, Log, Trace, Metrics or reliability products
 
 ## Phase 38: Session Replay
 
+Implementation status: complete as of 2026-07-28. The retained module contract and
+exit-gate evidence are in `module-contracts/0038-session-replay-phase-38.md` and
+`phase-reports/0038-session-replay.md`.
+
 Session Replay is an accepted desired product because it covers browser investigation
 and Webvisor-like session playback cases found in systems such as Yandex Metrica.
 It does not by itself claim full traffic-acquisition, attribution, funnel or product

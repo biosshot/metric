@@ -85,6 +85,21 @@ Metric router, launches the pinned Playwright Chromium, sends through a real DSN
 waits for `flush`, and verifies the accepted Error Event and absence of attachment
 blobs. The browser and server are closed before the test returns.
 
+Phase 38 additionally pins the real Session Replay path:
+
+```text
+cargo test -p metric-server --test sdk_compatibility_e2e \
+  real_browser_sdk_records_uploads_retrieves_and_plays_replay \
+  -- --ignored --exact --nocapture
+```
+
+The browser uses `@sentry/browser` 10.66.0 with client-side text/input masking,
+compression and media blocking. The test records an interaction in Chromium,
+uploads the paired Replay items, retrieves the exact stored segment and mounts it
+with `rrweb-player` 2.1.1. A synthetic secret entered before the flush must not occur
+in the decompressed recording. This proves the pinned client configuration, not a
+server-side DOM privacy guarantee.
+
 ## Python SDK
 
 `python/requirements.lock.txt` pins `sentry-sdk` 2.32.0 and its transport

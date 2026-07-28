@@ -523,3 +523,18 @@ HTTP and MongoDB so future runs compare the streaming fold itself; the durable M
 contract is covered separately by ignored integration tests. The local minimum is
 100,000 measurements/s and `deltas_per_container` must remain exactly one. No server,
 k6, or background process is started.
+
+## Phase 38 Session Replay
+
+Phase 38 keeps one focused release-mode regression profile:
+
+```text
+node performance/run-session-replay.mjs
+node performance/compare-session-replay.mjs performance/baselines/session-replay/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+The fixture validates 20,000 bounded raw rrweb segments with four events each. The
+artifact reports explicit validation RPS and has a local minimum gate of 10,000 RPS.
+It intentionally excludes HTTP, BlobStore and MongoDB; durable storage and browser
+compatibility are covered by separate focused tests. No server, browser or k6 process
+is started by this performance runner.

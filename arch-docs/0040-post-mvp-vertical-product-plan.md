@@ -49,12 +49,12 @@ Status as of 2026-07-27:
 | 35 | Cron Monitoring | Complete |
 | 36 | Uptime Monitoring | Complete |
 | 37 | Application Metrics | Complete |
-| 38 | Session Replay | Accepted, next |
+| 38 | Session Replay | Complete |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
-Phase 28-37 evidence is published in their corresponding reports; Phase 38 is next.
+Phase 28-38 evidence is published in their corresponding reports.
 
 ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
 decision deferred execution of Phase 27 without completing it. ADR-0045 now owns the
@@ -867,7 +867,7 @@ The completed chain, deferred gate and selected product wave are:
 -> 35 Cron
 -> 36 Uptime
 -> 37 Application Metrics (complete)
--> 38 Session Replay (next)
+-> 38 Session Replay (complete)
 ```
 
 ADR-0045 owns the completed Phase 28-36 scope, exclusions and gates. ADR-0046 owns
