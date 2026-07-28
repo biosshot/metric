@@ -28,6 +28,11 @@ const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
+const hasFilters = computed(
+  () =>
+    Boolean(service.value.trim() || environment.value.trim() || release.value.trim()) ||
+    range.value !== '24h',
+);
 const transactions = useQuery({
   queryKey: computed(() => [
     'transactions',
@@ -125,7 +130,12 @@ function previousPage(): void {
           <AppIcon name="search" :size="16" />
           Search
         </button>
-        <button class="button button--secondary" type="button" @click="resetFilters">
+        <button
+          v-if="hasFilters"
+          class="button button--secondary"
+          type="button"
+          @click="resetFilters"
+        >
           <AppIcon name="close" :size="16" />
           Reset
         </button>

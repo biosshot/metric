@@ -19,6 +19,9 @@ const range = ref('24h');
 const appliedRange = ref('24h');
 const selectedWindow = ref(timeWindow('24h'));
 const appliedWindow = ref({ ...selectedWindow.value });
+const hasFilters = computed(
+  () => Boolean(search.value.trim() || submittedSearch.value) || range.value !== '24h',
+);
 const replays = useQuery({
   queryKey: computed(() => [
     'replays',
@@ -50,6 +53,10 @@ function submitSearch(): void {
 function clearSearch(): void {
   search.value = '';
   submittedSearch.value = '';
+  range.value = '24h';
+  appliedRange.value = '24h';
+  selectedWindow.value = timeWindow('24h');
+  appliedWindow.value = { ...selectedWindow.value };
 }
 
 function duration(milliseconds: number): string {
@@ -101,7 +108,7 @@ function duration(milliseconds: number): string {
           Search
         </button>
         <button
-          v-if="submittedSearch"
+          v-if="hasFilters"
           class="button button--secondary"
           type="button"
           @click="clearSearch"

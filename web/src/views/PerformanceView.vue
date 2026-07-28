@@ -24,6 +24,11 @@ const appliedRange = ref('24h');
 const selectedWindow = ref(timeWindow('24h'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const projectId = computed(() => session.selectedProjectId ?? '');
+const hasFilters = computed(
+  () =>
+    Boolean(service.value.trim() || environment.value.trim() || release.value.trim()) ||
+    range.value !== '24h',
+);
 const performance = useQuery({
   queryKey: computed(() => [
     'performance',
@@ -107,7 +112,12 @@ function resetFilters(): void {
           <AppIcon name="search" :size="16" />
           Search
         </button>
-        <button class="button button--secondary" type="button" @click="resetFilters">
+        <button
+          v-if="hasFilters"
+          class="button button--secondary"
+          type="button"
+          @click="resetFilters"
+        >
           <AppIcon name="close" :size="16" />
           Reset
         </button>

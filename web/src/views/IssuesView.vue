@@ -38,6 +38,12 @@ const statusOptions: SelectOption[] = [
 ];
 
 const projectId = computed(() => session.selectedProjectId ?? '');
+const hasFilters = computed(
+  () =>
+    Boolean(
+      search.value.trim() || submittedSearch.value || status.value || submittedStatus.value,
+    ) || range.value !== '24h',
+);
 const queryKey = computed(() => [
   submittedSearch.value ? 'event-search' : 'issues',
   projectId.value,
@@ -83,21 +89,15 @@ function submitSearch(): void {
   resetPage(false);
 }
 
-function clearSearch(): void {
+function resetFilters(): void {
+  status.value = '';
+  submittedStatus.value = '';
   search.value = '';
   submittedSearch.value = '';
   range.value = '24h';
   appliedRange.value = '24h';
   selectedWindow.value = timeWindow('24h');
   appliedWindow.value = { ...selectedWindow.value };
-  resetPage(false);
-}
-
-function resetFilters(): void {
-  status.value = '';
-  submittedStatus.value = '';
-  search.value = '';
-  submittedSearch.value = '';
   resetPage(false);
 }
 
@@ -173,10 +173,10 @@ function formatTime(value: string): string {
           Search
         </button>
         <button
-          v-if="submittedSearch || submittedStatus"
+          v-if="hasFilters"
           class="button button--secondary"
           type="button"
-          @click="submittedSearch ? clearSearch() : resetFilters()"
+          @click="resetFilters"
         >
           <AppIcon name="close" :size="16" />
           Reset

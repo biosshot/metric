@@ -1053,6 +1053,10 @@ test('Replay search and detail keep controls and metadata in their content flow'
   const issueSearch = issueToolbar.getByRole('searchbox');
   const issueStatus = issueToolbar.getByRole('combobox', { name: 'Issue status' });
   const issueActions = issueToolbar.locator('.signal-toolbar__actions');
+  await expect(issueToolbar.getByRole('button', { name: 'Reset' })).toBeHidden();
+  await issueStatus.click();
+  await page.getByRole('option', { name: /^Open/ }).click();
+  await expect(issueToolbar.getByRole('button', { name: 'Reset' })).toBeVisible();
   const issueSearchBox = await issueSearch.boundingBox();
   const issueStatusBox = await issueStatus.boundingBox();
   const issueActionsBox = await issueActions.boundingBox();
@@ -1106,6 +1110,11 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(logActionsBox!.y).toBeLessThanOrEqual(logTimeRangeBox!.y);
   expect(logActionsBox!.y).toBeLessThan(logMessageBox!.y + logMessageBox!.height);
   expect(logSearchBox!.x).toBeGreaterThanOrEqual(logTimeRangeBox!.x + logTimeRangeBox!.width);
+  await expect(logToolbar.getByRole('button', { name: 'Reset' })).toBeHidden();
+  await logToolbar.getByPlaceholder('Service').fill('checkout');
+  await expect(logToolbar.getByRole('button', { name: 'Reset' })).toBeVisible();
+  await logToolbar.getByRole('button', { name: 'Reset' }).click();
+  await expect(logToolbar.getByRole('button', { name: 'Reset' })).toBeHidden();
 
   await page.goto('/traces');
   const traceToolbar = page.locator('.signal-toolbar--compact');

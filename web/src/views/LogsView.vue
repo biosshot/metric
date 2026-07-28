@@ -33,6 +33,16 @@ const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
+const hasFilters = computed(
+  () =>
+    Boolean(
+      level.value ||
+        message.value.trim() ||
+        service.value.trim() ||
+        environment.value.trim() ||
+        release.value.trim(),
+    ) || range.value !== '24h',
+);
 const levelOptions: SelectOption[] = [
   { value: '', label: 'All levels', icon: 'filter' },
   { value: 'trace', label: 'Trace', icon: 'status' },
@@ -178,7 +188,12 @@ function traceLink(log: StructuredLog): string | null {
           <AppIcon name="search" :size="16" />
           Search
         </button>
-        <button class="button button--secondary" type="button" @click="resetFilters">
+        <button
+          v-if="hasFilters"
+          class="button button--secondary"
+          type="button"
+          @click="resetFilters"
+        >
           <AppIcon name="close" :size="16" />
           Reset
         </button>
