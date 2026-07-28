@@ -1030,6 +1030,26 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(issueActionsBox).not.toBeNull();
   expect(issueActionsBox!.y).toBeLessThan(issueSearchBox!.y + issueSearchBox!.height);
   expect(issueActionsBox!.x).toBeGreaterThanOrEqual(issueStatusBox!.x + issueStatusBox!.width);
+  await issueToolbar.getByRole('combobox', { name: 'Issue time range' }).click();
+  await page.getByRole('option', { name: /^Custom range/ }).click();
+  const customRangePopover = page.getByRole('dialog', { name: 'Custom time range' });
+  const issueSearchWithPopoverBox = await issueSearch.boundingBox();
+  const issueStatusWithPopoverBox = await issueStatus.boundingBox();
+  const issueActionsWithPopoverBox = await issueActions.boundingBox();
+  expect(issueSearchWithPopoverBox).not.toBeNull();
+  expect(issueStatusWithPopoverBox).not.toBeNull();
+  expect(issueActionsWithPopoverBox).not.toBeNull();
+  expect(Math.abs(issueSearchWithPopoverBox!.width - issueSearchBox!.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(issueStatusWithPopoverBox!.x - issueStatusBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(issueActionsWithPopoverBox!.x - issueActionsBox!.x)).toBeLessThanOrEqual(1);
+  await expect
+    .poll(() =>
+      customRangePopover.evaluate(
+        (popover) => getComputedStyle(popover).backgroundColor !== 'rgba(0, 0, 0, 0)',
+      ),
+    )
+    .toBe(true);
+  await page.keyboard.press('Escape');
 
   await page.goto('/logs');
   const logToolbar = page.locator('.signal-toolbar');

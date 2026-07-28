@@ -136,6 +136,7 @@
     'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     'Liberation Mono', monospace;
   --canvas: #0a0a0a;
+  --surface-sunken: #0d0d0d;
   --surface: #101010;
   --surface-subtle: #171717;
   --surface-strong: #242424;
@@ -1351,6 +1352,8 @@ label small,
 .base-select__value {
   display: flex;
   min-width: 0;
+  overflow: hidden;
+  flex: 1;
   align-items: center;
   gap: 0.5rem;
 }
@@ -1996,7 +1999,13 @@ label small,
 }
 
 .signal-toolbar__actions .time-range-control {
-  width: min(240px, 100%);
+  width: 240px;
+  flex: 0 0 240px;
+}
+
+.signal-toolbar__actions .time-range-select {
+  width: 100%;
+  min-width: 0;
 }
 
 .signal-toolbar__actions .button {
@@ -3484,6 +3493,7 @@ label small,
 
   .signal-toolbar__actions .time-range-control {
     width: 100%;
+    flex-basis: 100%;
   }
 
   .time-range-custom {
