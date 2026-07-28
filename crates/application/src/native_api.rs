@@ -359,12 +359,31 @@ impl NativeApiService {
         context: &AuthContext,
         project_id: ProjectId,
         monitor_id: MonitorId,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
         limit: Option<usize>,
     ) -> Result<MonitorRunPage, NativeApiError> {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
+        if from.zip(until).is_some_and(|(from, until)| from >= until) {
+            return Err(NativeApiError::InvalidRequest);
+        }
         self.monitor_store()?
-            .list_monitor_runs(project_id, monitor_id, None, page_size(limit)?)
+            .list_monitor_runs(project_id, monitor_id, from, until, None, page_size(limit)?)
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn delete_monitor(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+    ) -> Result<(), NativeApiError> {
+        self.authorize_mutation(context, project_id, Permission::ProjectAdmin)
+            .await?;
+        self.monitor_store()?
+            .delete_monitor(project_id, monitor_id)
             .await
             .map_err(map_signal_error)
     }

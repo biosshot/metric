@@ -209,7 +209,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         1
     );
     let runs = store
-        .list_monitor_runs(project_id, monitor_id, None, 100)
+        .list_monitor_runs(project_id, monitor_id, None, None, None, 100)
         .await?;
     assert_eq!(runs.items[0].status, MonitorRunStatus::Timeout);
 
@@ -241,7 +241,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     );
     assert!(
         store
-            .list_monitor_runs(project_id, monitor_id, None, 100)
+            .list_monitor_runs(project_id, monitor_id, None, None, None, 100)
             .await?
             .items
             .iter()
@@ -274,7 +274,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         1
     );
     let missed_runs = store
-        .list_monitor_runs(project_id, missed_id, None, 100)
+        .list_monitor_runs(project_id, missed_id, None, None, None, 100)
         .await?;
     assert_eq!(missed_runs.items.len(), 1);
     assert_eq!(missed_runs.items[0].status, MonitorRunStatus::Missed);
@@ -302,6 +302,31 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             .and_then(|value| value.expire_after)
             .is_some()
     }));
+
+    let outside_window = store
+        .list_monitor_runs(
+            project_id,
+            monitor_id,
+            Some(timestamp(base.unix_millis() + 1)),
+            Some(timestamp(base.unix_millis() + 10_000)),
+            None,
+            100,
+        )
+        .await?;
+    assert!(outside_window.items.is_empty());
+
+    store.delete_monitor(project_id, monitor_id).await?;
+    assert!(matches!(
+        store.load_monitor(project_id, monitor_id).await,
+        Err(metric_ports::SignalStoreError::NotFound)
+    ));
+    assert!(
+        store
+            .list_monitor_runs(project_id, monitor_id, None, None, None, 100)
+            .await?
+            .items
+            .is_empty()
+    );
     Ok(())
 }
 

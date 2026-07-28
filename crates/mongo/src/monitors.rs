@@ -355,6 +355,8 @@ impl MongoMonitorStore {
         &self,
         project_id: ProjectId,
         monitor_id: MonitorId,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
         before: Option<MonitorRunAnchor>,
         limit: usize,
     ) -> Result<MonitorRunPage, SignalStoreError> {
@@ -362,6 +364,16 @@ impl MongoMonitorStore {
             return Err(SignalStoreError::InvalidData);
         }
         let mut filter = doc! { "p": project_id.get(), "m": binary(monitor_id.as_bytes()) };
+        let mut started_at = Document::new();
+        if let Some(from) = from {
+            started_at.insert("$gte", date(from));
+        }
+        if let Some(until) = until {
+            started_at.insert("$lte", date(until));
+        }
+        if !started_at.is_empty() {
+            filter.insert("i", started_at);
+        }
         if let Some(before) = before {
             filter.insert(
                 "$or",
@@ -399,6 +411,34 @@ impl MongoMonitorStore {
             None
         };
         Ok(MonitorRunPage { items, next })
+    }
+
+    async fn delete_inner(
+        &self,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+    ) -> Result<(), SignalStoreError> {
+        self.database
+            .collection::<Document>("monitor_runs")
+            .delete_many(doc! {
+                "p": project_id.get(),
+                "m": binary(monitor_id.as_bytes()),
+            })
+            .await
+            .map_err(unavailable)?;
+        let result = self
+            .database
+            .collection::<Document>("monitors")
+            .delete_one(doc! {
+                "_id": binary(monitor_id.as_bytes()),
+                "p": project_id.get(),
+            })
+            .await
+            .map_err(unavailable)?;
+        if result.deleted_count == 0 {
+            return Err(SignalStoreError::NotFound);
+        }
+        Ok(())
     }
 
     async fn timeout_inner(
@@ -662,10 +702,20 @@ impl MonitorStore for MongoMonitorStore {
         &self,
         project_id: ProjectId,
         monitor_id: MonitorId,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
         before: Option<MonitorRunAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<MonitorRunPage, SignalStoreError>> {
-        Box::pin(self.list_runs_inner(project_id, monitor_id, before, limit))
+        Box::pin(self.list_runs_inner(project_id, monitor_id, from, until, before, limit))
+    }
+
+    fn delete_monitor(
+        &self,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+    ) -> PortFuture<'_, Result<(), SignalStoreError>> {
+        Box::pin(self.delete_inner(project_id, monitor_id))
     }
 
     fn terminalize_due_timeouts(

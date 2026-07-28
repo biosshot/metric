@@ -235,6 +235,31 @@ describe('native API client', () => {
     });
   });
 
+  it('scopes monitor history by time and protects monitor deletion with CSRF', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.monitorRuns('42', 'b'.repeat(32), { from: 1_000, until: 2_000 });
+    await api.deleteMonitor('42', 'b'.repeat(32));
+
+    const [historyPath] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [deletePath, deleteInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(historyPath).toBe(
+      `/api/v1/projects/42/monitors/${'b'.repeat(32)}/runs?from=1000&until=2000&limit=100`,
+    );
+    expect(deletePath).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}`);
+    expect(deleteInit.method).toBe('DELETE');
+    expect((deleteInit.headers as Headers).get('x-csrf-token')).toBe('a'.repeat(64));
+  });
+
   it('refuses a mutation when this tab lost its CSRF token', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

@@ -464,6 +464,10 @@ pub fn router(
             get(list_monitors).post(put_monitor),
         )
         .route(
+            "/api/v1/projects/{project_id}/monitors/{monitor_id}",
+            delete(delete_monitor),
+        )
+        .route(
             "/api/v1/projects/{project_id}/monitors/{monitor_id}/runs",
             get(list_monitor_runs),
         )
@@ -771,11 +775,35 @@ async fn list_monitor_runs(
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
     let query = query_map(raw.as_deref())?;
+    let from = query
+        .get("from")
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| HttpApiError::InvalidRequest)
+                .and_then(|value| {
+                    Timestamp::from_unix_millis(value).map_err(|_| HttpApiError::InvalidRequest)
+                })
+        })
+        .transpose()?;
+    let until = query
+        .get("until")
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| HttpApiError::InvalidRequest)
+                .and_then(|value| {
+                    Timestamp::from_unix_millis(value).map_err(|_| HttpApiError::InvalidRequest)
+                })
+        })
+        .transpose()?;
     let page = api(&state)?
         .monitor_runs(
             &context,
             project_id_from(&project_id)?,
             MonitorId::from_bytes(hex_16(&monitor_id)?),
+            from,
+            until,
             query_limit(&query)?,
         )
         .await
@@ -783,6 +811,23 @@ async fn list_monitor_runs(
     Ok(Json(json!({
         "items": page.items.iter().map(monitor_run_value).collect::<Result<Vec<_>, _>>()?
     })))
+}
+
+async fn delete_monitor(
+    State(state): State<NativeHttpState>,
+    Path((project_id, monitor_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    api(&state)?
+        .delete_monitor(
+            &context,
+            project_id_from(&project_id)?,
+            MonitorId::from_bytes(hex_16(&monitor_id)?),
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]

@@ -559,6 +559,7 @@ fn parse_dataset(value: &str) -> Result<ExploreDataset, DashboardStoreError> {
         "errors" => Ok(ExploreDataset::Errors),
         "logs" => Ok(ExploreDataset::Logs),
         "spans" => Ok(ExploreDataset::Spans),
+        "metrics" => Ok(ExploreDataset::Metrics),
         _ => Err(DashboardStoreError::InvalidData),
     }
 }
@@ -670,5 +671,22 @@ fn map_mongo(error: MongoError) -> DashboardStoreError {
         DashboardStoreError::Conflict
     } else {
         DashboardStoreError::Unavailable
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_encoded_dashboard_dataset_can_be_decoded() {
+        for dataset in [
+            ExploreDataset::Errors,
+            ExploreDataset::Logs,
+            ExploreDataset::Spans,
+            ExploreDataset::Metrics,
+        ] {
+            assert_eq!(parse_dataset(dataset.as_str()), Ok(dataset));
+        }
     }
 }

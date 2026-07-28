@@ -179,6 +179,9 @@ interface ApiState {
   dashboardVariableSeen?: boolean;
   monitors?: Array<Record<string, any>>;
   monitorRuns?: Array<Record<string, any>>;
+  monitorRangeSeen?: boolean;
+  monitorFromSeen?: number;
+  monitorDeleted?: boolean;
   alertRules?: Array<Record<string, any>>;
 }
 
@@ -542,7 +545,15 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json({ items: state.monitors });
   }
   if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}/runs`) {
+    state.monitorRangeSeen = Boolean(url.searchParams.get('from') && url.searchParams.get('until'));
+    state.monitorFromSeen = Number(url.searchParams.get('from'));
     return json({ items: state.monitorRuns ?? [] });
+  }
+  if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}` && request.method() === 'DELETE') {
+    state.monitorDeleted = request.headers()['x-csrf-token'] === 'c'.repeat(64);
+    state.monitors = [];
+    state.monitorRuns = [];
+    return route.fulfill({ status: 204 });
   }
   if (path === '/api/v1/projects/42/notification-destinations') {
     return json({
@@ -680,6 +691,7 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await login(page);
 
   await page.getByRole('link', { name: 'Monitors', exact: true }).click();
+  await page.locator('.page-header').getByRole('button', { name: 'Create monitor' }).click();
   await page.getByRole('combobox', { name: 'Monitor type' }).click();
   await page.getByRole('option', { name: /^Uptime HTTP/ }).click();
   await page.getByLabel('Name', { exact: true }).fill('Public API');
@@ -694,6 +706,17 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await expect(page.getByText('HTTP 503')).toBeVisible();
   await expect(page.getByText('unexpected_status')).toBeVisible();
   await expect(page.getByText('HTTP 200')).toBeVisible();
+  await page.getByRole('button', { name: 'Timeline' }).click();
+  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(2);
+  await page.getByRole('combobox', { name: 'Run history period' }).click();
+  await page.getByRole('option', { name: /^Last 7 days/ }).click();
+  await expect.poll(() => state.monitorRangeSeen).toBe(true);
+  await page.getByRole('combobox', { name: 'Run history period' }).click();
+  await page.getByRole('option', { name: /^Custom period/ }).click();
+  await page.getByLabel('From').fill('2026-07-20T00:00');
+  await page.getByLabel('Until').fill('2026-07-21T00:00');
+  await page.getByRole('button', { name: 'Apply period' }).click();
+  await expect.poll(() => state.monitorFromSeen).toBe(new Date('2026-07-20T00:00').getTime());
   expect(state.csrfSeen).toBe(true);
 
   await page.goto('/settings/notifications');
@@ -706,6 +729,12 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await page.getByRole('button', { name: 'Create rule' }).click();
   await expect(page.getByText('Public API availability')).toBeVisible();
   expect(state.alertRules?.[0]?.monitor.notify_resolved).toBe(true);
+
+  await page.goto('/monitors');
+  await page.getByRole('button', { name: 'Delete monitor' }).click();
+  await page.getByRole('button', { name: 'Confirm delete' }).click();
+  await expect(page.getByRole('heading', { name: 'No monitors yet' })).toBeVisible();
+  expect(state.monitorDeleted).toBe(true);
 });
 
 test('first setup creates a project and reaches an actionable SDK DSN', async ({ page }) => {
@@ -962,6 +991,18 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await installApi(page, state);
   await login(page);
   await page.goto('/replays');
+
+  const replayToolbar = page.locator('.signal-toolbar--replays');
+  const replaySearch = replayToolbar.getByLabel('Search loaded Replays');
+  const replayActions = replayToolbar.locator('.signal-toolbar__actions');
+  const toolbarBox = await replayToolbar.boundingBox();
+  const searchBox = await replaySearch.boundingBox();
+  const actionsBox = await replayActions.boundingBox();
+  expect(toolbarBox).not.toBeNull();
+  expect(searchBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(Math.abs(actionsBox!.x - (toolbarBox!.x + 12))).toBeLessThanOrEqual(2);
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
 
   await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();

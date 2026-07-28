@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
-import type { CronMonitor, MonitorInput } from '../api/types';
+import type { CronMonitor, MonitorInput, MonitorRun } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
@@ -15,6 +15,15 @@ const session = useSessionStore();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const selectedMonitorId = ref('');
+const editorOpen = ref(false);
+const historyView = ref<'list' | 'chart'>('list');
+const historyRange = ref('24h');
+const deleteConfirmationId = ref('');
+const customHistoryFrom = ref(localDateTime(Date.now() - 7 * 24 * 60 * 60 * 1_000));
+const customHistoryUntil = ref(localDateTime(Date.now()));
+const appliedCustomFrom = ref(Date.now() - 7 * 24 * 60 * 60 * 1_000);
+const appliedCustomUntil = ref(Date.now());
+const customHistoryError = ref('');
 const kindOptions: SelectOption[] = [
   {
     value: 'cron',
@@ -47,6 +56,17 @@ const scheduleTypeOptions: SelectOption[] = [
     icon: 'refresh',
   },
 ];
+const historyRangeOptions: SelectOption[] = [
+  { value: '24h', label: 'Last 24 hours', icon: 'history' },
+  { value: '7d', label: 'Last 7 days', icon: 'history' },
+  { value: '30d', label: 'Last 30 days', icon: 'history' },
+  { value: 'custom', label: 'Custom period', icon: 'settings' },
+];
+const historyRangeMillis: Record<string, number> = {
+  '24h': 24 * 60 * 60 * 1_000,
+  '7d': 7 * 24 * 60 * 60 * 1_000,
+  '30d': 30 * 24 * 60 * 60 * 1_000,
+};
 const form = reactive<MonitorInput>({
   kind: 'cron',
   slug: '',
@@ -77,11 +97,22 @@ const selectedMonitor = computed(
     monitors.data.value?.items.find((monitor) => monitor.id === selectedMonitorId.value) ?? null,
 );
 const runs = useQuery({
-  queryKey: computed(() => ['monitor-runs', projectId.value, selectedMonitorId.value]),
-  queryFn: () => api.monitorRuns(projectId.value, selectedMonitorId.value),
+  queryKey: computed(() => [
+    'monitor-runs',
+    projectId.value,
+    selectedMonitorId.value,
+    historyRange.value,
+    appliedCustomFrom.value,
+    appliedCustomUntil.value,
+  ]),
+  queryFn: () => api.monitorRuns(projectId.value, selectedMonitorId.value, currentHistoryWindow()),
   enabled: computed(() => Boolean(projectId.value && selectedMonitorId.value)),
   refetchInterval: 10_000,
 });
+const chartRuns = computed(() => [...(runs.data.value?.items ?? [])].reverse());
+const maximumRunDuration = computed(() =>
+  Math.max(1, ...chartRuns.value.map((run) => run.duration_ms ?? 0)),
+);
 
 watch(
   () => monitors.data.value?.items,
@@ -92,6 +123,9 @@ watch(
   },
   { immediate: true },
 );
+watch([selectedMonitorId, historyRange], () => {
+  deleteConfirmationId.value = '';
+});
 
 const saveMonitor = useMutation({
   mutationFn: () =>
@@ -108,7 +142,17 @@ const saveMonitor = useMutation({
     }),
   onSuccess: async (monitor) => {
     selectedMonitorId.value = monitor.id;
+    editorOpen.value = false;
     await queryClient.invalidateQueries({ queryKey: ['monitors', projectId.value] });
+  },
+});
+const deleteMonitor = useMutation({
+  mutationFn: (monitorId: string) => api.deleteMonitor(projectId.value, monitorId),
+  onSuccess: async (_, monitorId) => {
+    if (selectedMonitorId.value === monitorId) selectedMonitorId.value = '';
+    deleteConfirmationId.value = '';
+    await queryClient.invalidateQueries({ queryKey: ['monitors', projectId.value] });
+    await queryClient.removeQueries({ queryKey: ['monitor-runs', projectId.value, monitorId] });
   },
 });
 
@@ -132,6 +176,15 @@ function edit(monitor: CronMonitor): void {
     max_redirects: monitor.uptime?.max_redirects ?? 3,
     headers: monitor.uptime?.headers.map((header) => ({ name: header.name, value: '' })) ?? [],
   });
+  editorOpen.value = true;
+}
+
+function confirmDelete(monitorId: string): void {
+  if (deleteConfirmationId.value === monitorId) {
+    deleteMonitor.mutate(monitorId);
+    return;
+  }
+  deleteConfirmationId.value = monitorId;
 }
 
 function addHeader(): void {
@@ -163,32 +216,83 @@ function duration(value: number | null): string {
   if (value < 1_000) return `${value} ms`;
   return `${(value / 1_000).toFixed(2)} s`;
 }
+
+function runBarHeight(run: MonitorRun): string {
+  const ratio = (run.duration_ms ?? 0) / maximumRunDuration.value;
+  return `${Math.max(18, Math.round(24 + ratio * 72))}px`;
+}
+
+function currentHistoryWindow(): { from: number; until: number } {
+  if (historyRange.value === 'custom') {
+    return { from: appliedCustomFrom.value, until: appliedCustomUntil.value };
+  }
+  const until = Date.now();
+  return {
+    from: until - historyRangeMillis[historyRange.value],
+    until,
+  };
+}
+
+function applyCustomHistory(): void {
+  const from = new Date(customHistoryFrom.value).getTime();
+  const until = new Date(customHistoryUntil.value).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(until) || from >= until) {
+    customHistoryError.value = 'Choose a valid start before the end of the period.';
+    return;
+  }
+  customHistoryError.value = '';
+  appliedCustomFrom.value = from;
+  appliedCustomUntil.value = until;
+}
+
+function localDateTime(value: number): string {
+  const date = new Date(value);
+  return new Date(value - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
 </script>
 
 <template>
-  <section>
+  <section class="monitors-page">
     <header class="page-header">
       <div>
         <p class="eyebrow">{{ session.selectedProject?.slug }} / scheduled jobs</p>
         <h1>Monitors</h1>
         <p>Track SDK cron jobs and safe server-originated HTTP uptime checks.</p>
       </div>
+      <button
+        v-if="session.has('project:admin')"
+        class="button button--secondary"
+        type="button"
+        :aria-pressed="editorOpen"
+        @click="editorOpen = !editorOpen"
+      >
+        <AppIcon :name="editorOpen ? 'close' : 'plus'" :size="16" />
+        {{ editorOpen ? 'Close editor' : 'Create monitor' }}
+      </button>
     </header>
 
     <ApiErrorPanel
       v-if="monitors.error.value"
+      class="monitor-error"
       :error="monitors.error.value"
       title="Cron monitors could not be loaded"
       @retry="monitors.refetch()"
     />
     <ApiErrorPanel
       v-if="saveMonitor.error.value"
+      class="monitor-error"
       :error="saveMonitor.error.value"
       title="Cron monitor was not saved"
     />
+    <ApiErrorPanel
+      v-if="deleteMonitor.error.value"
+      class="monitor-error"
+      :error="deleteMonitor.error.value"
+      title="Monitor deletion failed"
+    />
 
     <form
-      v-if="session.has('project:admin')"
+      v-if="session.has('project:admin') && editorOpen"
       class="panel settings-form monitor-form"
       @submit.prevent="saveMonitor.mutate()"
     >
@@ -359,13 +463,28 @@ function duration(value: number | null): string {
       </button>
     </form>
 
-    <LoadingPanel v-if="monitors.isPending.value" label="Loading cron monitors…" />
+    <LoadingPanel
+      v-if="monitors.isPending.value"
+      class="monitor-loading"
+      label="Loading cron monitors…"
+    />
     <EmptyState
       v-else-if="!monitors.data.value?.items.length"
+      class="monitor-empty"
       icon="monitors"
-      title="No cron check-ins yet"
-      description="Create a monitor here or send a check_in item with a Sentry SDK."
-    />
+      title="No monitors yet"
+      description="Create an uptime monitor here or send a check_in item with a Sentry SDK."
+    >
+      <button
+        v-if="session.has('project:admin')"
+        class="button button--primary"
+        type="button"
+        @click="editorOpen = true"
+      >
+        <AppIcon name="plus" :size="16" />
+        Create monitor
+      </button>
+    </EmptyState>
     <div v-else class="monitor-layout">
       <section class="monitor-list" aria-label="Cron monitors">
         <button
@@ -374,7 +493,7 @@ function duration(value: number | null): string {
           class="panel monitor-card"
           :class="{ 'monitor-card--selected': selectedMonitorId === monitor.id }"
           type="button"
-          @click="edit(monitor)"
+          @click="selectedMonitorId = monitor.id"
         >
           <span class="monitor-card__icon"><AppIcon name="monitors" /></span>
           <span class="monitor-card__copy">
@@ -401,8 +520,82 @@ function duration(value: number | null): string {
               {{ timestamp(selectedMonitor.last_check_in_at) }}
             </p>
           </div>
-          <StatusBadge :status="selectedMonitor.last_status ?? 'waiting'" />
+          <div class="monitor-history__actions">
+            <StatusBadge :status="selectedMonitor.last_status ?? 'waiting'" />
+            <button
+              v-if="session.has('project:admin')"
+              class="button button--secondary button--fit"
+              type="button"
+              @click="edit(selectedMonitor)"
+            >
+              <AppIcon name="settings" :size="15" />
+              Edit
+            </button>
+            <button
+              v-if="session.has('project:admin')"
+              class="button button--danger button--fit"
+              type="button"
+              :disabled="deleteMonitor.isPending.value"
+              @click="confirmDelete(selectedMonitor.id)"
+            >
+              <AppIcon name="delete" :size="15" />
+              {{
+                deleteConfirmationId === selectedMonitor.id ? 'Confirm delete' : 'Delete monitor'
+              }}
+            </button>
+          </div>
         </div>
+        <div class="monitor-history-controls">
+          <div class="section-tabs" role="group" aria-label="Run history presentation">
+            <button
+              class="button"
+              :class="historyView === 'list' ? 'button--primary' : 'button--secondary'"
+              type="button"
+              :aria-pressed="historyView === 'list'"
+              @click="historyView = 'list'"
+            >
+              <AppIcon name="clipboard" :size="15" />
+              List
+            </button>
+            <button
+              class="button"
+              :class="historyView === 'chart' ? 'button--primary' : 'button--secondary'"
+              type="button"
+              :aria-pressed="historyView === 'chart'"
+              @click="historyView = 'chart'"
+            >
+              <AppIcon name="activity" :size="15" />
+              Timeline
+            </button>
+          </div>
+          <BaseSelect
+            v-model="historyRange"
+            class="monitor-history-range"
+            :options="historyRangeOptions"
+            aria-label="Run history period"
+          />
+        </div>
+        <form
+          v-if="historyRange === 'custom'"
+          class="monitor-custom-range"
+          @submit.prevent="applyCustomHistory"
+        >
+          <label>
+            From
+            <input v-model="customHistoryFrom" type="datetime-local" required />
+          </label>
+          <label>
+            Until
+            <input v-model="customHistoryUntil" type="datetime-local" required />
+          </label>
+          <button class="button button--secondary button--fit" type="submit">
+            <AppIcon name="search" :size="15" />
+            Apply period
+          </button>
+          <small v-if="customHistoryError" class="field-error" role="alert">
+            {{ customHistoryError }}
+          </small>
+        </form>
         <LoadingPanel v-if="runs.isPending.value" label="Loading run history…" />
         <ApiErrorPanel
           v-else-if="runs.error.value"
@@ -416,7 +609,7 @@ function duration(value: number | null): string {
           title="No executions recorded"
           description="The monitor definition exists, but no SDK check-in or scheduler outcome exists yet."
         />
-        <ol v-else class="timeline monitor-run-list">
+        <ol v-else-if="historyView === 'list'" class="timeline monitor-run-list">
           <li v-for="run in runs.data.value?.items" :key="run.id">
             <span class="timeline__dot"></span>
             <div>
@@ -438,6 +631,33 @@ function duration(value: number | null): string {
             </div>
           </li>
         </ol>
+        <div v-else class="monitor-run-chart">
+          <div class="monitor-run-chart__legend" aria-hidden="true">
+            <span class="monitor-run-chart__key monitor-run-chart__key--success">Success</span>
+            <span class="monitor-run-chart__key monitor-run-chart__key--failure">Failure</span>
+            <span class="monitor-run-chart__key monitor-run-chart__key--progress">In progress</span>
+          </div>
+          <div
+            class="monitor-run-chart__plot"
+            role="list"
+            :aria-label="`${chartRuns.length} monitor runs over ${historyRange}`"
+          >
+            <span
+              v-for="run in chartRuns"
+              :key="run.id"
+              class="monitor-run-chart__column"
+              :class="`monitor-run-chart__column--${run.status}`"
+              :style="{ '--run-height': runBarHeight(run) }"
+              role="listitem"
+              :aria-label="`${run.status}, ${timestamp(run.started_at)}, ${duration(run.duration_ms)}`"
+              :title="`${timestamp(run.started_at)} · ${run.status} · ${duration(run.duration_ms)}`"
+            ></span>
+          </div>
+          <div v-if="chartRuns.length" class="monitor-run-chart__axis">
+            <span>{{ timestamp(chartRuns[0].started_at) }}</span>
+            <span>{{ timestamp(chartRuns[chartRuns.length - 1].started_at) }}</span>
+          </div>
+        </div>
       </section>
     </div>
   </section>

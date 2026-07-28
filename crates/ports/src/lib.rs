@@ -1674,9 +1674,17 @@ pub trait MonitorStore: Send + Sync + 'static {
         &self,
         project_id: ProjectId,
         monitor_id: MonitorId,
+        from: Option<metric_domain::Timestamp>,
+        until: Option<metric_domain::Timestamp>,
         before: Option<MonitorRunAnchor>,
         limit: usize,
     ) -> PortFuture<'_, Result<MonitorRunPage, SignalStoreError>>;
+
+    fn delete_monitor(
+        &self,
+        project_id: ProjectId,
+        monitor_id: MonitorId,
+    ) -> PortFuture<'_, Result<(), SignalStoreError>>;
 
     fn terminalize_due_timeouts(
         &self,

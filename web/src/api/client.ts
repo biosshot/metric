@@ -347,9 +347,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(monitor),
     }),
-  monitorRuns: (projectId: string, monitorId: string) =>
+  deleteMonitor: (projectId: string, monitorId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/monitors/${monitorId}`, {
+      method: 'DELETE',
+    }),
+  monitorRuns: (
+    projectId: string,
+    monitorId: string,
+    range: { from?: number; until?: number } = {},
+  ) =>
     request<{ items: MonitorRun[] }>(
-      `/api/v1/projects/${projectId}/monitors/${monitorId}/runs?limit=100`,
+      `/api/v1/projects/${projectId}/monitors/${monitorId}/runs${query({
+        from: range.from,
+        until: range.until,
+        limit: 100,
+      })}`,
     ),
   logs: (
     projectId: string,
