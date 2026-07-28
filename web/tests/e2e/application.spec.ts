@@ -710,9 +710,24 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await expect(page.getByText('HTTP 200')).toBeVisible();
   await page.getByRole('button', { name: 'Timeline' }).click();
   await expect(page.locator('.monitor-run-chart__column')).toHaveCount(2);
+  state.monitorRuns = Array.from({ length: 100 }, (_, index) => ({
+    ...state.monitorRuns![index % state.monitorRuns!.length],
+    id: index.toString(16).padStart(32, '0'),
+    started_at: new Date(Date.now() - (100 - index) * 60_000).toISOString(),
+  }));
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('combobox', { name: 'Run history period' }).click();
   await page.getByRole('option', { name: /^Last 7 days/ }).click();
   await expect.poll(() => state.monitorRangeSeen).toBe(true);
+  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(100);
+  await expect
+    .poll(() =>
+      page
+        .locator('.monitor-run-chart__plot')
+        .evaluate((plot) => plot.scrollWidth <= plot.clientWidth + 1),
+    )
+    .toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('combobox', { name: 'Run history period' }).click();
   await page.getByRole('option', { name: /^Custom period/ }).click();
   await page.getByLabel('From').fill('2026-07-20T00:00');

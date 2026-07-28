@@ -2612,9 +2612,10 @@ label small,
   display: flex;
   min-height: 8rem;
   align-items: end;
-  gap: 0.3rem;
+  justify-content: space-between;
+  gap: clamp(1px, 0.3vw, 5px);
   padding: 1rem 0.75rem 0.5rem;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-small);
   background:
@@ -2623,9 +2624,11 @@ label small,
 }
 
 .monitor-run-chart__column {
-  width: clamp(7px, 1.5vw, 14px);
-  min-width: 7px;
+  width: auto;
+  min-width: 0;
+  max-width: 14px;
   height: var(--run-height);
+  flex: 1 1 0;
   border-radius: 3px 3px 1px 1px;
   background: var(--semantic-info);
   opacity: 0.85;
