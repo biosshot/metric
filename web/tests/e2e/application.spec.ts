@@ -979,6 +979,22 @@ test('mobile pagination stays outside horizontal data scrolling and dashboard ca
       scroll: document.documentElement.scrollWidth,
     }));
     expect(widths.scroll).toBe(widths.client);
+    if (target.url === '/logs' || target.url === '/traces') {
+      const toolbarBox = await page.locator('.signal-toolbar').boundingBox();
+      const actionsBox = await page.locator('.signal-toolbar__actions').boundingBox();
+      const timeRangeBox = await page.locator('.time-range-control').boundingBox();
+      expect(toolbarBox).not.toBeNull();
+      expect(actionsBox).not.toBeNull();
+      expect(timeRangeBox).not.toBeNull();
+      expect(actionsBox!.x).toBeGreaterThanOrEqual(toolbarBox!.x);
+      expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(
+        toolbarBox!.x + toolbarBox!.width,
+      );
+      expect(timeRangeBox!.x).toBeGreaterThanOrEqual(actionsBox!.x);
+      expect(timeRangeBox!.x + timeRangeBox!.width).toBeLessThanOrEqual(
+        actionsBox!.x + actionsBox!.width,
+      );
+    }
   }
 
   await page.setViewportSize({ width: 1050, height: 900 });
