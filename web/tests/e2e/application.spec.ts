@@ -876,7 +876,7 @@ test('Dashboard lifecycle loads current data and keeps partial widget failures v
   await login(page);
   await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Edit dashboard' }).click();
+  await page.getByRole('button', { name: 'Create dashboard' }).click();
   const dashboardViewBox = await page.locator('.dashboard-section--views').boundingBox();
   const dashboardBuildersBox = await page.locator('.dashboard-builders').boundingBox();
   expect(dashboardViewBox).not.toBeNull();
@@ -901,6 +901,15 @@ test('Dashboard lifecycle loads current data and keeps partial widget failures v
   await expect(page.locator('.dashboard-widget__number')).toContainText('23');
   expect(state.dashboardVariableSeen).toBe(true);
   expect(state.csrfSeen).toBe(true);
+
+  const editDashboardBox = await page.getByRole('button', { name: 'Edit dashboard' }).boundingBox();
+  const refreshBox = await page.getByRole('button', { name: 'Refresh' }).boundingBox();
+  expect(editDashboardBox).not.toBeNull();
+  expect(refreshBox).not.toBeNull();
+  expect(
+    Math.abs(editDashboardBox!.x + editDashboardBox!.width - (refreshBox!.x + refreshBox!.width)),
+  ).toBeLessThanOrEqual(2);
+  expect(editDashboardBox!.y + editDashboardBox!.height).toBeLessThan(refreshBox!.y);
 
   await page.getByRole('button', { name: 'Edit dashboard' }).click();
   await page.locator('.saved-query-list article').getByRole('button', { name: 'Delete' }).click();
@@ -991,6 +1000,24 @@ test('Replay search and detail keep controls and metadata in their content flow'
   };
   await installApi(page, state);
   await login(page);
+
+  await page.goto('/logs');
+  const logToolbar = page.locator('.signal-toolbar');
+  const logActions = logToolbar.locator('.signal-toolbar__actions');
+  const logTimeRange = logToolbar.getByRole('combobox', { name: 'Log time range' });
+  const logToolbarBox = await logToolbar.boundingBox();
+  const logActionsBox = await logActions.boundingBox();
+  const logTimeRangeBox = await logTimeRange.boundingBox();
+  expect(logToolbarBox).not.toBeNull();
+  expect(logActionsBox).not.toBeNull();
+  expect(logTimeRangeBox).not.toBeNull();
+  expect(
+    Math.abs(
+      logToolbarBox!.x + logToolbarBox!.width - (logActionsBox!.x + logActionsBox!.width) - 12,
+    ),
+  ).toBeLessThanOrEqual(2);
+  expect(logActionsBox!.y).toBeGreaterThanOrEqual(logTimeRangeBox!.y + logTimeRangeBox!.height);
+
   await page.goto('/replays');
 
   const replayToolbar = page.locator('.signal-toolbar--replays');
@@ -1005,8 +1032,7 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(
     Math.abs(toolbarBox!.x + toolbarBox!.width - (actionsBox!.x + actionsBox!.width) - 12),
   ).toBeLessThanOrEqual(2);
-  expect(actionsBox!.y).toBeLessThan(searchBox!.y + searchBox!.height);
-  expect(actionsBox!.y + actionsBox!.height).toBeGreaterThan(searchBox!.y);
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
 
   await page.getByRole('combobox', { name: 'Replay time range' }).click();
   await page.getByRole('option', { name: /^Custom range/ }).click();

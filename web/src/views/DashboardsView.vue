@@ -555,16 +555,6 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               :options="dashboardOptions"
               label="Dashboard"
             />
-            <button
-              v-if="canWrite"
-              class="button button--secondary button--fit"
-              type="button"
-              :aria-pressed="editing"
-              @click="editing = !editing"
-            >
-              <AppIcon :name="editing ? 'close' : 'settings'" :size="16" />
-              {{ editing ? 'Close editor' : 'Edit dashboard' }}
-            </button>
           </div>
         </div>
         <EmptyState
@@ -599,8 +589,18 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 · {{ dashboard.refresh_interval }}</span
               >
             </div>
-            <div v-if="canWrite && editing" class="compact-actions">
+            <div v-if="canWrite" class="compact-actions dashboard-card__actions">
               <button
+                class="button button--secondary"
+                type="button"
+                :aria-pressed="editing"
+                @click="editing = !editing"
+              >
+                <AppIcon :name="editing ? 'close' : 'settings'" :size="15" />
+                {{ editing ? 'Close editor' : 'Edit dashboard' }}
+              </button>
+              <button
+                v-if="editing"
                 class="button button--secondary"
                 type="button"
                 @click="editDashboard(dashboard)"
@@ -608,6 +608,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 <AppIcon name="settings" :size="15" /> Edit widgets
               </button>
               <button
+                v-if="editing"
                 class="button button--danger"
                 type="button"
                 @click="removeDashboard(dashboard)"
