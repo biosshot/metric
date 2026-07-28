@@ -226,7 +226,7 @@ fn escape_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn valid_telegram_token(value: &str) -> bool {
+pub(crate) fn valid_telegram_token(value: &str) -> bool {
     let Some((bot_id, secret)) = value.split_once(':') else {
         return false;
     };

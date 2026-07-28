@@ -23,6 +23,8 @@ import type {
   LoginResponse,
   NotificationDestination,
   NotificationDelivery,
+  TelegramBot,
+  TelegramSubscriberSync,
   MonitorInput,
   MonitorRun,
   Organization,
@@ -480,6 +482,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  checkTelegramBot: (projectId: string, token: string) =>
+    request<TelegramBot>(`/api/v1/projects/${projectId}/notification-destinations/telegram/check`, {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  syncTelegramSubscribers: (projectId: string, token: string, pairingCode: string) =>
+    request<TelegramSubscriberSync>(
+      `/api/v1/projects/${projectId}/notification-destinations/telegram/sync`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ token, pairing_code: pairingCode }),
+      },
+    ),
   testNotificationDestination: (projectId: string, destinationId: string) =>
     request<NotificationDelivery>(
       `/api/v1/projects/${projectId}/notification-destinations/${destinationId}/test`,

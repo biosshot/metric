@@ -1,6 +1,6 @@
 //! Versioned native `/api/v1` HTTP adapter.
 
-use std::{collections::BTreeMap, net::SocketAddr, num::NonZeroU32, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
@@ -88,6 +88,8 @@ const ORGANIZATION_HEADER: &str = "x-metric-organization-id";
 const CSRF_HEADER: &str = "x-csrf-token";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const MAX_BODY_BYTES: usize = 64 * 1024;
+const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
+const MAX_TELEGRAM_RESPONSE_BYTES: u64 = 256 * 1024;
 
 #[derive(Clone)]
 struct NativeHttpState {
@@ -515,6 +517,14 @@ pub fn router(
         .route(
             "/api/v1/projects/{project_id}/notification-destinations/{destination_id}/test",
             post(test_notification_destination),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-destinations/telegram/check",
+            post(check_telegram_bot),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-destinations/telegram/sync",
+            post(sync_telegram_subscribers),
         )
         .route(
             "/api/v1/projects/{project_id}/notification-deliveries",
@@ -1358,6 +1368,19 @@ struct NotificationDestinationBody {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TelegramBotBody {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TelegramSubscriberSyncBody {
+    token: String,
+    pairing_code: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AlertRuleBody {
     id: Option<String>,
     name: String,
@@ -1485,6 +1508,231 @@ async fn put_notification_destination(
         StatusCode::CREATED,
         Json(notification_destination_value(&destination)),
     ))
+}
+
+async fn check_telegram_bot(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<TelegramBotBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let project_id = project_id_from(&project_id)?;
+    notification_admin(&state)?
+        .destinations(&context, project_id)
+        .await
+        .map_err(HttpApiError::Notification)?;
+    validate_telegram_token(&body.token)?;
+    let response = telegram_api(&body.token, "getMe", json!({})).await?;
+    let bot = response
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let id = bot
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let username = bot
+        .get("username")
+        .and_then(Value::as_str)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    Ok(Json(json!({
+        "id": id.to_string(),
+        "username": username,
+        "display_name": telegram_display_name(bot),
+    })))
+}
+
+async fn sync_telegram_subscribers(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Result<Json<TelegramSubscriberSyncBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    validate_telegram_token(&body.token)?;
+    if !(16..=64).contains(&body.pairing_code.len())
+        || !body
+            .pairing_code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(HttpApiError::InvalidRequest);
+    }
+    let project_id = project_id_from(&project_id)?;
+    let existing = notification_admin(&state)?
+        .destinations(&context, project_id)
+        .await
+        .map_err(HttpApiError::Notification)?;
+    let bot_response = telegram_api(&body.token, "getMe", json!({})).await?;
+    let bot = bot_response
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let bot_id = bot
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let username = bot
+        .get("username")
+        .and_then(Value::as_str)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let updates = telegram_api(
+        &body.token,
+        "getUpdates",
+        json!({
+            "allowed_updates": ["message"],
+            "limit": 100,
+            "timeout": 0,
+        }),
+    )
+    .await?;
+    let mut chats = BTreeMap::<i64, String>::new();
+    for update in updates
+        .get("result")
+        .and_then(Value::as_array)
+        .ok_or(HttpApiError::InvalidRequest)?
+    {
+        let Some(message) = update.get("message").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(text) = message.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        if !telegram_start_matches(text, &body.pairing_code) {
+            continue;
+        }
+        let Some(chat) = message.get("chat").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(chat_id) = chat.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        chats
+            .entry(chat_id)
+            .or_insert_with(|| telegram_display_name(chat));
+    }
+    let now = current_timestamp()?;
+    let mut subscribers = Vec::new();
+    for (chat_id, display_name) in chats.into_iter().take(32) {
+        let id = telegram_destination_id(project_id, bot_id, chat_id);
+        if !existing.iter().any(|destination| destination.id == id) {
+            let destination = NotificationDestination {
+                id,
+                project_id,
+                kind: NotificationDestinationKind::Telegram,
+                endpoint: WebhookEndpoint::new(chat_id.to_string())
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                sealed_secret: state
+                    .notification_secret_box
+                    .as_ref()
+                    .ok_or(HttpApiError::Unavailable)?
+                    .seal(body.token.as_bytes())
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                smtp: None,
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+            };
+            notification_admin(&state)?
+                .put_destination(&context, correlation_id(request_id)?, destination)
+                .await
+                .map_err(HttpApiError::Notification)?;
+        }
+        subscribers.push(json!({
+            "destination_id": hex::encode(id.as_bytes()),
+            "display_name": display_name,
+        }));
+    }
+    Ok(Json(json!({
+        "bot": {
+            "id": bot_id.to_string(),
+            "username": username,
+            "display_name": telegram_display_name(bot),
+        },
+        "subscribers": subscribers,
+    })))
+}
+
+fn validate_telegram_token(token: &str) -> Result<(), HttpApiError> {
+    if token.len() > 4_096 || !crate::notification_delivery::valid_telegram_token(token) {
+        return Err(HttpApiError::InvalidRequest);
+    }
+    Ok(())
+}
+
+async fn telegram_api(token: &str, method: &str, body: Value) -> Result<Value, HttpApiError> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|_| HttpApiError::Unavailable)?;
+    let response = client
+        .post(format!(
+            "{}/bot{token}/{method}",
+            TELEGRAM_API_BASE.trim_end_matches('/')
+        ))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| HttpApiError::Unavailable)?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_TELEGRAM_RESPONSE_BYTES)
+    {
+        return Err(HttpApiError::Unavailable);
+    }
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| HttpApiError::Unavailable)?;
+    if bytes.len() as u64 > MAX_TELEGRAM_RESPONSE_BYTES {
+        return Err(HttpApiError::Unavailable);
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| HttpApiError::InvalidRequest)?;
+    if !status.is_success() || value.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(HttpApiError::InvalidRequest);
+    }
+    Ok(value)
+}
+
+fn telegram_display_name(value: &serde_json::Map<String, Value>) -> String {
+    ["title", "first_name", "username"]
+        .into_iter()
+        .find_map(|field| value.get(field).and_then(Value::as_str))
+        .unwrap_or("Telegram subscriber")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+fn telegram_start_matches(text: &str, pairing_code: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    parts
+        .next()
+        .is_some_and(|command| command == "/start" || command.starts_with("/start@"))
+        && parts.next() == Some(pairing_code)
+        && parts.next().is_none()
+}
+
+fn telegram_destination_id(
+    project_id: ProjectId,
+    bot_id: i64,
+    chat_id: i64,
+) -> NotificationDestinationId {
+    let mut hasher = Sha256::new();
+    hasher.update(b"metric/telegram-subscriber/v1");
+    hasher.update(project_id.get().to_be_bytes());
+    hasher.update(bot_id.to_be_bytes());
+    hasher.update(chat_id.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    NotificationDestinationId::from_bytes(bytes)
 }
 
 async fn test_notification_destination(
@@ -4582,6 +4830,32 @@ mod tests {
     }
 
     #[test]
+    fn telegram_pairing_requires_the_exact_start_payload() {
+        assert!(telegram_start_matches(
+            "/start abcdefghijklmnop",
+            "abcdefghijklmnop"
+        ));
+        assert!(telegram_start_matches(
+            "/start@metric_bot abcdefghijklmnop",
+            "abcdefghijklmnop"
+        ));
+        assert!(!telegram_start_matches("/start", "abcdefghijklmnop"));
+        assert!(!telegram_start_matches(
+            "/start wrong-pairing-code",
+            "abcdefghijklmnop"
+        ));
+        let project = ProjectId::new(7).unwrap();
+        assert_eq!(
+            telegram_destination_id(project, 42, 99),
+            telegram_destination_id(project, 42, 99)
+        );
+        assert_ne!(
+            telegram_destination_id(project, 42, 99),
+            telegram_destination_id(project, 42, 100)
+        );
+    }
+
+    #[test]
     fn login_organization_id_preserves_large_decimal_strings_and_legacy_numbers() {
         let large = 9_007_199_254_740_993_u64;
         let body: LoginBody = serde_json::from_value(json!({
@@ -4844,6 +5118,14 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectAdmin),
             ),
             (
+                "POST /projects/:id/notification-destinations/telegram/check",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "POST /projects/:id/notification-destinations/telegram/sync",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
                 "GET /projects/:id/notification-deliveries",
                 RouteAccess::Permission(Permission::ProjectAdmin),
             ),
@@ -4866,7 +5148,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 65);
+        assert_eq!(matrix.len(), 67);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

@@ -514,7 +514,7 @@ async function login(page: Page, email = 'owner@example.com'): Promise<void> {
   await page.getByLabel('Password').fill('correct horse battery staple');
   await page.getByLabel('Organization ID').fill('7');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 }
 
 test('login session, investigation and CSRF lifecycle are coherent', async ({ page }) => {
@@ -527,6 +527,8 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await installApi(page, state);
   await login(page);
   await page.reload();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Issues', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();
   expect(state.sessionCookieSeen).toBe(true);
   expect(await page.evaluate(() => document.cookie)).not.toContain('metric_session');
@@ -545,7 +547,7 @@ test('login session, investigation and CSRF lifecycle are coherent', async ({ pa
   await page.getByRole('button', { name: 'Show all 120' }).click();
   await expect(page.locator('.stack-frame')).toHaveCount(120);
 
-  await page.getByRole('link', { name: /Project settings/ }).click();
+  await page.goto('/settings/project');
   await expect(page.getByText(/Raw Events are retained for/)).toContainText('30 days');
   await expect(page.getByText(/Hourly Issue statistics/)).toContainText('400 days');
   await page.getByRole('combobox', { name: 'IP address handling' }).click();
@@ -589,7 +591,7 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await expect(page.getByText('HTTP 200')).toBeVisible();
   expect(state.csrfSeen).toBe(true);
 
-  await page.getByRole('link', { name: 'Alerts', exact: true }).click();
+  await page.goto('/settings/notifications');
   await page.getByRole('combobox', { name: 'Rule type' }).click();
   await page.getByRole('option', { name: /^Monitor outcome/ }).click();
   await page.getByLabel('Rule name').fill('Public API availability');
@@ -659,6 +661,7 @@ test('viewer sees read-only controls and no hidden write action', async ({ page 
   await installApi(page, state);
   await page.addInitScript(() => localStorage.setItem('metric.project', '666'));
   await login(page, 'viewer@example.com');
+  await page.getByRole('link', { name: 'Issues', exact: true }).click();
   await page.getByRole('link', { name: /TypeError/ }).click();
 
   await expect(page.getByText('Read-only role: lifecycle controls are unavailable.')).toBeVisible();
@@ -676,6 +679,7 @@ test('server failures expose status, code and request ID', async ({ page }) => {
   };
   await installApi(page, state);
   await login(page);
+  await page.getByRole('link', { name: 'Issues', exact: true }).click();
 
   const alert = page.getByRole('alert');
   await expect(alert).toContainText('temporarily_unavailable');
@@ -695,6 +699,7 @@ test('loading and empty states explain what is happening', async ({ page }) => {
   };
   await installApi(page, state);
   await login(page);
+  await page.getByRole('link', { name: 'Issues', exact: true }).click();
 
   await expect(page.getByRole('status')).toContainText('Loading investigation data');
   await expect(page.getByRole('heading', { name: 'No Issues in this view' })).toBeVisible();
@@ -710,7 +715,7 @@ test('Explore submits a typed bounded query and renders a number result', async 
   };
   await installApi(page, state);
   await login(page);
-  await page.getByRole('link', { name: 'Explore' }).click();
+  await page.goto('/explore');
   await expect(page.getByRole('heading', { name: 'Unified Explore' })).toBeVisible();
   await page.getByRole('combobox', { name: 'Result' }).click();
   await page.getByRole('option', { name: /^Number/ }).click();
@@ -732,19 +737,22 @@ test('Dashboard lifecycle applies variables and keeps partial widget failures vi
   };
   await installApi(page, state);
   await login(page);
-  await page.getByRole('link', { name: 'Dashboards' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboards', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit dashboard' }).click();
 
   await page.getByPlaceholder('Production log volume').fill('Production log volume');
-  await page.getByRole('button', { name: 'Save query' }).click();
+  await page.getByRole('button', { name: 'Add widget' }).click();
   await expect(page.getByLabel('Saved query name')).toHaveValue('Production log volume');
 
   await page.getByPlaceholder('Service health').fill('Service health');
-  await page.getByRole('combobox', { name: 'Saved query' }).click();
-  await page.getByRole('option', { name: /Production log volume/ }).click();
-  await page.getByRole('button', { name: 'Add' }).click();
-  await page.getByRole('button', { name: 'Create dashboard' }).click();
-  await expect(page.getByLabel('Dashboard name')).toHaveValue('Service health');
+  const dashboardForm = page
+    .locator('form')
+    .filter({ has: page.getByPlaceholder('Service health') });
+  await dashboardForm.getByRole('button', { name: 'Create dashboard' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Service health', exact: true, level: 2 }),
+  ).toBeVisible();
 
   await page.getByPlaceholder('All environments').fill('production');
   await page.getByRole('button', { name: 'Refresh' }).click();
@@ -752,12 +760,13 @@ test('Dashboard lifecycle applies variables and keeps partial widget failures vi
   expect(state.dashboardVariableSeen).toBe(true);
   expect(state.csrfSeen).toBe(true);
 
+  await page.getByRole('button', { name: 'Edit dashboard' }).click();
   await page.locator('.saved-query-list article').getByRole('button', { name: 'Delete' }).click();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await expect(page.getByText('saved_query_missing')).toBeVisible();
 
   await page.locator('.dashboard-card').getByRole('button', { name: 'Delete' }).click();
-  await expect(page.getByRole('heading', { name: 'No dashboards yet' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'No dashboard yet' })).toBeVisible();
 });
 
 test('all routes have no serious accessibility violations at desktop and narrow widths', async ({
@@ -798,15 +807,16 @@ test('all routes have no serious accessibility violations at desktop and narrow 
     { name: 'issue-detail', url: `/issues/${issue.id}`, heading: issue.title },
     { name: 'event-detail', url: `/events/${event.event_id}`, heading: '120 frames' },
     { name: 'explore', url: '/explore', heading: 'Unified Explore' },
-    { name: 'dashboards', url: '/dashboards', heading: 'Dashboards' },
+    { name: 'dashboard', url: '/dashboard', heading: 'Dashboard' },
     { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
-    { name: 'project-settings', url: '/project/settings', heading: 'Project settings' },
-    { name: 'system-status', url: '/system', heading: 'System status' },
+    { name: 'project-settings', url: '/settings/project', heading: 'Project settings' },
+    { name: 'notifications', url: '/settings/notifications', heading: 'Alerts' },
+    { name: 'system-status', url: '/settings/system', heading: 'System status' },
   ];
 
   for (const route of routes) {
     await page.goto(route.url);
-    await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
+    await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible();
     for (const viewport of [
       { name: 'desktop', width: 1440, height: 1000 },
       { name: 'narrow', width: 390, height: 844 },

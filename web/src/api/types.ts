@@ -384,6 +384,20 @@ export interface NotificationDestination {
   updated_at: number;
 }
 
+export interface TelegramBot {
+  id: string;
+  username: string;
+  display_name: string;
+}
+
+export interface TelegramSubscriberSync {
+  bot: TelegramBot;
+  subscribers: Array<{
+    destination_id: string;
+    display_name: string;
+  }>;
+}
+
 export interface AlertRule {
   id: string;
   project_id: string;

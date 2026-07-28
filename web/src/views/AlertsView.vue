@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
+import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import type { TelegramBot } from '../api/types';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -17,6 +19,11 @@ const kind = ref('telegram');
 const ruleName = ref('');
 const ruleKind = ref('issue');
 const selectedDestinations = ref<string[]>([]);
+const selectedMemberIds = ref<string[]>([]);
+const memberSelectionTouched = ref(false);
+const telegramBot = ref<TelegramBot | null>(null);
+const telegramPairingCode = ref(createPairingCode());
+const telegramSyncNotice = ref('');
 const triggers = reactive({ new_issue: true, regression: true, resolved: false });
 const monitorRule = reactive({
   monitor_id: '',
@@ -106,25 +113,56 @@ const deliveries = useQuery({
   enabled: computed(() => Boolean(projectId.value)),
   refetchInterval: 5_000,
 });
+const organizationMembers = useQuery({
+  queryKey: ['organization-members'],
+  queryFn: api.organizationMembers,
+});
+const activeMembers = computed(
+  () => organizationMembers.data.value?.items.filter((member) => !member.disabled_at) ?? [],
+);
+const smtpRecipients = computed(() => {
+  const selected = new Set(selectedMemberIds.value);
+  const recipients = [
+    ...activeMembers.value
+      .filter((member) => selected.has(member.user_id))
+      .map((member) => member.email),
+    ...destination.smtp_recipients
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  ];
+  return [...new Map(recipients.map((value) => [value.toLowerCase(), value])).values()].slice(
+    0,
+    16,
+  );
+});
+const telegramStartUrl = computed(() =>
+  telegramBot.value
+    ? `https://t.me/${telegramBot.value.username}?start=${telegramPairingCode.value}`
+    : '',
+);
+watch(
+  activeMembers,
+  (members) => {
+    if (!memberSelectionTouched.value && !selectedMemberIds.value.length) {
+      selectedMemberIds.value = members.slice(0, 16).map((member) => member.user_id);
+    }
+  },
+  { immediate: true },
+);
 
 const saveDestination = useMutation({
   mutationFn: () =>
     api.putNotificationDestination(projectId.value, {
-      kind: kind.value,
+      kind: 'smtp_email',
       endpoint: destination.endpoint.trim(),
       secret: destination.secret,
       enabled: destination.enabled,
-      smtp_port: kind.value === 'smtp_email' ? destination.smtp_port : null,
-      smtp_security: kind.value === 'smtp_email' ? destination.smtp_security : null,
-      smtp_username: kind.value === 'smtp_email' ? destination.smtp_username.trim() : null,
-      smtp_from: kind.value === 'smtp_email' ? destination.smtp_from.trim() : null,
-      smtp_recipients:
-        kind.value === 'smtp_email'
-          ? destination.smtp_recipients
-              .split(',')
-              .map((value) => value.trim())
-              .filter(Boolean)
-          : null,
+      smtp_port: destination.smtp_port,
+      smtp_security: destination.smtp_security,
+      smtp_username: destination.smtp_username.trim(),
+      smtp_from: destination.smtp_from.trim(),
+      smtp_recipients: smtpRecipients.value,
     }),
   onSuccess: async (value) => {
     destination.secret = '';
@@ -132,12 +170,58 @@ const saveDestination = useMutation({
     destination.smtp_username = '';
     destination.smtp_from = '';
     destination.smtp_recipients = '';
+    memberSelectionTouched.value = false;
+    selectedMemberIds.value = activeMembers.value.slice(0, 16).map((member) => member.user_id);
     selectedDestinations.value = [...selectedDestinations.value, value.id];
     await queryClient.invalidateQueries({
       queryKey: ['notification-destinations', projectId.value],
     });
   },
 });
+const connectTelegram = useMutation({
+  mutationFn: () => api.checkTelegramBot(projectId.value, destination.secret),
+  onSuccess: (bot) => {
+    telegramBot.value = bot;
+    telegramSyncNotice.value = '';
+  },
+});
+const syncTelegram = useMutation({
+  mutationFn: () =>
+    api.syncTelegramSubscribers(projectId.value, destination.secret, telegramPairingCode.value),
+  onSuccess: async (value) => {
+    telegramBot.value = value.bot;
+    selectedDestinations.value = [
+      ...new Set([
+        ...selectedDestinations.value,
+        ...value.subscribers.map((subscriber) => subscriber.destination_id),
+      ]),
+    ];
+    telegramSyncNotice.value = value.subscribers.length
+      ? `${value.subscribers.length} Telegram subscriber${value.subscribers.length === 1 ? '' : 's'} connected and selected for the next rule.`
+      : 'No new subscribers found. Open the Telegram link, press Start, then sync again.';
+    await queryClient.invalidateQueries({
+      queryKey: ['notification-destinations', projectId.value],
+    });
+  },
+});
+watch(kind, () => {
+  destination.secret = '';
+  telegramBot.value = null;
+  telegramSyncNotice.value = '';
+  saveDestination.reset();
+  connectTelegram.reset();
+  syncTelegram.reset();
+});
+watch(
+  () => destination.secret,
+  () => {
+    if (kind.value === 'telegram' && telegramBot.value) {
+      telegramBot.value = null;
+      telegramSyncNotice.value = '';
+      syncTelegram.reset();
+    }
+  },
+);
 
 const saveRule = useMutation({
   mutationFn: () =>
@@ -201,6 +285,29 @@ function toggleDestination(id: string): void {
     ? selectedDestinations.value.filter((value) => value !== id)
     : [...selectedDestinations.value, id];
 }
+
+function toggleAllMembers(): void {
+  memberSelectionTouched.value = true;
+  selectedMemberIds.value =
+    selectedMemberIds.value.length === activeMembers.value.length
+      ? []
+      : activeMembers.value.slice(0, 16).map((member) => member.user_id);
+}
+
+function createPairingCode(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function renewTelegramLink(): void {
+  telegramPairingCode.value = createPairingCode();
+  telegramSyncNotice.value = '';
+}
+
+function maskedDestinationEndpoint(endpoint: string): string {
+  return endpoint.length > 4 ? `Subscriber ••••${endpoint.slice(-4)}` : 'Telegram subscriber';
+}
 </script>
 
 <template>
@@ -240,38 +347,119 @@ function toggleDestination(id: string): void {
       </div>
 
       <ApiErrorPanel
-        v-if="saveDestination.error.value"
-        :error="saveDestination.error.value"
-        title="Destination was not saved"
+        v-if="
+          saveDestination.error.value || connectTelegram.error.value || syncTelegram.error.value
+        "
+        :error="
+          saveDestination.error.value || connectTelegram.error.value || syncTelegram.error.value
+        "
+        :title="
+          kind !== 'telegram'
+            ? 'Email destination was not saved'
+            : syncTelegram.error.value
+              ? 'Telegram subscribers were not synced'
+              : 'Telegram bot could not be connected'
+        "
       />
-      <form class="settings-form" @submit.prevent="saveDestination.mutate()">
+      <form
+        class="settings-form"
+        @submit.prevent="kind === 'telegram' ? connectTelegram.mutate() : saveDestination.mutate()"
+      >
         <BaseSelect
           :model-value="kind"
           :options="kindOptions"
           label="Provider"
           @update:model-value="kind = $event"
         />
-        <div class="form-grid">
+        <template v-if="kind === 'telegram'">
           <label>
-            {{ kind === 'telegram' ? 'Chat ID' : 'SMTP host' }}
-            <input
-              v-model="destination.endpoint"
-              required
-              :placeholder="kind === 'telegram' ? '-1001234567890' : 'smtp.example.com'"
-            />
-          </label>
-          <label>
-            {{ kind === 'telegram' ? 'Bot token' : 'SMTP password' }}
+            Bot token
             <input
               v-model="destination.secret"
               required
               type="password"
               autocomplete="new-password"
-              :placeholder="kind === 'telegram' ? '123456:bot-token' : 'App password'"
+              placeholder="123456:bot-token"
             />
+            <small>
+              Create a bot with @BotFather and paste its token. The token is never returned by the
+              API.
+            </small>
           </label>
-        </div>
-        <template v-if="kind === 'smtp_email'">
+          <button
+            class="button button--primary"
+            type="submit"
+            :disabled="connectTelegram.isPending.value"
+          >
+            <AppIcon name="connect" :size="16" />
+            {{ connectTelegram.isPending.value ? 'Checking bot…' : 'Connect bot' }}
+          </button>
+          <section v-if="telegramBot" class="telegram-pairing">
+            <div class="telegram-pairing__identity">
+              <span class="section-icon section-icon--success">
+                <AppIcon name="telegram" />
+              </span>
+              <span>
+                <strong>{{ telegramBot.display_name }}</strong>
+                <small>@{{ telegramBot.username }} is ready to accept subscribers.</small>
+              </span>
+            </div>
+            <div>
+              <p class="eyebrow">Subscriber link</p>
+              <h3>No chat ID required</h3>
+              <p>
+                Share this link with the people who should receive alerts. Each person opens it and
+                presses Start; Metric discovers only subscribers using this exact link.
+              </p>
+            </div>
+            <CodeBlock :code="telegramStartUrl" language="text" title="Telegram start link" />
+            <div class="button-row">
+              <a
+                class="button button--primary"
+                :href="telegramStartUrl"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <AppIcon name="telegram" :size="16" />
+                Open in Telegram
+              </a>
+              <button class="button button--secondary" type="button" @click="renewTelegramLink">
+                <AppIcon name="refresh" :size="16" />
+                New link
+              </button>
+              <button
+                class="button button--secondary"
+                type="button"
+                :disabled="syncTelegram.isPending.value"
+                @click="syncTelegram.mutate()"
+              >
+                <AppIcon name="users" :size="16" />
+                {{ syncTelegram.isPending.value ? 'Syncing…' : 'Sync subscribers' }}
+              </button>
+            </div>
+            <p v-if="telegramSyncNotice" class="success-notice" role="status">
+              <AppIcon name="info" :size="16" />
+              {{ telegramSyncNotice }}
+            </p>
+          </section>
+        </template>
+        <template v-else>
+          <div class="form-grid">
+            <label>
+              SMTP host
+              <input v-model="destination.endpoint" required placeholder="smtp.example.com" />
+            </label>
+            <label>
+              SMTP password
+              <input
+                v-model="destination.secret"
+                required
+                type="password"
+                autocomplete="new-password"
+                placeholder="App password"
+              />
+            </label>
+          </div>
           <div class="form-grid form-grid--three">
             <label>
               Port
@@ -305,31 +493,76 @@ function toggleDestination(id: string): void {
               />
             </label>
             <label>
-              Recipients
+              Additional recipients
               <input
                 v-model="destination.smtp_recipients"
-                required
-                placeholder="oncall@example.com, owner@example.com"
+                placeholder="external-oncall@example.com"
               />
-              <small>Comma-separated, up to 16 addresses.</small>
+              <small>Optional comma-separated addresses outside the organization.</small>
             </label>
           </div>
+          <div class="notification-audience">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Organization audience</p>
+                <h3>Email participants</h3>
+                <p>Select organization members instead of copying their email addresses.</p>
+              </div>
+              <button class="button button--secondary" type="button" @click="toggleAllMembers">
+                <AppIcon name="organization" :size="16" />
+                {{
+                  selectedMemberIds.length === activeMembers.length ? 'Clear members' : 'Select all'
+                }}
+              </button>
+            </div>
+            <LoadingPanel
+              v-if="organizationMembers.isPending.value"
+              label="Loading organization members…"
+            />
+            <ApiErrorPanel
+              v-else-if="organizationMembers.error.value"
+              :error="organizationMembers.error.value"
+              title="Organization members were not loaded"
+              @retry="organizationMembers.refetch()"
+            />
+            <div v-else class="notification-member-grid">
+              <label v-for="member in activeMembers" :key="member.user_id" class="choice-card">
+                <input
+                  v-model="selectedMemberIds"
+                  type="checkbox"
+                  :value="member.user_id"
+                  @change="memberSelectionTouched = true"
+                />
+                <span>
+                  <strong>{{ member.display_name }}</strong>
+                  <small>{{ member.email }} · {{ member.role }}</small>
+                </span>
+              </label>
+            </div>
+            <p class="field-help">
+              {{ smtpRecipients.length }} of 16 recipient addresses selected.
+            </p>
+          </div>
+          <button
+            class="button button--primary"
+            type="submit"
+            :disabled="saveDestination.isPending.value || smtpRecipients.length === 0"
+          >
+            <AppIcon name="email" :size="16" />
+            {{ saveDestination.isPending.value ? 'Saving…' : 'Save email destination' }}
+          </button>
         </template>
-        <button
-          class="button button--primary"
-          type="submit"
-          :disabled="saveDestination.isPending.value"
-        >
-          <AppIcon :name="kind === 'telegram' ? 'telegram' : 'email'" :size="16" />
-          {{ saveDestination.isPending.value ? 'Saving…' : 'Save destination' }}
-        </button>
       </form>
       <div v-if="destinations.data.value?.items.length" class="channel-test-list">
         <article v-for="item in destinations.data.value.items" :key="item.id">
           <AppIcon :name="item.kind === 'telegram' ? 'telegram' : 'email'" />
           <span>
             <strong>{{ item.kind === 'telegram' ? 'Telegram' : 'SMTP Email' }}</strong>
-            <small>{{ item.endpoint }}</small>
+            <small>
+              {{
+                item.kind === 'telegram' ? maskedDestinationEndpoint(item.endpoint) : item.endpoint
+              }}
+            </small>
           </span>
           <button
             class="button button--secondary"
