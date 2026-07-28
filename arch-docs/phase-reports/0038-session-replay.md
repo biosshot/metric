@@ -11,7 +11,7 @@ started.
 | Compression bomb and malformed rejection | Pass | `replay_recording_limits_reject_bombs_malformed_data_and_excess_events` covers oversized decompression, invalid zlib/JSON and excess event count. |
 | Segment count, ordering and duration bounds | Pass | Domain constructors cap 100 segments and 24 hours; MongoDB appends then sorts by segment ID; domain, writer-restart and real MongoDB tests pass. |
 | Explicit project enablement and retention | Pass | `items.replay` defaults to false and is exposed in project setup/settings; `retention.replays_days` and `retention.replay_archive` are explicit configuration. |
-| Authorization and audit | Pass | Replay list/detail/segment routes require project read; raw segment access records durable `replay.accessed`; the pinned permission matrix and audit unit test pass. |
+| Authorization and audit | Pass | Replay list/detail/segment routes require project read; raw segment access records durable `replay.accessed`; the pinned permission matrix plus unit and real MongoDB audit tests pass. |
 | Project deletion | Pass | Deletion registry owns Mongo dataset code 23 and Blob namespace code 97; real MongoDB deletion integration verifies target-project purge and tenant isolation. |
 | No recording contents in operational logs | Pass | Replay submission debug output contains only lengths; neither validation, writer, MongoDB nor HTTP diagnostics format recording bytes. |
 | Partial upload and orphan recovery | Pass | Writer restart preserves the ordered partial set `[0, 2]`; orphan cleanup removes a Blob created before an interrupted manifest commit. |

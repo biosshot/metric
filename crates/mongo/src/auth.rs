@@ -1416,7 +1416,7 @@ pub(crate) fn audit_validator() -> Document {
             "actor": { "enum": ["web_session", "personal_api_token", "bootstrap"] },
             "actor_user_id": { "bsonType": "long", "minimum": 1 },
             "action": { "bsonType": "string", "minLength": 1, "maxLength": 64 },
-            "target_kind": { "enum": ["user", "api_token", "project", "project_key", "project_deletion", "incident_capsule", "notification_destination", "alert_rule"] },
+            "target_kind": { "enum": ["user", "api_token", "project", "project_key", "project_deletion", "incident_capsule", "notification_destination", "alert_rule", "replay"] },
             "target_id": { "bsonType": "string", "minLength": 1, "maxLength": 128 },
             "timestamp": { "bsonType": "date" },
             "metadata": {

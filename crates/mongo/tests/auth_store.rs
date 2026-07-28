@@ -193,9 +193,31 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             metadata: AuditMetadata::new([])?,
         })
         .await?;
+    store
+        .append_audit(AuditRecord {
+            request_id: RequestCorrelationId::new("request-replay-view")?,
+            organization_id,
+            actor: Actor::WebSession,
+            actor_user_id: owner_id,
+            action: AuditAction::ReplayAccessed,
+            target_kind: "replay",
+            target_id: AuditTargetId::new("12b87ff9ec0a4596ab89191c160c4b55")?,
+            timestamp: later,
+            metadata: AuditMetadata::new([])?,
+        })
+        .await?;
     let audit = store.list_audit_log(organization_id, 100).await?;
-    assert_eq!(audit.len(), 1);
-    assert_eq!(audit[0].action.as_ref(), "membership.role_changed");
+    assert_eq!(audit.len(), 2);
+    assert!(
+        audit
+            .iter()
+            .any(|record| record.action.as_ref() == "membership.role_changed")
+    );
+    assert!(
+        audit
+            .iter()
+            .any(|record| record.action.as_ref() == "replay.accessed")
+    );
     assert_eq!(
         store
             .set_user_disabled(second_owner, Some(now), CredentialId::new(8)?)
