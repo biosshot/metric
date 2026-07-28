@@ -181,7 +181,7 @@ function duration(milliseconds: number): string {
         <span>{{ duration(replay.duration_ms) }}</span>
         <time :datetime="replay.received_at">{{ replay.received_at }}</time>
       </RouterLink>
-      <nav v-if="pageCount > 1" class="pagination" aria-label="Replay pages">
+      <nav class="pagination" aria-label="Replay pages">
         <button
           class="button button--secondary"
           type="button"

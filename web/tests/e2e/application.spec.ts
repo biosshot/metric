@@ -1183,7 +1183,9 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect.poll(() => state.signalFromSeen).toBe(new Date('2026-07-20T00:00').getTime());
-  await expect(replayPages).toBeHidden();
+  await expect(replayPages).toContainText('Page 1 of 1');
+  await expect(replayPages.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  await expect(replayPages.getByRole('button', { name: 'Next' })).toBeDisabled();
   await expect(page.getByText('1 matching Replay for')).toBeVisible();
   await page.getByRole('link', { name: /example\.test\/replay/ }).click();
 
