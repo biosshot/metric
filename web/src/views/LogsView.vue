@@ -167,13 +167,13 @@ function traceLink(log: StructuredLog): string | null {
         <input v-model="release" maxlength="256" placeholder="Release" />
       </label>
       <BaseSelect v-model="level" :options="levelOptions" aria-label="Log level" />
-      <TimeRangeSelect
-        v-model="range"
-        :window-value="selectedWindow"
-        aria-label="Log time range"
-        @update:window-value="selectedWindow = $event"
-      />
       <div class="signal-toolbar__actions">
+        <TimeRangeSelect
+          v-model="range"
+          :window-value="selectedWindow"
+          aria-label="Log time range"
+          @update:window-value="selectedWindow = $event"
+        />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
           Search

@@ -88,12 +88,6 @@ function resetFilters(): void {
         <span class="sr-only">Service</span>
         <input v-model="service" maxlength="256" placeholder="Service" />
       </label>
-      <TimeRangeSelect
-        v-model="range"
-        :window-value="selectedWindow"
-        aria-label="Performance time range"
-        @update:window-value="selectedWindow = $event"
-      />
       <label>
         <span class="sr-only">Environment</span>
         <input v-model="environment" maxlength="128" placeholder="Environment" />
@@ -103,6 +97,12 @@ function resetFilters(): void {
         <input v-model="release" maxlength="256" placeholder="Release" />
       </label>
       <div class="signal-toolbar__actions">
+        <TimeRangeSelect
+          v-model="range"
+          :window-value="selectedWindow"
+          aria-label="Performance time range"
+          @update:window-value="selectedWindow = $event"
+        />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
           Search

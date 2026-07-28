@@ -1005,34 +1005,47 @@ test('Replay search and detail keep controls and metadata in their content flow'
   const logToolbar = page.locator('.signal-toolbar');
   const logActions = logToolbar.locator('.signal-toolbar__actions');
   const logTimeRange = logToolbar.getByRole('combobox', { name: 'Log time range' });
+  const logSearch = logToolbar.getByRole('button', { name: 'Search', exact: true });
   const logToolbarBox = await logToolbar.boundingBox();
   const logActionsBox = await logActions.boundingBox();
   const logTimeRangeBox = await logTimeRange.boundingBox();
+  const logSearchBox = await logSearch.boundingBox();
   expect(logToolbarBox).not.toBeNull();
   expect(logActionsBox).not.toBeNull();
   expect(logTimeRangeBox).not.toBeNull();
+  expect(logSearchBox).not.toBeNull();
   expect(
     Math.abs(
       logToolbarBox!.x + logToolbarBox!.width - (logActionsBox!.x + logActionsBox!.width) - 12,
     ),
   ).toBeLessThanOrEqual(2);
-  expect(logActionsBox!.y).toBeGreaterThanOrEqual(logTimeRangeBox!.y + logTimeRangeBox!.height);
+  expect(logActionsBox!.y).toBeLessThanOrEqual(logTimeRangeBox!.y);
+  expect(logSearchBox!.x).toBeGreaterThanOrEqual(logTimeRangeBox!.x + logTimeRangeBox!.width);
 
   await page.goto('/replays');
 
   const replayToolbar = page.locator('.signal-toolbar--replays');
   const replaySearch = replayToolbar.getByLabel('Search loaded Replays');
   const replayActions = replayToolbar.locator('.signal-toolbar__actions');
+  const replayTimeRange = replayToolbar.getByRole('combobox', { name: 'Replay time range' });
+  const replaySearchButton = replayToolbar.getByRole('button', { name: 'Search', exact: true });
   const toolbarBox = await replayToolbar.boundingBox();
   const searchBox = await replaySearch.boundingBox();
   const actionsBox = await replayActions.boundingBox();
+  const replayTimeRangeBox = await replayTimeRange.boundingBox();
+  const replaySearchButtonBox = await replaySearchButton.boundingBox();
   expect(toolbarBox).not.toBeNull();
   expect(searchBox).not.toBeNull();
   expect(actionsBox).not.toBeNull();
+  expect(replayTimeRangeBox).not.toBeNull();
+  expect(replaySearchButtonBox).not.toBeNull();
   expect(
     Math.abs(toolbarBox!.x + toolbarBox!.width - (actionsBox!.x + actionsBox!.width) - 12),
   ).toBeLessThanOrEqual(2);
   expect(actionsBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
+  expect(replaySearchButtonBox!.x).toBeGreaterThanOrEqual(
+    replayTimeRangeBox!.x + replayTimeRangeBox!.width,
+  );
 
   await page.getByRole('combobox', { name: 'Replay time range' }).click();
   await page.getByRole('option', { name: /^Custom range/ }).click();

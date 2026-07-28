@@ -1928,25 +1928,20 @@ label small,
   background: var(--surface);
   grid-template-columns:
     minmax(220px, 1fr) repeat(3, minmax(120px, 0.4fr))
-    repeat(2, minmax(190px, 0.65fr));
+    minmax(190px, 0.65fr);
   gap: 0.75rem;
 }
 
 .signal-toolbar--compact {
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
 }
 
 .signal-toolbar--issues {
-  grid-template-columns: minmax(280px, 1fr) repeat(2, minmax(180px, 0.35fr));
+  grid-template-columns: minmax(280px, 1fr) minmax(180px, 0.35fr);
 }
 
 .signal-toolbar--replays {
-  grid-template-columns: minmax(280px, 1fr) minmax(190px, 0.3fr);
-}
-
-.signal-toolbar--replays > .time-range-control {
-  align-self: start;
-  margin-top: 1.55rem;
+  grid-template-columns: minmax(280px, 1fr);
 }
 
 .time-range-control {
@@ -1987,11 +1982,17 @@ label small,
 
 .signal-toolbar__actions {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  width: 100%;
   justify-content: flex-end;
   justify-self: end;
   grid-column: 1 / -1;
   gap: 0.5rem;
+}
+
+.signal-toolbar__actions .time-range-control {
+  width: min(240px, 100%);
 }
 
 .signal-toolbar__actions .button {
@@ -3221,10 +3222,6 @@ label small,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .signal-toolbar--replays {
-    grid-template-columns: minmax(280px, 1fr) minmax(190px, 0.35fr);
-  }
-
   .compact-filter-group {
     flex-wrap: wrap;
   }
@@ -3453,10 +3450,6 @@ label small,
     grid-template-columns: 1fr;
   }
 
-  .signal-toolbar--replays > .time-range-control {
-    margin-top: 0;
-  }
-
   .compact-filter-group {
     width: 100%;
     align-items: stretch;
@@ -3466,6 +3459,10 @@ label small,
   .signal-toolbar__actions {
     width: 100%;
     justify-self: stretch;
+  }
+
+  .signal-toolbar__actions .time-range-control {
+    width: 100%;
   }
 
   .signal-toolbar__actions .button {

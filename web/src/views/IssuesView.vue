@@ -160,14 +160,14 @@ function formatTime(value: string): string {
         :options="statusOptions"
         aria-label="Issue status"
       />
-      <TimeRangeSelect
-        v-if="!submittedSearch"
-        v-model="range"
-        :window-value="selectedWindow"
-        aria-label="Issue time range"
-        @update:window-value="selectedWindow = $event"
-      />
       <div class="signal-toolbar__actions">
+        <TimeRangeSelect
+          v-if="!submittedSearch"
+          v-model="range"
+          :window-value="selectedWindow"
+          aria-label="Issue time range"
+          @update:window-value="selectedWindow = $event"
+        />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
           Search

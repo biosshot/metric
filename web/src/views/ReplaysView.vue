@@ -89,13 +89,13 @@ function duration(milliseconds: number): string {
         />
         <small>Searches the latest 50 Replay manifests loaded for this project.</small>
       </label>
-      <TimeRangeSelect
-        v-model="range"
-        :window-value="selectedWindow"
-        aria-label="Replay time range"
-        @update:window-value="selectedWindow = $event"
-      />
       <div class="signal-toolbar__actions">
+        <TimeRangeSelect
+          v-model="range"
+          :window-value="selectedWindow"
+          aria-label="Replay time range"
+          @update:window-value="selectedWindow = $event"
+        />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
           Search
