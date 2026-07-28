@@ -379,8 +379,31 @@ input[type='checkbox'] {
 
 .sidebar nav {
   display: grid;
+  overflow-y: auto;
   align-content: start;
-  gap: 0.3rem;
+  gap: 0.9rem;
+  padding-right: 0.2rem;
+}
+
+.sidebar__nav-group {
+  display: grid;
+  gap: 0.22rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar__nav-group:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.sidebar__nav-label {
+  padding: 0 0.72rem 0.28rem;
+  color: var(--text-subtle);
+  font-size: 0.65rem;
+  font-weight: 750;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
 }
 
 .sidebar nav a {
@@ -416,19 +439,25 @@ input[type='checkbox'] {
   border-top: 1px solid var(--border);
 }
 
-.sidebar__account div {
+.sidebar__identity {
   display: grid;
   min-width: 0;
+  color: inherit;
+  text-decoration: none;
 }
 
-.sidebar__account strong {
+.sidebar__identity:hover strong {
+  color: var(--accent-strong);
+}
+
+.sidebar__identity strong {
   overflow: hidden;
   font-size: 0.86rem;
   text-overflow: ellipsis;
   text-transform: capitalize;
 }
 
-.sidebar__account span {
+.sidebar__identity span {
   overflow: hidden;
   color: var(--text-muted);
   font-size: 0.72rem;

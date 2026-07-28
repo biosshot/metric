@@ -31,6 +31,8 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
     let index = ServeFile::new(root.join("index.html"));
     Router::new()
         .route_service("/", index.clone())
+        .route_service("/dashboard", index.clone())
+        .route_service("/dashboards", index.clone())
         .route_service("/issues", index.clone())
         .route_service("/issues/{issue_id}", index.clone())
         .route_service("/events/{event_id}", index.clone())
@@ -40,7 +42,6 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/traces/{trace_id}", index.clone())
         .route_service("/performance", index.clone())
         .route_service("/explore", index.clone())
-        .route_service("/dashboards", index.clone())
         .route_service("/alerts", index.clone())
         .route_service("/monitors", index.clone())
         .route_service("/feedback", index.clone())
@@ -54,6 +55,7 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/auth/setup", index.clone())
         .route_service("/project/setup", index.clone())
         .route_service("/project/settings", index.clone())
+        .route_service("/settings", index.clone())
         .route_service("/system", index)
         .route_service("/favicon.svg", ServeFile::new(root.join("favicon.svg")))
         .nest_service("/assets", ServeDir::new(root.join("assets")))
@@ -105,6 +107,8 @@ mod tests {
         std::fs::write(root.join("index.html"), "<main>Metric Web</main>").unwrap();
 
         for path in [
+            "/dashboard",
+            "/dashboards",
             "/issues/001122",
             "/logs",
             "/logs/001122",
@@ -112,7 +116,6 @@ mod tests {
             "/traces/001122",
             "/performance",
             "/explore",
-            "/dashboards",
             "/alerts",
             "/monitors",
             "/feedback",
@@ -124,6 +127,7 @@ mod tests {
             "/organization",
             "/account/tokens",
             "/auth/setup",
+            "/settings",
         ] {
             let response = router_with_root(&root)
                 .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())

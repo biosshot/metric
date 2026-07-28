@@ -172,7 +172,7 @@ async function copy(value: string): Promise<void> {
           <RouterLink
             v-if="session.has('project:admin')"
             class="button button--secondary"
-            to="/project/settings"
+            to="/settings"
           >
             <AppIcon name="settings" :size="16" />
             Manage keys

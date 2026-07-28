@@ -24,7 +24,9 @@ import MonitorsView from './views/MonitorsView.vue';
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/issues' },
+    { path: '/', redirect: '/dashboard' },
+    { path: '/dashboard', name: 'dashboard', component: DashboardsView },
+    { path: '/dashboards', redirect: '/dashboard' },
     { path: '/issues', name: 'issues', component: IssuesView },
     { path: '/issues/:issueId', name: 'issue', component: IssueDetailView },
     { path: '/events/:eventId', name: 'event', component: EventDetailView },
@@ -34,7 +36,6 @@ export const router = createRouter({
     { path: '/traces/:traceId', name: 'trace', component: TraceView },
     { path: '/performance', name: 'performance', component: PerformanceView },
     { path: '/explore', name: 'explore', component: ExploreView },
-    { path: '/dashboards', name: 'dashboards', component: DashboardsView },
     { path: '/alerts', name: 'alerts', component: AlertsView },
     { path: '/monitors', name: 'monitors', component: MonitorsView },
     {
@@ -55,9 +56,10 @@ export const router = createRouter({
     { path: '/organization', name: 'organization', component: OrganizationView },
     { path: '/account/tokens', redirect: '/organization' },
     { path: '/project/setup', name: 'setup', component: ProjectSetupView },
-    { path: '/project/settings', name: 'settings', component: ProjectSettingsView },
+    { path: '/project/settings', redirect: '/settings' },
+    { path: '/settings', name: 'settings', component: ProjectSettingsView },
     { path: '/system', name: 'system', component: SystemStatusView },
-    { path: '/:pathMatch(.*)*', redirect: '/issues' },
+    { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
   scrollBehavior: () => ({ top: 0 }),
 });

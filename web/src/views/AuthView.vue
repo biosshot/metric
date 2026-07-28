@@ -50,7 +50,7 @@ async function login(): Promise<void> {
   error.value = null;
   try {
     await session.login(email.value, password.value, organizationId.value);
-    await router.replace('/issues');
+    await router.replace('/dashboard');
   } catch (cause) {
     error.value = cause;
   } finally {

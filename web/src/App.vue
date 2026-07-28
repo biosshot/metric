@@ -28,14 +28,14 @@ onMounted(() => session.restore());
 function changeProject(projectId: string): void {
   session.selectProject(projectId);
   navigationOpen.value = false;
-  void router.push('/issues');
+  void router.push('/dashboard');
 }
 
 async function logout(): Promise<void> {
   logoutError.value = null;
   try {
     await session.logout();
-    await router.replace('/issues');
+    await router.replace('/dashboard');
   } catch (error) {
     logoutError.value = error;
   }
@@ -107,73 +107,72 @@ async function logout(): Promise<void> {
       />
 
       <nav aria-label="Primary">
-        <RouterLink to="/issues" @click="navigationOpen = false">
-          <AppIcon name="clipboard" :size="18" />
-          Issues
-        </RouterLink>
-        <RouterLink to="/logs" @click="navigationOpen = false">
-          <AppIcon name="logs" :size="18" />
-          Logs
-        </RouterLink>
-        <RouterLink to="/traces" @click="navigationOpen = false">
-          <AppIcon name="traces" :size="18" />
-          Traces
-        </RouterLink>
-        <RouterLink to="/performance" @click="navigationOpen = false">
-          <AppIcon name="gauge" :size="18" />
-          Performance
-        </RouterLink>
-        <RouterLink to="/explore" @click="navigationOpen = false">
-          <AppIcon name="explore" :size="18" />
-          Explore
-        </RouterLink>
-        <RouterLink to="/dashboards" @click="navigationOpen = false">
-          <AppIcon name="dashboard" :size="18" />
-          Dashboards
-        </RouterLink>
-        <RouterLink to="/alerts" @click="navigationOpen = false">
-          <AppIcon name="alerts" :size="18" />
-          Alerts
-        </RouterLink>
-        <RouterLink to="/monitors" @click="navigationOpen = false">
-          <AppIcon name="monitors" :size="18" />
-          Monitors
-        </RouterLink>
-        <RouterLink to="/replays" @click="navigationOpen = false">
-          <AppIcon name="replay" :size="18" />
-          Replays
-        </RouterLink>
-        <RouterLink to="/feedback" @click="navigationOpen = false">
-          <AppIcon name="message" :size="18" />
-          Feedback
-        </RouterLink>
-        <RouterLink to="/releases" @click="navigationOpen = false">
-          <AppIcon name="release" :size="18" />
-          Releases
-        </RouterLink>
-        <RouterLink to="/project/setup" @click="navigationOpen = false">
-          <AppIcon name="connect" :size="18" />
-          SDK setup
-        </RouterLink>
-        <RouterLink to="/project/settings" @click="navigationOpen = false">
-          <AppIcon name="settings" :size="18" />
-          Project settings
-        </RouterLink>
-        <RouterLink to="/system" @click="navigationOpen = false">
-          <AppIcon name="activity" :size="18" />
-          System status
-        </RouterLink>
-        <RouterLink to="/organization" @click="navigationOpen = false">
-          <AppIcon name="organization" :size="18" />
-          Organization
-        </RouterLink>
+        <div class="sidebar__nav-group">
+          <span class="sidebar__nav-label">Overview</span>
+          <RouterLink to="/dashboard" @click="navigationOpen = false">
+            <AppIcon name="dashboard" :size="18" />
+            Dashboard
+          </RouterLink>
+        </div>
+
+        <div class="sidebar__nav-group">
+          <span class="sidebar__nav-label">Observe</span>
+          <RouterLink to="/issues" @click="navigationOpen = false">
+            <AppIcon name="clipboard" :size="18" />
+            Issues
+          </RouterLink>
+          <RouterLink to="/logs" @click="navigationOpen = false">
+            <AppIcon name="logs" :size="18" />
+            Logs
+          </RouterLink>
+          <RouterLink
+            to="/traces"
+            :class="{ 'router-link-active': $route.name === 'performance' }"
+            @click="navigationOpen = false"
+          >
+            <AppIcon name="traces" :size="18" />
+            Traces
+          </RouterLink>
+          <RouterLink to="/replays" @click="navigationOpen = false">
+            <AppIcon name="replay" :size="18" />
+            Replays
+          </RouterLink>
+          <RouterLink to="/monitors" @click="navigationOpen = false">
+            <AppIcon name="monitors" :size="18" />
+            Monitors
+          </RouterLink>
+          <RouterLink to="/feedback" @click="navigationOpen = false">
+            <AppIcon name="message" :size="18" />
+            Feedback
+          </RouterLink>
+        </div>
+
+        <div class="sidebar__nav-group">
+          <span class="sidebar__nav-label">Delivery</span>
+          <RouterLink to="/releases" @click="navigationOpen = false">
+            <AppIcon name="release" :size="18" />
+            Releases
+          </RouterLink>
+        </div>
+
+        <div class="sidebar__nav-group">
+          <span class="sidebar__nav-label">Configure</span>
+          <RouterLink to="/project/setup" @click="navigationOpen = false">
+            <AppIcon name="connect" :size="18" />
+            SDK setup
+          </RouterLink>
+          <RouterLink to="/settings" @click="navigationOpen = false">
+            <AppIcon name="settings" :size="18" />
+            Settings
+          </RouterLink>
+        </div>
       </nav>
 
       <div class="sidebar__account">
-        <div>
+        <RouterLink class="sidebar__identity" to="/organization" @click="navigationOpen = false">
           <strong>{{ session.identity?.role }}</strong>
           <span>Org {{ session.organizationId }}</span>
-        </div>
+        </RouterLink>
         <button type="button" @click="logout">
           <AppIcon name="signOut" :size="16" />
           Sign out
