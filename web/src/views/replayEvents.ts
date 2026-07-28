@@ -2,19 +2,7 @@ const MAX_REPLAY_TIMELINE_MS = 24 * 60 * 60 * 1000;
 const MIN_EPOCH_SECONDS = 1_000_000_000;
 const MAX_EPOCH_SECONDS = 10_000_000_000;
 
-type ReplayEvent = Record<string, unknown> & {
-  timestamp: number;
-};
-
-function isSentryPerformanceSpan(event: Record<string, unknown>): boolean {
-  const data = event.data;
-  return (
-    event.type === 5 &&
-    typeof data === 'object' &&
-    data !== null &&
-    (data as Record<string, unknown>).tag === 'performanceSpan'
-  );
-}
+type ReplayEvent = Record<string, unknown> & { timestamp: number };
 
 export function prepareReplayEvents(values: unknown[]): ReplayEvent[] {
   let minimum = Number.POSITIVE_INFINITY;
@@ -28,10 +16,10 @@ export function prepareReplayEvents(values: unknown[]): ReplayEvent[] {
     if (typeof rawTimestamp !== 'number' || !Number.isFinite(rawTimestamp) || rawTimestamp <= 0) {
       throw new Error('Replay contains an invalid rrweb timestamp.');
     }
+    // The pinned Sentry browser SDK emits some custom rrweb events in epoch seconds
+    // and others in epoch milliseconds, including mixed breadcrumb units.
     const timestamp =
-      isSentryPerformanceSpan(event) &&
-      rawTimestamp >= MIN_EPOCH_SECONDS &&
-      rawTimestamp < MAX_EPOCH_SECONDS
+      rawTimestamp >= MIN_EPOCH_SECONDS && rawTimestamp < MAX_EPOCH_SECONDS
         ? rawTimestamp * 1000
         : rawTimestamp;
     minimum = Math.min(minimum, timestamp);

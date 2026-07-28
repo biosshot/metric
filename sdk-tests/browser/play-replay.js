@@ -18,10 +18,7 @@ async function decodeRecording(buffer) {
 function prepareEvents(events) {
   const prepared = events.map((event) => {
     const timestamp =
-      event?.type === 5 &&
-      event?.data?.tag === "performanceSpan" &&
-      event.timestamp >= 1_000_000_000 &&
-      event.timestamp < 10_000_000_000
+      event?.timestamp >= 1_000_000_000 && event.timestamp < 10_000_000_000
         ? event.timestamp * 1000
         : event?.timestamp;
     if (!Number.isFinite(timestamp) || timestamp <= 0) {

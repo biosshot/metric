@@ -11,7 +11,7 @@ import { api, ApiError } from '../api/client';
 import { useSessionStore } from '../stores/session';
 import { prepareReplayEvents } from './replayEvents';
 
-const MAX_PLAYER_SEGMENTS = 20;
+const MAX_PLAYER_SEGMENTS = 100;
 const MAX_PLAYER_EVENTS = 100_000;
 const MAX_PLAYER_BYTES = 50 * 1024 * 1024;
 
@@ -95,7 +95,14 @@ async function loadPlayer(): Promise<void> {
     playerError.value =
       error instanceof ApiError
         ? error
-        : new Error(`Replay could not be decoded: ${String(error)}`);
+        : new ApiError(
+            0,
+            'replay_player_error',
+            null,
+            error instanceof Error
+              ? error.message
+              : `Replay could not be decoded: ${String(error)}`,
+          );
   } finally {
     loadingPlayer.value = false;
   }

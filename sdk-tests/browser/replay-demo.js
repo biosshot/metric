@@ -5,6 +5,7 @@ const statusDetail = document.querySelector("#sdk-status-detail");
 const replayIdOutput = document.querySelector("#replay-id");
 const eventIdOutput = document.querySelector("#event-id");
 const flushButton = document.querySelector("#flush-replay");
+const captureErrorButton = document.querySelector("#capture-error");
 const dsn = new URLSearchParams(window.location.search).get("dsn");
 
 function setStatus(title, detail, tone = "ready") {
@@ -26,6 +27,7 @@ if (!dsn) {
     "error",
   );
   flushButton.disabled = true;
+  captureErrorButton.disabled = true;
 } else {
   Sentry.init({
     dsn,
@@ -59,6 +61,7 @@ if (!dsn) {
     replayId ? "recording" : "error",
   );
   flushButton.disabled = !replay;
+  let stopped = false;
 
   flushButton.addEventListener("click", async () => {
     flushButton.disabled = true;
@@ -67,14 +70,17 @@ if (!dsn) {
       await replay.flush();
       const flushed = await Sentry.flush(8_000);
       if (!flushed) throw new Error("Sentry SDK flush deadline exceeded");
+      await replay.stop();
+      stopped = true;
       replayIdOutput.textContent =
         replay.getReplayId() ?? replayId ?? "unknown";
       setStatus(
-        "Replay sent",
-        "Open Metric → Replays. You can keep interacting and flush another segment.",
+        "Replay sent and stopped",
+        "Open Metric → Replays. Reload this page to start another recording.",
         "success",
       );
       appendActivity("Replay segment flushed");
+      captureErrorButton.disabled = true;
     } catch (error) {
       setStatus(
         "Replay send failed",
@@ -82,20 +88,18 @@ if (!dsn) {
         "error",
       );
     } finally {
-      flushButton.disabled = false;
+      flushButton.disabled = stopped;
     }
   });
 
-  document
-    .querySelector("#capture-error")
-    .addEventListener("click", async () => {
-      const eventId = Sentry.captureException(
-        new Error("Metric manual Replay demo error"),
-      );
-      eventIdOutput.textContent = eventId;
-      appendActivity("Test Error captured");
-      await Sentry.flush(8_000);
-    });
+  captureErrorButton.addEventListener("click", async () => {
+    const eventId = Sentry.captureException(
+      new Error("Metric manual Replay demo error"),
+    );
+    eventIdOutput.textContent = eventId;
+    appendActivity("Test Error captured");
+    await Sentry.flush(8_000);
+  });
 }
 
 let count = 0;
