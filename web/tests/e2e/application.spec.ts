@@ -182,6 +182,7 @@ interface ApiState {
   monitorRangeSeen?: boolean;
   monitorFromSeen?: number;
   signalFromSeen?: number;
+  replays?: Array<Record<string, any>>;
   monitorDeleted?: boolean;
   alertRules?: Array<Record<string, any>>;
 }
@@ -335,7 +336,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   }
   if (path === '/api/v1/projects/42/replays') {
     state.signalFromSeen = Date.parse(url.searchParams.get('from') ?? '');
-    return json({ items: [replayRecord], next_cursor: null });
+    return json({ items: state.replays ?? [replayRecord], next_cursor: null });
   }
   if (path === '/api/v1/projects/42/explore' && request.method() === 'POST') {
     const body = request.postDataJSON() as {
@@ -1044,6 +1045,15 @@ test('Replay search and detail keep controls and metadata in their content flow'
     csrfSeen: false,
     sessionCookieSeen: false,
     failIssues: false,
+    replays: [
+      replayRecord,
+      ...Array.from({ length: 20 }, (_, index) => ({
+        ...replayRecord,
+        id: `${index + 1}`.padStart(32, '0'),
+        url: `https://example.test/replay/${index + 1}`,
+        environment: 'production',
+      })),
+    ],
   };
   await installApi(page, state);
   await login(page);
@@ -1151,6 +1161,12 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(replaySearchButtonBox!.x).toBeGreaterThanOrEqual(
     replayTimeRangeBox!.x + replayTimeRangeBox!.width,
   );
+  const replayPages = page.getByRole('navigation', { name: 'Replay pages' });
+  await expect(replayPages).toContainText('Page 1 of 3');
+  await expect(page.locator('.replay-row')).toHaveCount(10);
+  await replayPages.getByRole('button', { name: 'Next' }).click();
+  await expect(replayPages).toContainText('Page 2 of 3');
+  await expect(page.locator('.replay-row')).toHaveCount(10);
 
   await page.getByRole('combobox', { name: 'Replay time range' }).click();
   await page.getByRole('option', { name: /^Custom range/ }).click();
@@ -1167,6 +1183,7 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect.poll(() => state.signalFromSeen).toBe(new Date('2026-07-20T00:00').getTime());
+  await expect(replayPages).toBeHidden();
   await expect(page.getByText('1 matching Replay for')).toBeVisible();
   await page.getByRole('link', { name: /example\.test\/replay/ }).click();
 

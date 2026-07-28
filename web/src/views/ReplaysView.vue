@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -12,9 +12,11 @@ import { timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
+const PAGE_SIZE = 10;
 const projectId = computed(() => session.selectedProjectId ?? '');
 const search = ref('');
 const submittedSearch = ref('');
+const page = ref(1);
 const range = ref('24h');
 const appliedRange = ref('24h');
 const selectedWindow = ref(timeWindow('24h'));
@@ -43,14 +45,25 @@ const visibleReplays = computed(() => {
       .some((value) => value.toLowerCase().includes(term)),
   );
 });
+const pageCount = computed(() => Math.max(1, Math.ceil(visibleReplays.value.length / PAGE_SIZE)));
+const paginatedReplays = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE;
+  return visibleReplays.value.slice(start, start + PAGE_SIZE);
+});
+
+watch(pageCount, (count) => {
+  if (page.value > count) page.value = count;
+});
 
 function submitSearch(): void {
+  page.value = 1;
   submittedSearch.value = search.value.trim();
   appliedRange.value = range.value;
   appliedWindow.value = { ...selectedWindow.value };
 }
 
 function clearSearch(): void {
+  page.value = 1;
   search.value = '';
   submittedSearch.value = '';
   range.value = '24h';
@@ -149,7 +162,7 @@ function duration(milliseconds: number): string {
     </EmptyState>
     <div v-else class="transaction-list">
       <RouterLink
-        v-for="replay in visibleReplays"
+        v-for="replay in paginatedReplays"
         :key="replay.id"
         class="transaction-row replay-row"
         :to="`/replays/${replay.id}`"
@@ -168,6 +181,25 @@ function duration(milliseconds: number): string {
         <span>{{ duration(replay.duration_ms) }}</span>
         <time :datetime="replay.received_at">{{ replay.received_at }}</time>
       </RouterLink>
+      <nav v-if="pageCount > 1" class="pagination" aria-label="Replay pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="page === 1"
+          @click="page -= 1"
+        >
+          Previous
+        </button>
+        <span>Page {{ page }} of {{ pageCount }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="page === pageCount"
+          @click="page += 1"
+        >
+          Next
+        </button>
+      </nav>
     </div>
   </section>
 </template>
