@@ -775,28 +775,8 @@ async fn list_monitor_runs(
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
     let query = query_map(raw.as_deref())?;
-    let from = query
-        .get("from")
-        .map(|value| {
-            value
-                .parse::<i64>()
-                .map_err(|_| HttpApiError::InvalidRequest)
-                .and_then(|value| {
-                    Timestamp::from_unix_millis(value).map_err(|_| HttpApiError::InvalidRequest)
-                })
-        })
-        .transpose()?;
-    let until = query
-        .get("until")
-        .map(|value| {
-            value
-                .parse::<i64>()
-                .map_err(|_| HttpApiError::InvalidRequest)
-                .and_then(|value| {
-                    Timestamp::from_unix_millis(value).map_err(|_| HttpApiError::InvalidRequest)
-                })
-        })
-        .transpose()?;
+    let from = optional_query_timestamp(&query, "from")?;
+    let until = optional_query_timestamp(&query, "until")?;
     let page = api(&state)?
         .monitor_runs(
             &context,
@@ -4876,6 +4856,22 @@ mod tests {
     #[test]
     fn query_parser_rejects_duplicates_and_cookie_parser_is_exact() {
         assert!(query_map(Some("limit=10&limit=20")).is_err());
+        let time_query = BTreeMap::from([
+            ("from".to_owned(), "2026-07-20T00:00:00.000Z".to_owned()),
+            ("until".to_owned(), "2026-07-21T00:00:00.000Z".to_owned()),
+        ]);
+        assert_eq!(
+            optional_query_timestamp(&time_query, "from")
+                .unwrap()
+                .unwrap()
+                .unix_millis(),
+            1_784_505_600_000
+        );
+        assert!(
+            optional_query_timestamp(&time_query, "missing")
+                .unwrap()
+                .is_none()
+        );
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,

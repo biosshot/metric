@@ -992,6 +992,7 @@ test('mobile pagination stays outside horizontal data scrolling and dashboard ca
 test('Replay search and detail keep controls and metadata in their content flow', async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 2048, height: 1000 });
   const state: ApiState = {
     role: 'owner',
     csrfSeen: false,
@@ -1001,17 +1002,34 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await installApi(page, state);
   await login(page);
 
+  await page.goto('/issues');
+  const issueToolbar = page.locator('.signal-toolbar--issues');
+  const issueSearch = issueToolbar.getByRole('searchbox');
+  const issueStatus = issueToolbar.getByRole('combobox', { name: 'Issue status' });
+  const issueActions = issueToolbar.locator('.signal-toolbar__actions');
+  const issueSearchBox = await issueSearch.boundingBox();
+  const issueStatusBox = await issueStatus.boundingBox();
+  const issueActionsBox = await issueActions.boundingBox();
+  expect(issueSearchBox).not.toBeNull();
+  expect(issueStatusBox).not.toBeNull();
+  expect(issueActionsBox).not.toBeNull();
+  expect(issueActionsBox!.y).toBeLessThan(issueSearchBox!.y + issueSearchBox!.height);
+  expect(issueActionsBox!.x).toBeGreaterThanOrEqual(issueStatusBox!.x + issueStatusBox!.width);
+
   await page.goto('/logs');
   const logToolbar = page.locator('.signal-toolbar');
   const logActions = logToolbar.locator('.signal-toolbar__actions');
+  const logMessage = logToolbar.getByPlaceholder('Message contains…');
   const logTimeRange = logToolbar.getByRole('combobox', { name: 'Log time range' });
   const logSearch = logToolbar.getByRole('button', { name: 'Search', exact: true });
   const logToolbarBox = await logToolbar.boundingBox();
   const logActionsBox = await logActions.boundingBox();
+  const logMessageBox = await logMessage.boundingBox();
   const logTimeRangeBox = await logTimeRange.boundingBox();
   const logSearchBox = await logSearch.boundingBox();
   expect(logToolbarBox).not.toBeNull();
   expect(logActionsBox).not.toBeNull();
+  expect(logMessageBox).not.toBeNull();
   expect(logTimeRangeBox).not.toBeNull();
   expect(logSearchBox).not.toBeNull();
   expect(
@@ -1020,7 +1038,19 @@ test('Replay search and detail keep controls and metadata in their content flow'
     ),
   ).toBeLessThanOrEqual(2);
   expect(logActionsBox!.y).toBeLessThanOrEqual(logTimeRangeBox!.y);
+  expect(logActionsBox!.y).toBeLessThan(logMessageBox!.y + logMessageBox!.height);
   expect(logSearchBox!.x).toBeGreaterThanOrEqual(logTimeRangeBox!.x + logTimeRangeBox!.width);
+
+  await page.goto('/traces');
+  const traceToolbar = page.locator('.signal-toolbar--compact');
+  const traceRelease = traceToolbar.getByPlaceholder('Release');
+  const traceActions = traceToolbar.locator('.signal-toolbar__actions');
+  const traceReleaseBox = await traceRelease.boundingBox();
+  const traceActionsBox = await traceActions.boundingBox();
+  expect(traceReleaseBox).not.toBeNull();
+  expect(traceActionsBox).not.toBeNull();
+  expect(traceActionsBox!.y).toBeLessThan(traceReleaseBox!.y + traceReleaseBox!.height);
+  expect(traceActionsBox!.x).toBeGreaterThanOrEqual(traceReleaseBox!.x + traceReleaseBox!.width);
 
   await page.goto('/replays');
 
@@ -1042,7 +1072,7 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(
     Math.abs(toolbarBox!.x + toolbarBox!.width - (actionsBox!.x + actionsBox!.width) - 12),
   ).toBeLessThanOrEqual(2);
-  expect(actionsBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
+  expect(actionsBox!.y).toBeLessThan(searchBox!.y + searchBox!.height);
   expect(replaySearchButtonBox!.x).toBeGreaterThanOrEqual(
     replayTimeRangeBox!.x + replayTimeRangeBox!.width,
   );
