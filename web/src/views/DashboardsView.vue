@@ -27,8 +27,10 @@ const savedDataset = ref<ExploreDataset>('logs');
 const savedShape = ref<ExploreShape>('number');
 const dashboardName = ref('');
 const selectedSavedQuery = ref('');
+const selectedDashboardId = ref('');
 const refreshInterval = ref('manual');
 const draftWidgets = ref<SavedQuery[]>([]);
+const editing = ref(false);
 const environment = reactive<Record<string, string>>({});
 const release = reactive<Record<string, string>>({});
 const refreshResults = reactive<Record<string, DashboardRefresh>>({});
@@ -63,17 +65,32 @@ const dashboards = useQuery({
   enabled: computed(() => Boolean(projectId.value)),
 });
 const savedOptions = computed<SelectOption[]>(() => [
-  { value: '', label: 'Choose a saved query' },
+  { value: '', label: 'Choose an existing widget' },
   ...(savedQueries.data.value?.items ?? []).map((query) => ({
     value: query.id,
     label: query.name,
     description: `${query.query.dataset} · ${shapeFor(query.query)}`,
   })),
 ]);
+const dashboardOptions = computed<SelectOption[]>(() =>
+  (dashboards.data.value?.items ?? []).map((dashboard) => ({
+    value: dashboard.id,
+    label: dashboard.name,
+    description: `${dashboard.widgets.length} widget${dashboard.widgets.length === 1 ? '' : 's'}`,
+    icon: 'dashboard',
+  })),
+);
+const visibleDashboards = computed(() => {
+  const items = dashboards.data.value?.items ?? [];
+  const selected = items.find((dashboard) => dashboard.id === selectedDashboardId.value);
+  return selected ? [selected] : items.slice(0, 1);
+});
 
 watch(projectId, () => {
   draftWidgets.value = [];
   selectedSavedQuery.value = '';
+  selectedDashboardId.value = '';
+  editing.value = false;
   Object.keys(refreshResults).forEach((key) => delete refreshResults[key]);
 });
 
@@ -84,7 +101,10 @@ const createSaved = useMutation({
       savedName.value.trim(),
       buildQuery(savedDataset.value, savedShape.value),
     ),
-  onSuccess: async () => {
+  onSuccess: async (saved) => {
+    if (!draftWidgets.value.some((item) => item.id === saved.id)) {
+      draftWidgets.value.push(saved);
+    }
     savedName.value = '';
     await queryClient.invalidateQueries({ queryKey: ['saved-queries', projectId.value] });
   },
@@ -100,9 +120,11 @@ const createDashboard = useMutation({
       })),
       refresh_interval: refreshInterval.value,
     }),
-  onSuccess: async () => {
+  onSuccess: async (dashboard) => {
     dashboardName.value = '';
     draftWidgets.value = [];
+    selectedDashboardId.value = dashboard.id;
+    editing.value = false;
     await queryClient.invalidateQueries({ queryKey: ['dashboards', projectId.value] });
   },
 });
@@ -192,6 +214,9 @@ watch(
   (items) => {
     const now = Date.now();
     for (const dashboard of items ?? []) lastAutoRefresh[dashboard.id] ??= now;
+    if (items?.length && !items.some((dashboard) => dashboard.id === selectedDashboardId.value)) {
+      selectedDashboardId.value = items[0].id;
+    }
   },
   { immediate: true },
 );
@@ -212,10 +237,20 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
   <section class="dashboards-page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / shared query workspace</p>
-        <h1>Dashboards</h1>
-        <p>Save typed Explore questions and compose up to eight bounded widgets per project.</p>
+        <p class="eyebrow">{{ session.selectedProject?.slug }} / overview</p>
+        <h1>Dashboard</h1>
+        <p>See the shared project view first. Open editing only when the view needs to change.</p>
       </div>
+      <button
+        v-if="canWrite"
+        class="button button--secondary"
+        type="button"
+        :aria-pressed="editing"
+        @click="editing = !editing"
+      >
+        <AppIcon :name="editing ? 'close' : 'settings'" :size="16" />
+        {{ editing ? 'Close editor' : 'Edit dashboard' }}
+      </button>
     </header>
 
     <ApiErrorPanel
@@ -223,17 +258,18 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       :error="createSaved.error.value || createDashboard.error.value || mutation.error.value"
     />
 
-    <div v-if="canWrite" class="dashboard-builders">
+    <div v-if="canWrite && editing" class="dashboard-builders">
       <form class="panel dashboard-builder" @submit.prevent="createSaved.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Saved query</p>
-            <h2>Save a bounded question</h2>
+            <p class="eyebrow">Widget</p>
+            <h2>Define a visible widget</h2>
+            <p>Choose the signal and presentation. Metric keeps the bounded query internally.</p>
           </div>
           <AppIcon name="explore" :size="20" />
         </div>
         <label>
-          <span>Name</span>
+          <span>Widget title</span>
           <input v-model="savedName" maxlength="120" required placeholder="Production log volume" />
         </label>
         <div class="dashboard-builder__row">
@@ -246,14 +282,14 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           type="submit"
         >
           <AppIcon name="save" :size="17" />
-          Save query
+          Add widget
         </button>
       </form>
 
       <form class="panel dashboard-builder" @submit.prevent="createDashboard.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Dashboard</p>
+            <p class="eyebrow">Dashboard editor</p>
             <h2>Compose shared widgets</h2>
           </div>
           <AppIcon name="dashboard" :size="20" />
@@ -263,7 +299,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <input v-model="dashboardName" maxlength="120" required placeholder="Service health" />
         </label>
         <div class="dashboard-widget-picker">
-          <BaseSelect v-model="selectedSavedQuery" :options="savedOptions" label="Saved query" />
+          <BaseSelect
+            v-model="selectedSavedQuery"
+            :options="savedOptions"
+            label="Add an existing widget"
+          />
           <button
             class="button button--secondary"
             type="button"
@@ -302,7 +342,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
 
     <LoadingPanel
       v-if="savedQueries.isPending.value || dashboards.isPending.value"
-      label="Loading shared dashboards…"
+      label="Loading dashboard…"
     />
     <ApiErrorPanel
       v-else-if="savedQueries.error.value || dashboards.error.value"
@@ -313,11 +353,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       "
     />
     <template v-else>
-      <section class="dashboard-section">
+      <section v-if="canWrite && editing" class="dashboard-section dashboard-section--definitions">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Typed definitions</p>
-            <h2>Saved queries</h2>
+            <p class="eyebrow">Advanced</p>
+            <h2>Reusable widget definitions</h2>
           </div>
           <span>{{ savedQueries.data.value?.items.length ?? 0 }} shared</span>
         </div>
@@ -325,7 +365,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           v-if="!savedQueries.data.value?.items.length"
           icon="explore"
           title="No saved queries"
-          description="Save a table, number, or timeseries question before composing a dashboard."
+          description="Add a widget in the editor above. Its reusable definition will appear here."
         />
         <div v-else class="saved-query-list">
           <article v-for="saved in savedQueries.data.value.items" :key="saved.id">
@@ -354,22 +394,38 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
         </div>
       </section>
 
-      <section class="dashboard-section">
+      <section class="dashboard-section dashboard-section--views">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Shared project resources</p>
-            <h2>Dashboard views</h2>
+            <p class="eyebrow">Shared project view</p>
+            <h2>{{ visibleDashboards[0]?.name || 'Project dashboard' }}</h2>
           </div>
-          <span>{{ dashboards.data.value?.items.length ?? 0 }} dashboards</span>
+          <BaseSelect
+            v-if="dashboardOptions.length > 1"
+            v-model="selectedDashboardId"
+            class="dashboard-picker"
+            :options="dashboardOptions"
+            label="Dashboard"
+          />
         </div>
         <EmptyState
           v-if="!dashboards.data.value?.items.length"
           icon="dashboard"
-          title="No dashboards yet"
-          description="Compose saved queries into a bounded dashboard. Every project reader sees the same view."
-        />
+          title="No dashboard yet"
+          description="Create a shared view with the signals your team checks most often."
+        >
+          <button
+            v-if="canWrite"
+            class="button button--primary"
+            type="button"
+            @click="editing = true"
+          >
+            <AppIcon name="plus" :size="16" />
+            Create dashboard
+          </button>
+        </EmptyState>
         <article
-          v-for="dashboard in dashboards.data.value?.items ?? []"
+          v-for="dashboard in visibleDashboards"
           v-else
           :key="dashboard.id"
           class="dashboard-card"
@@ -377,7 +433,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <header>
             <div>
               <input
-                v-if="canWrite"
+                v-if="canWrite && editing"
                 v-model="dashboard.name"
                 maxlength="120"
                 aria-label="Dashboard name"
@@ -390,7 +446,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 · {{ dashboard.refresh_interval }}</span
               >
             </div>
-            <div v-if="canWrite" class="compact-actions">
+            <div v-if="canWrite && editing" class="compact-actions">
               <button
                 class="button button--secondary"
                 type="button"
@@ -408,7 +464,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             </div>
           </header>
 
-          <div class="dashboard-variables">
+          <form class="dashboard-variables" @submit.prevent="refresh(dashboard)">
             <label>
               <span>Environment</span>
               <input
@@ -423,17 +479,16 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             </label>
             <button
               class="button button--primary"
-              type="button"
+              type="submit"
               :disabled="mutation.isPending.value"
-              @click="refresh(dashboard)"
             >
               <AppIcon name="refresh" :size="16" />
               Refresh
             </button>
-          </div>
+          </form>
 
           <p v-if="refreshResults[dashboard.id]" class="dashboard-cost">
-            Total estimated cost {{ refreshResults[dashboard.id].total_cost }} / 25,000
+            Updated now · estimated cost {{ refreshResults[dashboard.id].total_cost }} / 25,000
           </p>
           <div class="dashboard-widgets">
             <article v-for="widget in dashboard.widgets" :key="widget.id" class="dashboard-widget">
@@ -460,7 +515,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 v-else-if="!widgetResult(dashboard.id, widget.id)"
                 class="dashboard-widget__waiting"
               >
-                Refresh to run this saved query.
+                Refresh to load this widget.
               </p>
               <strong v-else-if="widget.shape === 'number'" class="dashboard-widget__number">
                 {{

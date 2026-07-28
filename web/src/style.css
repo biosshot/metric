@@ -3416,6 +3416,36 @@ label small,
   margin-bottom: 1.5rem;
 }
 
+.dashboards-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboards-page > .page-header {
+  order: 0;
+}
+
+.dashboards-page > .loading-panel,
+.dashboards-page > .error-panel {
+  order: 1;
+}
+
+.dashboard-section--views {
+  order: 2;
+}
+
+.dashboard-builders {
+  order: 3;
+}
+
+.dashboard-section--definitions {
+  order: 4;
+}
+
+.dashboard-picker {
+  width: min(320px, 100%);
+}
+
 .dashboard-builder {
   display: grid;
   align-content: start;
