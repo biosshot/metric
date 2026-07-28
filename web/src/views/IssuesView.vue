@@ -183,45 +183,47 @@ function formatTime(value: string): string {
     </EmptyState>
 
     <div v-else class="issue-table-wrap">
-      <table v-if="!submittedSearch" class="issue-table">
-        <thead>
-          <tr>
-            <th scope="col">Issue</th>
-            <th scope="col">Status</th>
-            <th scope="col">Events</th>
-            <th scope="col">Last seen</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="issue in issueItems" :key="issue.id">
-            <td>
-              <RouterLink :to="`/issues/${issue.id}`" class="issue-title">
-                {{ issue.title }}
-              </RouterLink>
-              <span>{{ issue.culprit || issue.grouping.summary }}</span>
-            </td>
-            <td><StatusBadge :status="issue.status" /></td>
-            <td>
-              {{ issue.occurrence_count.toLocaleString() }}
-              <abbr v-if="issue.occurrence_count_approximate" title="Approximate count">~</abbr>
-            </td>
-            <td>{{ formatTime(issue.last_seen) }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="event-results">
-        <RouterLink
-          v-for="event in eventItems"
-          :key="event.event_id"
-          :to="`/events/${event.event_id}`"
-          class="event-row"
-        >
-          <span class="level-dot" :class="`level-dot--${event.level}`"></span>
-          <strong>{{ event.level }}</strong>
-          <span>{{ event.platform }}</span>
-          <code>{{ event.event_id }}</code>
-          <time :datetime="event.occurred_at">{{ formatTime(event.occurred_at) }}</time>
-        </RouterLink>
+      <div class="issue-table-scroll">
+        <table v-if="!submittedSearch" class="issue-table">
+          <thead>
+            <tr>
+              <th scope="col">Issue</th>
+              <th scope="col">Status</th>
+              <th scope="col">Events</th>
+              <th scope="col">Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="issue in issueItems" :key="issue.id">
+              <td>
+                <RouterLink :to="`/issues/${issue.id}`" class="issue-title">
+                  {{ issue.title }}
+                </RouterLink>
+                <span>{{ issue.culprit || issue.grouping.summary }}</span>
+              </td>
+              <td><StatusBadge :status="issue.status" /></td>
+              <td>
+                {{ issue.occurrence_count.toLocaleString() }}
+                <abbr v-if="issue.occurrence_count_approximate" title="Approximate count">~</abbr>
+              </td>
+              <td>{{ formatTime(issue.last_seen) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="event-results">
+          <RouterLink
+            v-for="event in eventItems"
+            :key="event.event_id"
+            :to="`/events/${event.event_id}`"
+            class="event-row"
+          >
+            <span class="level-dot" :class="`level-dot--${event.level}`"></span>
+            <strong>{{ event.level }}</strong>
+            <span>{{ event.platform }}</span>
+            <code>{{ event.event_id }}</code>
+            <time :datetime="event.occurred_at">{{ formatTime(event.occurred_at) }}</time>
+          </RouterLink>
+        </div>
       </div>
       <nav class="pagination" aria-label="Results pages">
         <button

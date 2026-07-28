@@ -102,6 +102,64 @@ const replayRecord = {
   expires_at: null,
 };
 
+const logRecord = {
+  id: '31'.repeat(16),
+  project_id: '42',
+  received_at: '2026-07-23T09:00:01Z',
+  timestamp: '2026-07-23T09:00:00Z',
+  timestamp_ns: '1784797200000000000',
+  level: 'info',
+  message: 'Worker accepted the scheduled job',
+  trace_id: '41'.repeat(16),
+  span_id: '51'.repeat(8),
+  environment: 'production',
+  release: 'backend@1.1',
+  service: 'worker',
+  body: {},
+};
+
+const transactionRecord = {
+  id: '61'.repeat(16),
+  project_id: '42',
+  received_at: '2026-07-23T09:00:01Z',
+  started_at: '2026-07-23T09:00:00Z',
+  started_at_ns: '1784797200000000000',
+  ended_at: '2026-07-23T09:00:00.125Z',
+  duration_ns: '125000000',
+  duration_ms: 125,
+  trace_id: '41'.repeat(16),
+  span_id: '51'.repeat(8),
+  parent_span_id: null,
+  is_segment: true,
+  operation_class: 'http',
+  operation: 'http.server',
+  status: 'ok',
+  name: 'GET /api/jobs',
+  environment: 'production',
+  release: 'backend@1.1',
+  service: 'api',
+  insight_flags: 0,
+  body: {},
+};
+
+const feedbackRecord = {
+  id: '71'.repeat(16),
+  project_id: '42',
+  received_at: '2026-07-23T09:00:00Z',
+  status: 'open',
+  status_changed_at: '2026-07-23T09:00:00Z',
+  message: 'The save action needs a clearer confirmation.',
+  name: 'Ada',
+  contact_email: 'ada@example.com',
+  url: 'https://example.test/settings',
+  associated_event_id: null,
+  issue_id: null,
+  trace_id: null,
+  replay_id: null,
+  attachments: [],
+  expires_at: '2026-08-23T09:00:00Z',
+};
+
 interface ApiState {
   role: 'owner' | 'viewer';
   csrfSeen: boolean;
@@ -259,6 +317,15 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json({ applied: true, issue });
   }
   if (path === `/api/v1/projects/42/events/${event.event_id}`) return json(event);
+  if (path === '/api/v1/projects/42/logs') {
+    return json({ items: [logRecord], next_cursor: null });
+  }
+  if (path === '/api/v1/projects/42/transactions') {
+    return json({ items: [transactionRecord], next_cursor: null });
+  }
+  if (path === '/api/v1/projects/42/feedback') {
+    return json({ items: [feedbackRecord], next_cursor: null });
+  }
   if (path === `/api/v1/projects/42/replays/${replayRecord.id}`) {
     return json(replayRecord);
   }
@@ -812,6 +879,75 @@ test('Dashboard lifecycle applies variables and keeps partial widget failures vi
 
   await page.locator('.dashboard-card').getByRole('button', { name: 'Delete' }).click();
   await expect(page.getByRole('heading', { name: 'No dashboard yet' })).toBeVisible();
+});
+
+test('mobile pagination stays outside horizontal data scrolling and dashboard cards do not overlap', async ({
+  page,
+}) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+    savedQueries: [],
+    dashboards: [],
+  };
+  await installApi(page, state);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page);
+  await page.goto('/issues');
+
+  const issueScroller = page.locator('.issue-table-scroll');
+  const issuePagination = page.getByRole('navigation', { name: 'Results pages' });
+  await expect(issuePagination).toBeVisible();
+  const scrollRange = await issueScroller.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  expect(scrollRange).toBeGreaterThan(0);
+  const paginationBefore = await issuePagination.boundingBox();
+  await issueScroller.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+  });
+  const paginationAfter = await issuePagination.boundingBox();
+  expect(paginationBefore).not.toBeNull();
+  expect(paginationAfter).not.toBeNull();
+  expect(paginationAfter!.x).toBeCloseTo(paginationBefore!.x, 0);
+
+  for (const target of [
+    { url: '/logs', label: 'Log result pages' },
+    { url: '/traces', label: 'Transaction pages' },
+    { url: '/feedback', label: 'Feedback result pages' },
+  ]) {
+    await page.goto(target.url);
+    await expect(page.getByRole('navigation', { name: target.label })).toBeVisible();
+    const widths = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }));
+    expect(widths.scroll).toBe(widths.client);
+  }
+
+  await page.setViewportSize({ width: 1050, height: 900 });
+  await page.goto('/dashboard?edit=1');
+  const builders = page.locator('.dashboard-builder');
+  await expect(builders).toHaveCount(2);
+  const firstBuilder = await builders.nth(0).boundingBox();
+  const secondBuilder = await builders.nth(1).boundingBox();
+  expect(firstBuilder).not.toBeNull();
+  expect(secondBuilder).not.toBeNull();
+  expect(secondBuilder!.y).toBeGreaterThanOrEqual(firstBuilder!.y + firstBuilder!.height);
+
+  const dashboardForm = builders.nth(1);
+  const picker = await dashboardForm.getByRole('combobox').first().boundingBox();
+  const addButton = await dashboardForm.getByRole('button', { name: 'Add' }).boundingBox();
+  expect(picker).not.toBeNull();
+  expect(addButton).not.toBeNull();
+  const overlaps =
+    picker!.x < addButton!.x + addButton!.width &&
+    picker!.x + picker!.width > addButton!.x &&
+    picker!.y < addButton!.y + addButton!.height &&
+    picker!.y + picker!.height > addButton!.y;
+  expect(overlaps).toBe(false);
 });
 
 test('Replay search and detail keep controls and metadata in their content flow', async ({

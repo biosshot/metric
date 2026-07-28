@@ -1613,6 +1613,12 @@ label small,
   background: var(--surface);
 }
 
+.issue-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
 .issue-table {
   width: 100%;
   border-collapse: collapse;
@@ -1762,8 +1768,10 @@ label small,
 
 .pagination {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 1rem;
   padding: 1rem;
   border-top: 1px solid var(--border);
@@ -3100,7 +3108,7 @@ label small,
   }
 
   .issue-table-wrap {
-    overflow-x: auto;
+    overflow: hidden;
   }
 
   .issue-table {
@@ -3620,7 +3628,7 @@ label small,
 
 .dashboard-builders {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr));
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -3880,5 +3888,21 @@ label small,
   .dashboard-variables,
   .saved-query-list > article {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .dashboard-builder__row,
+  .dashboard-widget-picker {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-widget-picker .button {
+    width: 100%;
+  }
+
+  .pagination {
+    column-gap: 0.65rem;
+    padding-inline: 0.75rem;
   }
 }
