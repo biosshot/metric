@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-07-27:
+Status as of 2026-07-28:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -25,15 +25,16 @@ Status as of 2026-07-27:
 | Phase 34 Alerts and destinations | Complete | ADR-0045 and Phase 34 report |
 | Phase 35 Cron Monitoring | Complete | ADR-0045 and Phase 35 report |
 | Phase 36 Uptime Monitoring | Complete | ADR-0045 and Phase 36 report |
-| Phase 37 Application Metrics | Next | ADR-0046 |
-| Profiling and Session Replay | Desired, execution deferred and unnumbered | ADR-0040/0046 |
+| Phase 37 Application Metrics | Complete | ADR-0046 and Phase 37 report |
+| Phase 38 Session Replay | Next | ADR-0046 |
+| Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046 |
 
 Phase 27 is not complete and no production-ready claim follows from deferring it.
-By explicit owner decision, deferred Phase 27 remains incomplete. Phases 28-36 are
-complete, and Phase 37 Application Metrics is the next implementation phase.
+By explicit owner decision, deferred Phase 27 remains incomplete. Phases 28-37 are
+complete, and Phase 38 Session Replay is the next implementation phase.
 ADR-0045 owns the completed lightweight wave; ADR-0046 owns the post-Phase-36
-Metrics decision and the deferred Profiling/Replay boundary.
+Metrics/Replay sequence and the deferred Profiling boundary.
 
 ## Document precedence
 
@@ -61,6 +62,7 @@ current roadmap.
 | Release Health | rebuildable `session_stats_hourly` derived from durable Sessions |
 | User Feedback | bounded accepted payload -> durable `feedback` record and exact telemetry links |
 | Cron/Uptime | bounded Scheduler execution -> durable `monitor_runs` -> existing notification outbox |
+| Application Metric | stream-fold pinned `trace_metric` container -> dedicated MetricWriter -> compact `metric_buckets` upsert |
 
 Logs and Spans do not have a pending Processor backlog. Their successful HTTP
 response is issued only after every submitted terminal record is durable.
@@ -70,7 +72,7 @@ duplicate because its ID contains the server receive time.
 
 ## Current physical storage names
 
-The active schema generation is 17. The Error occurrence collection is
+The active schema generation is 18. The Error occurrence collection is
 `error_events`; `events` is only a legacy generation-7 physical name. Native HTTP
 routes may still contain `/events` because route names are product concepts, not
 MongoDB collection selectors.
@@ -90,10 +92,11 @@ session_stats_hourly
 feedback
 monitors
 monitor_runs
+metric_buckets
 ```
 
-`metric_buckets`, `profiles` and `replays` are future names only. ADR-0046 makes
-Application Metrics the next phase and keeps Profiling and Replay disabled.
+`replays` and `profiles` are future names only. ADR-0046 makes completed Application
+Metrics Phase 37, Session Replay Phase 38 and keeps Profiling deferred.
 
 ## Current deployment boundary
 
@@ -120,5 +123,9 @@ the current release may claim production readiness.
 - `0044-production-readiness-program.md`: accepted but deferred Phase 27 and
   production launch gate.
 - `0045-lightweight-product-wave-phases-28-36.md`: completed Phases 28-36.
-- `0046-application-metrics-and-deferred-blob-products.md`: accepted Phase 37
-  bucket model and the deferred Profiling/Replay boundary.
+- `0046-application-metrics-session-replay-and-deferred-profiling.md`: completed
+  Phase 37 bucket model, accepted Phase 38 Replay and the deferred Profiling boundary.
+- `module-contracts/0037-application-metrics-phase-37.md`: Phase 37 implementation
+  boundary and exit gate.
+- `phase-reports/0037-application-metrics.md`: Phase 37 implementation and
+  verification evidence.

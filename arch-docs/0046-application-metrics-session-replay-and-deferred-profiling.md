@@ -1,4 +1,4 @@
-# ADR-0046: Application Metrics and deferred Blob products
+# ADR-0046: Application Metrics, Session Replay and deferred Profiling
 
 - Status: Accepted
 - Date: 2026-07-27
@@ -7,8 +7,8 @@
 ## Context
 
 Phase 36 completed the accepted lightweight product wave. The next product gap in
-the core observability path is Application Metrics. Profiling and Session Replay
-remain independent high-volume Blob products and must not delay Metrics.
+the core observability path is Application Metrics. Session Replay follows Metrics
+as a separate high-volume Blob product. Profiling must not delay either phase.
 
 Application Metrics are not only counters. The accepted first version supports:
 
@@ -28,6 +28,43 @@ time series.
 
 Phase 37 is the next product phase. It accepts only pinned Sentry SDK metric payload
 rows and implements a separate bounded Metrics lane.
+
+### Wire container versus internal representation
+
+The pinned Sentry SDK sends one `trace_metric` Envelope item with content type
+`application/vnd.sentry.items.trace-metric+json`. Its payload is a JSON object whose
+`items` member is an array. This container exists only at the compatibility edge and
+is not an internal domain or storage format.
+
+The wire container cannot be removed or replaced with one Envelope item per
+measurement without breaking Sentry SDK compatibility. It also amortizes Envelope
+headers and HTTP framing across many measurements. Phase 37 does not introduce a
+second custom single-measurement protocol.
+
+Metric does not deserialize the wire array into a retained
+`Vec<MetricMeasurement>`, copy the complete container into a queue or store it in
+MongoDB. A bounded streaming JSON visitor validates `item_count` and folds each
+measurement immediately into a request-local `MetricDeltaBatch` keyed by normalized
+series and time slot:
+
+```text
+trace_metric JSON container
+-> validate one item
+-> normalize series/time slot
+-> merge into MetricDeltaBatch
+-> discard the raw item
+```
+
+The request body remains subject to the existing compressed/decompressed byte limits,
+but no second full normalized representation is created. Structurally invalid
+containers are rejected. Invalid individual measurements produce bounded discard
+outcomes without preventing valid measurements in the same container from being
+aggregated.
+
+Only the compact delta map crosses the dedicated Metrics queue. If 1,000 wire
+measurements address ten series/time slots, the queue receives at most ten aggregate
+deltas rather than 1,000 measurement objects. The successful HTTP response still
+waits until every accepted delta is durably applied.
 
 The durable unit is one compact document per normalized metric series and time
 bucket, not one document per submitted measurement:
@@ -62,7 +99,7 @@ bounded discard outcomes and never create a collection or index entry.
 
 Metrics have:
 
-- a dedicated bounded RAM queue and micro-batch writer;
+- a dedicated bounded RAM queue of aggregate deltas and a micro-batch writer;
 - independent admission, overload, retention and archive settings;
 - no dependency on the Error Processor and no use of Log or Span queues;
 - a `metrics` dataset in the existing Explore boundary;
@@ -77,6 +114,9 @@ repeated series metadata or bucket count is a material storage cost.
 ### Phase 37 exit gate
 
 - pinned SDK counter, gauge and distribution fixtures ingest end to end;
+- the pinned `trace_metric` container is folded without retaining a normalized
+  measurement array or raw payload copy;
+- 1,000 same-series measurements create one queued delta for their time slot;
 - high-rate increments collapse into bounded bucket writes;
 - retry semantics cannot silently overcount beyond the documented at-least-once
   boundary;
@@ -95,14 +135,14 @@ added by Phase 37.
 Profiling may receive a phase number only after a separate owner decision. It remains
 optional and cannot block the Error, Log, Trace, Metrics or reliability products.
 
-## Session Replay
+## Phase 38: Session Replay
 
 Session Replay is an accepted desired product because it covers browser investigation
 and Webvisor-like session playback cases found in systems such as Yandex Metrica.
 It does not by itself claim full traffic-acquisition, attribution, funnel or product
-analytics parity. Implementation is deliberately deferred and remains unnumbered.
+analytics parity. Phase 38 follows completed Phase 37.
 
-The future storage boundary remains:
+The Phase 38 storage boundary is:
 
 - compact searchable metadata in `replays`;
 - immutable rrweb-compatible recording segments in BlobStore;
@@ -122,10 +162,12 @@ opaque rrweb segment contents do not. They are never indexed as searchable text.
 
 This means server acceptance is not proof that a recording contains no sensitive
 data. Operators remain responsible for enabling and configuring the supported SDK
-masking policy. The future Replay UI and documentation must state this boundary
+masking policy. The Replay UI and documentation must state this boundary
 explicitly.
 
-The future Replay security gate still requires:
+### Phase 38 exit gate
+
+The Replay security gate requires:
 
 - strict compressed and decompressed byte limits;
 - compression-bomb and malformed-segment rejection;
@@ -141,6 +183,6 @@ The future Replay security gate still requires:
 - A single hot counter affects only its current bucket, while different time buckets
   and series remain independently retainable and distributable.
 - Metrics extend existing query, dashboard and alert code vertically.
-- Profiling and Replay do not expand the current implementation scope.
-- Future Replay deliberately trusts configured client-side masking and makes that
+- Profiling does not expand the Phase 37 or Phase 38 implementation scope.
+- Replay deliberately trusts configured client-side masking and makes that
   trust boundary visible instead of claiming server-side privacy enforcement.

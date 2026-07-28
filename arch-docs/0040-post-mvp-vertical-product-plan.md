@@ -47,12 +47,14 @@ Status as of 2026-07-27:
 | 32-33 | Lightweight product wave | Complete |
 | 34 | Alerts and notification destinations | Complete |
 | 35 | Cron Monitoring | Complete |
-| 36 | Uptime Monitoring | Planned in ADR-0045 |
+| 36 | Uptime Monitoring | Complete |
+| 37 | Application Metrics | Complete |
+| 38 | Session Replay | Accepted, next |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
-Phase 28-35 evidence is published in their corresponding reports; Phase 36 is next.
+Phase 28-37 evidence is published in their corresponding reports; Phase 38 is next.
 
 ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
 decision deferred execution of Phase 27 without completing it. ADR-0045 now owns the
@@ -642,21 +644,25 @@ model, execution decision and exit gate below.
 
 Implement:
 
-- accepted Sentry metric item types still supported by target SDK versions;
+- the pinned Sentry SDK `trace_metric` container at the wire edge;
+- streaming validation and immediate folding into aggregate deltas without retaining
+  a normalized measurement array or raw container in the queue;
 - counters, gauges and distributions;
 - bounded metric name/unit/tag normalization;
 - `metric_buckets` with fixed bucket widths;
 - cardinality budgets, denied-tag policy and explicit discard accounting;
 - Explore dataset and Dashboard/Alert integration.
 
-Raw measurements are combined before durable storage where idempotency permits. The
-durable model is one compact document per normalized series and time bucket, not an
-Event-shaped document, not one document per measurement and not one permanent
-lifetime document per counter.
+The SDK wire container is not an internal format. Raw measurements are combined into
+a request-local delta map during parsing and then combined again by the dedicated
+micro-batch writer where idempotency permits. The durable model is one compact
+document per normalized series and time bucket, not an Event-shaped document, not
+one document per measurement and not one permanent lifetime document per counter.
 
 Exit gate:
 
 - retries cannot silently overcount outside documented at-least-once semantics;
+- a many-item SDK container does not become a many-object queue allocation;
 - cardinality attacks are bounded before collection/index growth;
 - bucket merge contention and recovery baselines pass;
 - Metrics do not share the Span or Log queue.
@@ -681,7 +687,10 @@ Exit gate:
 - profile processing cannot consume Symbolicator capacity reserved for Errors;
 - representative native/runtime SDK E2E and storage/load results pass.
 
-### Deferred backlog item — Session Replay
+### Phase 38 — Session Replay
+
+ADR-0046 supersedes the earlier unnumbered status and owns the exact storage,
+client-side privacy boundary and exit gate.
 
 Implement:
 
@@ -857,18 +866,21 @@ The completed chain, deferred gate and selected product wave are:
 -> 34 Alerts/Destinations
 -> 35 Cron
 -> 36 Uptime
--> 37 Application Metrics (next)
+-> 37 Application Metrics (complete)
+-> 38 Session Replay (next)
 ```
 
 ADR-0045 owns the completed Phase 28-36 scope, exclusions and gates. ADR-0046 owns
-Phase 37. The remaining unnumbered backlog keeps only capability dependencies:
+Phases 37 and 38. The remaining unnumbered backlog keeps only capability
+dependencies:
 
 - saved queries and Dashboards depend on Unified Explore;
 - query Alerts depend on a bounded query surface and the existing outbox;
 - Sessions/Feedback extend release and Error investigation independently;
 - Cron and Uptime share Scheduler but are otherwise independent;
 - Phase 37 Metrics extends Explore, Dashboards and Alerts;
-- Profiling and Replay depend on BlobStore and correlation contracts;
+- Phase 38 Replay depends on BlobStore and correlation contracts;
+- Profiling remains an optional unnumbered Blob product;
 - MCP and provider integrations remain removable application adapters;
 - online migrations and distributed roles are operations-driven and require separate
   acceptance evidence.
@@ -876,8 +888,8 @@ Phase 37. The remaining unnumbered backlog keeps only capability dependencies:
 A remaining backlog item receives a new phase number only if all of its accepted
 dependencies already exist and the move does not introduce a placeholder abstraction
 into an earlier hot path.
-Profiling and Replay may be disabled indefinitely without weakening Error, Log or
-Trace correctness.
+Profiling may be disabled indefinitely without weakening Error, Log, Trace, Metrics
+or Replay correctness.
 
 ## Cumulative post-MVP E2E ladder
 

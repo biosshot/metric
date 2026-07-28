@@ -60,6 +60,9 @@ Verify Cron Monitoring with the same pinned real SDK:
 ```powershell
 node sdk-tests/node/send-cron.mjs `
   "http://<dsn-key>@localhost:4001/<project-id>" metric-node-cron
+
+node sdk-tests/node/send-metrics.mjs `
+  "http://<dsn-key>@localhost:4001/<project-id>"
 ```
 
 It sends one `in_progress` and one terminal `ok` check-in with an interval monitor

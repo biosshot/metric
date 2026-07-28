@@ -20,6 +20,8 @@ Enabled core capabilities:
 - Unified Explore, Saved Queries and project-shared Dashboards;
 - count-based Alerts with Telegram and SMTP Email destinations;
 - Cron and GET/HEAD Uptime Monitoring;
+- Application Metrics counters, gauges and distributions through pinned Sentry
+  `trace_metric` containers, with compact buckets and Unified Explore;
 - signed webhook notifications when configured.
 
 Optional capabilities:
@@ -33,9 +35,9 @@ Optional capabilities:
 
 Explicitly disabled:
 
-- Application Metrics and StatsD metrics; Phase 37 is accepted but not implemented;
+- legacy StatsD and Sentry `metric_buckets` Envelope items;
 - profiles; desired but deliberately deferred;
-- Session Replay; desired but deliberately deferred.
+- Session Replay; Phase 38 is accepted after Phase 37 but not implemented.
 
 An absent optional route is represented by capabilities rather than a placeholder
 success response.

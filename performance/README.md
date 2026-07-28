@@ -506,3 +506,20 @@ The runner has a hard timeout and kills its Cargo child on expiry. The test uses
 unique database and drops it before exit. Run it at most once per implementation
 pass; the retained local result is a same-machine regression sentinel, not a
 production capacity claim.
+
+## Phase 37 Application Metrics
+
+Phase 37 keeps one focused release-mode regression profile. It parses 500 pinned
+`trace_metric` containers with 1,000 same-series counters each and verifies that every
+container crosses the queue boundary as one delta:
+
+```text
+node performance/run-application-metrics.mjs
+node performance/compare-application-metrics.mjs performance/baselines/application-metrics/ryzen-5600h-windows-v1.json performance/results/<candidate>.json 15
+```
+
+The artifact reports both container RPS and measurement RPS. It intentionally excludes
+HTTP and MongoDB so future runs compare the streaming fold itself; the durable MongoDB
+contract is covered separately by ignored integration tests. The local minimum is
+100,000 measurements/s and `deltas_per_container` must remain exactly one. No server,
+k6, or background process is started.
