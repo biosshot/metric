@@ -16,11 +16,13 @@ const props = withDefaults(
     options: SelectOption[];
     label?: string;
     ariaLabel?: string;
+    selectedLabel?: string;
     disabled?: boolean;
   }>(),
   {
     label: undefined,
     ariaLabel: undefined,
+    selectedLabel: undefined,
     disabled: false,
   },
 );
@@ -130,7 +132,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
     >
       <span class="base-select__value">
         <AppIcon v-if="selected?.icon" :name="selected.icon" :size="16" />
-        <span>{{ selected?.label ?? 'Select an option' }}</span>
+        <span>{{ selectedLabel ?? selected?.label ?? 'Select an option' }}</span>
       </span>
       <AppIcon class="base-select__chevron" name="chevronDown" :size="16" />
     </button>

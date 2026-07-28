@@ -1946,14 +1946,19 @@ label small,
 
 .time-range-control {
   display: grid;
+  position: relative;
   min-width: 0;
-  gap: 0.5rem;
 }
 
 .time-range-custom {
   display: grid;
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(320px, calc(100vw - 2rem));
   min-width: 0;
-  padding: 0.65rem;
+  padding: 0.8rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-small);
   background: var(--surface-sunken);
@@ -1997,6 +2002,11 @@ label small,
 .signal-toolbar__actions .button {
   align-self: end;
   white-space: nowrap;
+}
+
+.signal-toolbar--replays .signal-toolbar__actions {
+  align-self: start;
+  margin-top: 1.55rem;
 }
 
 .section-tabs {
@@ -3226,6 +3236,10 @@ label small,
     grid-column: 1 / -1;
   }
 
+  .signal-toolbar--replays .signal-toolbar__actions {
+    margin-top: 0;
+  }
+
   .compact-filter-group {
     flex-wrap: wrap;
   }
@@ -3466,6 +3480,12 @@ label small,
   }
 
   .signal-toolbar__actions .time-range-control {
+    width: 100%;
+  }
+
+  .time-range-custom {
+    right: auto;
+    left: 0;
     width: 100%;
   }
 

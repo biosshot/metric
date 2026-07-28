@@ -1072,16 +1072,23 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(
     Math.abs(toolbarBox!.x + toolbarBox!.width - (actionsBox!.x + actionsBox!.width) - 12),
   ).toBeLessThanOrEqual(2);
-  expect(actionsBox!.y).toBeLessThan(searchBox!.y + searchBox!.height);
+  expect(Math.abs(actionsBox!.y - searchBox!.y)).toBeLessThanOrEqual(4);
   expect(replaySearchButtonBox!.x).toBeGreaterThanOrEqual(
     replayTimeRangeBox!.x + replayTimeRangeBox!.width,
   );
 
   await page.getByRole('combobox', { name: 'Replay time range' }).click();
   await page.getByRole('option', { name: /^Custom range/ }).click();
+  const toolbarWithCustomRangeBox = await replayToolbar.boundingBox();
+  expect(toolbarWithCustomRangeBox).not.toBeNull();
+  expect(Math.abs(toolbarWithCustomRangeBox!.height - toolbarBox!.height)).toBeLessThanOrEqual(2);
   await page.getByLabel('From', { exact: true }).fill('2026-07-20T00:00');
   await page.getByLabel('Until', { exact: true }).fill('2026-07-21T00:00');
   await page.getByRole('button', { name: 'Apply range' }).click();
+  await expect(page.getByRole('dialog', { name: 'Custom time range' })).toBeHidden();
+  await expect(page.getByRole('combobox', { name: 'Replay time range' })).not.toContainText(
+    'Custom range',
+  );
   await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect.poll(() => state.signalFromSeen).toBe(new Date('2026-07-20T00:00').getTime());

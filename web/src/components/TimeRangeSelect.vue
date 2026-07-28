@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, useAttrs, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue';
 import BaseSelect, { type SelectOption } from './BaseSelect.vue';
 import {
   localDateTime,
@@ -30,6 +30,19 @@ const options: SelectOption[] = [
 const customFrom = ref(localDateTime(props.windowValue.from));
 const customUntil = ref(localDateTime(props.windowValue.until));
 const customError = ref('');
+const customOpen = ref(false);
+const root = ref<HTMLElement>();
+const fromInput = ref<HTMLInputElement>();
+const selectedLabel = computed(() => {
+  if (props.modelValue !== 'custom') return undefined;
+  const format = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${format.format(props.windowValue.from)} – ${format.format(props.windowValue.until)}`;
+});
 
 watch(
   () => props.windowValue,
@@ -46,8 +59,11 @@ function selectRange(value: string): void {
   if (value === 'custom') {
     customFrom.value = localDateTime(props.windowValue.from);
     customUntil.value = localDateTime(props.windowValue.until);
+    customOpen.value = true;
+    void nextTick(() => fromInput.value?.focus());
     return;
   }
+  customOpen.value = false;
   emit('update:windowValue', timeWindow(value));
 }
 
@@ -59,27 +75,46 @@ function applyCustom(): void {
   }
   customError.value = '';
   emit('update:windowValue', value);
+  customOpen.value = false;
 }
+
+function closeCustomRange(): void {
+  customOpen.value = false;
+  customError.value = '';
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!root.value?.contains(event.target as Node)) closeCustomRange();
+}
+
+onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown));
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown));
 </script>
 
 <template>
-  <div class="time-range-control">
+  <div ref="root" class="time-range-control" @keydown.esc="closeCustomRange">
     <BaseSelect
       v-bind="attrs"
       class="time-range-select"
       :model-value="modelValue"
       :options="options"
       :label="label"
+      :selected-label="selectedLabel"
       @update:model-value="selectRange"
     />
-    <div v-if="modelValue === 'custom'" class="time-range-custom">
+    <div
+      v-if="modelValue === 'custom' && customOpen"
+      class="time-range-custom"
+      role="dialog"
+      aria-label="Custom time range"
+    >
       <label>
         <span>From</span>
-        <input v-model="customFrom" type="datetime-local" required @change="applyCustom" />
+        <input ref="fromInput" v-model="customFrom" type="datetime-local" required />
       </label>
       <label>
         <span>Until</span>
-        <input v-model="customUntil" type="datetime-local" required @change="applyCustom" />
+        <input v-model="customUntil" type="datetime-local" required />
       </label>
       <button class="button button--secondary button--fit" type="button" @click="applyCustom">
         Apply range
