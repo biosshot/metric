@@ -26,7 +26,8 @@ const search = ref(initialSearch);
 const submittedSearch = ref(initialSearch);
 const range = ref('24h');
 const appliedRange = ref('24h');
-const appliedWindow = ref(timeWindow('24h'));
+const selectedWindow = ref(timeWindow('24h'));
+const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const statusOptions: SelectOption[] = [
@@ -78,7 +79,7 @@ function submitSearch(): void {
   submittedSearch.value = search.value.trim();
   submittedStatus.value = status.value;
   appliedRange.value = range.value;
-  appliedWindow.value = timeWindow(range.value);
+  appliedWindow.value = { ...selectedWindow.value };
   resetPage(false);
 }
 
@@ -87,7 +88,8 @@ function clearSearch(): void {
   submittedSearch.value = '';
   range.value = '24h';
   appliedRange.value = '24h';
-  appliedWindow.value = timeWindow('24h');
+  selectedWindow.value = timeWindow('24h');
+  appliedWindow.value = { ...selectedWindow.value };
   resetPage(false);
 }
 
@@ -158,7 +160,13 @@ function formatTime(value: string): string {
         :options="statusOptions"
         aria-label="Issue status"
       />
-      <TimeRangeSelect v-if="!submittedSearch" v-model="range" aria-label="Issue time range" />
+      <TimeRangeSelect
+        v-if="!submittedSearch"
+        v-model="range"
+        :window-value="selectedWindow"
+        aria-label="Issue time range"
+        @update:window-value="selectedWindow = $event"
+      />
       <div class="signal-toolbar__actions">
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />

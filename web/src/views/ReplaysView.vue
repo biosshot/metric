@@ -17,7 +17,8 @@ const search = ref('');
 const submittedSearch = ref('');
 const range = ref('24h');
 const appliedRange = ref('24h');
-const appliedWindow = ref(timeWindow('24h'));
+const selectedWindow = ref(timeWindow('24h'));
+const appliedWindow = ref({ ...selectedWindow.value });
 const replays = useQuery({
   queryKey: computed(() => [
     'replays',
@@ -43,7 +44,7 @@ const visibleReplays = computed(() => {
 function submitSearch(): void {
   submittedSearch.value = search.value.trim();
   appliedRange.value = range.value;
-  appliedWindow.value = timeWindow(range.value);
+  appliedWindow.value = { ...selectedWindow.value };
 }
 
 function clearSearch(): void {
@@ -88,7 +89,12 @@ function duration(milliseconds: number): string {
         />
         <small>Searches the latest 50 Replay manifests loaded for this project.</small>
       </label>
-      <TimeRangeSelect v-model="range" aria-label="Replay time range" />
+      <TimeRangeSelect
+        v-model="range"
+        :window-value="selectedWindow"
+        aria-label="Replay time range"
+        @update:window-value="selectedWindow = $event"
+      />
       <div class="signal-toolbar__actions">
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />

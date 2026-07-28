@@ -1949,6 +1949,36 @@ label small,
   justify-self: end;
 }
 
+.time-range-control {
+  display: grid;
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.time-range-custom {
+  display: grid;
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+  gap: 0.55rem;
+}
+
+.time-range-custom input {
+  min-width: 0;
+  padding-inline: 0.6rem;
+  font-size: 0.76rem;
+}
+
+.time-range-custom .button {
+  width: 100%;
+}
+
+.time-range-custom .field-error {
+  color: var(--semantic-error);
+}
+
 .signal-toolbar label,
 .compact-filter {
   display: grid;

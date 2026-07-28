@@ -252,9 +252,11 @@ describe('native API client', () => {
 
     const [historyPath] = fetchMock.mock.calls[0] as [string, RequestInit];
     const [deletePath, deleteInit] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(historyPath).toBe(
-      `/api/v1/projects/42/monitors/${'b'.repeat(32)}/runs?from=1000&until=2000&limit=100`,
-    );
+    const historyUrl = new URL(historyPath, 'http://metric.test');
+    expect(historyUrl.pathname).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}/runs`);
+    expect(historyUrl.searchParams.get('from')).toBe('1970-01-01T00:00:01.000Z');
+    expect(historyUrl.searchParams.get('until')).toBe('1970-01-01T00:00:02.000Z');
+    expect(historyUrl.searchParams.get('limit')).toBe('100');
     expect(deletePath).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}`);
     expect(deleteInit.method).toBe('DELETE');
     expect((deleteInit.headers as Headers).get('x-csrf-token')).toBe('a'.repeat(64));

@@ -23,7 +23,8 @@ const appliedEnvironment = ref('');
 const appliedRelease = ref(release.value);
 const range = ref('24h');
 const appliedRange = ref('24h');
-const appliedWindow = ref(timeWindow('24h'));
+const selectedWindow = ref(timeWindow('24h'));
+const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -60,7 +61,7 @@ function applyFilters(): void {
   appliedEnvironment.value = environment.value.trim();
   appliedRelease.value = release.value.trim();
   appliedRange.value = range.value;
-  appliedWindow.value = timeWindow(range.value);
+  appliedWindow.value = { ...selectedWindow.value };
   cursor.value = null;
   history.value = [];
 }
@@ -70,6 +71,7 @@ function resetFilters(): void {
   environment.value = '';
   release.value = '';
   range.value = '24h';
+  selectedWindow.value = timeWindow('24h');
   applyFilters();
 }
 
@@ -104,7 +106,12 @@ function previousPage(): void {
         <span class="sr-only">Service</span>
         <input v-model="service" maxlength="256" placeholder="Service" />
       </label>
-      <TimeRangeSelect v-model="range" aria-label="Trace time range" />
+      <TimeRangeSelect
+        v-model="range"
+        :window-value="selectedWindow"
+        aria-label="Trace time range"
+        @update:window-value="selectedWindow = $event"
+      />
       <label>
         <span class="sr-only">Environment</span>
         <input v-model="environment" maxlength="128" placeholder="Environment" />

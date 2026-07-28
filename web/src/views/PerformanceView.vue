@@ -21,7 +21,8 @@ const appliedEnvironment = ref('');
 const appliedRelease = ref('');
 const range = ref('24h');
 const appliedRange = ref('24h');
-const appliedWindow = ref(timeWindow('24h'));
+const selectedWindow = ref(timeWindow('24h'));
+const appliedWindow = ref({ ...selectedWindow.value });
 const projectId = computed(() => session.selectedProjectId ?? '');
 const performance = useQuery({
   queryKey: computed(() => [
@@ -55,7 +56,7 @@ function applyFilters(): void {
   appliedEnvironment.value = environment.value.trim();
   appliedRelease.value = release.value.trim();
   appliedRange.value = range.value;
-  appliedWindow.value = timeWindow(range.value);
+  appliedWindow.value = { ...selectedWindow.value };
 }
 
 function resetFilters(): void {
@@ -63,6 +64,7 @@ function resetFilters(): void {
   environment.value = '';
   release.value = '';
   range.value = '24h';
+  selectedWindow.value = timeWindow('24h');
   applyFilters();
 }
 </script>
@@ -86,7 +88,12 @@ function resetFilters(): void {
         <span class="sr-only">Service</span>
         <input v-model="service" maxlength="256" placeholder="Service" />
       </label>
-      <TimeRangeSelect v-model="range" aria-label="Performance time range" />
+      <TimeRangeSelect
+        v-model="range"
+        :window-value="selectedWindow"
+        aria-label="Performance time range"
+        @update:window-value="selectedWindow = $event"
+      />
       <label>
         <span class="sr-only">Environment</span>
         <input v-model="environment" maxlength="128" placeholder="Environment" />

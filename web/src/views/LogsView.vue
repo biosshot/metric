@@ -28,7 +28,8 @@ const release = ref(typeof route.query.release === 'string' ? route.query.releas
 const appliedRelease = ref(release.value);
 const range = ref('24h');
 const appliedRange = ref('24h');
-const appliedWindow = ref(timeWindow('24h'));
+const selectedWindow = ref(timeWindow('24h'));
+const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -95,7 +96,7 @@ function search(): void {
   appliedEnvironment.value = environment.value.trim();
   appliedRelease.value = release.value.trim();
   appliedRange.value = range.value;
-  appliedWindow.value = timeWindow(range.value);
+  appliedWindow.value = { ...selectedWindow.value };
   resetPage();
 }
 
@@ -106,6 +107,7 @@ function resetFilters(): void {
   environment.value = '';
   release.value = '';
   range.value = '24h';
+  selectedWindow.value = timeWindow('24h');
   search();
 }
 
@@ -165,7 +167,12 @@ function traceLink(log: StructuredLog): string | null {
         <input v-model="release" maxlength="256" placeholder="Release" />
       </label>
       <BaseSelect v-model="level" :options="levelOptions" aria-label="Log level" />
-      <TimeRangeSelect v-model="range" aria-label="Log time range" />
+      <TimeRangeSelect
+        v-model="range"
+        :window-value="selectedWindow"
+        aria-label="Log time range"
+        @update:window-value="selectedWindow = $event"
+      />
       <div class="signal-toolbar__actions">
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />

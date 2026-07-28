@@ -181,6 +181,7 @@ interface ApiState {
   monitorRuns?: Array<Record<string, any>>;
   monitorRangeSeen?: boolean;
   monitorFromSeen?: number;
+  signalFromSeen?: number;
   monitorDeleted?: boolean;
   alertRules?: Array<Record<string, any>>;
 }
@@ -333,6 +334,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json(replayRecord);
   }
   if (path === '/api/v1/projects/42/replays') {
+    state.signalFromSeen = Date.parse(url.searchParams.get('from') ?? '');
     return json({ items: [replayRecord], next_cursor: null });
   }
   if (path === '/api/v1/projects/42/explore' && request.method() === 'POST') {
@@ -546,7 +548,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   }
   if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}/runs`) {
     state.monitorRangeSeen = Boolean(url.searchParams.get('from') && url.searchParams.get('until'));
-    state.monitorFromSeen = Number(url.searchParams.get('from'));
+    state.monitorFromSeen = Date.parse(url.searchParams.get('from') ?? '');
     return json({ items: state.monitorRuns ?? [] });
   }
   if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}` && request.method() === 'DELETE') {
@@ -1006,8 +1008,14 @@ test('Replay search and detail keep controls and metadata in their content flow'
   expect(actionsBox!.y).toBeLessThan(searchBox!.y + searchBox!.height);
   expect(actionsBox!.y + actionsBox!.height).toBeGreaterThan(searchBox!.y);
 
+  await page.getByRole('combobox', { name: 'Replay time range' }).click();
+  await page.getByRole('option', { name: /^Custom range/ }).click();
+  await page.getByLabel('From', { exact: true }).fill('2026-07-20T00:00');
+  await page.getByLabel('Until', { exact: true }).fill('2026-07-21T00:00');
+  await page.getByRole('button', { name: 'Apply range' }).click();
   await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect.poll(() => state.signalFromSeen).toBe(new Date('2026-07-20T00:00').getTime());
   await expect(page.getByText('1 matching Replay for')).toBeVisible();
   await page.getByRole('link', { name: /example\.test\/replay/ }).click();
 

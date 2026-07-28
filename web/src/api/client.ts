@@ -172,6 +172,10 @@ function query(values: Record<string, string | number | null | undefined>): stri
   return encoded ? `?${encoded}` : '';
 }
 
+function queryTimestamp(value: number | undefined): string | undefined {
+  return value === undefined ? undefined : new Date(value).toISOString();
+}
+
 async function binaryRequest(path: string): Promise<ArrayBuffer> {
   const session = sessionProvider();
   const headers = new Headers();
@@ -321,8 +325,8 @@ export const api = {
       `/api/v1/projects/${projectId}/issues${query({
         status,
         cursor,
-        from: range.from,
-        until: range.until,
+        from: queryTimestamp(range.from),
+        until: queryTimestamp(range.until),
         limit: 50,
       })}`,
     ),
@@ -369,8 +373,8 @@ export const api = {
   ) =>
     request<{ items: MonitorRun[] }>(
       `/api/v1/projects/${projectId}/monitors/${monitorId}/runs${query({
-        from: range.from,
-        until: range.until,
+        from: queryTimestamp(range.from),
+        until: queryTimestamp(range.until),
         limit: 100,
       })}`,
     ),
@@ -396,8 +400,8 @@ export const api = {
         release: filters.release,
         service: filters.service,
         trace_id: filters.traceId,
-        from: filters.from,
-        until: filters.until,
+        from: queryTimestamp(filters.from),
+        until: queryTimestamp(filters.until),
         cursor: filters.cursor,
         limit: 50,
       })}`,
@@ -420,8 +424,8 @@ export const api = {
         environment: filters.environment,
         release: filters.release,
         service: filters.service,
-        from: filters.from,
-        until: filters.until,
+        from: queryTimestamp(filters.from),
+        until: queryTimestamp(filters.until),
         cursor: filters.cursor,
         limit: 50,
       })}`,
@@ -443,16 +447,16 @@ export const api = {
         environment: filters.environment,
         release: filters.release,
         service: filters.service,
-        from: filters.from,
-        until: filters.until,
+        from: queryTimestamp(filters.from),
+        until: queryTimestamp(filters.until),
         limit: 100,
       })}`,
     ),
   replays: (projectId: string, range: { from?: number; until?: number } = {}) =>
     request<Page<Replay>>(
       `/api/v1/projects/${projectId}/replays${query({
-        from: range.from,
-        until: range.until,
+        from: queryTimestamp(range.from),
+        until: queryTimestamp(range.until),
         limit: 50,
       })}`,
     ),
