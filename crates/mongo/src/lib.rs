@@ -20,6 +20,7 @@ mod metric_storage;
 mod monitors;
 mod notifications;
 mod releases;
+mod replays;
 mod sessions;
 mod signals;
 
@@ -45,6 +46,7 @@ pub use metric_storage::{MetricRetention, MongoMetricStore};
 pub use monitors::{MongoMonitorStore, MonitorRetention};
 pub use notifications::MongoNotificationStore;
 pub use releases::MongoReleaseStore;
+pub use replays::{MongoReplayStore, ReplayRetention};
 pub use sessions::{MongoSessionStore, SessionRetention};
 pub use signals::{MongoSignalStore, SignalRetention};
 
@@ -70,9 +72,9 @@ use mongodb::{
 };
 use thiserror::Error;
 
-pub const SCHEMA_GENERATION: i32 = 18;
+pub const SCHEMA_GENERATION: i32 = 19;
 const SCHEMA_ID: &str = "metric.schema";
-const SCHEMA_MODULES: [&str; 21] = [
+const SCHEMA_MODULES: [&str; 22] = [
     "project_identity_v1",
     "event_storage_v1",
     "issue_storage_v1",
@@ -94,8 +96,9 @@ const SCHEMA_MODULES: [&str; 21] = [
     "saved_queries_dashboards_v1",
     "cron_monitoring_v1",
     "application_metrics_v1",
+    "session_replay_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 37] = [
+const REQUIRED_COLLECTIONS: [&str; 38] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -125,6 +128,7 @@ const REQUIRED_COLLECTIONS: [&str; 37] = [
     "project_keys",
     "projects",
     "releases",
+    "replays",
     "saved_queries",
     "schema_meta",
     "session_stats_hourly",
@@ -284,6 +288,11 @@ impl MongoProjectStore {
     }
 
     #[must_use]
+    pub fn replay_store(&self, retention: ReplayRetention) -> MongoReplayStore {
+        MongoReplayStore::new(self.database.clone(), retention)
+    }
+
+    #[must_use]
     pub fn explore_store(&self) -> MongoExploreStore {
         MongoExploreStore::new(self.database.clone())
     }
@@ -373,6 +382,8 @@ impl MongoProjectStore {
         self.create_validated_collection("logs", signals::log_validator())
             .await?;
         self.create_validated_collection("metric_buckets", metric_storage::metric_validator())
+            .await?;
+        self.create_validated_collection("replays", replays::replay_validator())
             .await?;
         self.create_validated_collection("spans", signals::span_validator())
             .await?;
@@ -475,6 +486,7 @@ impl MongoProjectStore {
         event::create_event_indexes(&self.database).await?;
         signals::create_signal_indexes(&self.database).await?;
         metric_storage::create_metric_indexes(&self.database).await?;
+        replays::create_replay_indexes(&self.database).await?;
         sessions::create_session_indexes(&self.database).await?;
         for model in feedback::feedback_indexes() {
             self.database
@@ -634,6 +646,7 @@ impl MongoProjectStore {
             ),
             ("logs", signals::signal_index_names("logs")),
             ("metric_buckets", metric_storage::metric_index_names()),
+            ("replays", replays::replay_index_names()),
             ("spans", signals::signal_index_names("spans")),
             (
                 "span_stats_hourly",
@@ -707,6 +720,7 @@ impl MongoProjectStore {
             ("dashboards", dashboards::dashboard_validator()),
             ("logs", signals::log_validator()),
             ("metric_buckets", metric_storage::metric_validator()),
+            ("replays", replays::replay_validator()),
             ("spans", signals::span_validator()),
             ("span_stats_hourly", signals::span_stats_validator()),
             ("issues", issue::issue_validator()),
@@ -823,6 +837,7 @@ impl MongoProjectStore {
                 "feedback": project.items.feedback,
                 "check_in": project.items.check_in,
                 "metric": project.items.metric,
+                "replay": project.items.replay,
             },
             "limits": limits,
             "grouping_revision": i64::try_from(project.grouping_revision).map_err(|_| ProjectStoreError::InvalidData)?,
@@ -1145,6 +1160,7 @@ impl MongoProjectStore {
                         "feedback": update.items.feedback,
                         "check_in": update.items.check_in,
                         "metric": update.items.metric,
+                        "replay": update.items.replay,
                     },
                     "limits": limits,
                 }},
@@ -1420,6 +1436,9 @@ fn decode_snapshot(
             metric: items
                 .get_bool("metric")
                 .map_err(|_| ProjectStoreError::InvalidData)?,
+            replay: items
+                .get_bool("replay")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
         },
         limits: ProjectIngestLimits {
             max_event_bytes,
@@ -1510,6 +1529,9 @@ pub(crate) fn decode_project_view(document: &Document) -> Result<ProjectView, Pr
                 .map_err(|_| ProjectStoreError::InvalidData)?,
             metric: items
                 .get_bool("metric")
+                .map_err(|_| ProjectStoreError::InvalidData)?,
+            replay: items
+                .get_bool("replay")
                 .map_err(|_| ProjectStoreError::InvalidData)?,
         },
         limits: ProjectIngestLimits {
@@ -1801,7 +1823,7 @@ fn project_validator() -> Document {
             },
                     "items": {
                         "bsonType": "object",
-                        "required": ["error", "client_report", "log", "transaction", "span", "feedback", "check_in", "metric"],
+                        "required": ["error", "client_report", "log", "transaction", "span", "feedback", "check_in", "metric", "replay"],
                         "additionalProperties": false,
                         "properties": {
                             "error": { "bsonType": "bool" },
@@ -1812,6 +1834,7 @@ fn project_validator() -> Document {
                             "feedback": { "bsonType": "bool" },
                             "check_in": { "bsonType": "bool" },
                             "metric": { "bsonType": "bool" },
+                            "replay": { "bsonType": "bool" },
                 },
             },
             "limits": {

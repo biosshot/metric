@@ -52,7 +52,15 @@ const codeExample = computed(() => {
 
 Sentry.init({
   dsn: "${value}",
-  tracesSampleRate: 0
+  tracesSampleRate: 0,
+  integrations: [
+    Sentry.replayIntegration({
+      maskAllText: true,
+      blockAllMedia: true
+    })
+  ],
+  replaysSessionSampleRate: 0.1,
+  replaysOnErrorSampleRate: 1.0
 });`,
     },
     node: {
@@ -226,8 +234,9 @@ async function copy(value: string): Promise<void> {
       />
       <p class="info-note">
         <AppIcon name="info" :size="16" />
-        Metric accepts Error Events, Structured Logs, Transactions, and Spans. Replays, profiles,
-        and metrics remain disabled and are reported through capabilities.
+        Metric accepts Error Events, Structured Logs, Transactions, Spans, Application Metrics, and
+        browser Session Replays. Replay capture requires @sentry/browser 10.66.0 and client-side
+        masking.
       </p>
     </section>
   </section>

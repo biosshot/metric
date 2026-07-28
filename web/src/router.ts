@@ -37,6 +37,16 @@ export const router = createRouter({
     { path: '/dashboards', name: 'dashboards', component: DashboardsView },
     { path: '/alerts', name: 'alerts', component: AlertsView },
     { path: '/monitors', name: 'monitors', component: MonitorsView },
+    {
+      path: '/replays',
+      name: 'replays',
+      component: () => import('./views/ReplaysView.vue'),
+    },
+    {
+      path: '/replays/:replayId',
+      name: 'replay',
+      component: () => import('./views/ReplayDetailView.vue'),
+    },
     { path: '/feedback', name: 'feedback', component: FeedbackView },
     { path: '/feedback/:feedbackId', name: 'feedback-item', component: FeedbackDetailView },
     { path: '/releases', name: 'releases', component: ReleasesView },

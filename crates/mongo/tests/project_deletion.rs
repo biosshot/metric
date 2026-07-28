@@ -198,6 +198,34 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             "created_at": DateTime::from_millis(2_000),
         })
         .await?;
+    database
+        .collection::<mongodb::bson::Document>("replays")
+        .insert_many([42_i32, 43_i32].map(|project_id| {
+            let mut identity = [0_u8; 20];
+            identity[..4].copy_from_slice(&project_id.to_be_bytes());
+            identity[4..].copy_from_slice(&[9; 16]);
+            doc! {
+                "_id": generic_binary(&identity),
+                "p": project_id,
+                "i": generic_binary(&[9; 16]),
+                "s": DateTime::from_millis(1_000),
+                "e": DateTime::from_millis(2_000),
+                "r": DateTime::from_millis(2_000),
+                "z": DateTime::from_millis(100_000),
+                "x": [],
+                "t": [],
+                "sg": [{
+                    "i": 0_i64,
+                    "k": format!("projects/{project_id}/replays/{}/0.rrweb", "09".repeat(16)),
+                    "b": 2_i64,
+                    "d": generic_binary(&[7; 32]),
+                    "a": DateTime::from_millis(2_000),
+                    "o": 2_i64,
+                    "c": 0_i64,
+                }],
+            }
+        }))
+        .await?;
 
     let second = ProjectDeletionOperationId::from_bytes([2; 16]);
     store
@@ -206,7 +234,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 
     // A new adapter instance simulates process restart while the durable job remains.
     let mut late_inflight_inserted = false;
-    for _ in 0..44 {
+    for _ in 0..64 {
         // Recreate the adapter before every bounded step: every persisted phase/cursor
         // must be sufficient to resume after a process crash.
         let restarted =
@@ -254,6 +282,20 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     assert_eq!(
         database
             .collection::<mongodb::bson::Document>("error_events")
+            .count_documents(doc! { "p": 43 })
+            .await?,
+        1
+    );
+    assert_eq!(
+        database
+            .collection::<mongodb::bson::Document>("replays")
+            .count_documents(doc! { "p": 42 })
+            .await?,
+        0
+    );
+    assert_eq!(
+        database
+            .collection::<mongodb::bson::Document>("replays")
             .count_documents(doc! { "p": 43 })
             .await?,
         1
@@ -351,6 +393,7 @@ fn project(id: i32, slug: &str) -> ProjectIdentity {
             feedback: true,
             check_in: true,
             metric: true,
+            replay: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

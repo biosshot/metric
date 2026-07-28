@@ -49,6 +49,7 @@ use metric_domain::{
         CreateDeploy, CreateRelease, DeployId, DeployRecord, FinalizeRelease, ReleaseIssueSummary,
         ReleaseRecord,
     },
+    replays::{ReplayCursor, ReplayPage, ReplayRecord, ReplaySegmentCommit, ReplaySubmission},
     sessions::{ReleaseHealthBucket, SessionId, SessionRecord, SessionUpdate},
     signals::{
         LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SignalPage, SpanRecord,
@@ -1552,6 +1553,45 @@ pub trait MetricStore: Send + Sync + 'static {
     ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayQuery {
+    pub before: Option<ReplayCursor>,
+    pub limit: usize,
+}
+
+/// Replay owns an independent byte-bounded queue and BlobStore write lane.
+pub trait ReplaySink: Send + Sync + 'static {
+    fn persist_replay(
+        &self,
+        submission: ReplaySubmission,
+    ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>>;
+}
+
+/// Compact searchable metadata and segment-manifest ownership.
+pub trait ReplayStore: Send + Sync + 'static {
+    fn persist_replay_segment(
+        &self,
+        commit: ReplaySegmentCommit,
+    ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>>;
+
+    fn list_replays(
+        &self,
+        project_id: ProjectId,
+        query: ReplayQuery,
+    ) -> PortFuture<'_, Result<ReplayPage, SignalStoreError>>;
+
+    fn load_replay(
+        &self,
+        project_id: ProjectId,
+        replay_id: metric_domain::EventId,
+    ) -> PortFuture<'_, Result<ReplayRecord, SignalStoreError>>;
+
+    fn references_replay_blob(
+        &self,
+        key: &BlobKey,
+    ) -> PortFuture<'_, Result<bool, SignalStoreError>>;
+}
+
 /// Dedicated durable Session admission boundary.
 pub trait SessionSink: Send + Sync + 'static {
     fn persist_sessions(
@@ -1700,6 +1740,7 @@ pub enum FeedbackStoreError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedbackQuery {
     pub status: Option<FeedbackStatus>,
+    pub replay_id: Option<metric_domain::EventId>,
     pub before: Option<FeedbackAnchor>,
     pub limit: usize,
 }

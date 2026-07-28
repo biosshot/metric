@@ -55,6 +55,18 @@ impl BlobKey {
     }
 
     #[must_use]
+    pub fn replay_recording(project_id: ProjectId, replay_id: EventId, segment_id: u32) -> Self {
+        Self(
+            format!(
+                "projects/{}/replays/{}/{segment_id}.rrweb",
+                project_id.get(),
+                replay_id
+            )
+            .into(),
+        )
+    }
+
+    #[must_use]
     pub fn debug_chunk(organization_id: OrganizationId, sha1: [u8; 20]) -> Self {
         Self(
             format!(
@@ -141,6 +153,24 @@ impl BlobKey {
         let event_id = EventId::parse(segments[3]).map_err(|_| BlobValueError::InvalidKey)?;
         let object_id = BlobObjectId::parse(segments[4])?;
         Ok((project_id, event_id, object_id))
+    }
+
+    pub fn replay_relation(&self) -> Result<(ProjectId, EventId, u32), BlobValueError> {
+        let segments = self.0.split('/').collect::<Vec<_>>();
+        if segments.len() != 5 || segments[0] != "projects" || segments[2] != "replays" {
+            return Err(BlobValueError::InvalidKey);
+        }
+        let project_id = segments[1]
+            .parse::<i32>()
+            .ok()
+            .and_then(|value| ProjectId::new(value).ok())
+            .ok_or(BlobValueError::InvalidKey)?;
+        let replay_id = EventId::parse(segments[3]).map_err(|_| BlobValueError::InvalidKey)?;
+        let segment_id = segments[4]
+            .strip_suffix(".rrweb")
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or(BlobValueError::InvalidKey)?;
+        Ok((project_id, replay_id, segment_id))
     }
 
     pub fn debug_file_relation(&self) -> Result<(ProjectId, DebugFileId), BlobValueError> {
@@ -266,6 +296,7 @@ pub enum BlobKind {
     SpanArchive,
     SessionArchive,
     MetricArchive,
+    ReplayRecording,
 }
 
 impl BlobKind {
@@ -282,6 +313,7 @@ impl BlobKind {
             Self::SpanArchive => "span_archive",
             Self::SessionArchive => "session_archive",
             Self::MetricArchive => "metric_archive",
+            Self::ReplayRecording => "replay_recording",
         }
     }
 
@@ -308,6 +340,7 @@ pub enum BlobNamespace {
     SpanArchives,
     SessionArchives,
     MetricArchives,
+    ReplayRecordings,
 }
 
 impl BlobNamespace {
@@ -323,6 +356,7 @@ impl BlobNamespace {
             Self::SpanArchives => "projects/",
             Self::SessionArchives => "projects/",
             Self::MetricArchives => "projects/",
+            Self::ReplayRecordings => "projects/",
         }
     }
 
@@ -368,6 +402,10 @@ impl BlobNamespace {
             Self::MetricArchives => {
                 archive_kind(key, ArchiveKind::Metric)?;
                 BlobKind::MetricArchive
+            }
+            Self::ReplayRecordings => {
+                key.replay_relation()?;
+                BlobKind::ReplayRecording
             }
         })
     }

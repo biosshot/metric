@@ -83,6 +83,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             project_id,
             FeedbackQuery {
                 status: Some(FeedbackStatus::Open),
+                replay_id: None,
                 before: None,
                 limit: 10,
             },

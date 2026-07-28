@@ -96,6 +96,16 @@ cleanup_interval = "15m"
 cleanup_batch_size = 256
 cleanup_max_pages = 16
 
+[ingest.replay]
+max_segment_bytes = "5 MiB"
+max_decompressed_segment_bytes = "20 MiB"
+max_events_per_segment = 100000
+queue_capacity = 32
+max_queued_bytes = "32 MiB"
+orphan_grace = "1h"
+cleanup_interval = "5m"
+cleanup_batch_size = 100
+
 [ingest.project_cache]
 capacity = 100000
 max_inflight = 512
@@ -149,6 +159,8 @@ monitor_runs_days = 90
 metrics_days = 90
 metric_max_series_per_project = 10000
 metric_archive = false
+replays_days = 30
+replay_archive = false
 
 [project_deletion]
 grace_period = "24h"

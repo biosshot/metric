@@ -119,6 +119,8 @@ pub struct RetentionCapability {
     pub metrics_days: u32,
     pub metric_max_series_per_project: usize,
     pub metric_archive: bool,
+    pub replays_days: u32,
+    pub replay_archive: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -472,6 +474,15 @@ pub fn router(
             get(get_feedback).patch(update_feedback_status),
         )
         .route("/api/v1/projects/{project_id}/logs", get(list_logs))
+        .route("/api/v1/projects/{project_id}/replays", get(list_replays))
+        .route(
+            "/api/v1/projects/{project_id}/replays/{replay_id}",
+            get(get_replay),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/replays/{replay_id}/segments/{segment_id}",
+            get(download_replay_segment),
+        )
         .route("/api/v1/projects/{project_id}/explore", post(explore))
         .route(
             "/api/v1/projects/{project_id}/saved-queries",
@@ -599,12 +610,17 @@ async fn list_feedback(
         .get("status")
         .map(|value| FeedbackStatus::parse(value).map_err(|_| HttpApiError::InvalidRequest))
         .transpose()?;
+    let replay_id = query
+        .get("replay_id")
+        .map(|value| EventId::parse(value).map_err(|_| HttpApiError::InvalidRequest))
+        .transpose()?;
     let page = api(&state)?
         .feedback_list(
             &context,
             project_id_from(&project_id)?,
             FeedbackListRequest {
                 status,
+                replay_id,
                 cursor: query.get("cursor").map(String::as_str),
                 limit: query_limit(&query)?,
             },
@@ -2422,6 +2438,8 @@ struct ProjectBody {
     check_in_enabled: bool,
     #[serde(default = "default_true")]
     metric_enabled: bool,
+    #[serde(default)]
+    replay_enabled: bool,
     #[serde(default = "default_event_bytes")]
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
@@ -2454,6 +2472,7 @@ async fn create_project(
                     feedback: body.feedback_enabled,
                     check_in: body.check_in_enabled,
                     metric: body.metric_enabled,
+                    replay: body.replay_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -2646,6 +2665,8 @@ struct PolicyBody {
     feedback_enabled: bool,
     check_in_enabled: bool,
     metric_enabled: bool,
+    #[serde(default)]
+    replay_enabled: bool,
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
     burst: Option<u32>,
@@ -2686,6 +2707,7 @@ async fn update_project_policy(
                     feedback: body.feedback_enabled,
                     check_in: body.check_in_enabled,
                     metric: body.metric_enabled,
+                    replay: body.replay_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -2927,6 +2949,97 @@ async fn get_log(
         .await
         .map_err(HttpApiError::Api)?;
     Ok(Json(log_value(&log)?))
+}
+
+async fn list_replays(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let query = query_map(raw.as_deref())?;
+    let page = api(&state)?
+        .replays(
+            &context,
+            project_id_from(&project_id)?,
+            query_limit(&query)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(json!({
+        "items": page.items.iter().map(replay_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": page.next.map(|cursor| format!(
+            "{}:{}",
+            cursor.received_at.unix_millis(),
+            cursor.replay_id
+        )),
+    })))
+}
+
+async fn get_replay(
+    State(state): State<NativeHttpState>,
+    Path((project_id, replay_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let replay = api(&state)?
+        .replay(
+            &context,
+            project_id_from(&project_id)?,
+            EventId::parse(&replay_id).map_err(|_| HttpApiError::InvalidRequest)?,
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    Ok(Json(replay_value(&replay)?))
+}
+
+async fn download_replay_segment(
+    State(state): State<NativeHttpState>,
+    Path((project_id, replay_id, segment_id)): Path<(String, String, String)>,
+    headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Response, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let project_id = project_id_from(&project_id)?;
+    let replay_id = EventId::parse(&replay_id).map_err(|_| HttpApiError::InvalidRequest)?;
+    let segment_id = segment_id
+        .parse::<u32>()
+        .map_err(|_| HttpApiError::InvalidRequest)?;
+    let (segment, reader) = api(&state)?
+        .open_replay_segment(&context, project_id, replay_id, segment_id)
+        .await
+        .map_err(HttpApiError::Api)?;
+    identity(&state)?
+        .record_replay_audit(&context, correlation_id(request_id)?, project_id, replay_id)
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    let stream = futures_util::stream::try_unfold(reader, |mut reader| async move {
+        reader
+            .read_chunk(64 * 1024)
+            .await
+            .map(|chunk| chunk.map(|bytes| (bytes::Bytes::from(bytes.into_vec()), reader)))
+            .map_err(std::io::Error::other)
+    });
+    let mut response = Body::from_stream(stream).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.sentry.items.replay-recording"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&segment.object.size.to_string())
+            .map_err(|_| HttpApiError::Unavailable)?,
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
 }
 
 async fn list_transactions(
@@ -3440,6 +3553,8 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "metrics_days": policy.metrics_days,
             "metric_max_series_per_project": policy.metric_max_series_per_project,
             "metric_archive": policy.metric_archive,
+            "replays_days": policy.replays_days,
+            "replay_archive": policy.replay_archive,
             "clock": "received_at",
             "gradual_policy_reduction": true,
         })
@@ -3484,6 +3599,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "virtual_traces": state.required_ready,
             "performance_insights": state.required_ready,
             "application_metrics": state.required_ready,
+            "session_replay": state.required_ready,
             "sessions": state.required_ready,
             "release_health": state.required_ready,
             "user_feedback": state.required_ready,
@@ -4035,6 +4151,7 @@ fn policy_value(project: &ProjectView) -> Value {
             "feedback": project.items.feedback,
             "check_in": project.items.check_in,
             "metric": project.items.metric,
+            "replay": project.items.replay,
         },
         "limits": {
             "max_event_bytes": project.limits.max_event_bytes.get(),
@@ -4088,6 +4205,40 @@ fn feedback_value(feedback: &FeedbackRecord) -> Result<Value, HttpApiError> {
             "checksum": attachment.blob.checksum.to_string(),
         })).collect::<Vec<_>>(),
         "expires_at": timestamp_string(feedback.expires_at)?,
+    }))
+}
+
+fn replay_value(replay: &metric_domain::replays::ReplayRecord) -> Result<Value, HttpApiError> {
+    let segment_ids = replay
+        .segments
+        .iter()
+        .map(|segment| segment.segment_id)
+        .collect::<Vec<_>>();
+    let partial = segment_ids
+        .windows(2)
+        .any(|pair| pair[1] != pair[0].saturating_add(1))
+        || segment_ids.first().is_some_and(|segment| *segment != 0);
+    Ok(json!({
+        "id": replay.replay_id.to_string(),
+        "project_id": replay.project_id.get().to_string(),
+        "started_at": timestamp_string(replay.started_at)?,
+        "ended_at": timestamp_string(replay.ended_at)?,
+        "received_at": timestamp_string(replay.received_at)?,
+        "duration_ms": replay.ended_at.unix_millis().saturating_sub(replay.started_at.unix_millis()),
+        "environment": replay.environment,
+        "release": replay.release,
+        "url": replay.url,
+        "error_ids": replay.error_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "trace_ids": replay.trace_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "segments": replay.segments.iter().map(|segment| json!({
+            "segment_id": segment.segment_id,
+            "size": segment.object.size,
+            "decompressed_bytes": segment.decompressed_bytes,
+            "event_count": segment.event_count,
+            "checksum": segment.object.checksum.to_string(),
+        })).collect::<Vec<_>>(),
+        "partial": partial,
+        "expires_at": replay.expires_at.map(timestamp_string).transpose()?,
     }))
 }
 
@@ -4389,6 +4540,7 @@ mod tests {
                 feedback: true,
                 check_in: true,
                 metric: true,
+                replay: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: InboundFilterPolicy::new(vec![InboundFilterRule {
@@ -4403,7 +4555,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&project_value(&project).unwrap()).unwrap(),
-            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true,"check_in":true,"metric":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true,"check_in":true,"metric":true,"replay":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
         );
         assert!(
             inbound_filter_policy(vec![InboundFilterRuleBody {
@@ -4620,6 +4772,18 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
+                "GET /projects/:id/replays",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "GET /projects/:id/replays/:replay",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
+                "GET /projects/:id/replays/:replay/segments/:segment",
+                RouteAccess::Permission(Permission::ProjectRead),
+            ),
+            (
                 "POST /projects/:id/explore",
                 RouteAccess::Permission(Permission::EventRead),
             ),
@@ -4702,7 +4866,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 62);
+        assert_eq!(matrix.len(), 65);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

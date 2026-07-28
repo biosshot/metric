@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use metric_application::{
-    ingest::{AttachmentIngestConfig, FeedbackIngestConfig, IngestService},
+    ingest::{AttachmentIngestConfig, FeedbackIngestConfig, IngestService, ReplayIngestConfig},
     observability::Metrics,
     shutdown::ShutdownRoot,
 };
@@ -25,7 +25,7 @@ use metric_ports::{BlobStore, IngestOutcomeKind};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
     FakeEventSink, FakeFeedbackSink, FakeLogSink, FakeMetricSink, FakeMonitorSink, FakeOutcomeSink,
-    FakeProjectResolver, FakeSessionSink, FakeSpanSink, FixedClock, FixedRandom,
+    FakeProjectResolver, FakeReplaySink, FakeSessionSink, FakeSpanSink, FixedClock, FixedRandom,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -56,6 +56,7 @@ struct RunningHarness {
     sessions: FakeSessionSink,
     monitors: FakeMonitorSink,
     feedback: FakeFeedbackSink,
+    replays: FakeReplaySink,
     blob: LocalBlobStore,
     blob_directory: PathBuf,
     address: std::net::SocketAddr,
@@ -303,6 +304,12 @@ async fn real_browser_sdk_sends_an_error_event() {
 #[ignore = "requires npm ci/build in sdk-tests/browser and an installed Chromium"]
 async fn real_browser_sdk_sends_feedback_with_attachment() {
     exercise_real_browser_feedback().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires npm ci/build in sdk-tests/browser and an installed Chromium"]
+async fn real_browser_sdk_records_uploads_retrieves_and_plays_replay() {
+    exercise_real_browser_replay().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -608,6 +615,194 @@ async fn exercise_real_browser_feedback() -> Result<(), Box<dyn Error>> {
     verification
 }
 
+async fn exercise_real_browser_replay() -> Result<(), Box<dyn Error>> {
+    let workspace = workspace();
+    let browser_root = workspace.join("sdk-tests/browser");
+    let runner = browser_root.join("run-browser.mjs");
+    let page = Arc::<str>::from(std::fs::read_to_string(browser_root.join("page.html"))?);
+    let send_bundle = Arc::<str>::from(std::fs::read_to_string(
+        browser_root.join("dist/send-replay.js"),
+    )?);
+    let play_bundle = Arc::<str>::from(std::fs::read_to_string(
+        browser_root.join("dist/play-replay.js"),
+    )?);
+    let play_css = Arc::<str>::from(std::fs::read_to_string(
+        browser_root.join("dist/play-replay.css"),
+    )?);
+    if !browser_root
+        .join("node_modules/@sentry/browser/package.json")
+        .is_file()
+    {
+        return Err("run npm ci and npm run build in sdk-tests/browser before the gate".into());
+    }
+
+    let replays = FakeReplaySink::default();
+    let recording_source = replays.clone();
+    let playback_page = page.replace("/sdk-browser.js", "/sdk-playback.js");
+    let browser_routes = Router::new()
+        .route(
+            "/sdk-browser",
+            get({
+                let page = Arc::clone(&page);
+                move || {
+                    let page = Arc::clone(&page);
+                    async move { Html(page.to_string()) }
+                }
+            }),
+        )
+        .route(
+            "/sdk-browser.js",
+            get({
+                let bundle = Arc::clone(&send_bundle);
+                move || {
+                    let bundle = Arc::clone(&bundle);
+                    async move {
+                        (
+                            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                            bundle.to_string(),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/sdk-playback",
+            get(move || {
+                let page = playback_page.clone();
+                async move { Html(page) }
+            }),
+        )
+        .route(
+            "/sdk-playback.js",
+            get({
+                let bundle = Arc::clone(&play_bundle);
+                move || {
+                    let bundle = Arc::clone(&bundle);
+                    async move {
+                        (
+                            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                            bundle.to_string(),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/play-replay.css",
+            get({
+                let css = Arc::clone(&play_css);
+                move || {
+                    let css = Arc::clone(&css);
+                    async move {
+                        (
+                            [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                            css.to_string(),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/sdk-replay-recording",
+            get(move || {
+                let recordings = recording_source.submissions();
+                async move {
+                    recordings.first().map_or_else(
+                        || {
+                            (
+                                axum::http::StatusCode::NOT_FOUND,
+                                "Replay is not durable yet".to_owned(),
+                            )
+                                .into_response()
+                        },
+                        |submission| {
+                            (
+                                [(
+                                    header::CONTENT_TYPE,
+                                    "application/vnd.sentry.items.replay-recording",
+                                )],
+                                submission.recording.to_vec(),
+                            )
+                                .into_response()
+                        },
+                    )
+                }
+            }),
+        );
+    let harness = start_harness_with_replays(browser_routes, replays).await?;
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+
+    let send_page = format!("http://{}/sdk-browser", harness.address);
+    let send_runner = runner.clone();
+    let send_dsn = dsn.clone();
+    let send_output = tokio::task::spawn_blocking(move || {
+        Command::new("node")
+            .arg(send_runner)
+            .arg(send_page)
+            .arg(send_dsn)
+            .output()
+    })
+    .await??;
+    verify_process_output(&send_output, "Browser Replay")?;
+    for _ in 0..80 {
+        if !harness.replays.submissions().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let submissions = harness.replays.submissions();
+    let submission = submissions
+        .first()
+        .ok_or("real Browser SDK did not upload Replay")?;
+    if submission.metadata.environment.as_deref() != Some("sdk-compatibility")
+        || submission.metadata.release.as_deref() != Some("metric-browser-replay-test@1.0.0")
+        || submission.event_count < 2
+    {
+        return Err("real Browser Replay metadata is incompatible".into());
+    }
+    let recording_text = replay_recording_text(&submission.recording)?;
+    if recording_text.contains("top-secret-value") {
+        return Err("pinned Replay masking exposed the synthetic secret".into());
+    }
+
+    let playback_page = format!("http://{}/sdk-playback", harness.address);
+    let playback_output = tokio::task::spawn_blocking(move || {
+        Command::new("node")
+            .arg(runner)
+            .arg(playback_page)
+            .arg(dsn)
+            .output()
+    })
+    .await??;
+    let playback = verify_process_output(&playback_output, "Browser Replay player")?;
+    if playback.event_id != "0123456789abcdef0123456789abcdef" {
+        return Err("rrweb player did not complete the retrieved recording".into());
+    }
+
+    stop_harness(harness).await
+}
+
+fn replay_recording_text(recording: &[u8]) -> Result<String, Box<dyn Error>> {
+    use std::io::Read;
+
+    let newline = recording
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or("Replay recording header is missing")?;
+    let payload = &recording[newline + 1..];
+    let bytes = if payload.first() == Some(&b'[') {
+        payload.to_vec()
+    } else {
+        let mut bytes = Vec::new();
+        flate2::read::ZlibDecoder::new(payload).read_to_end(&mut bytes)?;
+        bytes
+    };
+    Ok(String::from_utf8(bytes)?)
+}
+
 async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn Error>> {
     let harness = start_harness(Router::new()).await?;
     let workspace = workspace();
@@ -759,6 +954,7 @@ async fn start_harness_with_policy(
     let sessions = FakeSessionSink::default();
     let feedback = FakeFeedbackSink::default();
     let monitors = FakeMonitorSink::default();
+    let replays = FakeReplaySink::default();
     let (app, blob, blob_directory) = test_app(
         sink.clone(),
         outcomes.clone(),
@@ -768,6 +964,7 @@ async fn start_harness_with_policy(
         sessions.clone(),
         feedback.clone(),
         monitors.clone(),
+        replays.clone(),
         policy,
         &root,
     )
@@ -790,6 +987,60 @@ async fn start_harness_with_policy(
         sessions,
         monitors,
         feedback,
+        replays,
+        blob,
+        blob_directory,
+        address,
+        server,
+    })
+}
+
+async fn start_harness_with_replays(
+    extra_routes: Router,
+    replays: FakeReplaySink,
+) -> Result<RunningHarness, Box<dyn Error>> {
+    let root = ShutdownRoot::new();
+    let sink = FakeEventSink::accepting();
+    let outcomes = FakeOutcomeSink::default();
+    let logs = FakeLogSink::default();
+    let metrics = FakeMetricSink::default();
+    let spans = FakeSpanSink::default();
+    let sessions = FakeSessionSink::default();
+    let feedback = FakeFeedbackSink::default();
+    let monitors = FakeMonitorSink::default();
+    let (app, blob, blob_directory) = test_app(
+        sink.clone(),
+        outcomes.clone(),
+        logs.clone(),
+        metrics.clone(),
+        spans.clone(),
+        sessions.clone(),
+        feedback.clone(),
+        monitors.clone(),
+        replays.clone(),
+        InboundFilterPolicy::default(),
+        &root,
+    )
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(http::run(
+        listener,
+        root.signal(),
+        Duration::from_secs(2),
+        app.merge(extra_routes),
+    ));
+    Ok(RunningHarness {
+        root,
+        sink,
+        outcomes,
+        logs,
+        metrics,
+        spans,
+        sessions,
+        monitors,
+        feedback,
+        replays,
         blob,
         blob_directory,
         address,
@@ -968,6 +1219,7 @@ async fn test_app(
     sessions: FakeSessionSink,
     feedback: FakeFeedbackSink,
     monitors: FakeMonitorSink,
+    replays: FakeReplaySink,
     policy: InboundFilterPolicy,
     root: &ShutdownRoot,
 ) -> (Router, LocalBlobStore, PathBuf) {
@@ -986,6 +1238,7 @@ async fn test_app(
         event_codec: Default::default(),
         backlog: Default::default(),
         attachments: Default::default(),
+        replay: Default::default(),
     };
     let directory = std::env::temp_dir().join(format!("metric-sdk-blob-{}", uuid::Uuid::new_v4()));
     let blob = LocalBlobStore::new(
@@ -1021,6 +1274,7 @@ async fn test_app(
                         feedback: true,
                         check_in: true,
                         metric: true,
+                        replay: true,
                     },
                     limits: ProjectIngestLimits::default(),
                     inbound_filters: Arc::new(policy.compile().unwrap()),
@@ -1046,6 +1300,7 @@ async fn test_app(
             Arc::new(monitors),
             metric_application::ingest::MonitorIngestConfig::default(),
         )
+        .with_replay_sink(Arc::new(replays), ReplayIngestConfig::default())
         .with_feedback_sink(Arc::new(feedback), FeedbackIngestConfig::default()),
     );
     (

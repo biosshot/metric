@@ -59,6 +59,7 @@ use metric_application::{
     },
     projects::{ProjectCacheConfig, ProjectService, ProjectServiceError},
     releases::ReleaseService,
+    replay_writer::{ReplayWriter, ReplayWriterConfig, ReplayWriterStartError, ReplayWriterTask},
     scheduler::{Scheduler, SchedulerConfig, SchedulerStartError, SchedulerTask},
     search::{SearchConfig, SearchService},
     session_writer::{
@@ -108,6 +109,8 @@ pub enum ServerError {
     #[error(transparent)]
     MetricWriter(#[from] MetricWriterStartError),
     #[error(transparent)]
+    ReplayWriter(#[from] ReplayWriterStartError),
+    #[error(transparent)]
     SpanWriter(#[from] SpanWriterStartError),
     #[error(transparent)]
     SessionWriter(#[from] SessionWriterStartError),
@@ -156,6 +159,7 @@ struct RuntimeModules {
     event_sink: std::sync::Arc<dyn EventSink>,
     log_sink: Option<std::sync::Arc<dyn LogSink>>,
     metric_sink: Option<std::sync::Arc<dyn MetricSink>>,
+    replay_sink: Option<std::sync::Arc<dyn metric_ports::ReplaySink>>,
     span_sink: Option<std::sync::Arc<dyn SpanSink>>,
     session_sink: Option<std::sync::Arc<dyn SessionSink>>,
     monitor_sink: Option<std::sync::Arc<dyn MonitorSink>>,
@@ -163,6 +167,7 @@ struct RuntimeModules {
     writer_task: Option<MongoWriterTask>,
     log_writer_task: Option<LogWriterTask>,
     metric_writer_task: Option<MetricWriterTask>,
+    replay_writer_task: Option<ReplayWriterTask>,
     span_writer_task: Option<SpanWriterTask>,
     session_writer_task: Option<SessionWriterTask>,
     monitor_writer_task: Option<MonitorWriterTask>,
@@ -269,6 +274,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         event_sink,
         log_sink,
         metric_sink,
+        replay_sink,
         span_sink,
         session_sink,
         monitor_sink,
@@ -276,6 +282,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         writer_task,
         log_writer_task,
         metric_writer_task,
+        replay_writer_task,
         span_writer_task,
         session_writer_task,
         monitor_writer_task,
@@ -549,6 +556,28 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         )?;
         let metric_sink: std::sync::Arc<dyn MetricSink> = metric_writer;
+        let replay_store: std::sync::Arc<dyn metric_ports::ReplayStore> =
+            std::sync::Arc::new(store.replay_store(metric_mongo::ReplayRetention {
+                days: config.retention.replays_days,
+                archive: config.retention.replay_archive,
+            }));
+        let (replay_writer, replay_writer_task) = ReplayWriter::start(
+            std::sync::Arc::clone(&replay_store),
+            std::sync::Arc::clone(&blob_store),
+            std::sync::Arc::clone(&clock),
+            ReplayWriterConfig {
+                channel_capacity: config.ingest.replay.queue_capacity,
+                max_queued_bytes: config.ingest.replay.max_queued_bytes,
+                max_segment_bytes: config.ingest.replay.max_segment_bytes,
+                operation_timeout: config.ingest.request_timeout.get(),
+                shutdown_drain: config.server.shutdown_grace.get(),
+                orphan_grace: config.ingest.replay.orphan_grace.get(),
+                cleanup_interval: config.ingest.replay.cleanup_interval.get(),
+                cleanup_batch_size: config.ingest.replay.cleanup_batch_size,
+            },
+            shutdown.signal(),
+        )?;
+        let replay_sink: std::sync::Arc<dyn metric_ports::ReplaySink> = replay_writer;
         let (span_writer, span_writer_task) = SpanWriter::start(
             std::sync::Arc::clone(&signal_store),
             SpanWriterConfig {
@@ -674,6 +703,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .with_session_store(session_store)
             .with_monitor_store(monitor_store)
             .with_feedback_store(feedback_store)
+            .with_replay_store(replay_store)
             .with_explore(explore_service)
             .with_dashboards(dashboard_service)
             .with_release_service(std::sync::Arc::clone(&release_service)),
@@ -887,6 +917,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             event_sink,
             log_sink: Some(log_sink),
             metric_sink: Some(metric_sink),
+            replay_sink: Some(replay_sink),
             span_sink: Some(span_sink),
             session_sink: Some(session_sink),
             monitor_sink: Some(monitor_sink),
@@ -894,6 +925,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             writer_task: Some(writer_task),
             log_writer_task: Some(log_writer_task),
             metric_writer_task: Some(metric_writer_task),
+            replay_writer_task: Some(replay_writer_task),
             span_writer_task: Some(span_writer_task),
             session_writer_task: Some(session_writer_task),
             monitor_writer_task: Some(monitor_writer_task),
@@ -927,6 +959,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             log_sink: None,
             metric_sink: None,
+            replay_sink: None,
             span_sink: None,
             session_sink: None,
             monitor_sink: None,
@@ -934,6 +967,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             writer_task: None,
             log_writer_task: None,
             metric_writer_task: None,
+            replay_writer_task: None,
             span_writer_task: None,
             session_writer_task: None,
             monitor_writer_task: None,
@@ -993,6 +1027,15 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             metric_application::ingest::MetricIngestConfig::default(),
         );
     }
+    if let Some(replay_sink) = replay_sink {
+        ingest_service = ingest_service.with_replay_sink(
+            replay_sink,
+            metric_application::ingest::ReplayIngestConfig {
+                max_decompressed_segment_bytes: config.ingest.replay.max_decompressed_segment_bytes,
+                max_events_per_segment: config.ingest.replay.max_events_per_segment,
+            },
+        );
+    }
     if let Some(span_sink) = span_sink {
         ingest_service = ingest_service.with_span_sink(span_sink);
     }
@@ -1022,6 +1065,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let required_ready = writer_task.is_some()
         && log_writer_task.is_some()
         && metric_writer_task.is_some()
+        && replay_writer_task.is_some()
         && span_writer_task.is_some()
         && session_writer_task.is_some()
         && monitor_writer_task.is_some()
@@ -1053,6 +1097,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     metrics_days: config.retention.metrics_days,
                     metric_max_series_per_project: config.retention.metric_max_series_per_project,
                     metric_archive: config.archive.enabled && config.retention.metric_archive,
+                    replays_days: config.retention.replays_days,
+                    replay_archive: config.retention.replay_archive,
                 }),
                 project_deletion: required_ready.then_some(
                     native_http::ProjectDeletionCapability {
@@ -1153,6 +1199,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = metric_writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = replay_writer_task {
         task.wait().await;
     }
     if let Some(task) = span_writer_task {

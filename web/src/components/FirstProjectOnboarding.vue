@@ -36,6 +36,7 @@ const project = reactive<CreateProjectInput>({
   feedback_enabled: true,
   check_in_enabled: true,
   metric_enabled: true,
+  replay_enabled: false,
   max_event_bytes: 1_048_576,
   max_events_per_second: null,
   burst: null,
@@ -221,6 +222,16 @@ const createProject = useMutation({
                 <strong>Application Metrics</strong>
               </span>
               <small>Accept bounded SDK counters, gauges, and distributions.</small>
+            </span>
+          </label>
+          <label class="check-control">
+            <input v-model="project.replay_enabled" type="checkbox" />
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="view" :size="17" />
+                <strong>Session Replay</strong>
+              </span>
+              <small>Accept browser recordings masked by the pinned SDK.</small>
             </span>
           </label>
         </div>

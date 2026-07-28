@@ -130,6 +130,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                     metrics_days: 90,
                     metric_max_series_per_project: 10_000,
                     metric_archive: false,
+                    replays_days: 30,
+                    replay_archive: false,
                 }),
                 ..native_http::NativeHttpModules::default()
             },

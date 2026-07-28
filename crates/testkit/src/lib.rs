@@ -12,6 +12,7 @@ use metric_domain::{
     feedback::FeedbackRecord,
     metrics::MetricDeltaBatch,
     monitors::MonitorUpdate,
+    replays::ReplaySubmission,
     sessions::SessionUpdate,
     signals::{LogRecord, SpanRecord},
     symbolication::{BackendSymbolicationResult, SymbolicationRequest},
@@ -19,8 +20,8 @@ use metric_domain::{
 use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, FeedbackSink, FeedbackStoreError,
     IngestOutcome, LogSink, MetricSink, MonitorSink, OutcomeSink, PortFuture, ProjectResolveError,
-    ProjectResolver, RandomError, RandomSource, SessionSink, SignalStoreError, SpanSink,
-    SymbolicationBackend, SymbolicationBackendError,
+    ProjectResolver, RandomError, RandomSource, ReplaySink, SessionSink, SignalStoreError,
+    SpanSink, SymbolicationBackend, SymbolicationBackendError,
 };
 
 #[derive(Clone)]
@@ -157,6 +158,34 @@ impl MetricSink for FakeMetricSink {
                 .lock()
                 .expect("fake Metric sink lock poisoned")
                 .push(batch);
+            Ok(DurableOutcome::Accepted)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeReplaySink(Arc<Mutex<Vec<ReplaySubmission>>>);
+
+impl FakeReplaySink {
+    #[must_use]
+    pub fn submissions(&self) -> Vec<ReplaySubmission> {
+        self.0
+            .lock()
+            .expect("fake Replay sink lock poisoned")
+            .clone()
+    }
+}
+
+impl ReplaySink for FakeReplaySink {
+    fn persist_replay(
+        &self,
+        submission: ReplaySubmission,
+    ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .expect("fake Replay sink lock poisoned")
+                .push(submission);
             Ok(DurableOutcome::Accepted)
         })
     }

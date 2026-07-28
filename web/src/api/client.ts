@@ -39,6 +39,7 @@ import type {
   ReleaseIssue,
   ReleaseHealth,
   ReleaseSummary,
+  Replay,
   SavedQuery,
   Deploy,
   Span,
@@ -169,6 +170,35 @@ function query(values: Record<string, string | number | null | undefined>): stri
   return encoded ? `?${encoded}` : '';
 }
 
+async function binaryRequest(path: string): Promise<ArrayBuffer> {
+  const session = sessionProvider();
+  const headers = new Headers();
+  headers.set('accept', 'application/vnd.sentry.items.replay-recording');
+  if (session.organizationId) headers.set('x-metric-organization-id', session.organizationId);
+  let response: Response;
+  try {
+    response = await fetch(path, { headers, credentials: 'include' });
+  } catch {
+    throw new ApiError(
+      0,
+      'network_error',
+      null,
+      'Cannot reach Metric. Check the connection and server status.',
+      true,
+    );
+  }
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      `http_${response.status}`,
+      response.headers.get('x-request-id'),
+      `Metric could not load this Replay segment (HTTP ${response.status}).`,
+      response.status === 429 || response.status >= 500,
+    );
+  }
+  return response.arrayBuffer();
+}
+
 export const api = {
   bootstrap(body: Record<string, unknown>) {
     return request<Identity>(
@@ -272,6 +302,7 @@ export const api = {
         feedback_enabled: policy.items.feedback,
         check_in_enabled: policy.items.check_in,
         metric_enabled: policy.items.metric,
+        replay_enabled: policy.items.replay,
         max_event_bytes: policy.limits.max_event_bytes,
         max_events_per_second: policy.limits.max_events_per_second,
         burst: policy.limits.burst,
@@ -376,6 +407,12 @@ export const api = {
         limit: 100,
       })}`,
     ),
+  replays: (projectId: string) =>
+    request<Page<Replay>>(`/api/v1/projects/${projectId}/replays?limit=50`),
+  replay: (projectId: string, replayId: string) =>
+    request<Replay>(`/api/v1/projects/${projectId}/replays/${replayId}`),
+  replaySegment: (projectId: string, replayId: string, segmentId: number) =>
+    binaryRequest(`/api/v1/projects/${projectId}/replays/${replayId}/segments/${segmentId}`),
   explore: (projectId: string, body: ExploreRequest) =>
     request<ExploreResult>(`/api/v1/projects/${projectId}/explore`, {
       method: 'POST',
@@ -459,9 +496,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  feedback: (projectId: string, status?: string, cursor?: string | null) =>
+  feedback: (projectId: string, status?: string, cursor?: string | null, replayId?: string) =>
     request<Page<Feedback>>(
-      `/api/v1/projects/${projectId}/feedback${query({ status, cursor, limit: 50 })}`,
+      `/api/v1/projects/${projectId}/feedback${query({
+        status,
+        cursor,
+        replay_id: replayId,
+        limit: 50,
+      })}`,
     ),
   feedbackItem: (projectId: string, feedbackId: string) =>
     request<Feedback>(`/api/v1/projects/${projectId}/feedback/${feedbackId}`),

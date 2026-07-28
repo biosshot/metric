@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "session-replay-validation-phase-38",
+    "source_commit": "d35cba953200580bd08011da6fd1cbcfcd22ccae",
+    "generated_at": "2026-07-28T08:53:00.297Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "20000 raw rrweb segments; 4 events per segment",
+    "scope": "request-local Replay recording validation only; excludes HTTP, BlobStore and MongoDB"
+  },
+  "metrics": {
+    "iterations": 20000,
+    "events_per_segment": 4,
+    "validation_rps": 3592857,
+    "minimum_validation_rps": 10000
+  }
+}

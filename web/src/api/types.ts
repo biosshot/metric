@@ -86,6 +86,7 @@ export interface ProjectPolicy {
     feedback: boolean;
     check_in: boolean;
     metric: boolean;
+    replay: boolean;
   };
   limits: {
     max_event_bytes: number;
@@ -142,6 +143,7 @@ export interface CreateProjectInput {
   feedback_enabled: boolean;
   check_in_enabled: boolean;
   metric_enabled: boolean;
+  replay_enabled: boolean;
   max_event_bytes: number;
   max_events_per_second: number | null;
   burst: number | null;
@@ -513,6 +515,31 @@ export interface Feedback {
   replay_id: string | null;
   attachments: FeedbackAttachment[];
   expires_at: string;
+}
+
+export interface ReplaySegment {
+  segment_id: number;
+  size: number;
+  decompressed_bytes: number;
+  event_count: number;
+  checksum: string;
+}
+
+export interface Replay {
+  id: string;
+  project_id: string;
+  started_at: string;
+  ended_at: string;
+  received_at: string;
+  duration_ms: number;
+  environment: string | null;
+  release: string | null;
+  url: string | null;
+  error_ids: string[];
+  trace_ids: string[];
+  segments: ReplaySegment[];
+  partial: boolean;
+  expires_at: string | null;
 }
 
 export interface ReleaseSummary {

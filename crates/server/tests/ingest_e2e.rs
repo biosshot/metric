@@ -51,6 +51,7 @@ fn config() -> IngestConfig {
         event_codec: Default::default(),
         backlog: Default::default(),
         attachments: Default::default(),
+        replay: Default::default(),
     }
 }
 
@@ -74,6 +75,7 @@ fn snapshot() -> ProjectSnapshot {
             feedback: true,
             check_in: true,
             metric: true,
+            replay: true,
         },
         limits: ProjectIngestLimits::default(),
         inbound_filters: Default::default(),

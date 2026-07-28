@@ -4,12 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild send-error.js --bundle --format=iife --platform=browser --outfile=dist/send-error.js && esbuild send-feedback.js --bundle --format=iife --platform=browser --outfile=dist/send-feedback.js",
+    "build": "esbuild send-error.js --bundle --format=iife --platform=browser --outfile=dist/send-error.js && esbuild send-feedback.js --bundle --format=iife --platform=browser --outfile=dist/send-feedback.js && esbuild send-replay.js --bundle --format=iife --platform=browser --outfile=dist/send-replay.js && esbuild play-replay.js --bundle --format=iife --platform=browser --outfile=dist/play-replay.js",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
-    "@sentry/browser": "10.66.0"
+    "@sentry/browser": "10.66.0",
+    "rrweb-player": "2.1.1",
+    "svelte": "4.2.19"
   },
   "devDependencies": {
     "@eslint/js": "9.31.0",

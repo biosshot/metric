@@ -16,6 +16,8 @@
     "@lucide/vue": "1.26.0",
     "@tanstack/vue-query": "5.83.0",
     "pinia": "3.0.3",
+    "rrweb-player": "2.1.1",
+    "svelte": "4.2.19",
     "vue": "3.5.18",
     "vue-router": "4.5.1"
   },

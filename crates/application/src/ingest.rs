@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    io::Read,
     sync::{Arc, Mutex},
 };
 
@@ -22,6 +23,7 @@ use metric_domain::{
         MonitorRunStatus, MonitorSchedule, MonitorUpdate,
     },
     releases::validate_version,
+    replays::{MAX_REPLAY_CORRELATIONS, ReplayMetadata, ReplaySubmission},
     sessions::{SessionId, SessionState, SessionUpdate},
     signals::{
         LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
@@ -31,8 +33,8 @@ use metric_domain::{
 use metric_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
     FeedbackSink, FeedbackStoreError, IngestOutcome, IngestOutcomeKind, LogSink, MetricSink,
-    MonitorSink, OutcomeSink, ProjectResolveError, ProjectResolver, RandomSource, SessionSink,
-    SignalStoreError, SpanSink,
+    MonitorSink, OutcomeSink, ProjectResolveError, ProjectResolver, RandomSource, ReplaySink,
+    SessionSink, SignalStoreError, SpanSink,
 };
 use serde::{
     Deserializer,
@@ -150,6 +152,12 @@ pub struct PendingMetricContainer {
     pub raw_json: Box<[u8]>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingReplay {
+    pub event_json: Box<[u8]>,
+    pub recording: Box<[u8]>,
+}
+
 impl std::fmt::Debug for PrimaryEvent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -171,6 +179,7 @@ pub struct IngestRequest {
     /// Independent Log/Transaction/Span items, not an exhaustive signal taxonomy.
     pub signals: Vec<PendingSignal>,
     pub metrics: Vec<PendingMetricContainer>,
+    pub replays: Vec<PendingReplay>,
     pub check_ins: Vec<Box<[u8]>>,
     pub attachments: Vec<PendingAttachment>,
     pub discarded: Vec<DiscardedItem>,
@@ -249,6 +258,21 @@ pub struct MetricIngestConfig {
     pub max_unit_bytes: usize,
     pub max_tag_key_bytes: usize,
     pub max_tag_value_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReplayIngestConfig {
+    pub max_decompressed_segment_bytes: usize,
+    pub max_events_per_segment: u32,
+}
+
+impl Default for ReplayIngestConfig {
+    fn default() -> Self {
+        Self {
+            max_decompressed_segment_bytes: 20 * 1024 * 1024,
+            max_events_per_segment: 100_000,
+        }
+    }
 }
 
 impl Default for MetricIngestConfig {
@@ -379,6 +403,8 @@ pub struct IngestService {
     monitor_rate: Mutex<HashMap<ProjectId, FeedbackRateWindow>>,
     metric_sink: Option<Arc<dyn MetricSink>>,
     metric_config: MetricIngestConfig,
+    replay_sink: Option<Arc<dyn ReplaySink>>,
+    replay_config: ReplayIngestConfig,
 }
 
 impl IngestService {
@@ -414,6 +440,8 @@ impl IngestService {
             monitor_rate: Mutex::new(HashMap::new()),
             metric_sink: None,
             metric_config: MetricIngestConfig::default(),
+            replay_sink: None,
+            replay_config: ReplayIngestConfig::default(),
         }
     }
 
@@ -465,6 +493,17 @@ impl IngestService {
     ) -> Self {
         self.metric_sink = Some(metric_sink);
         self.metric_config = config;
+        self
+    }
+
+    #[must_use]
+    pub fn with_replay_sink(
+        mut self,
+        replay_sink: Arc<dyn ReplaySink>,
+        config: ReplayIngestConfig,
+    ) -> Self {
+        self.replay_sink = Some(replay_sink);
+        self.replay_config = config;
         self
     }
 
@@ -528,6 +567,7 @@ impl IngestService {
 
         disabled_categories.extend(self.persist_signals(&snapshot, request.signals).await?);
         disabled_categories.extend(self.persist_metrics(&snapshot, request.metrics).await?);
+        disabled_categories.extend(self.persist_replays(&snapshot, request.replays).await?);
         disabled_categories.extend(self.persist_check_ins(&snapshot, request.check_ins).await?);
         disabled_categories.sort_unstable();
         disabled_categories.dedup();
@@ -906,6 +946,45 @@ impl IngestService {
             reason: "metric",
             quantity,
         });
+        Ok(Vec::new())
+    }
+
+    async fn persist_replays(
+        &self,
+        snapshot: &ProjectSnapshot,
+        replays: Vec<PendingReplay>,
+    ) -> Result<Vec<&'static str>, IngestError> {
+        if replays.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !snapshot.items.replay {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "feature_disabled",
+                quantity: u64::try_from(replays.len()).unwrap_or(u64::MAX),
+            });
+            return Ok(vec!["replay"]);
+        }
+        let sink = self
+            .replay_sink
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("replay_storage_unavailable"))?;
+        let received_at = self.clock.now();
+        for replay in replays {
+            let submission = normalize_replay(snapshot, received_at, replay, self.replay_config)?;
+            let outcome = sink
+                .persist_replay(submission)
+                .await
+                .map_err(map_signal_store_error)?;
+            self.outcome_sink.record(IngestOutcome {
+                kind: match outcome {
+                    DurableOutcome::Accepted => IngestOutcomeKind::Accepted,
+                    DurableOutcome::Duplicate => IngestOutcomeKind::Duplicate,
+                },
+                reason: "replay",
+                quantity: 1,
+            });
+        }
         Ok(Vec::new())
     }
 
@@ -1390,6 +1469,278 @@ fn fold_metric_container(
         .end()
         .map_err(|_| IngestError::invalid("invalid_metric_container"))?;
     Ok(batch)
+}
+
+fn normalize_replay(
+    snapshot: &ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    replay: PendingReplay,
+    config: ReplayIngestConfig,
+) -> Result<ReplaySubmission, IngestError> {
+    if config.max_decompressed_segment_bytes == 0 || config.max_events_per_segment == 0 {
+        return Err(IngestError::invalid("invalid_replay_configuration"));
+    }
+    let mut event: Value = serde_json::from_slice(&replay.event_json)
+        .map_err(|_| IngestError::invalid("invalid_replay_event"))?;
+    scrub_value(&mut event, None, &snapshot.scrub_policy, 0)?;
+    let object = event
+        .as_object()
+        .ok_or_else(|| IngestError::invalid("invalid_replay_event"))?;
+    let replay_id = object
+        .get("replay_id")
+        .and_then(Value::as_str)
+        .and_then(|value| EventId::parse(value).ok())
+        .ok_or_else(|| IngestError::invalid("invalid_replay_id"))?;
+    if object
+        .get("event_id")
+        .and_then(Value::as_str)
+        .and_then(|value| EventId::parse(value).ok())
+        .is_some_and(|event_id| event_id != replay_id)
+    {
+        return Err(IngestError::invalid("conflicting_replay_id"));
+    }
+    let segment_id = object
+        .get("segment_id")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| IngestError::invalid("invalid_replay_segment_id"))?;
+    let started_at = object
+        .get("replay_start_timestamp")
+        .ok_or_else(|| IngestError::invalid("missing_replay_start_timestamp"))
+        .and_then(parse_replay_timestamp)?;
+    let ended_at = object
+        .get("timestamp")
+        .ok_or_else(|| IngestError::invalid("missing_replay_timestamp"))
+        .and_then(parse_replay_timestamp)?;
+    let sdk = object
+        .get("sdk")
+        .and_then(Value::as_object)
+        .ok_or_else(|| IngestError::invalid("missing_replay_sdk"))?;
+    if sdk.get("version").and_then(Value::as_str) != Some("10.66.0")
+        || !sdk
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.starts_with("sentry.javascript."))
+    {
+        return Err(IngestError::invalid("unsupported_replay_sdk"));
+    }
+    let (recording_segment_id, decompressed_bytes, event_count) =
+        validate_replay_recording(&replay.recording, config)?;
+    if recording_segment_id != segment_id {
+        return Err(IngestError::invalid("replay_segment_id_mismatch"));
+    }
+    let metadata = ReplayMetadata {
+        project_id: snapshot.project_id,
+        replay_id,
+        segment_id,
+        started_at,
+        ended_at,
+        received_at,
+        environment: bounded_replay_text(object.get("environment"))?,
+        release: bounded_replay_text(object.get("release"))?,
+        url: replay_url(object.get("urls"))?,
+        error_ids: replay_event_ids(object.get("error_ids"))?,
+        trace_ids: replay_trace_ids(object.get("trace_ids"))?,
+    };
+    metadata
+        .validate()
+        .map_err(|_| IngestError::invalid("invalid_replay_metadata"))?;
+    Ok(ReplaySubmission {
+        metadata,
+        recording: replay.recording,
+        decompressed_bytes,
+        event_count,
+    })
+}
+
+fn parse_replay_timestamp(value: &Value) -> Result<metric_domain::Timestamp, IngestError> {
+    let seconds = value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| IngestError::invalid("invalid_replay_timestamp"))?;
+    if seconds < i64::MIN as f64 / 1_000.0 || seconds > i64::MAX as f64 / 1_000.0 {
+        return Err(IngestError::invalid("invalid_replay_timestamp"));
+    }
+    metric_domain::Timestamp::from_unix_millis((seconds * 1_000.0).round() as i64)
+        .map_err(|_| IngestError::invalid("invalid_replay_timestamp"))
+}
+
+fn bounded_replay_text(value: Option<&Value>) -> Result<Option<Box<str>>, IngestError> {
+    value
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= metric_domain::replays::MAX_REPLAY_TEXT_BYTES
+                        && !value.chars().any(char::is_control)
+                })
+                .map(Into::into)
+                .ok_or_else(|| IngestError::invalid("invalid_replay_text"))
+        })
+        .transpose()
+}
+
+fn replay_url(value: Option<&Value>) -> Result<Option<Box<str>>, IngestError> {
+    let Some(raw) = value
+        .and_then(Value::as_array)
+        .and_then(|values| values.last())
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let mut url = url::Url::parse(raw).map_err(|_| IngestError::invalid("invalid_replay_url"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(IngestError::invalid("invalid_replay_url"));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.set_password(None)
+        .map_err(|_| IngestError::invalid("invalid_replay_url"))?;
+    url.set_username("")
+        .map_err(|_| IngestError::invalid("invalid_replay_url"))?;
+    if url.as_str().len() > metric_domain::replays::MAX_REPLAY_TEXT_BYTES {
+        return Err(IngestError::invalid("invalid_replay_url"));
+    }
+    Ok(Some(url.to_string().into()))
+}
+
+fn replay_event_ids(value: Option<&Value>) -> Result<Vec<EventId>, IngestError> {
+    replay_id_strings(
+        value,
+        |value| EventId::parse(value).ok(),
+        "invalid_replay_error_id",
+    )
+}
+
+fn replay_trace_ids(
+    value: Option<&Value>,
+) -> Result<Vec<metric_domain::signals::TraceId>, IngestError> {
+    replay_id_strings(
+        value,
+        |value| metric_domain::signals::TraceId::parse(value).ok(),
+        "invalid_replay_trace_id",
+    )
+}
+
+fn replay_id_strings<T>(
+    value: Option<&Value>,
+    parse: impl Fn(&str) -> Option<T>,
+    code: &'static str,
+) -> Result<Vec<T>, IngestError> {
+    let Some(values) = value else {
+        return Ok(Vec::new());
+    };
+    let values = values
+        .as_array()
+        .filter(|values| values.len() <= MAX_REPLAY_CORRELATIONS)
+        .ok_or_else(|| IngestError::invalid(code))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .and_then(&parse)
+                .ok_or_else(|| IngestError::invalid(code))
+        })
+        .collect()
+}
+
+fn validate_replay_recording(
+    recording: &[u8],
+    config: ReplayIngestConfig,
+) -> Result<(u32, u64, u32), IngestError> {
+    let newline = recording
+        .iter()
+        .take(257)
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| IngestError::invalid("invalid_replay_recording_header"))?;
+    if newline == 0 || newline > 256 {
+        return Err(IngestError::invalid("invalid_replay_recording_header"));
+    }
+    let header: Value = serde_json::from_slice(&recording[..newline])
+        .map_err(|_| IngestError::invalid("invalid_replay_recording_header"))?;
+    let segment_id = header
+        .get("segment_id")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| IngestError::invalid("invalid_replay_recording_header"))?;
+    let payload = recording
+        .get(newline + 1..)
+        .filter(|payload| !payload.is_empty())
+        .ok_or_else(|| IngestError::invalid("empty_replay_recording"))?;
+    let first = payload
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .ok_or_else(|| IngestError::invalid("empty_replay_recording"))?;
+    let decompressed;
+    let events = if first == b'[' {
+        if payload.len() > config.max_decompressed_segment_bytes {
+            return Err(IngestError::invalid("replay_decompressed_too_large"));
+        }
+        payload
+    } else {
+        let decoder = flate2::read::ZlibDecoder::new(payload);
+        let maximum = u64::try_from(config.max_decompressed_segment_bytes)
+            .map_err(|_| IngestError::invalid("invalid_replay_configuration"))?;
+        decompressed = {
+            let mut bytes = Vec::new();
+            decoder
+                .take(maximum.saturating_add(1))
+                .read_to_end(&mut bytes)
+                .map_err(|_| IngestError::invalid("invalid_replay_compression"))?;
+            if bytes.len() > config.max_decompressed_segment_bytes {
+                return Err(IngestError::invalid("replay_decompressed_too_large"));
+            }
+            bytes
+        };
+        &decompressed
+    };
+    let event_count = count_replay_events(events, config.max_events_per_segment)?;
+    Ok((
+        segment_id,
+        u64::try_from(events.len()).unwrap_or(u64::MAX),
+        event_count,
+    ))
+}
+
+fn count_replay_events(bytes: &[u8], maximum: u32) -> Result<u32, IngestError> {
+    struct ReplayEventsVisitor {
+        maximum: u32,
+    }
+
+    impl<'de> Visitor<'de> for ReplayEventsVisitor {
+        type Value = u32;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a bounded rrweb event array")
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut count = 0_u32;
+            while sequence.next_element::<IgnoredAny>()?.is_some() {
+                count = count.saturating_add(1);
+                if count > self.maximum {
+                    return Err(serde::de::Error::custom("too many rrweb events"));
+                }
+            }
+            Ok(count)
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let count = deserializer
+        .deserialize_seq(ReplayEventsVisitor { maximum })
+        .map_err(|_| IngestError::invalid("invalid_replay_events"))?;
+    deserializer
+        .end()
+        .map_err(|_| IngestError::invalid("invalid_replay_events"))?;
+    Ok(count)
 }
 
 struct MetricContainerSeed<'a> {
@@ -3027,6 +3378,7 @@ mod tests {
                 feedback: true,
                 check_in: true,
                 metric: true,
+                replay: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: Default::default(),
@@ -3421,6 +3773,118 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code(), "invalid_trace_id");
+    }
+
+    #[test]
+    fn replay_recording_limits_reject_bombs_malformed_data_and_excess_events() {
+        use std::io::Write;
+
+        let config = ReplayIngestConfig {
+            max_decompressed_segment_bytes: 128,
+            max_events_per_segment: 2,
+        };
+        let plain = b"{\"segment_id\":3}\n[{\"type\":2},{\"type\":3}]";
+        assert_eq!(
+            validate_replay_recording(plain, config).unwrap(),
+            (3, 23, 2)
+        );
+
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(b"[{\"type\":2},{\"type\":3}]").unwrap();
+        let mut compressed = b"{\"segment_id\":3}\n".to_vec();
+        compressed.extend(encoder.finish().unwrap());
+        assert_eq!(
+            validate_replay_recording(&compressed, config).unwrap(),
+            (3, 23, 2)
+        );
+
+        let mut bomb_encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        bomb_encoder.write_all(&vec![b' '; 512]).unwrap();
+        let mut bomb = b"{\"segment_id\":3}\n".to_vec();
+        bomb.extend(bomb_encoder.finish().unwrap());
+        assert_eq!(
+            validate_replay_recording(&bomb, config).unwrap_err().code(),
+            "replay_decompressed_too_large"
+        );
+        assert_eq!(
+            validate_replay_recording(b"{\"segment_id\":3}\n[invalid]", config)
+                .unwrap_err()
+                .code(),
+            "invalid_replay_events"
+        );
+        assert_eq!(
+            validate_replay_recording(
+                b"{\"segment_id\":3}\n[{\"type\":1},{\"type\":2},{\"type\":3}]",
+                config,
+            )
+            .unwrap_err()
+            .code(),
+            "invalid_replay_events"
+        );
+    }
+
+    #[test]
+    fn replay_metadata_is_pinned_linked_and_scrubbed_before_storage() {
+        let submission = normalize_replay(
+            &snapshot(),
+            metric_domain::Timestamp::from_unix_millis(1_753_372_801_500).unwrap(),
+            PendingReplay {
+                event_json: br#"{
+                    "event_id":"0123456789abcdef0123456789abcdef",
+                    "replay_id":"0123456789abcdef0123456789abcdef",
+                    "segment_id":0,
+                    "replay_start_timestamp":1753372800.0,
+                    "timestamp":1753372801.0,
+                    "environment":"production",
+                    "release":"web@1.0.0",
+                    "urls":["https://example.test/checkout?token=secret#card"],
+                    "error_ids":["11111111111111111111111111111111"],
+                    "trace_ids":["22222222222222222222222222222222"],
+                    "sdk":{"name":"sentry.javascript.browser","version":"10.66.0"}
+                }"#
+                .as_slice()
+                .into(),
+                recording: b"{\"segment_id\":0}\n[{\"type\":2},{\"type\":3}]"
+                    .as_slice()
+                    .into(),
+            },
+            ReplayIngestConfig {
+                max_decompressed_segment_bytes: 1024,
+                max_events_per_segment: 10,
+            },
+        )
+        .unwrap();
+        assert_eq!(submission.metadata.segment_id, 0);
+        assert_eq!(submission.event_count, 2);
+        assert_eq!(
+            submission.metadata.url.as_deref(),
+            Some("https://example.test/checkout")
+        );
+        assert_eq!(submission.metadata.error_ids.len(), 1);
+        assert_eq!(submission.metadata.trace_ids.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "performance baseline runs in release mode"]
+    fn performance_replay_validation_rps() {
+        let recording =
+            b"{\"segment_id\":0}\n[{\"type\":2},{\"type\":3},{\"type\":3},{\"type\":5}]";
+        let config = ReplayIngestConfig {
+            max_decompressed_segment_bytes: 1024,
+            max_events_per_segment: 10,
+        };
+        let iterations = 20_000_u64;
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(validate_replay_recording(recording, config).unwrap());
+        }
+        let rps = iterations as f64 / started.elapsed().as_secs_f64();
+        eprintln!("replay validation: {rps:.0} requests/s");
+        assert!(
+            rps >= 10_000.0,
+            "Replay validation baseline {rps:.0} RPS is below gate"
+        );
     }
 
     #[test]

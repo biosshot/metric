@@ -253,6 +253,34 @@ pub struct IngestConfig {
     pub event_codec: EventCodecSettings,
     pub backlog: BacklogSettings,
     pub attachments: AttachmentSettings,
+    pub replay: ReplaySettings,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReplaySettings {
+    pub max_segment_bytes: usize,
+    pub max_decompressed_segment_bytes: usize,
+    pub max_events_per_segment: u32,
+    pub queue_capacity: usize,
+    pub max_queued_bytes: u32,
+    pub orphan_grace: SchedulerInterval,
+    pub cleanup_interval: SchedulerInterval,
+    pub cleanup_batch_size: usize,
+}
+
+impl Default for ReplaySettings {
+    fn default() -> Self {
+        Self {
+            max_segment_bytes: 5 * 1024 * 1024,
+            max_decompressed_segment_bytes: 20 * 1024 * 1024,
+            max_events_per_segment: 100_000,
+            queue_capacity: 32,
+            max_queued_bytes: 32 * 1024 * 1024,
+            orphan_grace: "1h".parse().expect("default orphan grace is valid"),
+            cleanup_interval: "5m".parse().expect("default cleanup interval is valid"),
+            cleanup_batch_size: 100,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -369,6 +397,8 @@ pub struct RetentionSettings {
     pub metrics_days: u32,
     pub metric_max_series_per_project: usize,
     pub metric_archive: bool,
+    pub replays_days: u32,
+    pub replay_archive: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -474,6 +504,8 @@ impl Default for RetentionSettings {
             metrics_days: 90,
             metric_max_series_per_project: 10_000,
             metric_archive: false,
+            replays_days: 30,
+            replay_archive: false,
         }
     }
 }
@@ -1033,6 +1065,35 @@ struct RawIngestConfig {
     event_codec: RawEventCodecSettings,
     backlog: RawBacklogSettings,
     attachments: RawAttachmentSettings,
+    replay: RawReplaySettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawReplaySettings {
+    max_segment_bytes: String,
+    max_decompressed_segment_bytes: String,
+    max_events_per_segment: u32,
+    queue_capacity: usize,
+    max_queued_bytes: String,
+    orphan_grace: String,
+    cleanup_interval: String,
+    cleanup_batch_size: usize,
+}
+
+impl Default for RawReplaySettings {
+    fn default() -> Self {
+        Self {
+            max_segment_bytes: "5 MiB".to_owned(),
+            max_decompressed_segment_bytes: "20 MiB".to_owned(),
+            max_events_per_segment: 100_000,
+            queue_capacity: 32,
+            max_queued_bytes: "32 MiB".to_owned(),
+            orphan_grace: "1h".to_owned(),
+            cleanup_interval: "5m".to_owned(),
+            cleanup_batch_size: 100,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1251,6 +1312,8 @@ struct RawRetentionSettings {
     metrics_days: u32,
     metric_max_series_per_project: usize,
     metric_archive: bool,
+    replays_days: u32,
+    replay_archive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1314,6 +1377,8 @@ impl Default for RawRetentionSettings {
             metrics_days: 90,
             metric_max_series_per_project: 10_000,
             metric_archive: false,
+            replays_days: 30,
+            replay_archive: false,
         }
     }
 }
@@ -1371,6 +1436,7 @@ impl Default for RawIngestConfig {
             event_codec: RawEventCodecSettings::default(),
             backlog: RawBacklogSettings::default(),
             attachments: RawAttachmentSettings::default(),
+            replay: RawReplaySettings::default(),
         }
     }
 }
@@ -1911,7 +1977,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
         let rendered = format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nfeedback_days = {}\nissue_stats_hourly_days = {}\nlogs_days = {}\nspans_days = {}\nspan_stats_hourly_days = {}\nsessions_days = {}\nsession_stats_hourly_days = {}\nsession_active_max_hours = {}\nmonitor_runs_days = {}\nmetrics_days = {}\nmetric_max_series_per_project = {}\nmetric_archive = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.replay]\nmax_segment_bytes = {}\nmax_decompressed_segment_bytes = {}\nmax_events_per_segment = {}\nqueue_capacity = {}\nmax_queued_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nfeedback_days = {}\nissue_stats_hourly_days = {}\nlogs_days = {}\nspans_days = {}\nspan_stats_hourly_days = {}\nsessions_days = {}\nsession_stats_hourly_days = {}\nsession_active_max_hours = {}\nmonitor_runs_days = {}\nmetrics_days = {}\nmetric_max_series_per_project = {}\nmetric_archive = {}\nreplays_days = {}\nreplay_archive = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
@@ -1949,6 +2015,14 @@ impl AppConfig {
             humantime::format_duration(self.ingest.attachments.cleanup_interval.get()),
             self.ingest.attachments.cleanup_batch_size,
             self.ingest.attachments.cleanup_max_pages,
+            self.ingest.replay.max_segment_bytes,
+            self.ingest.replay.max_decompressed_segment_bytes,
+            self.ingest.replay.max_events_per_segment,
+            self.ingest.replay.queue_capacity,
+            self.ingest.replay.max_queued_bytes,
+            humantime::format_duration(self.ingest.replay.orphan_grace.get()),
+            humantime::format_duration(self.ingest.replay.cleanup_interval.get()),
+            self.ingest.replay.cleanup_batch_size,
             self.ingest.project_cache.capacity,
             self.ingest.project_cache.max_inflight,
             humantime::format_duration(self.ingest.project_cache.positive_ttl.get()),
@@ -1992,6 +2066,8 @@ impl AppConfig {
             self.retention.metrics_days,
             self.retention.metric_max_series_per_project,
             self.retention.metric_archive,
+            self.retention.replays_days,
+            self.retention.replay_archive,
             humantime::format_duration(self.project_deletion.grace_period.get()),
             self.project_deletion.delete_batch_documents,
             humantime::format_duration(self.project_deletion.completed_job_retention.get()),
@@ -2236,6 +2312,17 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             .map_err(|_| ConfigError::InvalidIngestConfig)?;
         let cleanup_interval = SchedulerInterval::from_str(&raw.attachments.cleanup_interval)
             .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let replay_segment = ConfiguredBytes::from_str(&raw.replay.max_segment_bytes)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let replay_decompressed =
+            ConfiguredBytes::from_str(&raw.replay.max_decompressed_segment_bytes)
+                .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let replay_queued = ConfiguredBytes::from_str(&raw.replay.max_queued_bytes)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let replay_orphan_grace = SchedulerInterval::from_str(&raw.replay.orphan_grace)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
+        let replay_cleanup_interval = SchedulerInterval::from_str(&raw.replay.cleanup_interval)
+            .map_err(|_| ConfigError::InvalidIngestConfig)?;
         let valid = compressed.get() > 0
             && decompressed.get() >= compressed.get()
             && event.get() > 0
@@ -2268,12 +2355,24 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
             && !cleanup_interval.get().is_zero()
             && (1..=10_000).contains(&raw.attachments.cleanup_batch_size)
             && (1..=1024).contains(&raw.attachments.cleanup_max_pages);
+        let valid_replay = replay_segment.get() > 0
+            && replay_segment.get() <= decompressed.get()
+            && replay_decompressed.get() >= replay_segment.get()
+            && replay_decompressed.get() <= decompressed.get()
+            && (1..=1_000_000).contains(&raw.replay.max_events_per_segment)
+            && (1..=1024).contains(&raw.replay.queue_capacity)
+            && replay_queued.get() >= replay_segment.get()
+            && replay_queued.get() <= u64::from(u32::MAX)
+            && !replay_orphan_grace.get().is_zero()
+            && !replay_cleanup_interval.get().is_zero()
+            && (1..=10_000).contains(&raw.replay.cleanup_batch_size);
         if !valid
             || !valid_cache
             || !valid_batch
             || !valid_codec
             || !valid_backlog
             || !valid_attachments
+            || !valid_replay
         {
             return Err(ConfigError::InvalidIngestConfig);
         }
@@ -2323,6 +2422,19 @@ impl TryFrom<RawIngestConfig> for IngestConfig {
                 cleanup_interval,
                 cleanup_batch_size: raw.attachments.cleanup_batch_size,
                 cleanup_max_pages: raw.attachments.cleanup_max_pages,
+            },
+            replay: ReplaySettings {
+                max_segment_bytes: usize::try_from(replay_segment.get())
+                    .map_err(|_| ConfigError::InvalidIngestConfig)?,
+                max_decompressed_segment_bytes: usize::try_from(replay_decompressed.get())
+                    .map_err(|_| ConfigError::InvalidIngestConfig)?,
+                max_events_per_segment: raw.replay.max_events_per_segment,
+                queue_capacity: raw.replay.queue_capacity,
+                max_queued_bytes: u32::try_from(replay_queued.get())
+                    .map_err(|_| ConfigError::InvalidIngestConfig)?,
+                orphan_grace: replay_orphan_grace,
+                cleanup_interval: replay_cleanup_interval,
+                cleanup_batch_size: raw.replay.cleanup_batch_size,
             },
         })
     }
@@ -2421,6 +2533,7 @@ impl TryFrom<RawRetentionSettings> for RetentionSettings {
             && (1..=8_760).contains(&raw.session_active_max_hours)
             && (1..=3_650).contains(&raw.monitor_runs_days)
             && (1..=3_650).contains(&raw.metrics_days)
+            && (1..=3_650).contains(&raw.replays_days)
             && (1..=1_000_000).contains(&raw.metric_max_series_per_project);
         valid
             .then_some(Self {
@@ -2437,6 +2550,8 @@ impl TryFrom<RawRetentionSettings> for RetentionSettings {
                 metrics_days: raw.metrics_days,
                 metric_max_series_per_project: raw.metric_max_series_per_project,
                 metric_archive: raw.metric_archive,
+                replays_days: raw.replays_days,
+                replay_archive: raw.replay_archive,
             })
             .ok_or(ConfigError::InvalidRetentionConfig)
     }

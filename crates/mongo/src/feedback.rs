@@ -84,6 +84,9 @@ impl MongoFeedbackStore {
         if let Some(status) = query.status {
             filter.insert("s", status.as_str());
         }
+        if let Some(replay_id) = query.replay_id {
+            filter.insert("r", binary(replay_id.as_bytes()));
+        }
         if let Some(before) = query.before {
             let key = EventKey::new(project_id, before.feedback_id);
             filter.insert(
@@ -443,6 +446,10 @@ pub(crate) fn feedback_indexes() -> Vec<IndexModel> {
             doc! { "p": 1, "s": 1, "a": -1, "_id": -1 },
             "feedback_project_status_timeline",
         ),
+        index(
+            doc! { "p": 1, "r": 1, "a": -1, "_id": -1 },
+            "feedback_project_replay_timeline",
+        ),
         IndexModel::builder()
             .keys(doc! { "x": 1 })
             .options(
@@ -460,6 +467,7 @@ pub(crate) fn feedback_index_names() -> BTreeSet<&'static str> {
         "_id_",
         "feedback_expiry_ttl",
         "feedback_project_status_timeline",
+        "feedback_project_replay_timeline",
         "feedback_project_timeline",
     ])
 }

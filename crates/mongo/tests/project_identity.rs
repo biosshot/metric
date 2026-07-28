@@ -239,6 +239,7 @@ fn project(id: i32, organization_id: u64, slug: &str) -> ProjectIdentity {
             feedback: true,
             check_in: true,
             metric: true,
+            replay: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

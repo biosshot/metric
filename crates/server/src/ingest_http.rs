@@ -20,8 +20,8 @@ use futures_util::{TryStreamExt, future};
 use metric_application::{
     ingest::{
         DisabledCategory, DiscardedItem, IngestError, IngestErrorKind, IngestRequest, IngestResult,
-        IngestService, MinidumpRequest, PendingAttachment, PendingMetricContainer, PendingSignal,
-        PendingSignalKind, PrimaryEvent,
+        IngestService, MinidumpRequest, PendingAttachment, PendingMetricContainer, PendingReplay,
+        PendingSignal, PendingSignalKind, PrimaryEvent,
     },
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
@@ -367,6 +367,7 @@ async fn process_request(
             EnvelopeLimits {
                 max_items: state.config.max_envelope_items,
                 max_event_bytes: state.config.max_event_bytes,
+                max_replay_bytes: state.config.replay.max_segment_bytes,
             },
             AttachmentLimits {
                 max_count: if state.config.attachments.enabled {
@@ -385,6 +386,7 @@ async fn process_request(
             primary: Some(parse_store_event(&decoded, state.config.max_event_bytes)?),
             signals: Vec::new(),
             metrics: Vec::new(),
+            replays: Vec::new(),
             check_ins: Vec::new(),
             attachments: Vec::new(),
             discarded: Vec::new(),
@@ -432,6 +434,14 @@ fn map_request(
             .map(|metric| PendingMetricContainer {
                 item_count: metric.item_count,
                 raw_json: metric.bytes,
+            })
+            .collect(),
+        replays: parsed
+            .replays
+            .into_iter()
+            .map(|replay| PendingReplay {
+                event_json: replay.event,
+                recording: replay.recording,
             })
             .collect(),
         check_ins: parsed

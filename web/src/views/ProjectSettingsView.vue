@@ -115,6 +115,7 @@ const policy = reactive<ProjectPolicy>({
     feedback: true,
     check_in: true,
     metric: true,
+    replay: false,
   },
   limits: { max_event_bytes: 1_048_576, max_events_per_second: null, burst: null },
   inbound_filters: [],
@@ -328,6 +329,17 @@ const cancelDeletion = useMutation({
           <span>
             <strong>Application Metrics</strong>
             <small>Accept bounded SDK counters, gauges, and distributions.</small>
+          </span>
+        </label>
+        <label class="check-control">
+          <input
+            v-model="policy.items.replay"
+            type="checkbox"
+            :disabled="!session.has('project:admin')"
+          />
+          <span>
+            <strong>Session Replay</strong>
+            <small>Requires client-side masking; recording bytes remain opaque to Metric.</small>
           </span>
         </label>
       </div>

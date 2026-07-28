@@ -1019,6 +1019,33 @@ impl IdentityService {
         .await
     }
 
+    pub async fn record_replay_audit(
+        &self,
+        context: &AuthContext,
+        request_id: RequestCorrelationId,
+        project_id: ProjectId,
+        replay_id: metric_domain::EventId,
+    ) -> Result<(), AuthError> {
+        if !context.permissions.contains(Permission::ProjectRead) {
+            return Err(AuthError::Forbidden);
+        }
+        let metadata = AuditMetadata::new([(
+            AuditMetadataKey::ProjectId,
+            AuditMetadataValue::new(project_id.get().to_string())
+                .map_err(|_| AuthError::Forbidden)?,
+        )])
+        .map_err(|_| AuthError::Forbidden)?;
+        self.audit(
+            context,
+            request_id,
+            AuditAction::ReplayAccessed,
+            "replay",
+            replay_id.to_string(),
+            metadata,
+        )
+        .await
+    }
+
     pub async fn validate_issue_assignee(
         &self,
         context: &AuthContext,
@@ -2222,6 +2249,50 @@ mod tests {
                 .authenticate_session(&rotated.session, None, false, context.organization_id,)
                 .await,
             Err(AuthError::InvalidCredential)
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_access_requires_project_read_and_is_audited() {
+        let (service, store, _clock, owner, _session) = bootstrapped().await;
+        let project_id = ProjectId::new(42).unwrap();
+        let replay_id = metric_domain::EventId::from_bytes([4; 16]);
+        service
+            .record_replay_audit(
+                &owner,
+                BoundedId::new("replay-access-1").unwrap(),
+                project_id,
+                replay_id,
+            )
+            .await
+            .unwrap();
+        {
+            let state = store.state.lock().unwrap();
+            let audit = state.audits.last().unwrap();
+            assert_eq!(audit.action, AuditAction::ReplayAccessed);
+            assert_eq!(audit.target_kind, "replay");
+            assert_eq!(audit.target_id.as_str(), replay_id.to_string());
+            assert_eq!(
+                audit.metadata.values(),
+                &[(
+                    AuditMetadataKey::ProjectId,
+                    AuditMetadataValue::new("42").unwrap()
+                )]
+            );
+        }
+
+        let mut unauthorized = owner;
+        unauthorized.permissions = PermissionSet::empty();
+        assert_eq!(
+            service
+                .record_replay_audit(
+                    &unauthorized,
+                    BoundedId::new("replay-access-2").unwrap(),
+                    project_id,
+                    replay_id,
+                )
+                .await,
+            Err(AuthError::Forbidden)
         );
     }
 

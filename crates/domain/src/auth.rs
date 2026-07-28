@@ -455,6 +455,7 @@ pub enum AuditAction {
     IncidentCapsuleExported,
     NotificationDestinationUpserted,
     AlertRuleUpserted,
+    ReplayAccessed,
 }
 
 impl AuditAction {
@@ -482,6 +483,7 @@ impl AuditAction {
             Self::IncidentCapsuleExported => "incident_capsule.exported",
             Self::NotificationDestinationUpserted => "notification_destination.upserted",
             Self::AlertRuleUpserted => "alert_rule.upserted",
+            Self::ReplayAccessed => "replay.accessed",
         }
     }
 }

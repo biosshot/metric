@@ -133,6 +133,7 @@ describe('native API client', () => {
       feedback_enabled: true,
       check_in_enabled: true,
       metric_enabled: true,
+      replay_enabled: false,
       max_event_bytes: 1_048_576,
       max_events_per_second: null,
       burst: null,
@@ -164,6 +165,7 @@ describe('native API client', () => {
         feedback: true,
         check_in: true,
         metric: true,
+        replay: false,
       },
       limits: {
         max_event_bytes: 1_048_576,

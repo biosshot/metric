@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
@@ -11,7 +12,11 @@ import { api } from '../api/client';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
+const route = useRoute();
 const projectId = computed(() => session.selectedProjectId ?? '');
+const replayId = computed(() =>
+  typeof route.query.replay_id === 'string' ? route.query.replay_id : '',
+);
 const status = ref('');
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
@@ -23,8 +28,20 @@ const statusOptions: SelectOption[] = [
 ];
 
 const feedback = useQuery({
-  queryKey: computed(() => ['feedback', projectId.value, status.value, cursor.value]),
-  queryFn: () => api.feedback(projectId.value, status.value || undefined, cursor.value),
+  queryKey: computed(() => [
+    'feedback',
+    projectId.value,
+    status.value,
+    cursor.value,
+    replayId.value,
+  ]),
+  queryFn: () =>
+    api.feedback(
+      projectId.value,
+      status.value || undefined,
+      cursor.value,
+      replayId.value || undefined,
+    ),
   enabled: computed(() => Boolean(projectId.value)),
 });
 
@@ -58,7 +75,10 @@ function formatTime(value: string): string {
       <div>
         <p class="eyebrow">{{ session.selectedProject?.slug }} / users</p>
         <h1>User Feedback</h1>
-        <p>Read SDK-submitted reports, follow their investigation links, and triage status.</p>
+        <p v-if="replayId">Feedback linked to Replay {{ replayId }}.</p>
+        <p v-else>
+          Read SDK-submitted reports, follow their investigation links, and triage status.
+        </p>
       </div>
       <BaseSelect v-model="status" class="compact-select" :options="statusOptions" />
     </header>

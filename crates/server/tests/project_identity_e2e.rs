@@ -98,6 +98,7 @@ fn app(service: Arc<IngestService>, root: &ShutdownRoot) -> Router {
         event_codec: Default::default(),
         backlog: Default::default(),
         attachments: Default::default(),
+        replay: Default::default(),
     };
     http::router(
         root.signal(),
@@ -150,6 +151,7 @@ async fn seed(store: &MongoProjectStore) -> Result<(), Box<dyn Error>> {
                 feedback: true,
                 check_in: true,
                 metric: true,
+                replay: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,

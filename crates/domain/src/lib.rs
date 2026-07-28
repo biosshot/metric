@@ -20,6 +20,7 @@ pub mod monitors;
 pub mod notifications;
 pub mod processing;
 pub mod releases;
+pub mod replays;
 pub mod sessions;
 pub mod signals;
 pub mod symbolication;
@@ -490,6 +491,7 @@ pub struct ItemCapabilities {
     pub feedback: bool,
     pub check_in: bool,
     pub metric: bool,
+    pub replay: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

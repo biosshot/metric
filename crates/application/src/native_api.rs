@@ -27,6 +27,7 @@ use metric_domain::{
         UptimeMonitorConfig,
     },
     releases::{DeployRecord, ReleaseIssueSummary, ReleaseRecord, RepositoryReference},
+    replays::{ReplayPage, ReplayRecord, ReplaySegment},
     signals::{
         LogId, LogRecord, LogSeverity, PerformanceBucket, SignalCursor, SpanRecord, TraceId,
         TraceView,
@@ -35,7 +36,7 @@ use metric_domain::{
 use metric_ports::{
     BlobReadSession, BlobStore, BlobStoreError, Clock, FeedbackQuery, FeedbackStore,
     FeedbackStoreError, InvestigationStore, InvestigationStoreError, LogQuery, MonitorStore,
-    PerformanceQuery, SegmentQuery, SignalStore, SignalStoreError,
+    PerformanceQuery, ReplayQuery, ReplayStore, SegmentQuery, SignalStore, SignalStoreError,
 };
 use thiserror::Error;
 
@@ -156,6 +157,7 @@ pub struct PerformanceListRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct FeedbackListRequest<'a> {
     pub status: Option<FeedbackStatus>,
+    pub replay_id: Option<EventId>,
     pub cursor: Option<&'a str>,
     pub limit: Option<usize>,
 }
@@ -189,6 +191,7 @@ pub struct NativeApiService {
     explore: Option<Arc<ExploreService>>,
     dashboards: Option<Arc<DashboardService>>,
     monitor_store: Option<Arc<dyn MonitorStore>>,
+    replay_store: Option<Arc<dyn ReplayStore>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +231,7 @@ impl NativeApiService {
             explore: None,
             dashboards: None,
             monitor_store: None,
+            replay_store: None,
         }
     }
 
@@ -262,6 +266,78 @@ impl NativeApiService {
     pub fn with_monitor_store(mut self, monitor_store: Arc<dyn MonitorStore>) -> Self {
         self.monitor_store = Some(monitor_store);
         self
+    }
+
+    #[must_use]
+    pub fn with_replay_store(mut self, replay_store: Arc<dyn ReplayStore>) -> Self {
+        self.replay_store = Some(replay_store);
+        self
+    }
+
+    pub async fn replays(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        limit: Option<usize>,
+    ) -> Result<ReplayPage, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        self.replay_store()?
+            .list_replays(
+                project_id,
+                ReplayQuery {
+                    before: None,
+                    limit: page_size(limit)?,
+                },
+            )
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn replay(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        replay_id: EventId,
+    ) -> Result<ReplayRecord, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        self.replay_store()?
+            .load_replay(project_id, replay_id)
+            .await
+            .map_err(map_signal_error)
+    }
+
+    pub async fn open_replay_segment(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        replay_id: EventId,
+        segment_id: u32,
+    ) -> Result<(ReplaySegment, Box<dyn BlobReadSession>), NativeApiError> {
+        let replay = self.replay(context, project_id, replay_id).await?;
+        let segment = replay
+            .segments
+            .into_iter()
+            .find(|segment| segment.segment_id == segment_id)
+            .ok_or(NativeApiError::NotFound)?;
+        if segment
+            .object
+            .key
+            .replay_relation()
+            .map_err(|_| NativeApiError::Unavailable)?
+            != (project_id, replay_id, segment_id)
+        {
+            return Err(NativeApiError::Unavailable);
+        }
+        let reader = self
+            .blob_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)?
+            .open(&segment.object.key)
+            .await
+            .map_err(map_blob_error)?;
+        Ok((segment, reader))
     }
 
     pub async fn monitors(
@@ -601,8 +677,14 @@ impl NativeApiService {
     ) -> Result<NativePage<FeedbackRecord>, NativeApiError> {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
-        let normalized = request.status.map_or("all", FeedbackStatus::as_str);
-        let digest = cursor_digest(project_id, normalized, CursorKind::Feedback);
+        let normalized = format!(
+            "{}:{}",
+            request.status.map_or("all", FeedbackStatus::as_str),
+            request
+                .replay_id
+                .map_or_else(|| "all".to_owned(), |value| value.to_string())
+        );
+        let digest = cursor_digest(project_id, &normalized, CursorKind::Feedback);
         let before = request
             .cursor
             .map(|value| decode_feedback_anchor(value, digest))
@@ -613,6 +695,7 @@ impl NativeApiService {
                 project_id,
                 FeedbackQuery {
                     status: request.status,
+                    replay_id: request.replay_id,
                     before,
                     limit: page_size(request.limit)?,
                 },
@@ -703,6 +786,12 @@ impl NativeApiService {
 
     fn monitor_store(&self) -> Result<&Arc<dyn MonitorStore>, NativeApiError> {
         self.monitor_store
+            .as_ref()
+            .ok_or(NativeApiError::Unavailable)
+    }
+
+    fn replay_store(&self) -> Result<&Arc<dyn ReplayStore>, NativeApiError> {
+        self.replay_store
             .as_ref()
             .ok_or(NativeApiError::Unavailable)
     }

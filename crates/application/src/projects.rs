@@ -735,6 +735,7 @@ mod tests {
                 feedback: true,
                 check_in: true,
                 metric: true,
+                replay: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: Default::default(),
@@ -907,6 +908,7 @@ mod tests {
                     feedback: true,
                     check_in: true,
                     metric: true,
+                    replay: true,
                 },
                 limits: ProjectIngestLimits::default(),
             })

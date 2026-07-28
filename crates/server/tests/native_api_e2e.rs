@@ -381,6 +381,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
                     feedback: true,
                     check_in: true,
                     metric: true,
+                    replay: true,
                 },
                 limits: ProjectIngestLimits::default(),
             },
@@ -788,6 +789,7 @@ async fn setup(database: &Database) -> Result<MongoProjectStore, Box<dyn Error>>
                 feedback: true,
                 check_in: true,
                 metric: true,
+                replay: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,
@@ -963,6 +965,7 @@ fn ingest_config() -> IngestConfig {
         event_codec: Default::default(),
         backlog: Default::default(),
         attachments: Default::default(),
+        replay: Default::default(),
     }
 }
 

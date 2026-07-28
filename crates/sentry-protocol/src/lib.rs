@@ -16,6 +16,7 @@ const MAX_CLIENT_REPORT_TEXT_BYTES: usize = 64;
 pub struct EnvelopeLimits {
     pub max_items: usize,
     pub max_event_bytes: usize,
+    pub max_replay_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,11 +44,29 @@ pub struct ParsedEnvelope {
     pub signals: Vec<RawSignal>,
     /// Pinned Sentry SDK v10 trace-metric containers.
     pub metrics: Vec<RawMetricContainer>,
+    /// Pinned browser SDK Replay metadata/recording pairs.
+    pub replays: Vec<RawReplay>,
     /// Cron check-ins have an independent admission and storage lane.
     pub check_ins: Vec<RawCheckIn>,
     pub attachments: Vec<RawAttachment>,
     pub discarded: Vec<DiscardedItem>,
     pub client_report_quantity: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawReplay {
+    pub event: Box<[u8]>,
+    pub recording: Box<[u8]>,
+}
+
+impl std::fmt::Debug for RawReplay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawReplay")
+            .field("event_bytes", &self.event.len())
+            .field("recording_bytes", &self.recording.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -274,6 +293,8 @@ pub fn parse_envelope_with_attachments(
     let mut primary = None;
     let mut signals = Vec::new();
     let mut metrics = Vec::new();
+    let mut replay_events = Vec::new();
+    let mut replay_recordings = Vec::new();
     let mut check_ins = Vec::new();
     let mut attachments = Vec::new();
     let mut attachment_bytes = 0_usize;
@@ -400,6 +421,18 @@ pub fn parse_envelope_with_attachments(
                     bytes: payload.into(),
                 });
             }
+            ItemClass::ReplayEvent => {
+                if length > limits.max_event_bytes {
+                    return Err(ProtocolError::too_large("replay_event_too_large"));
+                }
+                replay_events.push(Box::<[u8]>::from(payload));
+            }
+            ItemClass::ReplayRecording => {
+                if length > limits.max_replay_bytes {
+                    return Err(ProtocolError::too_large("replay_recording_too_large"));
+                }
+                replay_recordings.push(Box::<[u8]>::from(payload));
+            }
             ItemClass::CheckIn => {
                 if length > limits.max_event_bytes {
                     return Err(ProtocolError::too_large("check_in_too_large"));
@@ -423,18 +456,29 @@ pub fn parse_envelope_with_attachments(
     if primary.is_none()
         && signals.is_empty()
         && metrics.is_empty()
+        && replay_events.is_empty()
+        && replay_recordings.is_empty()
         && check_ins.is_empty()
         && discarded.is_empty()
         && client_report_quantity == 0
     {
         return Err(ProtocolError::invalid("empty_envelope"));
     }
+    if replay_events.len() != replay_recordings.len() {
+        return Err(ProtocolError::invalid("incomplete_replay_pair"));
+    }
+    let replays = replay_events
+        .into_iter()
+        .zip(replay_recordings)
+        .map(|(event, recording)| RawReplay { event, recording })
+        .collect();
     Ok(ParsedEnvelope {
         event_id,
         dsn,
         primary,
         signals,
         metrics,
+        replays,
         check_ins,
         attachments,
         discarded,
@@ -604,6 +648,8 @@ enum ItemClass {
     Event,
     Signal(RawSignalKind),
     Metric,
+    ReplayEvent,
+    ReplayRecording,
     CheckIn,
     ClientReport,
     Attachment,
@@ -620,7 +666,8 @@ fn classify_item(kind: &str) -> ItemClass {
         "session" => ItemClass::Signal(RawSignalKind::Session),
         "sessions" => ItemClass::Disabled(DisabledCategory::Session),
         "profile" | "profile_chunk" => ItemClass::Disabled(DisabledCategory::Profile),
-        "replay_event" | "replay_recording" => ItemClass::Disabled(DisabledCategory::Replay),
+        "replay_event" => ItemClass::ReplayEvent,
+        "replay_recording" => ItemClass::ReplayRecording,
         "check_in" => ItemClass::CheckIn,
         "span" => ItemClass::Signal(RawSignalKind::Span),
         "trace_metric" => ItemClass::Metric,
@@ -655,6 +702,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 100,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -669,6 +717,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 100,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -688,6 +737,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 100,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -717,6 +767,7 @@ mod tests {
                 EnvelopeLimits {
                     max_items: 10,
                     max_event_bytes: 1024,
+                    max_replay_bytes: 1024,
                 },
             )
             .unwrap();
@@ -737,6 +788,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 10,
                 max_event_bytes: 1_024,
+                max_replay_bytes: 1_024,
             },
         )
         .unwrap();
@@ -745,6 +797,75 @@ mod tests {
         assert!(parsed.primary.is_none());
         assert!(parsed.signals.is_empty());
         assert!(parsed.discarded.is_empty());
+    }
+
+    #[test]
+    fn replay_event_and_recording_are_a_bounded_pair() {
+        let event = r#"{"replay_id":"0123456789abcdef0123456789abcdef","segment_id":0}"#;
+        let recording = "{\"segment_id\":0}\n[]";
+        let body = format!(
+            "{{}}\n{{\"type\":\"replay_event\",\"length\":{}}}\n{}\n{{\"type\":\"replay_recording\",\"length\":{}}}\n{}",
+            event.len(),
+            event,
+            recording.len(),
+            recording
+        );
+        let parsed = parse_envelope(
+            body.as_bytes(),
+            EnvelopeLimits {
+                max_items: 10,
+                max_event_bytes: 1024,
+                max_replay_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.replays.len(), 1);
+        assert_eq!(parsed.replays[0].event.as_ref(), event.as_bytes());
+        assert_eq!(parsed.replays[0].recording.as_ref(), recording.as_bytes());
+    }
+
+    #[test]
+    fn incomplete_or_oversized_replay_is_rejected() {
+        let event = r#"{"replay_id":"0123456789abcdef0123456789abcdef","segment_id":0}"#;
+        let incomplete = envelope(
+            &format!(r#"{{"type":"replay_event","length":{}}}"#, event.len()),
+            event,
+        );
+        assert_eq!(
+            parse_envelope(
+                &incomplete,
+                EnvelopeLimits {
+                    max_items: 10,
+                    max_event_bytes: 1024,
+                    max_replay_bytes: 1024,
+                },
+            )
+            .unwrap_err()
+            .code,
+            "incomplete_replay_pair"
+        );
+
+        let recording = "{\"segment_id\":0}\n[]";
+        let body = format!(
+            "{{}}\n{{\"type\":\"replay_event\",\"length\":{}}}\n{}\n{{\"type\":\"replay_recording\",\"length\":{}}}\n{}",
+            event.len(),
+            event,
+            recording.len(),
+            recording
+        );
+        assert_eq!(
+            parse_envelope(
+                body.as_bytes(),
+                EnvelopeLimits {
+                    max_items: 10,
+                    max_event_bytes: 1024,
+                    max_replay_bytes: recording.len() - 1,
+                },
+            )
+            .unwrap_err()
+            .code,
+            "replay_recording_too_large"
+        );
     }
 
     #[test]
@@ -759,6 +880,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 1,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -782,6 +904,7 @@ mod tests {
                 EnvelopeLimits {
                     max_items: 1,
                     max_event_bytes: 1024,
+                    max_replay_bytes: 1024,
                 },
             )
             .unwrap_err()
@@ -805,6 +928,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 10,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
             AttachmentLimits {
                 max_count: 1,
@@ -821,6 +945,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 10,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
             AttachmentLimits {
                 max_count: 1,
@@ -844,6 +969,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 100,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -861,6 +987,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 2,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -874,6 +1001,7 @@ mod tests {
                 EnvelopeLimits {
                     max_items: 1,
                     max_event_bytes: 16,
+                    max_replay_bytes: 16,
                 },
             )
             .unwrap_err()
@@ -891,6 +1019,7 @@ mod tests {
                 EnvelopeLimits {
                     max_items: 100,
                     max_event_bytes: 1024,
+                    max_replay_bytes: 1024,
                 },
             )
             .unwrap_err()
@@ -908,6 +1037,7 @@ mod tests {
                 EnvelopeLimits {
                     max_items: 1,
                     max_event_bytes: EVENT.len() + 16,
+                    max_replay_bytes: EVENT.len() + 16,
                 },
             );
             if declared == EVENT.len() {
@@ -933,6 +1063,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 100,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -955,6 +1086,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 1,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -988,6 +1120,7 @@ mod tests {
             EnvelopeLimits {
                 max_items: 100,
                 max_event_bytes: 1024,
+                max_replay_bytes: 1024,
             },
         )
         .unwrap();
@@ -1007,6 +1140,7 @@ mod tests {
                 EnvelopeLimits {
                     max_items: 100,
                     max_event_bytes: 1024,
+                    max_replay_bytes: 1024,
                 },
             )
             .is_err()
@@ -1029,6 +1163,7 @@ mod tests {
                     EnvelopeLimits {
                         max_items: 100,
                         max_event_bytes: 1024,
+                        max_replay_bytes: 1024,
                     },
                 )
                 .unwrap(),

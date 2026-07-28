@@ -161,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             feedback: true,
             check_in: true,
             metric: true,
+            replay: true,
         },
         limits: ProjectIngestLimits::default(),
         inbound_filters: Default::default(),
@@ -260,5 +261,6 @@ fn benchmark_config() -> IngestConfig {
         event_codec: Default::default(),
         backlog: Default::default(),
         attachments: Default::default(),
+        replay: Default::default(),
     }
 }
