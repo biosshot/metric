@@ -2,9 +2,11 @@
 import { computed, ref } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
+import AppIcon from '../components/AppIcon.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
+import TraceSectionNav from '../components/TraceSectionNav.vue';
 import { api } from '../api/client';
 import { useSessionStore } from '../stores/session';
 
@@ -12,20 +14,23 @@ const session = useSessionStore();
 const service = ref('');
 const environment = ref('');
 const release = ref('');
+const appliedService = ref('');
+const appliedEnvironment = ref('');
+const appliedRelease = ref('');
 const projectId = computed(() => session.selectedProjectId ?? '');
 const performance = useQuery({
   queryKey: computed(() => [
     'performance',
     projectId.value,
-    service.value,
-    environment.value,
-    release.value,
+    appliedService.value,
+    appliedEnvironment.value,
+    appliedRelease.value,
   ]),
   queryFn: () =>
     api.performance(projectId.value, {
-      service: service.value.trim() || undefined,
-      environment: environment.value.trim() || undefined,
-      release: release.value.trim() || undefined,
+      service: appliedService.value || undefined,
+      environment: appliedEnvironment.value || undefined,
+      release: appliedRelease.value || undefined,
     }),
   enabled: computed(() => Boolean(projectId.value)),
 });
@@ -35,6 +40,19 @@ const total = computed(() =>
 const failed = computed(() =>
   (performance.data.value?.items ?? []).reduce((sum, item) => sum + item.failure_count, 0),
 );
+
+function applyFilters(): void {
+  appliedService.value = service.value.trim();
+  appliedEnvironment.value = environment.value.trim();
+  appliedRelease.value = release.value.trim();
+}
+
+function resetFilters(): void {
+  service.value = '';
+  environment.value = '';
+  release.value = '';
+  applyFilters();
+}
 </script>
 
 <template>
@@ -45,21 +63,36 @@ const failed = computed(() =>
         <h1>Performance Insights</h1>
         <p>Bounded hourly summaries built from durable root spans.</p>
       </div>
-      <div class="compact-filter-group">
-        <label class="compact-filter">
-          <span>Service</span>
-          <input v-model="service" maxlength="256" placeholder="All services" />
-        </label>
-        <label class="compact-filter">
-          <span>Environment</span>
-          <input v-model="environment" maxlength="128" placeholder="All environments" />
-        </label>
-        <label class="compact-filter">
-          <span>Release</span>
-          <input v-model="release" maxlength="256" placeholder="All releases" />
-        </label>
-      </div>
     </header>
+    <TraceSectionNav />
+    <form
+      class="signal-toolbar signal-toolbar--compact"
+      role="search"
+      @submit.prevent="applyFilters"
+    >
+      <label>
+        <span class="sr-only">Service</span>
+        <input v-model="service" maxlength="256" placeholder="Service" />
+      </label>
+      <label>
+        <span class="sr-only">Environment</span>
+        <input v-model="environment" maxlength="128" placeholder="Environment" />
+      </label>
+      <label>
+        <span class="sr-only">Release</span>
+        <input v-model="release" maxlength="256" placeholder="Release" />
+      </label>
+      <div class="signal-toolbar__actions">
+        <button class="button button--primary" type="submit">
+          <AppIcon name="search" :size="16" />
+          Search
+        </button>
+        <button class="button button--secondary" type="button" @click="resetFilters">
+          <AppIcon name="close" :size="16" />
+          Reset
+        </button>
+      </div>
+    </form>
     <LoadingPanel v-if="performance.isPending.value" label="Loading performance summaries…" />
     <ApiErrorPanel
       v-else-if="performance.error.value"

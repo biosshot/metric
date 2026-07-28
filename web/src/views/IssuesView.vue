@@ -18,6 +18,7 @@ type InvestigationResult = Page<Issue> | (Page<Event> & { candidates_examined: n
 const session = useSessionStore();
 const route = useRoute();
 const status = ref('');
+const submittedStatus = ref('');
 const initialSearch = typeof route.query.q === 'string' ? route.query.q : '';
 const search = ref(initialSearch);
 const submittedSearch = ref(initialSearch);
@@ -34,7 +35,7 @@ const projectId = computed(() => session.selectedProjectId ?? '');
 const queryKey = computed(() => [
   submittedSearch.value ? 'event-search' : 'issues',
   projectId.value,
-  status.value,
+  submittedStatus.value,
   submittedSearch.value,
   cursor.value,
 ]);
@@ -44,7 +45,7 @@ const result = useQuery<InvestigationResult>({
   queryFn: () =>
     submittedSearch.value
       ? api.search(projectId.value, submittedSearch.value, cursor.value)
-      : api.issues(projectId.value, status.value || undefined, cursor.value),
+      : api.issues(projectId.value, submittedStatus.value || undefined, cursor.value),
   enabled: computed(() => Boolean(projectId.value)),
 });
 const issueItems = computed(() =>
@@ -58,14 +59,23 @@ const candidatesExamined = computed(() => {
   return value && 'candidates_examined' in value ? value.candidates_examined : null;
 });
 
-watch([projectId, status], () => resetPage());
+watch(projectId, () => resetPage(false));
 
 function submitSearch(): void {
   submittedSearch.value = search.value.trim();
+  submittedStatus.value = status.value;
   resetPage(false);
 }
 
 function clearSearch(): void {
+  search.value = '';
+  submittedSearch.value = '';
+  resetPage(false);
+}
+
+function resetFilters(): void {
+  status.value = '';
+  submittedStatus.value = '';
   search.value = '';
   submittedSearch.value = '';
   resetPage(false);
@@ -107,13 +117,13 @@ function formatTime(value: string): string {
         <h1>Issues</h1>
         <p>Errors grouped by their stable failure signature.</p>
       </div>
-      <RouterLink class="button button--secondary" to="/project/setup">
-        <AppIcon name="connect" :size="16" />
-        Configure SDK
-      </RouterLink>
     </header>
 
-    <form class="issue-toolbar" role="search" @submit.prevent="submitSearch">
+    <form
+      class="signal-toolbar signal-toolbar--issues"
+      role="search"
+      @submit.prevent="submitSearch"
+    >
       <label class="search-field">
         <span class="sr-only">Search events</span>
         <input
@@ -123,19 +133,6 @@ function formatTime(value: string): string {
           maxlength="4096"
         />
       </label>
-      <button class="button button--primary" type="submit">
-        <AppIcon name="search" :size="16" />
-        Search
-      </button>
-      <button
-        v-if="submittedSearch"
-        class="button button--secondary"
-        type="button"
-        @click="clearSearch"
-      >
-        <AppIcon name="close" :size="16" />
-        Clear
-      </button>
       <BaseSelect
         v-if="!submittedSearch"
         v-model="status"
@@ -143,6 +140,21 @@ function formatTime(value: string): string {
         :options="statusOptions"
         aria-label="Issue status"
       />
+      <div class="signal-toolbar__actions">
+        <button class="button button--primary" type="submit">
+          <AppIcon name="search" :size="16" />
+          Search
+        </button>
+        <button
+          v-if="submittedSearch || submittedStatus"
+          class="button button--secondary"
+          type="button"
+          @click="submittedSearch ? clearSearch() : resetFilters()"
+        >
+          <AppIcon name="close" :size="16" />
+          Reset
+        </button>
+      </div>
     </form>
 
     <div v-if="submittedSearch" class="search-context">

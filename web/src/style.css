@@ -1737,15 +1737,58 @@ label small,
   gap: 0.75rem;
 }
 
+.signal-toolbar--compact {
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) max-content;
+}
+
+.signal-toolbar--issues {
+  grid-template-columns: minmax(280px, 1fr) minmax(180px, 0.35fr) max-content;
+}
+
 .signal-toolbar label,
 .compact-filter {
   display: grid;
   gap: 0.35rem;
 }
 
-.signal-toolbar > .button {
+.signal-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.signal-toolbar__actions .button {
   align-self: end;
   white-space: nowrap;
+}
+
+.section-tabs {
+  display: flex;
+  gap: 0.25rem;
+  width: fit-content;
+  margin: -0.85rem 0 1rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.section-tabs a {
+  padding: 0.55rem 0.85rem;
+  border-radius: calc(var(--radius-small) - 3px);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.section-tabs a:hover {
+  color: var(--text);
+}
+
+.section-tabs a.router-link-active {
+  background: var(--semantic-info-surface);
+  color: var(--text);
 }
 
 .compact-filter span {
@@ -2733,6 +2776,11 @@ label small,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .signal-toolbar--compact,
+  .signal-toolbar--issues {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .compact-filter-group {
     flex-wrap: wrap;
   }
@@ -2932,8 +2980,12 @@ label small,
     flex-direction: column;
   }
 
-  .signal-toolbar .button {
+  .signal-toolbar__actions {
     width: 100%;
+  }
+
+  .signal-toolbar__actions .button {
+    flex: 1;
   }
 
   .log-row,

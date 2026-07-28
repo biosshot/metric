@@ -3,9 +3,11 @@ import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
+import AppIcon from '../components/AppIcon.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
+import TraceSectionNav from '../components/TraceSectionNav.vue';
 import { api } from '../api/client';
 import { useSessionStore } from '../stores/session';
 
@@ -14,6 +16,9 @@ const route = useRoute();
 const service = ref('');
 const environment = ref('');
 const release = ref(typeof route.query.release === 'string' ? route.query.release : '');
+const appliedService = ref('');
+const appliedEnvironment = ref('');
+const appliedRelease = ref(release.value);
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -21,25 +26,40 @@ const transactions = useQuery({
   queryKey: computed(() => [
     'transactions',
     projectId.value,
-    service.value,
-    environment.value,
-    release.value,
+    appliedService.value,
+    appliedEnvironment.value,
+    appliedRelease.value,
     cursor.value,
   ]),
   queryFn: () =>
     api.transactions(projectId.value, {
-      service: service.value.trim() || undefined,
-      environment: environment.value.trim() || undefined,
-      release: release.value.trim() || undefined,
+      service: appliedService.value || undefined,
+      environment: appliedEnvironment.value || undefined,
+      release: appliedRelease.value || undefined,
       cursor: cursor.value,
     }),
   enabled: computed(() => Boolean(projectId.value)),
 });
 
-watch([projectId, service, environment, release], () => {
+watch(projectId, () => {
   cursor.value = null;
   history.value = [];
 });
+
+function applyFilters(): void {
+  appliedService.value = service.value.trim();
+  appliedEnvironment.value = environment.value.trim();
+  appliedRelease.value = release.value.trim();
+  cursor.value = null;
+  history.value = [];
+}
+
+function resetFilters(): void {
+  service.value = '';
+  environment.value = '';
+  release.value = '';
+  applyFilters();
+}
 
 function nextPage(): void {
   const next = transactions.data.value?.next_cursor;
@@ -58,24 +78,39 @@ function previousPage(): void {
     <header class="page-header">
       <div>
         <p class="eyebrow">{{ session.selectedProject?.slug }} / tracing</p>
-        <h1>Transactions</h1>
+        <h1>Traces</h1>
         <p>Root segments from Sentry transactions and streamed spans.</p>
       </div>
-      <div class="compact-filter-group">
-        <label class="compact-filter">
-          <span>Service</span>
-          <input v-model="service" maxlength="256" placeholder="All services" />
-        </label>
-        <label class="compact-filter">
-          <span>Environment</span>
-          <input v-model="environment" maxlength="128" placeholder="All environments" />
-        </label>
-        <label class="compact-filter">
-          <span>Release</span>
-          <input v-model="release" maxlength="256" placeholder="All releases" />
-        </label>
-      </div>
     </header>
+    <TraceSectionNav />
+    <form
+      class="signal-toolbar signal-toolbar--compact"
+      role="search"
+      @submit.prevent="applyFilters"
+    >
+      <label>
+        <span class="sr-only">Service</span>
+        <input v-model="service" maxlength="256" placeholder="Service" />
+      </label>
+      <label>
+        <span class="sr-only">Environment</span>
+        <input v-model="environment" maxlength="128" placeholder="Environment" />
+      </label>
+      <label>
+        <span class="sr-only">Release</span>
+        <input v-model="release" maxlength="256" placeholder="Release" />
+      </label>
+      <div class="signal-toolbar__actions">
+        <button class="button button--primary" type="submit">
+          <AppIcon name="search" :size="16" />
+          Search
+        </button>
+        <button class="button button--secondary" type="button" @click="resetFilters">
+          <AppIcon name="close" :size="16" />
+          Reset
+        </button>
+      </div>
+    </form>
     <LoadingPanel v-if="transactions.isPending.value" label="Loading transactions…" />
     <ApiErrorPanel
       v-else-if="transactions.error.value"

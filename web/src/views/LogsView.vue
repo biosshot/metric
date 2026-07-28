@@ -15,11 +15,15 @@ import { useSessionStore } from '../stores/session';
 const session = useSessionStore();
 const route = useRoute();
 const level = ref('');
+const appliedLevel = ref('');
 const message = ref('');
 const submittedMessage = ref('');
 const service = ref('');
+const appliedService = ref('');
 const environment = ref('');
+const appliedEnvironment = ref('');
 const release = ref(typeof route.query.release === 'string' ? route.query.release : '');
+const appliedRelease = ref(release.value);
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -37,26 +41,26 @@ const logs = useQuery({
   queryKey: computed(() => [
     'logs',
     projectId.value,
-    level.value,
+    appliedLevel.value,
     submittedMessage.value,
-    service.value,
-    environment.value,
-    release.value,
+    appliedService.value,
+    appliedEnvironment.value,
+    appliedRelease.value,
     cursor.value,
   ]),
   queryFn: () =>
     api.logs(projectId.value, {
-      level: level.value || undefined,
+      level: appliedLevel.value || undefined,
       message: submittedMessage.value || undefined,
-      service: service.value.trim() || undefined,
-      environment: environment.value.trim() || undefined,
-      release: release.value.trim() || undefined,
+      service: appliedService.value || undefined,
+      environment: appliedEnvironment.value || undefined,
+      release: appliedRelease.value || undefined,
       cursor: cursor.value,
     }),
   enabled: computed(() => Boolean(projectId.value)),
 });
 
-watch([projectId, level, service, environment, release], resetPage);
+watch(projectId, resetPage);
 
 const levelCounts = computed(() => {
   const counts = new Map<string, number>();
@@ -77,7 +81,20 @@ const maximumLevelCount = computed(() =>
 
 function search(): void {
   submittedMessage.value = message.value.trim();
+  appliedLevel.value = level.value;
+  appliedService.value = service.value.trim();
+  appliedEnvironment.value = environment.value.trim();
+  appliedRelease.value = release.value.trim();
   resetPage();
+}
+
+function resetFilters(): void {
+  level.value = '';
+  message.value = '';
+  service.value = '';
+  environment.value = '';
+  release.value = '';
+  search();
 }
 
 function resetPage(): void {
@@ -136,10 +153,16 @@ function traceLink(log: StructuredLog): string | null {
         <input v-model="release" maxlength="256" placeholder="Release" />
       </label>
       <BaseSelect v-model="level" :options="levelOptions" aria-label="Log level" />
-      <button class="button button--primary" type="submit">
-        <AppIcon name="search" :size="16" />
-        Search
-      </button>
+      <div class="signal-toolbar__actions">
+        <button class="button button--primary" type="submit">
+          <AppIcon name="search" :size="16" />
+          Search
+        </button>
+        <button class="button button--secondary" type="button" @click="resetFilters">
+          <AppIcon name="close" :size="16" />
+          Reset
+        </button>
+      </div>
     </form>
 
     <LoadingPanel v-if="logs.isPending.value" label="Loading structured logs…" />
