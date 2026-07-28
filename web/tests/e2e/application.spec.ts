@@ -708,6 +708,13 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await expect(page.getByText('HTTP 503')).toBeVisible();
   await expect(page.getByText('unexpected_status')).toBeVisible();
   await expect(page.getByText('HTTP 200')).toBeVisible();
+  await page.setViewportSize({ width: 1050, height: 900 });
+  const monitorListBox = await page.locator('.monitor-list').boundingBox();
+  const monitorHistoryBox = await page.locator('.monitor-history').boundingBox();
+  expect(monitorListBox).not.toBeNull();
+  expect(monitorHistoryBox).not.toBeNull();
+  expect(monitorHistoryBox!.y).toBeGreaterThanOrEqual(monitorListBox!.y + monitorListBox!.height);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Timeline' }).click();
   await expect(page.locator('.monitor-run-chart__column')).toHaveCount(2);
   state.monitorRuns = Array.from({ length: 100 }, (_, index) => ({
@@ -998,6 +1005,14 @@ test('mobile pagination stays outside horizontal data scrolling and dashboard ca
   }
 
   await page.setViewportSize({ width: 1050, height: 900 });
+  await page.goto('/logs');
+  const tabletToolbarActionsBox = await page.locator('.signal-toolbar__actions').boundingBox();
+  const tabletTimeRangeBox = await page.locator('.time-range-control').boundingBox();
+  expect(tabletToolbarActionsBox).not.toBeNull();
+  expect(tabletTimeRangeBox).not.toBeNull();
+  expect(Math.abs(tabletTimeRangeBox!.x - tabletToolbarActionsBox!.x)).toBeLessThanOrEqual(1);
+  expect(tabletTimeRangeBox!.width).toBeGreaterThan(240);
+
   await page.goto('/dashboard?edit=1');
   const builders = page.locator('.dashboard-builder');
   await expect(builders).toHaveCount(2);

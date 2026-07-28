@@ -2666,7 +2666,7 @@ label small,
   font-size: 0.65rem;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .monitor-layout {
     grid-template-columns: 1fr;
   }
@@ -3246,6 +3246,11 @@ label small,
   .signal-toolbar__actions {
     width: 100%;
     grid-column: 1 / -1;
+  }
+
+  .signal-toolbar__actions .time-range-control {
+    width: auto;
+    flex: 1 1 240px;
   }
 
   .signal-toolbar--replays .signal-toolbar__actions {
