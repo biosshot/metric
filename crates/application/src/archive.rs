@@ -9,7 +9,8 @@ use metric_domain::{
     Timestamp,
     archive::{
         ArchiveBatch, ArchiveBatchState, ArchiveEvent, ArchiveKind, ArchiveRecords, ArchiveSignal,
-        EVENT_ARCHIVE_SCHEMA_VERSION, LOG_ARCHIVE_SCHEMA_VERSION, SPAN_ARCHIVE_SCHEMA_VERSION,
+        EVENT_ARCHIVE_SCHEMA_VERSION, LOG_ARCHIVE_SCHEMA_VERSION, METRIC_ARCHIVE_SCHEMA_VERSION,
+        SPAN_ARCHIVE_SCHEMA_VERSION,
     },
     blob::{BlobKind, BlobNamespace},
 };
@@ -338,6 +339,9 @@ fn encode_batch(kind: ArchiveKind, records: &ArchiveRecords) -> Result<Vec<u8>, 
         (ArchiveKind::Session, ArchiveRecords::Sessions(sessions)) => {
             encode_signal_parquet(kind, sessions)
         }
+        (ArchiveKind::Metric, ArchiveRecords::Metrics(metrics)) => {
+            encode_signal_parquet(kind, metrics)
+        }
         _ => Err(ArchiveError::InvalidData),
     }
 }
@@ -436,7 +440,7 @@ pub fn encode_signal_parquet(
 ) -> Result<Vec<u8>, ArchiveError> {
     if !matches!(
         kind,
-        ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session
+        ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session | ArchiveKind::Metric
     ) || records.is_empty()
         || records.len() > MAXIMUM_EVENTS
         || records.iter().any(|record| {
@@ -451,6 +455,10 @@ pub fn encode_signal_parquet(
         ArchiveKind::Session => (
             "metric_session_archive_v1",
             metric_domain::archive::SESSION_ARCHIVE_SCHEMA_VERSION,
+        ),
+        ArchiveKind::Metric => (
+            "metric_application_metric_archive_v1",
+            METRIC_ARCHIVE_SCHEMA_VERSION,
         ),
         ArchiveKind::Event => return Err(ArchiveError::InvalidData),
     };

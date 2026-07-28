@@ -35,6 +35,7 @@ use metric_domain::{
         IssueCommand, IssueCommandResult, IssueMutationResult, IssueOccurrence, IssueSearchQuery,
         IssueSearchResult, IssueSnapshot,
     },
+    metrics::MetricDeltaBatch,
     monitors::{
         MonitorAnchor, MonitorDefinition, MonitorId, MonitorPage, MonitorRun, MonitorRunAnchor,
         MonitorRunId, MonitorRunPage, MonitorUpdate,
@@ -1531,6 +1532,24 @@ pub trait SpanSink: Send + Sync + 'static {
         &self,
         records: Vec<SpanRecord>,
     ) -> PortFuture<'_, Result<Vec<DurableOutcome>, SignalStoreError>>;
+}
+
+/// Dedicated bounded Application Metrics admission boundary.
+///
+/// A successful response means every compact delta in the request is durable.
+pub trait MetricSink: Send + Sync + 'static {
+    fn persist_metrics(
+        &self,
+        batch: MetricDeltaBatch,
+    ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>>;
+}
+
+/// Application Metrics storage is deliberately isolated from Error/Log/Span storage.
+pub trait MetricStore: Send + Sync + 'static {
+    fn persist_metrics(
+        &self,
+        batch: MetricDeltaBatch,
+    ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>>;
 }
 
 /// Dedicated durable Session admission boundary.

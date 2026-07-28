@@ -35,6 +35,7 @@ const project = reactive<CreateProjectInput>({
   span_enabled: true,
   feedback_enabled: true,
   check_in_enabled: true,
+  metric_enabled: true,
   max_event_bytes: 1_048_576,
   max_events_per_second: null,
   burst: null,
@@ -210,6 +211,16 @@ const createProject = useMutation({
                 <strong>Cron check-ins</strong>
               </span>
               <small>Track scheduled jobs and missed executions.</small>
+            </span>
+          </label>
+          <label class="check-control">
+            <input v-model="project.metric_enabled" type="checkbox" />
+            <span class="check-control__copy">
+              <span class="check-control__title">
+                <AppIcon name="gauge" :size="17" />
+                <strong>Application Metrics</strong>
+              </span>
+              <small>Accept bounded SDK counters, gauges, and distributions.</small>
             </span>
           </label>
         </div>

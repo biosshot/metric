@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "scenario": "application-metrics-streaming-fold-phase-37",
+    "source_commit": "765e33850c8fbe9c09e19f3503836af070fe423d",
+    "generated_at": "2026-07-28T07:02:18.633Z",
+    "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
+    "fixture": "500 pinned trace_metric containers; 1000 same-series counters each",
+    "scope": "request-local JSON streaming fold only; excludes HTTP and MongoDB"
+  },
+  "metrics": {
+    "containers": 500,
+    "measurements": 500000,
+    "container_rps": 281,
+    "measurement_rps": 281227,
+    "deltas_per_container": 1,
+    "minimum_measurement_rps": 100000
+  }
+}

@@ -265,6 +265,7 @@ pub enum BlobKind {
     LogArchive,
     SpanArchive,
     SessionArchive,
+    MetricArchive,
 }
 
 impl BlobKind {
@@ -280,6 +281,7 @@ impl BlobKind {
             Self::LogArchive => "log_archive",
             Self::SpanArchive => "span_archive",
             Self::SessionArchive => "session_archive",
+            Self::MetricArchive => "metric_archive",
         }
     }
 
@@ -290,6 +292,7 @@ impl BlobKind {
             ArchiveKind::Log => Self::LogArchive,
             ArchiveKind::Span => Self::SpanArchive,
             ArchiveKind::Session => Self::SessionArchive,
+            ArchiveKind::Metric => Self::MetricArchive,
         }
     }
 }
@@ -304,6 +307,7 @@ pub enum BlobNamespace {
     LogArchives,
     SpanArchives,
     SessionArchives,
+    MetricArchives,
 }
 
 impl BlobNamespace {
@@ -318,6 +322,7 @@ impl BlobNamespace {
             Self::LogArchives => "projects/",
             Self::SpanArchives => "projects/",
             Self::SessionArchives => "projects/",
+            Self::MetricArchives => "projects/",
         }
     }
 
@@ -328,6 +333,7 @@ impl BlobNamespace {
             ArchiveKind::Log => Self::LogArchives,
             ArchiveKind::Span => Self::SpanArchives,
             ArchiveKind::Session => Self::SessionArchives,
+            ArchiveKind::Metric => Self::MetricArchives,
         }
     }
 
@@ -358,6 +364,10 @@ impl BlobNamespace {
             Self::SessionArchives => {
                 archive_kind(key, ArchiveKind::Session)?;
                 BlobKind::SessionArchive
+            }
+            Self::MetricArchives => {
+                archive_kind(key, ArchiveKind::Metric)?;
+                BlobKind::MetricArchive
             }
         })
     }

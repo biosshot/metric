@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 36] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 37] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -120,6 +120,11 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 36] = [
     DatasetRegistration {
         code: 21,
         name: "monitor_runs",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
+        code: 22,
+        name: "metric_buckets",
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
@@ -225,7 +230,7 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 36] = [
 ];
 
 /// Blob cleanup owns the bounded physical purge after MongoDB parent deletion.
-pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 8] = [
+pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 9] = [
     DatasetRegistration {
         code: 90,
         name: "blob:projects/{project_id}/events",
@@ -257,6 +262,11 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 8] = [
         ownership: DatasetOwnership::ProjectOwned,
     },
     DatasetRegistration {
+        code: 96,
+        name: "blob:projects/{project_id}/archives/metrics",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
         code: 0,
         name: "blob:debug-chunks/{organization_id}",
         ownership: DatasetOwnership::OrganizationShared,
@@ -268,9 +278,9 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 8] = [
     },
 ];
 
-const PURGE_CODES: [u16; 26] = [
-    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64, 66,
-    68, 70,
+const PURGE_CODES: [u16; 27] = [
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62, 64,
+    66, 68, 70,
 ];
 
 impl MongoProjectStore {
@@ -580,6 +590,10 @@ impl MongoProjectStore {
             }
             18 => {
                 self.delete_owned_batch("dashboards", "project_id", project_id, cursor, batch_size)
+                    .await
+            }
+            22 => {
+                self.delete_owned_batch("metric_buckets", "p", project_id, cursor, batch_size)
                     .await
             }
             20 => {

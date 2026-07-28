@@ -127,6 +127,9 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                     session_stats_hourly_days: 400,
                     session_active_max_hours: 24,
                     monitor_runs_days: 90,
+                    metrics_days: 90,
+                    metric_max_series_per_project: 10_000,
+                    metric_archive: false,
                 }),
                 ..native_http::NativeHttpModules::default()
             },

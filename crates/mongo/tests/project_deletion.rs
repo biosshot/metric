@@ -350,6 +350,7 @@ fn project(id: i32, slug: &str) -> ProjectIdentity {
             span: true,
             feedback: true,
             check_in: true,
+            metric: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

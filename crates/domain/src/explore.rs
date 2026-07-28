@@ -14,6 +14,7 @@ pub enum ExploreDataset {
     Errors,
     Logs,
     Spans,
+    Metrics,
 }
 
 impl ExploreDataset {
@@ -23,6 +24,7 @@ impl ExploreDataset {
             Self::Errors => "errors",
             Self::Logs => "logs",
             Self::Spans => "spans",
+            Self::Metrics => "metrics",
         }
     }
 }
@@ -46,6 +48,12 @@ pub enum ExploreField {
     Status,
     Name,
     IsSegment,
+    MetricKind,
+    Unit,
+    MetricCount,
+    MetricSum,
+    MetricMin,
+    MetricMax,
 }
 
 impl ExploreField {
@@ -69,6 +77,12 @@ impl ExploreField {
             Self::Status => "status",
             Self::Name => "name",
             Self::IsSegment => "is_segment",
+            Self::MetricKind => "metric_kind",
+            Self::Unit => "unit",
+            Self::MetricCount => "metric_count",
+            Self::MetricSum => "metric_sum",
+            Self::MetricMin => "metric_min",
+            Self::MetricMax => "metric_max",
         }
     }
 
@@ -107,12 +121,34 @@ impl ExploreField {
                     | Self::Name
                     | Self::IsSegment
             ),
+            ExploreDataset::Metrics => matches!(
+                self,
+                Self::Timestamp
+                    | Self::ReceivedAt
+                    | Self::Name
+                    | Self::MetricKind
+                    | Self::Unit
+                    | Self::TraceId
+                    | Self::MetricCount
+                    | Self::MetricSum
+                    | Self::MetricMin
+                    | Self::MetricMax
+            ),
         }
     }
 
     #[must_use]
     pub const fn numeric(self) -> bool {
-        matches!(self, Self::Timestamp | Self::ReceivedAt | Self::DurationMs)
+        matches!(
+            self,
+            Self::Timestamp
+                | Self::ReceivedAt
+                | Self::DurationMs
+                | Self::MetricCount
+                | Self::MetricSum
+                | Self::MetricMin
+                | Self::MetricMax
+        )
     }
 
     #[must_use]
@@ -125,6 +161,7 @@ impl ExploreField {
                     ExploreDataset::Spans,
                     Self::OperationClass | Self::IsSegment
                 )
+                | (ExploreDataset::Metrics, Self::MetricKind | Self::Unit)
         )
     }
 
@@ -136,6 +173,8 @@ impl ExploreField {
             (ExploreDataset::Logs, Self::Level) => Some(6),
             (ExploreDataset::Spans, Self::OperationClass) => Some(12),
             (ExploreDataset::Spans, Self::IsSegment) => Some(2),
+            (ExploreDataset::Metrics, Self::MetricKind) => Some(3),
+            (ExploreDataset::Metrics, Self::Unit) => Some(64),
             _ => None,
         }
     }

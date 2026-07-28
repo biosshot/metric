@@ -86,6 +86,7 @@ fn collection_name(dataset: ExploreDataset) -> &'static str {
         ExploreDataset::Errors => "error_events",
         ExploreDataset::Logs => "logs",
         ExploreDataset::Spans => "spans",
+        ExploreDataset::Metrics => "metric_buckets",
     }
 }
 
@@ -93,6 +94,10 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
     let dataset = plan.query.dataset;
     let (from, until) = match dataset {
         ExploreDataset::Errors => (
+            Bson::DateTime(DateTime::from_millis(plan.query.from.unix_millis())),
+            Bson::DateTime(DateTime::from_millis(plan.query.until.unix_millis())),
+        ),
+        ExploreDataset::Metrics => (
             Bson::DateTime(DateTime::from_millis(plan.query.from.unix_millis())),
             Bson::DateTime(DateTime::from_millis(plan.query.until.unix_millis())),
         ),
@@ -115,7 +120,7 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
     };
     let mut clauses = vec![
         doc! { "p": plan.project_id.get() },
-        doc! { "o": { "$gte": from, "$lt": until } },
+        doc! { time_field(dataset): { "$gte": from, "$lt": until } },
     ];
     if dataset == ExploreDataset::Errors {
         clauses.push(doc! { "q": { "$exists": false } });
@@ -182,12 +187,13 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
         };
         let time = match dataset {
             ExploreDataset::Errors => Bson::DateTime(DateTime::from_millis(cursor.time)),
+            ExploreDataset::Metrics => Bson::DateTime(DateTime::from_millis(cursor.time)),
             ExploreDataset::Logs | ExploreDataset::Spans => Bson::Int64(cursor.time),
         };
         clauses.push(doc! {
             "$or": [
-                { "o": { "$lt": time.clone() } },
-                { "o": time, "_id": { "$lt": id } },
+                { time_field(dataset): { "$lt": time.clone() } },
+                { time_field(dataset): time, "_id": { "$lt": id } },
             ]
         });
     }
@@ -305,6 +311,10 @@ fn raw_cursor(
             .get_datetime("o")
             .map_err(|_| ExploreStoreError::InvalidData)?
             .timestamp_millis(),
+        ExploreDataset::Metrics => document
+            .get_datetime("t")
+            .map_err(|_| ExploreStoreError::InvalidData)?
+            .timestamp_millis(),
         ExploreDataset::Logs | ExploreDataset::Spans => document
             .get_i64("o")
             .map_err(|_| ExploreStoreError::InvalidData)?,
@@ -376,6 +386,18 @@ fn fields(dataset: ExploreDataset) -> &'static [ExploreField] {
             ExploreField::SpanId,
             ExploreField::IsSegment,
         ],
+        ExploreDataset::Metrics => &[
+            ExploreField::Timestamp,
+            ExploreField::ReceivedAt,
+            ExploreField::Name,
+            ExploreField::MetricKind,
+            ExploreField::Unit,
+            ExploreField::TraceId,
+            ExploreField::MetricCount,
+            ExploreField::MetricSum,
+            ExploreField::MetricMin,
+            ExploreField::MetricMax,
+        ],
     }
 }
 
@@ -384,6 +406,7 @@ fn physical_field(
     field: ExploreField,
 ) -> Result<&'static str, ExploreStoreError> {
     let value = match (dataset, field) {
+        (ExploreDataset::Metrics, ExploreField::Timestamp) => "t",
         (_, ExploreField::Timestamp) => "o",
         (_, ExploreField::ReceivedAt) => "r",
         (ExploreDataset::Errors | ExploreDataset::Logs, ExploreField::Level) => "l",
@@ -402,6 +425,14 @@ fn physical_field(
         (ExploreDataset::Spans, ExploreField::Status) => "v",
         (ExploreDataset::Spans, ExploreField::Name) => "m",
         (ExploreDataset::Spans, ExploreField::IsSegment) => "t",
+        (ExploreDataset::Metrics, ExploreField::Name) => "n",
+        (ExploreDataset::Metrics, ExploreField::MetricKind) => "k",
+        (ExploreDataset::Metrics, ExploreField::Unit) => "u",
+        (ExploreDataset::Metrics, ExploreField::TraceId) => "g",
+        (ExploreDataset::Metrics, ExploreField::MetricCount) => "c",
+        (ExploreDataset::Metrics, ExploreField::MetricSum) => "s0",
+        (ExploreDataset::Metrics, ExploreField::MetricMin) => "lo",
+        (ExploreDataset::Metrics, ExploreField::MetricMax) => "hi",
         _ => return Err(ExploreStoreError::InvalidData),
     };
     Ok(value)
@@ -415,7 +446,8 @@ fn physical_value(
     match (field, value) {
         (ExploreField::Timestamp, ExploreValue::Integer(value))
         | (ExploreField::ReceivedAt, ExploreValue::Integer(value)) => match (dataset, field) {
-            (_, ExploreField::ReceivedAt) | (ExploreDataset::Errors, ExploreField::Timestamp) => {
+            (_, ExploreField::ReceivedAt)
+            | (ExploreDataset::Errors | ExploreDataset::Metrics, ExploreField::Timestamp) => {
                 Ok(Bson::DateTime(DateTime::from_millis(*value)))
             }
             _ => value
@@ -430,6 +462,20 @@ fn physical_value(
         (ExploreField::DurationMs, ExploreValue::Number(value)) => {
             Ok(Bson::Int64((*value * 1_000_000.0).round() as i64))
         }
+        (
+            ExploreField::MetricCount
+            | ExploreField::MetricSum
+            | ExploreField::MetricMin
+            | ExploreField::MetricMax,
+            ExploreValue::Integer(value),
+        ) => Ok(Bson::Int64(*value)),
+        (
+            ExploreField::MetricCount
+            | ExploreField::MetricSum
+            | ExploreField::MetricMin
+            | ExploreField::MetricMax,
+            ExploreValue::Number(value),
+        ) => Ok(Bson::Double(*value)),
         (ExploreField::IsSegment, ExploreValue::Bool(value)) => Ok(Bson::Boolean(*value)),
         (ExploreField::Level, ExploreValue::String(value)) => Ok(Bson::Int32(
             level_code(dataset, value).ok_or(ExploreStoreError::InvalidData)?,
@@ -439,6 +485,9 @@ fn physical_value(
         )),
         (ExploreField::OperationClass, ExploreValue::String(value)) => Ok(Bson::Int32(
             operation_class_code(value).ok_or(ExploreStoreError::InvalidData)?,
+        )),
+        (ExploreField::MetricKind, ExploreValue::String(value)) => Ok(Bson::Int32(
+            metric_kind_code(value).ok_or(ExploreStoreError::InvalidData)?,
         )),
         (
             ExploreField::TraceId | ExploreField::SpanId | ExploreField::IssueId,
@@ -461,13 +510,21 @@ fn numeric_expression(
 ) -> Result<Bson, ExploreStoreError> {
     let physical = format!("${}", physical_field(dataset, field)?);
     Ok(match (dataset, field) {
-        (_, ExploreField::ReceivedAt) | (ExploreDataset::Errors, ExploreField::Timestamp) => {
+        (_, ExploreField::ReceivedAt)
+        | (ExploreDataset::Errors | ExploreDataset::Metrics, ExploreField::Timestamp) => {
             Bson::Document(doc! { "$toLong": physical })
         }
         (
             ExploreDataset::Logs | ExploreDataset::Spans,
             ExploreField::Timestamp | ExploreField::DurationMs,
         ) => Bson::Document(doc! { "$divide": [physical, 1_000_000_f64] }),
+        (
+            ExploreDataset::Metrics,
+            ExploreField::MetricCount
+            | ExploreField::MetricSum
+            | ExploreField::MetricMin
+            | ExploreField::MetricMax,
+        ) => Bson::String(physical),
         _ => return Err(ExploreStoreError::InvalidData),
     })
 }
@@ -475,6 +532,7 @@ fn numeric_expression(
 fn timestamp_expression(dataset: ExploreDataset) -> Bson {
     match dataset {
         ExploreDataset::Errors => Bson::String("$o".into()),
+        ExploreDataset::Metrics => Bson::String("$t".into()),
         ExploreDataset::Logs | ExploreDataset::Spans => {
             Bson::Document(doc! { "$toDate": { "$divide": ["$o", 1_000_000_i64] } })
         }
@@ -549,6 +607,15 @@ fn display_bson_value(
             };
             return Ok(ExploreValue::String(label.into()));
         }
+        if field == ExploreField::MetricKind {
+            let label = match code {
+                1 => "counter",
+                2 => "gauge",
+                3 => "distribution",
+                _ => return Err(ExploreStoreError::InvalidData),
+            };
+            return Ok(ExploreValue::String(label.into()));
+        }
     }
     bson_value(value)
 }
@@ -580,6 +647,24 @@ fn level_code(dataset: ExploreDataset, value: &str) -> Option<i32> {
             _ => None,
         },
         ExploreDataset::Spans => None,
+        ExploreDataset::Metrics => None,
+    }
+}
+
+fn metric_kind_code(value: &str) -> Option<i32> {
+    match value {
+        "counter" => Some(1),
+        "gauge" => Some(2),
+        "distribution" => Some(3),
+        _ => None,
+    }
+}
+
+fn time_field(dataset: ExploreDataset) -> &'static str {
+    if dataset == ExploreDataset::Metrics {
+        "t"
+    } else {
+        "o"
     }
 }
 

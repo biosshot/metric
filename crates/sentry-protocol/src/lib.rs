@@ -41,6 +41,8 @@ pub struct ParsedEnvelope {
     /// Independently durable telemetry items: Logs, Transactions, standalone Spans
     /// and application Sessions. Errors occupy the dependency-root role.
     pub signals: Vec<RawSignal>,
+    /// Pinned Sentry SDK v10 trace-metric containers.
+    pub metrics: Vec<RawMetricContainer>,
     /// Cron check-ins have an independent admission and storage lane.
     pub check_ins: Vec<RawCheckIn>,
     pub attachments: Vec<RawAttachment>,
@@ -74,6 +76,21 @@ pub enum RawSignalKind {
 pub struct RawSignal {
     pub kind: RawSignalKind,
     pub bytes: Box<[u8]>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawMetricContainer {
+    pub item_count: u32,
+    pub bytes: Box<[u8]>,
+}
+
+impl std::fmt::Debug for RawMetricContainer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawMetricContainer")
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for RawSignal {
@@ -214,6 +231,7 @@ struct WireItemHeader {
     filename: Option<String>,
     content_type: Option<String>,
     attachment_type: Option<String>,
+    item_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,6 +273,7 @@ pub fn parse_envelope_with_attachments(
     let dsn = header.dsn.as_deref().map(parse_dsn).transpose()?;
     let mut primary = None;
     let mut signals = Vec::new();
+    let mut metrics = Vec::new();
     let mut check_ins = Vec::new();
     let mut attachments = Vec::new();
     let mut attachment_bytes = 0_usize;
@@ -364,6 +383,23 @@ pub fn parse_envelope_with_attachments(
                     bytes: payload.into(),
                 });
             }
+            ItemClass::Metric => {
+                if length > limits.max_event_bytes {
+                    return Err(ProtocolError::too_large("metric_container_too_large"));
+                }
+                if item_header.content_type.as_deref()
+                    != Some("application/vnd.sentry.items.trace-metric+json")
+                {
+                    return Err(ProtocolError::invalid("invalid_metric_content_type"));
+                }
+                metrics.push(RawMetricContainer {
+                    item_count: item_header
+                        .item_count
+                        .filter(|count| *count > 0)
+                        .ok_or_else(|| ProtocolError::invalid("invalid_metric_item_count"))?,
+                    bytes: payload.into(),
+                });
+            }
             ItemClass::CheckIn => {
                 if length > limits.max_event_bytes {
                     return Err(ProtocolError::too_large("check_in_too_large"));
@@ -386,6 +422,7 @@ pub fn parse_envelope_with_attachments(
 
     if primary.is_none()
         && signals.is_empty()
+        && metrics.is_empty()
         && check_ins.is_empty()
         && discarded.is_empty()
         && client_report_quantity == 0
@@ -397,6 +434,7 @@ pub fn parse_envelope_with_attachments(
         dsn,
         primary,
         signals,
+        metrics,
         check_ins,
         attachments,
         discarded,
@@ -565,6 +603,7 @@ fn parse_client_report(payload: &[u8]) -> Result<u64, ProtocolError> {
 enum ItemClass {
     Event,
     Signal(RawSignalKind),
+    Metric,
     CheckIn,
     ClientReport,
     Attachment,
@@ -584,6 +623,7 @@ fn classify_item(kind: &str) -> ItemClass {
         "replay_event" | "replay_recording" => ItemClass::Disabled(DisabledCategory::Replay),
         "check_in" => ItemClass::CheckIn,
         "span" => ItemClass::Signal(RawSignalKind::Span),
+        "trace_metric" => ItemClass::Metric,
         "statsd" | "metric_buckets" => ItemClass::Disabled(DisabledCategory::Statsd),
         "attachment" => ItemClass::Attachment,
         "view_hierarchy" => ItemClass::Disabled(DisabledCategory::Attachment),
@@ -634,6 +674,26 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.primary.unwrap().bytes.as_ref(), payload.as_bytes());
         assert!(parsed.discarded.is_empty());
+    }
+
+    #[test]
+    fn pinned_trace_metric_item_is_a_dedicated_container() {
+        let payload = r#"{"version":2,"items":[{"timestamp":1700000000,"trace_id":"","name":"jobs","type":"counter","value":1,"attributes":{}}]}"#;
+        let header = format!(
+            r#"{{"type":"trace_metric","content_type":"application/vnd.sentry.items.trace-metric+json","item_count":1,"length":{}}}"#,
+            payload.len()
+        );
+        let parsed = parse_envelope(
+            &envelope(&header, payload),
+            EnvelopeLimits {
+                max_items: 100,
+                max_event_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(parsed.metrics.len(), 1);
+        assert!(parsed.signals.is_empty());
+        assert!(parsed.primary.is_none());
     }
 
     #[test]

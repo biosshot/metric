@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex},
 };
 
@@ -16,6 +16,7 @@ use metric_domain::{
     inbound_filter::{
         InboundFilterField, InboundFilterFields, InboundFilterMatch, InboundFilterSignal,
     },
+    metrics::{MetricAggregate, MetricDelta, MetricDeltaBatch, MetricKind, MetricSeries},
     monitors::{
         MonitorConfig, MonitorDefinition, MonitorId, MonitorRun, MonitorRunId, MonitorRunSource,
         MonitorRunStatus, MonitorSchedule, MonitorUpdate,
@@ -29,9 +30,13 @@ use metric_domain::{
 };
 use metric_ports::{
     BlobChunkSource, BlobStore, BlobStoreError, Clock, DurableOutcome, EventSink, EventSinkError,
-    FeedbackSink, FeedbackStoreError, IngestOutcome, IngestOutcomeKind, LogSink, MonitorSink,
-    OutcomeSink, ProjectResolveError, ProjectResolver, RandomSource, SessionSink, SignalStoreError,
-    SpanSink,
+    FeedbackSink, FeedbackStoreError, IngestOutcome, IngestOutcomeKind, LogSink, MetricSink,
+    MonitorSink, OutcomeSink, ProjectResolveError, ProjectResolver, RandomSource, SessionSink,
+    SignalStoreError, SpanSink,
+};
+use serde::{
+    Deserializer,
+    de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Value};
 use sha2::Sha256;
@@ -139,6 +144,12 @@ pub struct PendingSignal {
     pub raw_json: Box<[u8]>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingMetricContainer {
+    pub item_count: u32,
+    pub raw_json: Box<[u8]>,
+}
+
 impl std::fmt::Debug for PrimaryEvent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -159,6 +170,7 @@ pub struct IngestRequest {
     pub primary: Option<PrimaryEvent>,
     /// Independent Log/Transaction/Span items, not an exhaustive signal taxonomy.
     pub signals: Vec<PendingSignal>,
+    pub metrics: Vec<PendingMetricContainer>,
     pub check_ins: Vec<Box<[u8]>>,
     pub attachments: Vec<PendingAttachment>,
     pub discarded: Vec<DiscardedItem>,
@@ -227,6 +239,29 @@ pub struct MonitorIngestConfig {
     pub retention_days: u32,
     pub max_check_ins_per_minute: u32,
     pub limiter_capacity: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MetricIngestConfig {
+    pub bucket_width_seconds: u32,
+    pub max_tags: usize,
+    pub max_name_bytes: usize,
+    pub max_unit_bytes: usize,
+    pub max_tag_key_bytes: usize,
+    pub max_tag_value_bytes: usize,
+}
+
+impl Default for MetricIngestConfig {
+    fn default() -> Self {
+        Self {
+            bucket_width_seconds: 60,
+            max_tags: 16,
+            max_name_bytes: 200,
+            max_unit_bytes: 32,
+            max_tag_key_bytes: 64,
+            max_tag_value_bytes: 128,
+        }
+    }
 }
 
 impl Default for MonitorIngestConfig {
@@ -342,6 +377,8 @@ pub struct IngestService {
     monitor_sink: Option<Arc<dyn MonitorSink>>,
     monitor_config: MonitorIngestConfig,
     monitor_rate: Mutex<HashMap<ProjectId, FeedbackRateWindow>>,
+    metric_sink: Option<Arc<dyn MetricSink>>,
+    metric_config: MetricIngestConfig,
 }
 
 impl IngestService {
@@ -375,6 +412,8 @@ impl IngestService {
             monitor_sink: None,
             monitor_config: MonitorIngestConfig::default(),
             monitor_rate: Mutex::new(HashMap::new()),
+            metric_sink: None,
+            metric_config: MetricIngestConfig::default(),
         }
     }
 
@@ -415,6 +454,17 @@ impl IngestService {
     ) -> Self {
         self.monitor_sink = Some(monitor_sink);
         self.monitor_config = config;
+        self
+    }
+
+    #[must_use]
+    pub fn with_metric_sink(
+        mut self,
+        metric_sink: Arc<dyn MetricSink>,
+        config: MetricIngestConfig,
+    ) -> Self {
+        self.metric_sink = Some(metric_sink);
+        self.metric_config = config;
         self
     }
 
@@ -477,6 +527,7 @@ impl IngestService {
             .collect::<Vec<_>>();
 
         disabled_categories.extend(self.persist_signals(&snapshot, request.signals).await?);
+        disabled_categories.extend(self.persist_metrics(&snapshot, request.metrics).await?);
         disabled_categories.extend(self.persist_check_ins(&snapshot, request.check_ins).await?);
         disabled_categories.sort_unstable();
         disabled_categories.dedup();
@@ -794,6 +845,67 @@ impl IngestService {
                 quantity: duplicate as u64,
             });
         }
+        Ok(Vec::new())
+    }
+
+    async fn persist_metrics(
+        &self,
+        snapshot: &ProjectSnapshot,
+        containers: Vec<PendingMetricContainer>,
+    ) -> Result<Vec<&'static str>, IngestError> {
+        if containers.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !snapshot.items.metric {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Unsupported,
+                reason: "feature_disabled",
+                quantity: containers.len() as u64,
+            });
+            return Ok(vec!["metric_bucket"]);
+        }
+        let received_at = self.clock.now();
+        let mut batch = MetricDeltaBatch::default();
+        for container in containers {
+            if container.raw_json.len() > snapshot.limits.max_event_bytes.get() as usize {
+                return Err(IngestError {
+                    kind: IngestErrorKind::TooLarge,
+                    code: "project_metric_container_too_large",
+                });
+            }
+            let folded = fold_metric_container(
+                snapshot,
+                received_at,
+                &container.raw_json,
+                self.metric_config,
+            )?;
+            if folded.source_measurements != container.item_count {
+                return Err(IngestError::invalid("metric_item_count_mismatch"));
+            }
+            batch.merge(folded);
+        }
+        if batch.discarded_measurements > 0 {
+            self.outcome_sink.record(IngestOutcome {
+                kind: IngestOutcomeKind::Invalid,
+                reason: "invalid_metric_measurement",
+                quantity: u64::from(batch.discarded_measurements),
+            });
+        }
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+        let quantity = u64::try_from(batch.len()).unwrap_or(u64::MAX);
+        self.metric_sink
+            .as_ref()
+            .ok_or_else(|| IngestError::unavailable("metric_storage_unavailable"))?
+            .persist_metrics(batch)
+            .await
+            .map_err(map_signal_store_error)?;
+        self.outcome_sink.record(IngestOutcome {
+            kind: IngestOutcomeKind::Accepted,
+            reason: "metric",
+            quantity,
+        });
         Ok(Vec::new())
     }
 
@@ -1247,6 +1359,273 @@ fn validate_minidump_header(header: &[u8], total_size: u64) -> Result<(), Ingest
         return Err(IngestError::invalid("invalid_minidump_directory"));
     }
     Ok(())
+}
+
+fn fold_metric_container(
+    snapshot: &ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    raw_json: &[u8],
+    config: MetricIngestConfig,
+) -> Result<MetricDeltaBatch, IngestError> {
+    if config.bucket_width_seconds == 0
+        || config.max_tags == 0
+        || config.max_name_bytes == 0
+        || config.max_unit_bytes == 0
+        || config.max_tag_key_bytes == 0
+        || config.max_tag_value_bytes == 0
+    {
+        return Err(IngestError::invalid("invalid_metric_configuration"));
+    }
+    let mut batch = MetricDeltaBatch::default();
+    let mut deserializer = serde_json::Deserializer::from_slice(raw_json);
+    MetricContainerSeed {
+        snapshot,
+        received_at,
+        config,
+        batch: &mut batch,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|_| IngestError::invalid("invalid_metric_container"))?;
+    deserializer
+        .end()
+        .map_err(|_| IngestError::invalid("invalid_metric_container"))?;
+    Ok(batch)
+}
+
+struct MetricContainerSeed<'a> {
+    snapshot: &'a ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    config: MetricIngestConfig,
+    batch: &'a mut MetricDeltaBatch,
+}
+
+impl<'de> DeserializeSeed<'de> for MetricContainerSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(MetricContainerVisitor {
+            snapshot: self.snapshot,
+            received_at: self.received_at,
+            config: self.config,
+            batch: self.batch,
+        })
+    }
+}
+
+struct MetricContainerVisitor<'a> {
+    snapshot: &'a ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    config: MetricIngestConfig,
+    batch: &'a mut MetricDeltaBatch,
+}
+
+impl<'de> Visitor<'de> for MetricContainerVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a Sentry trace metric container")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut found_items = false;
+        while let Some(key) = map.next_key::<Box<str>>()? {
+            if key.as_ref() == "items" {
+                if found_items {
+                    return Err(serde::de::Error::duplicate_field("items"));
+                }
+                found_items = true;
+                map.next_value_seed(MetricItemsSeed {
+                    snapshot: self.snapshot,
+                    received_at: self.received_at,
+                    config: self.config,
+                    batch: self.batch,
+                })?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        if !found_items {
+            return Err(serde::de::Error::missing_field("items"));
+        }
+        Ok(())
+    }
+}
+
+struct MetricItemsSeed<'a> {
+    snapshot: &'a ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    config: MetricIngestConfig,
+    batch: &'a mut MetricDeltaBatch,
+}
+
+impl<'de> DeserializeSeed<'de> for MetricItemsSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(MetricItemsVisitor {
+            snapshot: self.snapshot,
+            received_at: self.received_at,
+            config: self.config,
+            batch: self.batch,
+        })
+    }
+}
+
+struct MetricItemsVisitor<'a> {
+    snapshot: &'a ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    config: MetricIngestConfig,
+    batch: &'a mut MetricDeltaBatch,
+}
+
+impl<'de> Visitor<'de> for MetricItemsVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an array of Sentry trace metrics")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while let Some(value) = sequence.next_element::<Value>()? {
+            self.batch.source_measurements = self.batch.source_measurements.saturating_add(1);
+            match normalize_metric_measurement(self.snapshot, self.received_at, self.config, value)
+            {
+                Some(delta) => self.batch.push(delta),
+                None => {
+                    self.batch.discarded_measurements =
+                        self.batch.discarded_measurements.saturating_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn normalize_metric_measurement(
+    snapshot: &ProjectSnapshot,
+    received_at: metric_domain::Timestamp,
+    config: MetricIngestConfig,
+    value: Value,
+) -> Option<MetricDelta> {
+    let object = value.as_object()?;
+    let timestamp_seconds = object.get("timestamp")?.as_f64()?;
+    if !timestamp_seconds.is_finite() {
+        return None;
+    }
+    let timestamp_millis = (timestamp_seconds * 1_000.0).round();
+    if timestamp_millis < i64::MIN as f64 || timestamp_millis > i64::MAX as f64 {
+        return None;
+    }
+    let timestamp_millis = timestamp_millis as i64;
+    let width_millis = i64::from(config.bucket_width_seconds).checked_mul(1_000)?;
+    let bucket_start = metric_domain::Timestamp::from_unix_millis(
+        timestamp_millis.div_euclid(width_millis) * width_millis,
+    )
+    .ok()?;
+    let name = bounded_metric_text(object.get("name")?.as_str()?, config.max_name_bytes, false)?;
+    let kind = match object.get("type")?.as_str()? {
+        "counter" => MetricKind::Counter,
+        "gauge" => MetricKind::Gauge,
+        "distribution" => MetricKind::Distribution,
+        _ => return None,
+    };
+    let unit = bounded_metric_text(
+        object.get("unit").and_then(Value::as_str).unwrap_or("none"),
+        config.max_unit_bytes,
+        true,
+    )?;
+    let measurement = object.get("value")?.as_f64()?;
+    if !measurement.is_finite() {
+        return None;
+    }
+    let trace_id = match object.get("trace_id").and_then(Value::as_str) {
+        None | Some("") => None,
+        Some(value) => Some(TraceId::parse(value).ok()?),
+    };
+    let mut tags = BTreeMap::new();
+    if let Some(attributes) = object.get("attributes") {
+        let attributes = attributes.as_object()?;
+        if attributes.len() > config.max_tags.saturating_mul(4) {
+            return None;
+        }
+        for (key, typed) in attributes {
+            if key == "sentry.timestamp.sequence"
+                || key.starts_with("user.")
+                || key.starts_with("sentry._internal.")
+            {
+                continue;
+            }
+            let key = bounded_metric_text(key, config.max_tag_key_bytes, false)?;
+            let key = key
+                .chars()
+                .map(|character| {
+                    if matches!(character, '.' | '$') {
+                        '_'
+                    } else {
+                        character
+                    }
+                })
+                .collect::<String>()
+                .into_boxed_str();
+            let typed = typed.as_object()?;
+            let raw = typed.get("value")?;
+            let tag = match raw {
+                Value::String(value) => {
+                    bounded_metric_text(value, config.max_tag_value_bytes, true)?
+                }
+                Value::Bool(value) => value.to_string().into_boxed_str(),
+                Value::Number(value) => {
+                    bounded_metric_text(&value.to_string(), config.max_tag_value_bytes, true)?
+                }
+                _ => return None,
+            };
+            if tags.insert(key, tag).is_some() {
+                return None;
+            }
+            if tags.len() > config.max_tags {
+                return None;
+            }
+        }
+    }
+    Some(MetricDelta {
+        series: MetricSeries {
+            project_id: snapshot.project_id,
+            name,
+            kind,
+            unit,
+            tags,
+        },
+        bucket_start,
+        bucket_width_seconds: config.bucket_width_seconds,
+        received_at,
+        trace_id,
+        aggregate: MetricAggregate::from_measurement(kind, measurement),
+    })
+}
+
+fn bounded_metric_text(value: &str, maximum: usize, allow_empty: bool) -> Option<Box<str>> {
+    let value = value.trim();
+    if (!allow_empty && value.is_empty())
+        || value.len() > maximum
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+    {
+        None
+    } else {
+        Some(value.into())
+    }
 }
 
 fn minidump_event_id(project_id: ProjectId, checksum: BlobChecksum) -> EventId {
@@ -2647,6 +3026,7 @@ mod tests {
                 span: true,
                 feedback: true,
                 check_in: true,
+                metric: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: Default::default(),
@@ -2698,6 +3078,178 @@ mod tests {
                 .unwrap_err()
                 .code(),
             "feedback_attachment_too_large"
+        );
+    }
+
+    #[test]
+    fn pinned_sdk_metric_kinds_fold_into_compact_deltas() {
+        let snapshot = snapshot();
+        let received_at = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
+        let payload = serde_json::json!({
+            "version": 2,
+            "items": [
+                {
+                    "timestamp": 1_700_000_000.1,
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "name": "checkout.requests",
+                    "type": "counter",
+                    "unit": "none",
+                    "value": 2,
+                    "attributes": {
+                        "sentry.environment": {"value": "prod", "type": "string"},
+                        "sentry.timestamp.sequence": {"value": 1, "type": "integer"}
+                    }
+                },
+                {
+                    "timestamp": 1_700_000_000.2,
+                    "trace_id": "",
+                    "name": "checkout.queue",
+                    "type": "gauge",
+                    "unit": "item",
+                    "value": 7,
+                    "attributes": {}
+                },
+                {
+                    "timestamp": 1_700_000_000.3,
+                    "trace_id": "",
+                    "name": "checkout.duration",
+                    "type": "distribution",
+                    "unit": "millisecond",
+                    "value": 12.5,
+                    "attributes": {}
+                }
+            ]
+        });
+        let batch = fold_metric_container(
+            &snapshot,
+            received_at,
+            &serde_json::to_vec(&payload).unwrap(),
+            MetricIngestConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(batch.len(), 3);
+        assert_eq!(batch.discarded_measurements, 0);
+        assert!(
+            batch
+                .deltas
+                .values()
+                .any(|delta| matches!(delta.aggregate, MetricAggregate::Counter { sum: 2.0, .. }))
+        );
+        assert!(
+            batch
+                .deltas
+                .values()
+                .any(|delta| matches!(delta.aggregate, MetricAggregate::Gauge { last: 7.0, .. }))
+        );
+        assert!(batch.deltas.values().any(|delta| matches!(
+            delta.aggregate,
+            MetricAggregate::Distribution { count: 1, .. }
+        )));
+    }
+
+    #[test]
+    fn one_thousand_same_series_measurements_cross_as_one_delta() {
+        let snapshot = snapshot();
+        let received_at = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
+        let item = serde_json::json!({
+            "timestamp": 1_700_000_000.0,
+            "trace_id": "",
+            "name": "jobs.completed",
+            "type": "counter",
+            "unit": "none",
+            "value": 1,
+            "attributes": {"queue": {"value": "email", "type": "string"}}
+        });
+        let payload = serde_json::json!({
+            "version": 2,
+            "items": std::iter::repeat_n(item, 1_000).collect::<Vec<_>>()
+        });
+        let batch = fold_metric_container(
+            &snapshot,
+            received_at,
+            &serde_json::to_vec(&payload).unwrap(),
+            MetricIngestConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(batch.len(), 1);
+        let MetricAggregate::Counter { sum, count } =
+            &batch.deltas.values().next().unwrap().aggregate
+        else {
+            panic!("counter");
+        };
+        assert_eq!((*sum, *count), (1_000.0, 1_000));
+    }
+
+    #[test]
+    fn invalid_metric_measurement_does_not_hide_valid_sibling() {
+        let snapshot = snapshot();
+        let received_at = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
+        let payload = serde_json::json!({
+            "items": [
+                {"name": "missing-fields"},
+                {
+                    "timestamp": 1_700_000_000.0,
+                    "trace_id": "",
+                    "name": "valid",
+                    "type": "gauge",
+                    "value": 4,
+                    "attributes": {}
+                }
+            ]
+        });
+        let batch = fold_metric_container(
+            &snapshot,
+            received_at,
+            &serde_json::to_vec(&payload).unwrap(),
+            MetricIngestConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch.discarded_measurements, 1);
+    }
+
+    #[test]
+    #[ignore = "Phase 37 retained streaming-fold RPS baseline runs explicitly in release mode"]
+    fn performance_application_metric_streaming_fold_rps() {
+        const CONTAINERS: u64 = 500;
+        const ITEMS: u64 = 1_000;
+        let snapshot = snapshot();
+        let received_at = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
+        let item = serde_json::json!({
+            "timestamp": 1_700_000_000.0,
+            "trace_id": "",
+            "name": "jobs.completed",
+            "type": "counter",
+            "unit": "none",
+            "value": 1,
+            "attributes": {
+                "queue": {"value": "email", "type": "string"},
+                "sentry.environment": {"value": "production", "type": "string"}
+            }
+        });
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "version": 2,
+            "items": std::iter::repeat_n(item, ITEMS as usize).collect::<Vec<_>>()
+        }))
+        .unwrap();
+        let started = std::time::Instant::now();
+        for _ in 0..CONTAINERS {
+            let batch = fold_metric_container(
+                &snapshot,
+                received_at,
+                &payload,
+                MetricIngestConfig::default(),
+            )
+            .unwrap();
+            assert_eq!(batch.source_measurements, ITEMS as u32);
+            assert_eq!(batch.len(), 1);
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        let container_rps = (CONTAINERS as f64 / elapsed).round() as u64;
+        let measurement_rps = ((CONTAINERS * ITEMS) as f64 / elapsed).round() as u64;
+        eprintln!(
+            "Application Metrics Phase 37: containers={CONTAINERS},measurements={},container_rps={container_rps},measurement_rps={measurement_rps},deltas_per_container=1",
+            CONTAINERS * ITEMS
         );
     }
 

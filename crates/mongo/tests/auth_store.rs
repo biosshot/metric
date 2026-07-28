@@ -267,6 +267,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                 span: true,
                 feedback: true,
                 check_in: true,
+                metric: true,
             },
             limits: ProjectIngestLimits::default(),
             grouping_revision: 1,

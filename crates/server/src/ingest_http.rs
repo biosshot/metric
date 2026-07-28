@@ -20,8 +20,8 @@ use futures_util::{TryStreamExt, future};
 use metric_application::{
     ingest::{
         DisabledCategory, DiscardedItem, IngestError, IngestErrorKind, IngestRequest, IngestResult,
-        IngestService, MinidumpRequest, PendingAttachment, PendingSignal, PendingSignalKind,
-        PrimaryEvent,
+        IngestService, MinidumpRequest, PendingAttachment, PendingMetricContainer, PendingSignal,
+        PendingSignalKind, PrimaryEvent,
     },
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
@@ -384,6 +384,7 @@ async fn process_request(
             dsn: None,
             primary: Some(parse_store_event(&decoded, state.config.max_event_bytes)?),
             signals: Vec::new(),
+            metrics: Vec::new(),
             check_ins: Vec::new(),
             attachments: Vec::new(),
             discarded: Vec::new(),
@@ -423,6 +424,14 @@ fn map_request(
                     RawSignalKind::Session => PendingSignalKind::Session,
                 },
                 raw_json: signal.bytes,
+            })
+            .collect(),
+        metrics: parsed
+            .metrics
+            .into_iter()
+            .map(|metric| PendingMetricContainer {
+                item_count: metric.item_count,
+                raw_json: metric.bytes,
             })
             .collect(),
         check_ins: parsed

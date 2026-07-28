@@ -8,7 +8,8 @@ use metric_domain::{
     archive::{
         ArchiveBatch, ArchiveBatchState, ArchiveEvent, ArchiveKind, ArchiveRecords,
         ArchiveSegmentId, ArchiveSignal, ArchiveSourceId, EVENT_ARCHIVE_SCHEMA_VERSION,
-        LOG_ARCHIVE_SCHEMA_VERSION, SESSION_ARCHIVE_SCHEMA_VERSION, SPAN_ARCHIVE_SCHEMA_VERSION,
+        LOG_ARCHIVE_SCHEMA_VERSION, METRIC_ARCHIVE_SCHEMA_VERSION, SESSION_ARCHIVE_SCHEMA_VERSION,
+        SPAN_ARCHIVE_SCHEMA_VERSION,
     },
     blob::{BlobKey, BlobKind},
     grouping::IssueId,
@@ -73,7 +74,7 @@ impl MongoArchiveStore {
         }
         match request.kind {
             ArchiveKind::Event => self.claim_events(request).await,
-            ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session => {
+            ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session | ArchiveKind::Metric => {
                 self.claim_signals(request).await
             }
         }
@@ -265,6 +266,7 @@ impl MongoArchiveStore {
                 ArchiveKind::Log => ArchiveSourceId::Log(LogId::from_bytes(signal.id)),
                 ArchiveKind::Span => ArchiveSourceId::Span(SpanRecordId::from_bytes(signal.id)),
                 ArchiveKind::Session => ArchiveSourceId::Session(SessionId::from_bytes(signal.id)),
+                ArchiveKind::Metric => ArchiveSourceId::Metric(signal.id),
                 ArchiveKind::Event => unreachable!("Event uses claim_events"),
             })
             .collect::<Vec<_>>();
@@ -292,6 +294,7 @@ impl MongoArchiveStore {
             ArchiveKind::Log => ArchiveRecords::Logs(selected),
             ArchiveKind::Span => ArchiveRecords::Spans(selected),
             ArchiveKind::Session => ArchiveRecords::Sessions(selected),
+            ArchiveKind::Metric => ArchiveRecords::Metrics(selected),
             ArchiveKind::Event => unreachable!("Event uses claim_events"),
         };
         let batch = ArchiveBatch {
@@ -404,7 +407,10 @@ impl MongoArchiveStore {
                             ArchiveRecord::Event(event),
                         );
                     }
-                    ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session => {
+                    ArchiveKind::Log
+                    | ArchiveKind::Span
+                    | ArchiveKind::Session
+                    | ArchiveKind::Metric => {
                         let signal = decode_signal(&document, kind)?;
                         let id = match kind {
                             ArchiveKind::Log => ArchiveSourceId::Log(LogId::from_bytes(signal.id)),
@@ -414,6 +420,7 @@ impl MongoArchiveStore {
                             ArchiveKind::Session => {
                                 ArchiveSourceId::Session(SessionId::from_bytes(signal.id))
                             }
+                            ArchiveKind::Metric => ArchiveSourceId::Metric(signal.id),
                             ArchiveKind::Event => unreachable!(),
                         };
                         by_key.insert(id, ArchiveRecord::Signal(signal));
@@ -433,7 +440,10 @@ impl MongoArchiveStore {
                     }
                     ArchiveRecords::Events(values)
                 }
-                ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session => {
+                ArchiveKind::Log
+                | ArchiveKind::Span
+                | ArchiveKind::Session
+                | ArchiveKind::Metric => {
                     let mut values = Vec::with_capacity(source_ids.len());
                     for id in &source_ids {
                         let ArchiveRecord::Signal(value) =
@@ -447,6 +457,7 @@ impl MongoArchiveStore {
                         ArchiveKind::Log => ArchiveRecords::Logs(values),
                         ArchiveKind::Span => ArchiveRecords::Spans(values),
                         ArchiveKind::Session => ArchiveRecords::Sessions(values),
+                        ArchiveKind::Metric => ArchiveRecords::Metrics(values),
                         ArchiveKind::Event => unreachable!(),
                     }
                 }
@@ -803,7 +814,7 @@ fn decode_signal(
 ) -> Result<ArchiveSignal, ArchiveStoreError> {
     if !matches!(
         kind,
-        ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session
+        ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Session | ArchiveKind::Metric
     ) || document.get_datetime("h").is_err()
         || document.contains_key("z")
     {
@@ -831,6 +842,10 @@ fn decode_signal(
         }))
         .map_err(|_| ArchiveStoreError::InvalidData)?
         .into_boxed_slice()
+    } else if kind == ArchiveKind::Metric {
+        serde_json::to_vec(document)
+            .map_err(|_| ArchiveStoreError::InvalidData)?
+            .into_boxed_slice()
     } else {
         signals::decode_body(document).map_err(|_| ArchiveStoreError::InvalidData)?
     };
@@ -847,6 +862,11 @@ fn decode_signal(
         )?,
         occurred_at_ns: if kind == ArchiveKind::Session {
             timestamp(document, "s")?
+                .unix_millis()
+                .checked_mul(1_000_000)
+                .ok_or(ArchiveStoreError::InvalidData)?
+        } else if kind == ArchiveKind::Metric {
+            timestamp(document, "t")?
                 .unix_millis()
                 .checked_mul(1_000_000)
                 .ok_or(ArchiveStoreError::InvalidData)?
@@ -908,6 +928,12 @@ fn decode_source_id(value: &Bson, kind: ArchiveKind) -> Result<ArchiveSourceId, 
             .map(SessionId::from_bytes)
             .map(ArchiveSourceId::Session)
             .map_err(|_| ArchiveStoreError::InvalidData),
+        ArchiveKind::Metric => value
+            .bytes
+            .as_slice()
+            .try_into()
+            .map(ArchiveSourceId::Metric)
+            .map_err(|_| ArchiveStoreError::InvalidData),
     }
 }
 
@@ -946,11 +972,20 @@ fn session_projection() -> Document {
     }
 }
 
+fn metric_projection() -> Document {
+    doc! {
+        "_id": 1, "p": 1, "s": 1, "n": 1, "k": 1, "u": 1, "a": 1,
+        "t": 1, "w": 1, "r": 1, "g": 1, "v": 1, "s0": 1, "c": 1,
+        "lo": 1, "hi": 1, "q": 1, "h": 1, "z": 1
+    }
+}
+
 fn source_projection(kind: ArchiveKind) -> Document {
     match kind {
         ArchiveKind::Event => event_projection(),
         ArchiveKind::Log | ArchiveKind::Span => signal_projection(),
         ArchiveKind::Session => session_projection(),
+        ArchiveKind::Metric => metric_projection(),
     }
 }
 
@@ -960,6 +995,7 @@ fn source_collection(kind: ArchiveKind) -> &'static str {
         ArchiveKind::Log => "logs",
         ArchiveKind::Span => "spans",
         ArchiveKind::Session => "sessions",
+        ArchiveKind::Metric => "metric_buckets",
     }
 }
 
@@ -969,6 +1005,7 @@ fn archive_index(kind: ArchiveKind) -> &'static str {
         ArchiveKind::Log => "log_archive_due",
         ArchiveKind::Span => "span_archive_due",
         ArchiveKind::Session => "session_archive_due",
+        ArchiveKind::Metric => "metric_archive_due",
     }
 }
 
@@ -978,6 +1015,7 @@ fn schema_version(kind: ArchiveKind) -> u16 {
         ArchiveKind::Log => LOG_ARCHIVE_SCHEMA_VERSION,
         ArchiveKind::Span => SPAN_ARCHIVE_SCHEMA_VERSION,
         ArchiveKind::Session => SESSION_ARCHIVE_SCHEMA_VERSION,
+        ArchiveKind::Metric => METRIC_ARCHIVE_SCHEMA_VERSION,
     }
 }
 
@@ -987,13 +1025,14 @@ fn empty_records(kind: ArchiveKind) -> ArchiveRecords {
         ArchiveKind::Log => ArchiveRecords::Logs(Vec::new()),
         ArchiveKind::Span => ArchiveRecords::Spans(Vec::new()),
         ArchiveKind::Session => ArchiveRecords::Sessions(Vec::new()),
+        ArchiveKind::Metric => ArchiveRecords::Metrics(Vec::new()),
     }
 }
 
 fn source_time_field(kind: ArchiveKind) -> &'static str {
     match kind {
         ArchiveKind::Session => "f",
-        ArchiveKind::Event | ArchiveKind::Log | ArchiveKind::Span => "r",
+        ArchiveKind::Event | ArchiveKind::Log | ArchiveKind::Span | ArchiveKind::Metric => "r",
     }
 }
 

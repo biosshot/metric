@@ -146,6 +146,9 @@ sessions_days = 7
 session_stats_hourly_days = 400
 session_active_max_hours = 24
 monitor_runs_days = 90
+metrics_days = 90
+metric_max_series_per_project = 10000
+metric_archive = false
 
 [project_deletion]
 grace_period = "24h"

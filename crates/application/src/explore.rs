@@ -234,9 +234,13 @@ fn value_matches(
         ExploreField::Timestamp | ExploreField::ReceivedAt => {
             matches!(value, ExploreValue::Integer(value) if Timestamp::from_unix_millis(*value).is_ok())
         }
-        ExploreField::DurationMs => {
+        ExploreField::DurationMs | ExploreField::MetricCount => {
             matches!(value, ExploreValue::Integer(value) if *value >= 0)
                 || matches!(value, ExploreValue::Number(value) if value.is_finite() && *value >= 0.0)
+        }
+        ExploreField::MetricSum | ExploreField::MetricMin | ExploreField::MetricMax => {
+            matches!(value, ExploreValue::Integer(_))
+                || matches!(value, ExploreValue::Number(value) if value.is_finite())
         }
         ExploreField::IsSegment => matches!(value, ExploreValue::Bool(_)),
         ExploreField::TraceId => {
@@ -280,6 +284,11 @@ fn value_matches(
                     "other" | "http.server" | "http.client" | "database" | "cache"
                         | "queue" | "file" | "rpc" | "function" | "task" | "ui" | "resource"
                 )
+        ),
+        ExploreField::MetricKind => matches!(
+            value,
+            ExploreValue::String(value)
+                if matches!(value.as_ref(), "counter" | "gauge" | "distribution")
         ),
         _ => matches!(value, ExploreValue::String(value) if value.len() <= 256),
     }

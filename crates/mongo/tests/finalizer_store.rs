@@ -549,6 +549,7 @@ fn project() -> ProjectIdentity {
             span: true,
             feedback: true,
             check_in: true,
+            metric: true,
         },
         limits: ProjectIngestLimits::default(),
         grouping_revision: 1,

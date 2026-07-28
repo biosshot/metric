@@ -42,6 +42,7 @@ use metric_application::{
         IncidentCapsuleAccess, IncidentCapsuleConfig, IncidentCapsuleError, IncidentCapsuleService,
     },
     log_writer::{LogWriter, LogWriterConfig, LogWriterStartError, LogWriterTask},
+    metric_writer::{MetricWriter, MetricWriterConfig, MetricWriterStartError, MetricWriterTask},
     monitor_writer::{
         MonitorWriter, MonitorWriterConfig, MonitorWriterStartError, MonitorWriterTask,
     },
@@ -75,9 +76,9 @@ use metric_domain::Timestamp;
 use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
 use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
-    FeedbackSink, FeedbackStore, LogSink, MonitorSink, MonitorStore, OutcomeSink, PortFuture,
-    ProjectResolveError, ProjectResolver, RandomError, RandomSource, SessionSink, SessionStore,
-    SignalStore, SpanSink,
+    FeedbackSink, FeedbackStore, LogSink, MetricSink, MetricStore, MonitorSink, MonitorStore,
+    OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource,
+    SessionSink, SessionStore, SignalStore, SpanSink,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -104,6 +105,8 @@ pub enum ServerError {
     Writer(#[from] MongoWriterStartError),
     #[error(transparent)]
     LogWriter(#[from] LogWriterStartError),
+    #[error(transparent)]
+    MetricWriter(#[from] MetricWriterStartError),
     #[error(transparent)]
     SpanWriter(#[from] SpanWriterStartError),
     #[error(transparent)]
@@ -152,12 +155,14 @@ struct RuntimeModules {
     project_resolver: std::sync::Arc<dyn ProjectResolver>,
     event_sink: std::sync::Arc<dyn EventSink>,
     log_sink: Option<std::sync::Arc<dyn LogSink>>,
+    metric_sink: Option<std::sync::Arc<dyn MetricSink>>,
     span_sink: Option<std::sync::Arc<dyn SpanSink>>,
     session_sink: Option<std::sync::Arc<dyn SessionSink>>,
     monitor_sink: Option<std::sync::Arc<dyn MonitorSink>>,
     feedback_sink: Option<std::sync::Arc<dyn FeedbackSink>>,
     writer_task: Option<MongoWriterTask>,
     log_writer_task: Option<LogWriterTask>,
+    metric_writer_task: Option<MetricWriterTask>,
     span_writer_task: Option<SpanWriterTask>,
     session_writer_task: Option<SessionWriterTask>,
     monitor_writer_task: Option<MonitorWriterTask>,
@@ -263,12 +268,14 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         project_resolver,
         event_sink,
         log_sink,
+        metric_sink,
         span_sink,
         session_sink,
         monitor_sink,
         feedback_sink,
         writer_task,
         log_writer_task,
+        metric_writer_task,
         span_writer_task,
         session_writer_task,
         monitor_writer_task,
@@ -524,6 +531,24 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             shutdown.signal(),
         )?;
         let log_sink: std::sync::Arc<dyn LogSink> = log_writer;
+        let metric_store: std::sync::Arc<dyn MetricStore> =
+            std::sync::Arc::new(store.metric_store(metric_mongo::MetricRetention {
+                days: config.retention.metrics_days,
+                max_series_per_project: config.retention.metric_max_series_per_project,
+                archive: config.archive.enabled && config.retention.metric_archive,
+            }));
+        let (metric_writer, metric_writer_task) = MetricWriter::start(
+            metric_store,
+            MetricWriterConfig {
+                channel_capacity: config.ingest.max_waiting_for_storage,
+                max_wait: config.ingest.batch.max_wait.get(),
+                max_deltas: config.ingest.batch.max_documents.saturating_mul(8),
+                operation_timeout: config.ingest.request_timeout.get(),
+                shutdown_drain: config.server.shutdown_grace.get(),
+            },
+            shutdown.signal(),
+        )?;
+        let metric_sink: std::sync::Arc<dyn MetricSink> = metric_writer;
         let (span_writer, span_writer_task) = SpanWriter::start(
             std::sync::Arc::clone(&signal_store),
             SpanWriterConfig {
@@ -861,12 +886,14 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             project_resolver,
             event_sink,
             log_sink: Some(log_sink),
+            metric_sink: Some(metric_sink),
             span_sink: Some(span_sink),
             session_sink: Some(session_sink),
             monitor_sink: Some(monitor_sink),
             feedback_sink: Some(feedback_sink),
             writer_task: Some(writer_task),
             log_writer_task: Some(log_writer_task),
+            metric_writer_task: Some(metric_writer_task),
             span_writer_task: Some(span_writer_task),
             session_writer_task: Some(session_writer_task),
             monitor_writer_task: Some(monitor_writer_task),
@@ -899,12 +926,14 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             project_resolver: std::sync::Arc::new(UnavailableProjectResolver),
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             log_sink: None,
+            metric_sink: None,
             span_sink: None,
             session_sink: None,
             monitor_sink: None,
             feedback_sink: None,
             writer_task: None,
             log_writer_task: None,
+            metric_writer_task: None,
             span_writer_task: None,
             session_writer_task: None,
             monitor_writer_task: None,
@@ -958,6 +987,12 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(log_sink) = log_sink {
         ingest_service = ingest_service.with_log_sink(log_sink);
     }
+    if let Some(metric_sink) = metric_sink {
+        ingest_service = ingest_service.with_metric_sink(
+            metric_sink,
+            metric_application::ingest::MetricIngestConfig::default(),
+        );
+    }
     if let Some(span_sink) = span_sink {
         ingest_service = ingest_service.with_span_sink(span_sink);
     }
@@ -986,6 +1021,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     let ingest = std::sync::Arc::new(ingest_service);
     let required_ready = writer_task.is_some()
         && log_writer_task.is_some()
+        && metric_writer_task.is_some()
         && span_writer_task.is_some()
         && session_writer_task.is_some()
         && monitor_writer_task.is_some()
@@ -1014,6 +1050,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                     session_stats_hourly_days: config.retention.session_stats_hourly_days,
                     session_active_max_hours: config.retention.session_active_max_hours,
                     monitor_runs_days: config.retention.monitor_runs_days,
+                    metrics_days: config.retention.metrics_days,
+                    metric_max_series_per_project: config.retention.metric_max_series_per_project,
+                    metric_archive: config.archive.enabled && config.retention.metric_archive,
                 }),
                 project_deletion: required_ready.then_some(
                     native_http::ProjectDeletionCapability {
@@ -1111,6 +1150,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         task.wait().await;
     }
     if let Some(task) = log_writer_task {
+        task.wait().await;
+    }
+    if let Some(task) = metric_writer_task {
         task.wait().await;
     }
     if let Some(task) = span_writer_task {

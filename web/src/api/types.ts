@@ -85,6 +85,7 @@ export interface ProjectPolicy {
     span: boolean;
     feedback: boolean;
     check_in: boolean;
+    metric: boolean;
   };
   limits: {
     max_event_bytes: number;
@@ -140,6 +141,7 @@ export interface CreateProjectInput {
   span_enabled: boolean;
   feedback_enabled: boolean;
   check_in_enabled: boolean;
+  metric_enabled: boolean;
   max_event_bytes: number;
   max_events_per_second: number | null;
   burst: number | null;
@@ -282,7 +284,7 @@ export interface PerformanceBucket {
   sample_limit: number;
 }
 
-export type ExploreDataset = 'errors' | 'logs' | 'spans';
+export type ExploreDataset = 'errors' | 'logs' | 'spans' | 'metrics';
 export type ExploreShape = 'table' | 'number' | 'timeseries';
 export type ExploreScalar = string | number | boolean | null;
 
@@ -387,7 +389,7 @@ export interface AlertRule {
   enabled: boolean;
   triggers: Array<'new_issue' | 'regression' | 'resolved'>;
   aggregate: {
-    dataset: 'errors' | 'logs' | 'spans';
+    dataset: ExploreDataset;
     lookback_minutes: number;
     evaluation_interval_minutes: number;
     threshold: number;

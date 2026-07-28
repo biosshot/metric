@@ -26,6 +26,12 @@ const datasetOptions: SelectOption[] = [
   { value: 'errors', label: 'Errors', icon: 'bug', description: 'Finalized Error events' },
   { value: 'logs', label: 'Logs', icon: 'logs', description: 'Structured log records' },
   { value: 'spans', label: 'Spans', icon: 'traces', description: 'Root and child spans' },
+  {
+    value: 'metrics',
+    label: 'Metrics',
+    icon: 'gauge',
+    description: 'Counters, gauges, and distributions',
+  },
 ];
 const modeOptions: SelectOption[] = [
   {
@@ -69,6 +75,12 @@ const fieldsByDataset: Record<ExploreDataset, SelectOption[]> = {
     { value: 'status', label: 'Status' },
     { value: 'is_segment', label: 'Root segment' },
   ],
+  metrics: [
+    { value: 'name', label: 'Metric name' },
+    { value: 'metric_kind', label: 'Metric kind' },
+    { value: 'unit', label: 'Unit' },
+    { value: 'trace_id', label: 'Trace ID' },
+  ],
 };
 const groupFieldsByDataset: Record<ExploreDataset, SelectOption[]> = {
   errors: [
@@ -79,6 +91,10 @@ const groupFieldsByDataset: Record<ExploreDataset, SelectOption[]> = {
   spans: [
     { value: 'operation_class', label: 'Operation class' },
     { value: 'is_segment', label: 'Root segment' },
+  ],
+  metrics: [
+    { value: 'metric_kind', label: 'Metric kind' },
+    { value: 'unit', label: 'Unit' },
   ],
 };
 const optionalFields = computed<SelectOption[]>(() => [
@@ -119,7 +135,12 @@ async function run(nextCursor: string | null = null): Promise<void> {
       value: filterField.value === 'is_segment' ? raw === 'true' : raw,
     });
   }
-  const aggregate = mode.value === 'table' ? [] : [{ function: 'count' as const, alias: 'count' }];
+  const aggregate =
+    mode.value === 'table'
+      ? []
+      : dataset.value === 'metrics'
+        ? [{ function: 'sum' as const, field: 'metric_count', alias: 'count' }]
+        : [{ function: 'count' as const, alias: 'count' }];
   await query.mutateAsync({
     dataset: dataset.value,
     from: until - 24 * 60 * 60 * 1000,
@@ -149,7 +170,9 @@ function display(value: ExploreScalar, key: string): string {
       <div>
         <p class="eyebrow">{{ session.selectedProject?.slug }} / explore</p>
         <h1>Unified Explore</h1>
-        <p>Ask one bounded question of Errors, Logs, or Spans without raw database syntax.</p>
+        <p>
+          Ask one bounded question of Errors, Logs, Spans, or Metrics without raw database syntax.
+        </p>
       </div>
     </header>
 

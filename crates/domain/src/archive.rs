@@ -15,6 +15,7 @@ pub const EVENT_ARCHIVE_SCHEMA_VERSION: u16 = 1;
 pub const LOG_ARCHIVE_SCHEMA_VERSION: u16 = 1;
 pub const SPAN_ARCHIVE_SCHEMA_VERSION: u16 = 1;
 pub const SESSION_ARCHIVE_SCHEMA_VERSION: u16 = 1;
+pub const METRIC_ARCHIVE_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArchiveKind {
@@ -22,10 +23,17 @@ pub enum ArchiveKind {
     Log,
     Span,
     Session,
+    Metric,
 }
 
 impl ArchiveKind {
-    pub const ALL: [Self; 4] = [Self::Event, Self::Log, Self::Span, Self::Session];
+    pub const ALL: [Self; 5] = [
+        Self::Event,
+        Self::Log,
+        Self::Span,
+        Self::Session,
+        Self::Metric,
+    ];
 
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -34,6 +42,7 @@ impl ArchiveKind {
             Self::Log => "log",
             Self::Span => "span",
             Self::Session => "session",
+            Self::Metric => "metric",
         }
     }
 
@@ -44,6 +53,7 @@ impl ArchiveKind {
             Self::Log => "logs",
             Self::Span => "spans",
             Self::Session => "sessions",
+            Self::Metric => "metrics",
         }
     }
 
@@ -53,6 +63,7 @@ impl ArchiveKind {
             "log" => Ok(Self::Log),
             "span" => Ok(Self::Span),
             "session" => Ok(Self::Session),
+            "metric" => Ok(Self::Metric),
             _ => Err(ArchiveValueError),
         }
     }
@@ -63,6 +74,7 @@ impl ArchiveKind {
             "logs" => Ok(Self::Log),
             "spans" => Ok(Self::Span),
             "sessions" => Ok(Self::Session),
+            "metrics" => Ok(Self::Metric),
             _ => Err(ArchiveValueError),
         }
     }
@@ -77,6 +89,7 @@ pub enum ArchiveSourceId {
     Log(LogId),
     Span(SpanRecordId),
     Session(SessionId),
+    Metric([u8; 16]),
 }
 
 impl ArchiveSourceId {
@@ -87,6 +100,7 @@ impl ArchiveSourceId {
             Self::Log(_) => ArchiveKind::Log,
             Self::Span(_) => ArchiveKind::Span,
             Self::Session(_) => ArchiveKind::Session,
+            Self::Metric(_) => ArchiveKind::Metric,
         }
     }
 
@@ -97,6 +111,7 @@ impl ArchiveSourceId {
             Self::Log(value) => value.as_bytes().to_vec(),
             Self::Span(value) => value.as_bytes().to_vec(),
             Self::Session(value) => value.as_bytes().to_vec(),
+            Self::Metric(value) => value.to_vec(),
         }
     }
 }
@@ -182,6 +197,7 @@ pub enum ArchiveRecords {
     Logs(Vec<ArchiveSignal>),
     Spans(Vec<ArchiveSignal>),
     Sessions(Vec<ArchiveSignal>),
+    Metrics(Vec<ArchiveSignal>),
 }
 
 impl ArchiveRecords {
@@ -189,7 +205,10 @@ impl ArchiveRecords {
     pub fn len(&self) -> usize {
         match self {
             Self::Events(records) => records.len(),
-            Self::Logs(records) | Self::Spans(records) | Self::Sessions(records) => records.len(),
+            Self::Logs(records)
+            | Self::Spans(records)
+            | Self::Sessions(records)
+            | Self::Metrics(records) => records.len(),
         }
     }
 

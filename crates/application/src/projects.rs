@@ -734,6 +734,7 @@ mod tests {
                 span: true,
                 feedback: true,
                 check_in: true,
+                metric: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: Default::default(),
@@ -905,6 +906,7 @@ mod tests {
                     span: true,
                     feedback: true,
                     check_in: true,
+                    metric: true,
                 },
                 limits: ProjectIngestLimits::default(),
             })

@@ -74,6 +74,7 @@ const datasetOptions: SelectOption[] = [
   { value: 'errors', label: 'Errors', icon: 'bug' },
   { value: 'logs', label: 'Logs', icon: 'logs' },
   { value: 'spans', label: 'Spans', icon: 'traces' },
+  { value: 'metrics', label: 'Metrics', icon: 'gauge' },
 ];
 
 const destinations = useQuery({

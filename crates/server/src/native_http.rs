@@ -116,6 +116,9 @@ pub struct RetentionCapability {
     pub session_stats_hourly_days: u32,
     pub session_active_max_hours: u32,
     pub monitor_runs_days: u32,
+    pub metrics_days: u32,
+    pub metric_max_series_per_project: usize,
+    pub metric_archive: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -871,6 +874,7 @@ fn parse_explore_dataset(value: &str) -> Result<ExploreDataset, HttpApiError> {
         "errors" => Ok(ExploreDataset::Errors),
         "logs" => Ok(ExploreDataset::Logs),
         "spans" => Ok(ExploreDataset::Spans),
+        "metrics" => Ok(ExploreDataset::Metrics),
         _ => Err(HttpApiError::InvalidRequest),
     }
 }
@@ -894,6 +898,12 @@ fn parse_explore_field(value: &str) -> Result<ExploreField, HttpApiError> {
         "status" => Ok(ExploreField::Status),
         "name" => Ok(ExploreField::Name),
         "is_segment" => Ok(ExploreField::IsSegment),
+        "metric_kind" => Ok(ExploreField::MetricKind),
+        "unit" => Ok(ExploreField::Unit),
+        "metric_count" => Ok(ExploreField::MetricCount),
+        "metric_sum" => Ok(ExploreField::MetricSum),
+        "metric_min" => Ok(ExploreField::MetricMin),
+        "metric_max" => Ok(ExploreField::MetricMax),
         _ => Err(HttpApiError::InvalidRequest),
     }
 }
@@ -1556,6 +1566,7 @@ async fn put_alert_rule(
                     "errors" => ExploreDataset::Errors,
                     "logs" => ExploreDataset::Logs,
                     "spans" => ExploreDataset::Spans,
+                    "metrics" => ExploreDataset::Metrics,
                     _ => return Err(HttpApiError::InvalidRequest),
                 },
                 lookback_minutes: body.lookback_minutes.ok_or(HttpApiError::InvalidRequest)?,
@@ -2409,6 +2420,8 @@ struct ProjectBody {
     feedback_enabled: bool,
     #[serde(default = "default_true")]
     check_in_enabled: bool,
+    #[serde(default = "default_true")]
+    metric_enabled: bool,
     #[serde(default = "default_event_bytes")]
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
@@ -2440,6 +2453,7 @@ async fn create_project(
                     span: body.span_enabled,
                     feedback: body.feedback_enabled,
                     check_in: body.check_in_enabled,
+                    metric: body.metric_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -2631,6 +2645,7 @@ struct PolicyBody {
     span_enabled: bool,
     feedback_enabled: bool,
     check_in_enabled: bool,
+    metric_enabled: bool,
     max_event_bytes: u32,
     max_events_per_second: Option<u32>,
     burst: Option<u32>,
@@ -2670,6 +2685,7 @@ async fn update_project_policy(
                     span: body.span_enabled,
                     feedback: body.feedback_enabled,
                     check_in: body.check_in_enabled,
+                    metric: body.metric_enabled,
                 },
                 limits: ingest_limits(
                     body.max_event_bytes,
@@ -3421,6 +3437,9 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "session_stats_hourly_days": policy.session_stats_hourly_days,
             "session_active_max_hours": policy.session_active_max_hours,
             "monitor_runs_days": policy.monitor_runs_days,
+            "metrics_days": policy.metrics_days,
+            "metric_max_series_per_project": policy.metric_max_series_per_project,
+            "metric_archive": policy.metric_archive,
             "clock": "received_at",
             "gradual_policy_reduction": true,
         })
@@ -3464,6 +3483,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "spans": state.required_ready,
             "virtual_traces": state.required_ready,
             "performance_insights": state.required_ready,
+            "application_metrics": state.required_ready,
             "sessions": state.required_ready,
             "release_health": state.required_ready,
             "user_feedback": state.required_ready,
@@ -3481,7 +3501,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
         },
         "retention": retention,
         "explore": {
-            "datasets": ["errors", "logs", "spans"],
+            "datasets": ["errors", "logs", "spans", "metrics"],
             "maximum_range_days": 30,
             "maximum_predicates": 8,
             "maximum_group_by": 2,
@@ -3517,7 +3537,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "backends": ["telegram", "smtp_email"],
             "legacy_webhook_delivery": true,
             "delivery": "at_least_once",
-            "aggregate_datasets": ["errors", "logs", "spans"],
+            "aggregate_datasets": ["errors", "logs", "spans", "metrics"],
             "sealed_secrets": true,
             "smtp_security": ["starttls", "tls"],
         })),
@@ -4014,6 +4034,7 @@ fn policy_value(project: &ProjectView) -> Value {
             "span": project.items.span,
             "feedback": project.items.feedback,
             "check_in": project.items.check_in,
+            "metric": project.items.metric,
         },
         "limits": {
             "max_event_bytes": project.limits.max_event_bytes.get(),
@@ -4367,6 +4388,7 @@ mod tests {
                 span: true,
                 feedback: true,
                 check_in: true,
+                metric: true,
             },
             limits: ProjectIngestLimits::default(),
             inbound_filters: InboundFilterPolicy::new(vec![InboundFilterRule {
@@ -4381,7 +4403,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&project_value(&project).unwrap()).unwrap(),
-            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true,"check_in":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
+            r#"{"id":"7","organization_id":"9","slug":"backend","display_name":"Backend","state":"active","policy":{"revision":2,"ip_policy":"hmac","items":{"error":true,"client_report":true,"log":true,"transaction":true,"span":true,"feedback":true,"check_in":true,"metric":true},"limits":{"max_event_bytes":1048576,"max_events_per_second":null,"burst":null},"inbound_filters":[{"signal":"error","field":"message","operation":"contains","pattern":"healthcheck"}]},"grouping_revision":1,"created_at":"2023-11-14T22:13:20Z"}"#
         );
         assert!(
             inbound_filter_policy(vec![InboundFilterRuleBody {

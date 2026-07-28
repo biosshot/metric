@@ -271,6 +271,7 @@ export const api = {
         span_enabled: policy.items.span,
         feedback_enabled: policy.items.feedback,
         check_in_enabled: policy.items.check_in,
+        metric_enabled: policy.items.metric,
         max_event_bytes: policy.limits.max_event_bytes,
         max_events_per_second: policy.limits.max_events_per_second,
         burst: policy.limits.burst,

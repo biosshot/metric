@@ -73,6 +73,7 @@ fn snapshot() -> ProjectSnapshot {
             span: true,
             feedback: true,
             check_in: true,
+            metric: true,
         },
         limits: ProjectIngestLimits::default(),
         inbound_filters: Default::default(),

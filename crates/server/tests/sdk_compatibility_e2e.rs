@@ -24,7 +24,7 @@ use metric_domain::{
 use metric_ports::{BlobStore, IngestOutcomeKind};
 use metric_server::{config::IngestConfig, http, ingest_http};
 use metric_testkit::{
-    FakeEventSink, FakeFeedbackSink, FakeLogSink, FakeMonitorSink, FakeOutcomeSink,
+    FakeEventSink, FakeFeedbackSink, FakeLogSink, FakeMetricSink, FakeMonitorSink, FakeOutcomeSink,
     FakeProjectResolver, FakeSessionSink, FakeSpanSink, FixedClock, FixedRandom,
 };
 use serde::Deserialize;
@@ -51,6 +51,7 @@ struct RunningHarness {
     sink: FakeEventSink,
     outcomes: FakeOutcomeSink,
     logs: FakeLogSink,
+    metrics: FakeMetricSink,
     spans: FakeSpanSink,
     sessions: FakeSessionSink,
     monitors: FakeMonitorSink,
@@ -153,6 +154,50 @@ async fn real_node_sdk_sends_cron_success_and_error_check_ins() {
             .count()
             >= 2
     );
+    stop_harness(harness).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Node.js and npm ci in sdk-tests/node"]
+async fn real_node_sdk_sends_counter_gauge_and_distribution_metrics() {
+    let sender = workspace().join("sdk-tests/node/send-metrics.mjs");
+    let harness = start_harness(Router::new()).await.unwrap();
+    let dsn = format!("http://{KEY_TEXT}@{}/42", harness.address);
+    let output =
+        tokio::task::spawn_blocking(move || Command::new("node").arg(sender).arg(dsn).output())
+            .await
+            .unwrap()
+            .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        output.status.success(),
+        "Node SDK failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let batches = harness.metrics.batches();
+    assert!(!batches.is_empty());
+    let deltas = batches
+        .iter()
+        .flat_map(|batch| batch.deltas.values())
+        .collect::<Vec<_>>();
+    assert!(deltas.iter().any(|delta| {
+        matches!(
+            delta.aggregate,
+            metric_domain::metrics::MetricAggregate::Counter { .. }
+        )
+    }));
+    assert!(deltas.iter().any(|delta| {
+        matches!(
+            delta.aggregate,
+            metric_domain::metrics::MetricAggregate::Gauge { .. }
+        )
+    }));
+    assert!(deltas.iter().any(|delta| {
+        matches!(
+            delta.aggregate,
+            metric_domain::metrics::MetricAggregate::Distribution { .. }
+        )
+    }));
     stop_harness(harness).await.unwrap();
 }
 
@@ -709,6 +754,7 @@ async fn start_harness_with_policy(
     let sink = FakeEventSink::accepting();
     let outcomes = FakeOutcomeSink::default();
     let logs = FakeLogSink::default();
+    let metrics = FakeMetricSink::default();
     let spans = FakeSpanSink::default();
     let sessions = FakeSessionSink::default();
     let feedback = FakeFeedbackSink::default();
@@ -717,6 +763,7 @@ async fn start_harness_with_policy(
         sink.clone(),
         outcomes.clone(),
         logs.clone(),
+        metrics.clone(),
         spans.clone(),
         sessions.clone(),
         feedback.clone(),
@@ -738,6 +785,7 @@ async fn start_harness_with_policy(
         sink,
         outcomes,
         logs,
+        metrics,
         spans,
         sessions,
         monitors,
@@ -915,6 +963,7 @@ async fn test_app(
     sink: FakeEventSink,
     outcomes: FakeOutcomeSink,
     logs: FakeLogSink,
+    metrics: FakeMetricSink,
     spans: FakeSpanSink,
     sessions: FakeSessionSink,
     feedback: FakeFeedbackSink,
@@ -971,6 +1020,7 @@ async fn test_app(
                         span: true,
                         feedback: true,
                         check_in: true,
+                        metric: true,
                     },
                     limits: ProjectIngestLimits::default(),
                     inbound_filters: Arc::new(policy.compile().unwrap()),
@@ -986,6 +1036,10 @@ async fn test_app(
         )
         .with_blob_store(Arc::new(blob.clone()), AttachmentIngestConfig::default())
         .with_log_sink(Arc::new(logs))
+        .with_metric_sink(
+            Arc::new(metrics),
+            metric_application::ingest::MetricIngestConfig::default(),
+        )
         .with_span_sink(Arc::new(spans))
         .with_session_sink(Arc::new(sessions))
         .with_monitor_sink(

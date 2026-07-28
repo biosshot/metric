@@ -10,6 +10,7 @@ use std::{
 use metric_domain::{
     AcceptedEvent, DsnKey, ProjectSnapshot, Timestamp,
     feedback::FeedbackRecord,
+    metrics::MetricDeltaBatch,
     monitors::MonitorUpdate,
     sessions::SessionUpdate,
     signals::{LogRecord, SpanRecord},
@@ -17,7 +18,7 @@ use metric_domain::{
 };
 use metric_ports::{
     Clock, DurableOutcome, EventSink, EventSinkError, FeedbackSink, FeedbackStoreError,
-    IngestOutcome, LogSink, MonitorSink, OutcomeSink, PortFuture, ProjectResolveError,
+    IngestOutcome, LogSink, MetricSink, MonitorSink, OutcomeSink, PortFuture, ProjectResolveError,
     ProjectResolver, RandomError, RandomSource, SessionSink, SignalStoreError, SpanSink,
     SymbolicationBackend, SymbolicationBackendError,
 };
@@ -129,6 +130,34 @@ impl LogSink for FakeLogSink {
                 .expect("fake Log sink lock poisoned")
                 .extend(records);
             Ok(outcomes)
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FakeMetricSink(Arc<Mutex<Vec<MetricDeltaBatch>>>);
+
+impl FakeMetricSink {
+    #[must_use]
+    pub fn batches(&self) -> Vec<MetricDeltaBatch> {
+        self.0
+            .lock()
+            .expect("fake Metric sink lock poisoned")
+            .clone()
+    }
+}
+
+impl MetricSink for FakeMetricSink {
+    fn persist_metrics(
+        &self,
+        batch: MetricDeltaBatch,
+    ) -> PortFuture<'_, Result<DurableOutcome, SignalStoreError>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .expect("fake Metric sink lock poisoned")
+                .push(batch);
+            Ok(DurableOutcome::Accepted)
         })
     }
 }
