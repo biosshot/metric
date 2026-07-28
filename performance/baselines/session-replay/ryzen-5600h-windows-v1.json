@@ -2,7 +2,7 @@
   "schema_version": 1,
   "metadata": {
     "scenario": "session-replay-validation-phase-38",
-    "source_commit": "d35cba953200580bd08011da6fd1cbcfcd22ccae",
+    "source_commit": "c7149d5482e800c7c7a154b2e104eabf0676355c",
     "generated_at": "2026-07-28T08:53:00.297Z",
     "rust_toolchain": "rustc 1.88.0 (6b00bc388 2025-06-23)",
     "hardware": "AMD Ryzen 5 5600H with Radeon Graphics         ; 15.9 GiB RAM; win32",
