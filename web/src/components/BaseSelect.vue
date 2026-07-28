@@ -7,6 +7,7 @@ export interface SelectOption {
   label: string;
   description?: string;
   icon?: AppIconName;
+  action?: boolean;
 }
 
 const props = withDefaults(
@@ -147,9 +148,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
           :id="`${id}-option-${index}`"
           :key="option.value"
           class="base-select__option"
-          :class="{ 'base-select__option--active': index === highlightedIndex }"
+          :class="{
+            'base-select__option--active': index === highlightedIndex,
+            'base-select__option--action': option.action,
+          }"
           role="option"
-          :aria-selected="option.value === modelValue"
+          :aria-selected="!option.action && option.value === modelValue"
           @mouseenter="highlightedIndex = index"
           @click="choose(option)"
         >
@@ -159,7 +163,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
             <small v-if="option.description">{{ option.description }}</small>
           </span>
           <AppIcon
-            v-if="option.value === modelValue"
+            v-if="!option.action && option.value === modelValue"
             class="base-select__check"
             name="check"
             :size="16"

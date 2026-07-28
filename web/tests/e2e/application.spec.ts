@@ -989,10 +989,11 @@ test('settings anchors, capability grid and project creation stay discoverable',
   await installApi(page, state);
   await login(page);
 
-  await expect(page.getByRole('link', { name: 'New project' })).toHaveAttribute(
-    'href',
-    '/projects/new',
-  );
+  await page.getByRole('combobox', { name: 'Project' }).click();
+  const createProject = page.getByRole('option', { name: /New project/ });
+  await expect(createProject).toHaveClass(/base-select__option--action/);
+  await createProject.click();
+  await expect(page).toHaveURL(/\/projects\/new$/);
   await page.goto('/project/setup');
   await page.getByRole('link', { name: 'Manage keys' }).click();
   await expect(page).toHaveURL(/\/settings\/project#dsn-keys$/);

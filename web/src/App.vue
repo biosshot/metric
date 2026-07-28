@@ -15,17 +15,34 @@ const session = useSessionStore();
 const router = useRouter();
 const navigationOpen = ref(false);
 const logoutError = ref<unknown>(null);
-const projectOptions = computed<SelectOption[]>(() =>
-  session.projects.map((project) => ({
+const createProjectAction = '__create_project__';
+const projectOptions = computed<SelectOption[]>(() => [
+  ...session.projects.map((project) => ({
     value: project.id,
     label: project.display_name,
-    icon: 'bug',
+    icon: 'bug' as const,
   })),
-);
+  ...(session.has('organization:admin')
+    ? [
+        {
+          value: createProjectAction,
+          label: 'New project',
+          description: 'Create another isolated project',
+          icon: 'plus' as const,
+          action: true,
+        },
+      ]
+    : []),
+]);
 
 onMounted(() => session.restore());
 
 function changeProject(projectId: string): void {
+  if (projectId === createProjectAction) {
+    navigationOpen.value = false;
+    void router.push('/projects/new');
+    return;
+  }
   session.selectProject(projectId);
   navigationOpen.value = false;
   void router.push('/dashboard');
@@ -106,15 +123,6 @@ async function logout(): Promise<void> {
           label="Project"
           @update:model-value="changeProject"
         />
-        <RouterLink
-          v-if="session.has('organization:admin')"
-          class="project-create-link"
-          to="/projects/new"
-          @click="navigationOpen = false"
-        >
-          <AppIcon name="plus" :size="16" />
-          New project
-        </RouterLink>
       </div>
 
       <nav aria-label="Primary">

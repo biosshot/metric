@@ -23,4 +23,27 @@ describe('BaseSelect', () => {
     expect(view.emitted()['update:modelValue']).toEqual([['resolved']]);
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('exposes a separated action without treating it as the selected value', async () => {
+    const view = render(BaseSelect, {
+      props: {
+        modelValue: 'open',
+        options: [
+          ...options,
+          { value: '__create__', label: 'New project', icon: 'plus', action: true },
+        ],
+        ariaLabel: 'Project',
+      },
+    });
+    const trigger = screen.getByRole('combobox', { name: 'Project' });
+
+    await fireEvent.click(trigger);
+    const action = screen.getByRole('option', { name: 'New project' });
+    expect(action).toHaveAttribute('aria-selected', 'false');
+    expect(action).toHaveClass('base-select__option--action');
+    await fireEvent.click(action);
+
+    expect(view.emitted()['update:modelValue']).toEqual([['__create__']]);
+    expect(trigger).toHaveTextContent('Open');
+  });
 });
