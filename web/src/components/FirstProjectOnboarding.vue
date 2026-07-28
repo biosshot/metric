@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useMutation } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
 import { api } from '../api/client';
@@ -11,6 +11,7 @@ import BaseSelect, { type SelectOption } from './BaseSelect.vue';
 
 const session = useSessionStore();
 const router = useRouter();
+const firstProject = computed(() => session.projects.length === 0);
 const slugWasEdited = ref(false);
 const ipPolicyOptions: SelectOption[] = [
   {
@@ -84,8 +85,10 @@ const createProject = useMutation({
   <section class="onboarding-layout" aria-labelledby="first-project-title">
     <header class="page-header">
       <div>
-        <p class="eyebrow">Organization ready</p>
-        <h1 id="first-project-title">Create your first project</h1>
+        <p class="eyebrow">{{ firstProject ? 'Organization ready' : 'Project administration' }}</p>
+        <h1 id="first-project-title">
+          {{ firstProject ? 'Create your first project' : 'Create a new project' }}
+        </h1>
         <p>A project isolates its Events, Issues, privacy policy, limits, and SDK credentials.</p>
       </div>
     </header>

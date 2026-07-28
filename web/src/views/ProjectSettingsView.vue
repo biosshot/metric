@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
+import { useRoute } from 'vue-router';
 import { api } from '../api/client';
 import type {
   InboundFilterField,
@@ -17,6 +18,7 @@ import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
+const route = useRoute();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const newKeyLabel = ref('');
@@ -93,6 +95,16 @@ const capabilities = useQuery({
   queryKey: ['capabilities'],
   queryFn: api.capabilities,
 });
+watch(
+  [() => route.hash, () => project.data.value],
+  async ([hash, projectData]) => {
+    if (!hash || !projectData) return;
+    await nextTick();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    document.querySelector(hash)?.scrollIntoView({ block: 'start' });
+  },
+  { immediate: true, flush: 'post' },
+);
 const deletion = useQuery({
   queryKey: computed(() => ['project-deletion', projectId.value]),
   queryFn: () => api.projectDeletionStatus(projectId.value),
@@ -236,6 +248,24 @@ const cancelDeletion = useMutation({
         <p>Accepted ingestion, privacy controls, limits, and DSN keys.</p>
       </div>
     </header>
+    <nav class="settings-anchor-nav" aria-label="Project setting sections">
+      <a href="#data-policy">
+        <AppIcon name="shield" :size="15" />
+        Data policy
+      </a>
+      <a href="#dsn-keys">
+        <AppIcon name="key" :size="15" />
+        DSN keys
+      </a>
+      <a href="#retention">
+        <AppIcon name="history" :size="15" />
+        Retention
+      </a>
+      <a v-if="session.has('project:admin')" href="#delete-project">
+        <AppIcon name="delete" :size="15" />
+        Delete project
+      </a>
+    </nav>
     <p v-if="notice" class="success-notice" role="status">{{ notice }}</p>
     <div v-if="!session.has('project:admin')" class="permission-banner">
       You can inspect these settings, but only a project administrator can change them.
@@ -246,7 +276,12 @@ const cancelDeletion = useMutation({
       :error="project.error.value"
       @retry="project.refetch()"
     />
-    <form v-else class="panel settings-form" @submit.prevent="savePolicy.mutate()">
+    <form
+      v-else
+      id="data-policy"
+      class="panel settings-form settings-anchor"
+      @submit.prevent="savePolicy.mutate()"
+    >
       <div class="section-heading">
         <div>
           <p class="eyebrow">Revision {{ policy.revision }}</p>
@@ -472,7 +507,7 @@ const cancelDeletion = useMutation({
       </button>
     </form>
 
-    <section class="panel">
+    <section id="dsn-keys" class="panel settings-anchor">
       <div class="section-heading">
         <div>
           <p class="eyebrow">SDK access</p>
@@ -529,7 +564,7 @@ const cancelDeletion = useMutation({
       />
     </section>
 
-    <section class="panel unavailable-setting">
+    <section id="retention" class="panel unavailable-setting settings-anchor">
       <div>
         <p class="eyebrow">Retention</p>
         <h2>Automated retention</h2>
@@ -560,7 +595,11 @@ const cancelDeletion = useMutation({
       <StatusBadge :status="capabilities.data.value?.retention ? 'active' : 'unavailable'" />
     </section>
 
-    <section v-if="session.has('project:admin')" class="panel danger-zone">
+    <section
+      v-if="session.has('project:admin')"
+      id="delete-project"
+      class="panel danger-zone settings-anchor"
+    >
       <div class="section-heading">
         <div>
           <p class="eyebrow">Danger zone</p>

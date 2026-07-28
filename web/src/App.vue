@@ -98,13 +98,24 @@ async function logout(): Promise<void> {
         <strong>Metric</strong>
       </div>
 
-      <BaseSelect
-        class="project-switcher"
-        :model-value="session.selectedProjectId ?? ''"
-        :options="projectOptions"
-        label="Project"
-        @update:model-value="changeProject"
-      />
+      <div class="sidebar__project">
+        <BaseSelect
+          class="project-switcher"
+          :model-value="session.selectedProjectId ?? ''"
+          :options="projectOptions"
+          label="Project"
+          @update:model-value="changeProject"
+        />
+        <RouterLink
+          v-if="session.has('organization:admin')"
+          class="project-create-link"
+          to="/projects/new"
+          @click="navigationOpen = false"
+        >
+          <AppIcon name="plus" :size="16" />
+          New project
+        </RouterLink>
+      </div>
 
       <nav aria-label="Primary">
         <div class="sidebar__nav-group">

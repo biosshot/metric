@@ -120,16 +120,6 @@ onBeforeUnmount(() => player?.$destroy());
         <h1>Session Replay</h1>
         <p class="mono">{{ replayId }}</p>
       </div>
-      <button
-        v-if="replay.data.value"
-        class="button button--primary"
-        type="button"
-        :disabled="loadingPlayer"
-        @click="loadPlayer"
-      >
-        <AppIcon :name="loadingPlayer ? 'loading' : 'replay'" :size="17" />
-        {{ loadingPlayer ? 'Preparing…' : 'Load recording' }}
-      </button>
     </header>
     <LoadingPanel v-if="replay.isPending.value" label="Loading Replay metadata…" />
     <ApiErrorPanel
@@ -143,12 +133,10 @@ onBeforeUnmount(() => player?.$destroy());
         Playback renders untrusted historical DOM inside rrweb’s sandbox. Client-side masking must
         be configured before capture; the server cannot retroactively scrub opaque recordings.
       </div>
-      <div class="summary-grid">
+      <div class="metric-grid replay-metadata-grid">
         <article>
           <span>Status</span>
-          <strong>{{
-            replay.data.value.partial ? 'Partial recording' : 'Complete manifest'
-          }}</strong>
+          <strong>{{ replay.data.value.partial ? 'Partial' : 'Complete' }}</strong>
         </article>
         <article>
           <span>Segments</span>
@@ -169,6 +157,15 @@ onBeforeUnmount(() => player?.$destroy());
           <AppIcon name="replay" :size="28" />
           <strong>Recording is not downloaded automatically</strong>
           <span>Use “Load recording” to fetch the bounded segment set.</span>
+          <button
+            class="button button--primary"
+            type="button"
+            :disabled="loadingPlayer"
+            @click="loadPlayer"
+          >
+            <AppIcon name="replay" :size="17" />
+            Load recording
+          </button>
         </div>
         <LoadingPanel v-if="loadingPlayer" label="Downloading and validating Replay…" />
         <div ref="target" class="replay-player"></div>

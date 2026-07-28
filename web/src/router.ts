@@ -21,6 +21,7 @@ import DashboardsView from './views/DashboardsView.vue';
 import AlertsView from './views/AlertsView.vue';
 import MonitorsView from './views/MonitorsView.vue';
 import SettingsView from './views/SettingsView.vue';
+import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -56,6 +57,7 @@ export const router = createRouter({
     { path: '/auth/setup', name: 'password-setup', component: AuthView },
     { path: '/organization', redirect: '/settings/organization' },
     { path: '/account/tokens', redirect: '/settings/organization' },
+    { path: '/projects/new', name: 'project-new', component: FirstProjectOnboarding },
     { path: '/project/setup', name: 'setup', component: ProjectSetupView },
     { path: '/project/settings', redirect: '/settings/project' },
     {
@@ -72,5 +74,5 @@ export const router = createRouter({
     { path: '/system', redirect: '/settings/system' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
-  scrollBehavior: () => ({ top: 0 }),
+  scrollBehavior: (to) => (to.hash ? { el: to.hash, top: 24 } : { top: 0 }),
 });

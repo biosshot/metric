@@ -53,6 +53,7 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/organization", index.clone())
         .route_service("/account/tokens", index.clone())
         .route_service("/auth/setup", index.clone())
+        .route_service("/projects/new", index.clone())
         .route_service("/project/setup", index.clone())
         .route_service("/project/settings", index.clone())
         .route_service("/settings", index.clone())
@@ -131,6 +132,7 @@ mod tests {
             "/organization",
             "/account/tokens",
             "/auth/setup",
+            "/projects/new",
             "/settings",
             "/settings/project",
             "/settings/notifications",

@@ -70,6 +70,38 @@ const event = {
   },
 };
 
+const replayRecord = {
+  id: 'a1477a22ee174888834b000d10a284f7',
+  project_id: '42',
+  started_at: '2026-07-23T09:00:00Z',
+  ended_at: '2026-07-23T09:00:09Z',
+  received_at: '2026-07-23T09:00:10Z',
+  duration_ms: 9_000,
+  environment: 'manual-replay-demo',
+  release: 'metric-browser-replay-demo@1.0.0',
+  url: 'https://example.test/replay',
+  error_ids: [],
+  trace_ids: [],
+  segments: [
+    {
+      segment_id: 0,
+      size: 512,
+      decompressed_bytes: 1_024,
+      event_count: 8,
+      checksum: 'a'.repeat(64),
+    },
+    {
+      segment_id: 1,
+      size: 256,
+      decompressed_bytes: 512,
+      event_count: 4,
+      checksum: 'b'.repeat(64),
+    },
+  ],
+  partial: false,
+  expires_at: null,
+};
+
 interface ApiState {
   role: 'owner' | 'viewer';
   csrfSeen: boolean;
@@ -227,6 +259,12 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json({ applied: true, issue });
   }
   if (path === `/api/v1/projects/42/events/${event.event_id}`) return json(event);
+  if (path === `/api/v1/projects/42/replays/${replayRecord.id}`) {
+    return json(replayRecord);
+  }
+  if (path === '/api/v1/projects/42/replays') {
+    return json({ items: [replayRecord], next_cursor: null });
+  }
   if (path === '/api/v1/projects/42/explore' && request.method() === 'POST') {
     const body = request.postDataJSON() as {
       dataset: string;
@@ -740,6 +778,13 @@ test('Dashboard lifecycle applies variables and keeps partial widget failures vi
   await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Edit dashboard' }).click();
+  const dashboardViewBox = await page.locator('.dashboard-section--views').boundingBox();
+  const dashboardBuildersBox = await page.locator('.dashboard-builders').boundingBox();
+  expect(dashboardViewBox).not.toBeNull();
+  expect(dashboardBuildersBox).not.toBeNull();
+  expect(
+    dashboardBuildersBox!.y - (dashboardViewBox!.y + dashboardViewBox!.height),
+  ).toBeGreaterThanOrEqual(20);
 
   await page.getByPlaceholder('Production log volume').fill('Production log volume');
   await page.getByRole('button', { name: 'Add widget' }).click();
@@ -767,6 +812,65 @@ test('Dashboard lifecycle applies variables and keeps partial widget failures vi
 
   await page.locator('.dashboard-card').getByRole('button', { name: 'Delete' }).click();
   await expect(page.getByRole('heading', { name: 'No dashboard yet' })).toBeVisible();
+});
+
+test('Replay search and detail keep controls and metadata in their content flow', async ({
+  page,
+}) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+  await page.goto('/replays');
+
+  await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByText('1 matching Replay for')).toBeVisible();
+  await page.getByRole('link', { name: /example\.test\/replay/ }).click();
+
+  await expect(page.getByRole('heading', { name: 'Session Replay', exact: true })).toBeVisible();
+  await expect(page.locator('.replay-metadata-grid article')).toHaveCount(4);
+  await expect(page.locator('.replay-metadata-grid')).toContainText('Complete');
+  await expect(page.locator('.replay-metadata-grid')).toContainText('manual-replay-demo');
+  const placeholder = page.locator('.replay-player-placeholder');
+  await expect(placeholder).toContainText('Recording is not downloaded automatically');
+  await expect(placeholder.getByRole('button', { name: 'Load recording' })).toBeVisible();
+});
+
+test('settings anchors, capability grid and project creation stay discoverable', async ({
+  page,
+}) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+
+  await expect(page.getByRole('link', { name: 'New project' })).toHaveAttribute(
+    'href',
+    '/projects/new',
+  );
+  await page.goto('/project/setup');
+  await page.getByRole('link', { name: 'Manage keys' }).click();
+  await expect(page).toHaveURL(/\/settings\/project#dsn-keys$/);
+  await expect(page.locator('#dsn-keys')).toBeInViewport();
+
+  await page.goto('/settings/system');
+  const capabilities = page.locator('.capability-list article');
+  await expect(capabilities).toHaveCount(4);
+  const firstCapability = await capabilities.nth(0).boundingBox();
+  const secondCapability = await capabilities.nth(1).boundingBox();
+  expect(firstCapability).not.toBeNull();
+  expect(secondCapability).not.toBeNull();
+  expect(Math.abs(firstCapability!.y - secondCapability!.y)).toBeLessThan(2);
+  expect(secondCapability!.x).toBeGreaterThan(firstCapability!.x);
 });
 
 test('all routes have no serious accessibility violations at desktop and narrow widths', async ({
@@ -806,8 +910,11 @@ test('all routes have no serious accessibility violations at desktop and narrow 
     { name: 'issues', url: '/issues', heading: 'Issues' },
     { name: 'issue-detail', url: `/issues/${issue.id}`, heading: issue.title },
     { name: 'event-detail', url: `/events/${event.event_id}`, heading: '120 frames' },
+    { name: 'replays', url: '/replays', heading: 'Session Replays' },
+    { name: 'replay-detail', url: `/replays/${replayRecord.id}`, heading: 'Session Replay' },
     { name: 'explore', url: '/explore', heading: 'Unified Explore' },
     { name: 'dashboard', url: '/dashboard', heading: 'Dashboard' },
+    { name: 'project-new', url: '/projects/new', heading: 'Create a new project' },
     { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
     { name: 'project-settings', url: '/settings/project', heading: 'Project settings' },
     { name: 'notifications', url: '/settings/notifications', heading: 'Alerts' },

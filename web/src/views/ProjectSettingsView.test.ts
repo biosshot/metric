@@ -53,6 +53,10 @@ vi.mock('../stores/session', () => ({
   }),
 }));
 
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ hash: '' }),
+}));
+
 describe('ProjectSettingsView inbound filters', () => {
   beforeEach(() => vi.clearAllMocks());
 

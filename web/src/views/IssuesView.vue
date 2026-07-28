@@ -113,7 +113,7 @@ function formatTime(value: string): string {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }}</p>
+        <p class="eyebrow">{{ session.selectedProject?.slug }} / issues</p>
         <h1>Issues</h1>
         <p>Errors grouped by their stable failure signature.</p>
       </div>

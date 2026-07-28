@@ -360,6 +360,33 @@ input[type='checkbox'] {
   font-size: 1.02rem;
 }
 
+.sidebar__project {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.project-create-link {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-small);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.project-create-link:hover,
+.project-create-link.router-link-active {
+  border-color: var(--semantic-info);
+  background: var(--semantic-info-surface);
+  color: var(--text);
+}
+
 .brand-mark {
   display: grid;
   width: 54px;
@@ -1879,6 +1906,10 @@ label small,
   grid-template-columns: minmax(280px, 1fr) minmax(180px, 0.35fr) max-content;
 }
 
+.signal-toolbar--replays {
+  grid-template-columns: minmax(280px, 1fr) max-content;
+}
+
 .signal-toolbar label,
 .compact-filter {
   display: grid;
@@ -2025,6 +2056,10 @@ label small,
   grid-template-columns: minmax(18rem, 1fr) auto auto auto minmax(12rem, auto);
 }
 
+.transaction-row.replay-row time {
+  color: var(--text-muted);
+}
+
 .replay-player-shell {
   position: relative;
   min-height: 28rem;
@@ -2048,6 +2083,14 @@ label small,
 
 .replay-player-placeholder strong {
   color: var(--text);
+}
+
+.replay-player-placeholder .button {
+  margin-top: 0.55rem;
+}
+
+.replay-metadata-grid strong {
+  overflow-wrap: anywhere;
 }
 
 .replay-player {
@@ -2782,6 +2825,7 @@ label small,
 .capability-list {
   display: grid;
   gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .component-grid {
@@ -3601,10 +3645,41 @@ label small,
 
 .dashboard-builders {
   order: 3;
+  margin-top: 1.5rem;
 }
 
 .dashboard-section--definitions {
   order: 4;
+}
+
+.settings-anchor {
+  scroll-margin-top: 1.5rem;
+}
+
+.settings-anchor-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: -0.5rem 0 1.25rem;
+}
+
+.settings-anchor-nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.settings-anchor-nav a:hover {
+  border-color: var(--semantic-info);
+  color: var(--text);
 }
 
 .dashboard-picker {
