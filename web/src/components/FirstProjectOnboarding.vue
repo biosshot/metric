@@ -8,9 +8,11 @@ import { useSessionStore } from '../stores/session';
 import ApiErrorPanel from './ApiErrorPanel.vue';
 import AppIcon from './AppIcon.vue';
 import BaseSelect, { type SelectOption } from './BaseSelect.vue';
+import EmptyState from './EmptyState.vue';
 
 const session = useSessionStore();
 const router = useRouter();
+const canCreateProject = computed(() => session.has('organization:admin'));
 const firstProject = computed(() => session.projects.length === 0);
 const slugWasEdited = ref(false);
 const ipPolicyOptions: SelectOption[] = [
@@ -82,7 +84,19 @@ const createProject = useMutation({
 </script>
 
 <template>
-  <section class="onboarding-layout" aria-labelledby="first-project-title">
+  <section v-if="!canCreateProject">
+    <EmptyState
+      icon="blocked"
+      title="Project creation is restricted"
+      description="Only an organization administrator can create a project and its initial DSN key."
+    >
+      <RouterLink class="button button--secondary" to="/dashboard">
+        <AppIcon name="back" :size="16" />
+        Back to dashboard
+      </RouterLink>
+    </EmptyState>
+  </section>
+  <section v-else class="onboarding-layout" aria-labelledby="first-project-title">
     <header class="page-header">
       <div>
         <p class="eyebrow">{{ firstProject ? 'Organization ready' : 'Project administration' }}</p>

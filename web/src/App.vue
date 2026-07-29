@@ -176,7 +176,11 @@ async function logout(): Promise<void> {
 
         <div class="sidebar__nav-group">
           <span class="sidebar__nav-label">Configure</span>
-          <RouterLink to="/project/setup" @click="navigationOpen = false">
+          <RouterLink
+            v-if="session.has('project:admin')"
+            to="/project/setup"
+            @click="navigationOpen = false"
+          >
             <AppIcon name="connect" :size="18" />
             SDK setup
           </RouterLink>

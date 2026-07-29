@@ -11,6 +11,7 @@ import type {
   ProjectPolicy,
 } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
+import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -21,6 +22,7 @@ const session = useSessionStore();
 const route = useRoute();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
+const canAdministerProject = computed(() => session.has('project:admin'));
 const newKeyLabel = ref('');
 const notice = ref('');
 const deleteConfirmation = ref('');
@@ -90,6 +92,7 @@ const project = useQuery({
 const keys = useQuery({
   queryKey: computed(() => ['project-keys', projectId.value]),
   queryFn: () => api.keys(projectId.value),
+  enabled: canAdministerProject,
 });
 const capabilities = useQuery({
   queryKey: ['capabilities'],
@@ -108,7 +111,11 @@ watch(
 const deletion = useQuery({
   queryKey: computed(() => ['project-deletion', projectId.value]),
   queryFn: () => api.projectDeletionStatus(projectId.value),
-  enabled: computed(() => ['pending_delete', 'purging'].includes(project.data.value?.state ?? '')),
+  enabled: computed(
+    () =>
+      canAdministerProject.value &&
+      ['pending_delete', 'purging'].includes(project.data.value?.state ?? ''),
+  ),
   refetchInterval: (query) =>
     query.state.data?.phase === 'pending_grace' || query.state.data?.phase === 'purging'
       ? 2_000
@@ -253,7 +260,7 @@ const cancelDeletion = useMutation({
         <AppIcon name="shield" :size="15" />
         Data policy
       </a>
-      <a href="#dsn-keys">
+      <a v-if="canAdministerProject" href="#dsn-keys">
         <AppIcon name="key" :size="15" />
         DSN keys
       </a>
@@ -261,13 +268,13 @@ const cancelDeletion = useMutation({
         <AppIcon name="history" :size="15" />
         Retention
       </a>
-      <a v-if="session.has('project:admin')" href="#delete-project">
+      <a v-if="canAdministerProject" href="#delete-project">
         <AppIcon name="delete" :size="15" />
         Delete project
       </a>
     </nav>
     <p v-if="notice" class="success-notice" role="status">{{ notice }}</p>
-    <div v-if="!session.has('project:admin')" class="permission-banner">
+    <div v-if="!canAdministerProject" class="permission-banner">
       You can inspect these settings, but only a project administrator can change them.
     </div>
     <LoadingPanel v-if="project.isPending.value" label="Loading accepted project policy…" />
@@ -514,54 +521,62 @@ const cancelDeletion = useMutation({
           <h2>DSN keys</h2>
         </div>
       </div>
-      <LoadingPanel v-if="keys.isPending.value" label="Loading DSN keys…" />
-      <ApiErrorPanel
-        v-else-if="keys.error.value"
-        :error="keys.error.value"
-        @retry="keys.refetch()"
+      <EmptyState
+        v-if="!canAdministerProject"
+        icon="blocked"
+        title="DSN key access is restricted"
+        description="Project credentials are visible only to project administrators."
       />
-      <div v-else class="key-list">
-        <article v-for="key in keys.data.value?.items" :key="key.dsn_key">
-          <div>
-            <strong>{{ key.label }}</strong>
-            <code>{{ key.dsn_key }}</code>
-          </div>
-          <StatusBadge :status="key.state" />
-          <button
-            v-if="session.has('project:admin') && key.state === 'active'"
-            class="button button--danger"
-            type="button"
-            :disabled="disableKey.isPending.value"
-            @click="disableKey.mutate(key.dsn_key)"
-          >
-            <AppIcon name="blocked" :size="16" />
-            Disable
-          </button>
-        </article>
-      </div>
-      <form
-        v-if="session.has('project:admin')"
-        class="inline-form"
-        @submit.prevent="createKey.mutate()"
-      >
-        <label>
-          New key label
-          <input v-model.trim="newKeyLabel" maxlength="64" required />
-        </label>
-        <button
-          class="button button--secondary"
-          type="submit"
-          :disabled="createKey.isPending.value"
+      <template v-else>
+        <LoadingPanel v-if="keys.isPending.value" label="Loading DSN keys…" />
+        <ApiErrorPanel
+          v-else-if="keys.error.value"
+          :error="keys.error.value"
+          @retry="keys.refetch()"
+        />
+        <div v-else class="key-list">
+          <article v-for="key in keys.data.value?.items" :key="key.dsn_key">
+            <div>
+              <strong>{{ key.label }}</strong>
+              <code>{{ key.dsn_key }}</code>
+            </div>
+            <StatusBadge :status="key.state" />
+            <button
+              v-if="session.has('project:admin') && key.state === 'active'"
+              class="button button--danger"
+              type="button"
+              :disabled="disableKey.isPending.value"
+              @click="disableKey.mutate(key.dsn_key)"
+            >
+              <AppIcon name="blocked" :size="16" />
+              Disable
+            </button>
+          </article>
+        </div>
+        <form
+          v-if="session.has('project:admin')"
+          class="inline-form"
+          @submit.prevent="createKey.mutate()"
         >
-          <AppIcon name="plus" :size="16" />
-          Create key
-        </button>
-      </form>
-      <ApiErrorPanel
-        v-if="createKey.error.value || disableKey.error.value"
-        :error="createKey.error.value || disableKey.error.value"
-        title="Key operation failed"
-      />
+          <label>
+            New key label
+            <input v-model.trim="newKeyLabel" maxlength="64" required />
+          </label>
+          <button
+            class="button button--secondary"
+            type="submit"
+            :disabled="createKey.isPending.value"
+          >
+            <AppIcon name="plus" :size="16" />
+            Create key
+          </button>
+        </form>
+        <ApiErrorPanel
+          v-if="createKey.error.value || disableKey.error.value"
+          :error="createKey.error.value || disableKey.error.value"
+          title="Key operation failed"
+        />
+      </template>
     </section>
 
     <section id="retention" class="panel unavailable-setting settings-anchor">

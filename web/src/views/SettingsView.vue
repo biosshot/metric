@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import AppIcon from '../components/AppIcon.vue';
+import { useSessionStore } from '../stores/session';
+
+const session = useSessionStore();
 </script>
 
 <template>
@@ -25,7 +28,7 @@ import AppIcon from '../components/AppIcon.vue';
         </div>
         <div>
           <span>Automation</span>
-          <RouterLink to="/settings/notifications">
+          <RouterLink v-if="session.has('project:admin')" to="/settings/notifications">
             <AppIcon name="alerts" :size="17" />
             Notifications
           </RouterLink>

@@ -15,6 +15,7 @@ type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet';
 
 const session = useSessionStore();
 const projectId = computed(() => session.selectedProjectId ?? '');
+const canAdministerProject = computed(() => session.has('project:admin'));
 const copyNotice = ref('');
 const copyError = ref('');
 const selectedSdk = ref<SdkId>('browser');
@@ -28,6 +29,7 @@ const sdkOptions: SelectOption[] = [
 const keys = useQuery({
   queryKey: computed(() => ['project-keys', projectId.value]),
   queryFn: () => api.keys(projectId.value),
+  enabled: canAdministerProject,
 });
 const activeKeys = computed(
   () => keys.data.value?.items.filter((item) => item.state === 'active') ?? [],
@@ -134,7 +136,14 @@ async function copy(value: string): Promise<void> {
       </div>
     </header>
 
-    <div class="setup-grid">
+    <EmptyState
+      v-if="!canAdministerProject"
+      icon="blocked"
+      title="SDK setup is restricted"
+      description="DSN keys are project credentials. Ask a project administrator to configure the SDK or grant an administrative role."
+    />
+
+    <div v-else class="setup-grid">
       <section class="panel setup-steps">
         <ol>
           <li>
@@ -214,7 +223,7 @@ async function copy(value: string): Promise<void> {
       </section>
     </div>
 
-    <section v-if="activeDsn" class="panel code-examples">
+    <section v-if="canAdministerProject && activeDsn" class="panel code-examples">
       <div class="code-examples__heading">
         <div>
           <p class="eyebrow">Ready-to-use example</p>
