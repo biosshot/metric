@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { api } from '../api/client';
 import type { CreatedApiToken } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -9,27 +9,100 @@ import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
+import { useSessionStore } from '../stores/session';
 
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
 const queryClient = useQueryClient();
-const tokenProfile = ref('releases');
-const tokenName = ref('sentry-cli releases');
+const session = useSessionStore();
+const tokenProfile = ref('');
+const tokenName = ref('');
 const expiresOn = ref(new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10));
 const createdToken = ref<CreatedApiToken | null>(null);
 const revokingTokenId = ref<string | null>(null);
-const profileOptions: SelectOption[] = [
-  { value: 'releases', label: 'Releases and deploys', icon: 'release' },
-  { value: 'debug-files', label: 'Debug files', icon: 'fileCode' },
+
+interface TokenProfile {
+  value: string;
+  label: string;
+  icon: SelectOption['icon'];
+  title: string;
+  defaultName: string;
+  scopes: string[];
+}
+
+const tokenProfiles: TokenProfile[] = [
+  {
+    value: 'releases',
+    label: 'Releases and deploys',
+    icon: 'release',
+    title: 'Create Release CLI token',
+    defaultName: 'sentry-cli releases',
+    scopes: ['release:read', 'release:write'],
+  },
+  {
+    value: 'debug-files',
+    label: 'Debug files',
+    icon: 'fileCode',
+    title: 'Create debug-file token',
+    defaultName: 'sentry-cli debug files',
+    scopes: ['debug_file:read', 'debug_file:write'],
+  },
+  {
+    value: 'issues',
+    label: 'Issue automation',
+    icon: 'bug',
+    title: 'Create Issue automation token',
+    defaultName: 'issue automation',
+    scopes: ['event:read', 'issue:read', 'issue:write', 'project:read'],
+  },
+  {
+    value: 'read-only',
+    label: 'Read-only API',
+    icon: 'view',
+    title: 'Create read-only API token',
+    defaultName: 'read-only API',
+    scopes: [
+      'event:read',
+      'issue:read',
+      'project:read',
+      'debug_file:read',
+      'artifact:read',
+      'release:read',
+    ],
+  },
 ];
-const tokenScopes = computed(() =>
-  tokenProfile.value === 'releases'
-    ? ['release:read', 'release:write']
-    : ['debug_file:read', 'debug_file:write'],
+
+const availableProfiles = computed(() =>
+  tokenProfiles.filter((profile) => profile.scopes.every((scope) => session.has(scope))),
 );
-const profileTitle = computed(() =>
-  tokenProfile.value === 'releases' ? 'Create Release CLI token' : 'Create debug-file token',
+const profileOptions = computed<SelectOption[]>(() =>
+  availableProfiles.value.map(({ value, label, icon }) => ({ value, label, icon })),
 );
+const selectedProfile = computed(() =>
+  availableProfiles.value.find((profile) => profile.value === tokenProfile.value),
+);
+const tokenScopes = computed(() => selectedProfile.value?.scopes ?? []);
+const profileTitle = computed(() => selectedProfile.value?.title ?? 'Create API token');
+
+watch(
+  availableProfiles,
+  (profiles) => {
+    if (profiles.some((profile) => profile.value === tokenProfile.value)) return;
+    const preferred =
+      profiles.find((profile) => profile.value === 'releases') ??
+      profiles.find((profile) => profile.value === 'issues') ??
+      profiles[0];
+    tokenProfile.value = preferred?.value ?? '';
+    tokenName.value = preferred?.defaultName ?? '';
+  },
+  { immediate: true },
+);
+
+watch(tokenProfile, (value, previous) => {
+  if (!value || value === previous) return;
+  const profile = availableProfiles.value.find((candidate) => candidate.value === value);
+  if (profile) tokenName.value = profile.defaultName;
+});
 
 const tokens = useQuery({
   queryKey: ['api-tokens'],
@@ -114,6 +187,10 @@ function formatTimestamp(value: string | null): string {
             Grants only <code>{{ tokenScopes.join(', ') }}</code
             >.
           </p>
+          <p v-if="!session.has('release:write') || !session.has('debug_file:write')" class="muted">
+            Profiles are limited to your current role. Release and debug-file uploads require their
+            corresponding write permissions.
+          </p>
         </div>
       </div>
       <div class="form-grid">
@@ -130,7 +207,7 @@ function formatTimestamp(value: string | null): string {
       <button
         class="button button--primary"
         type="submit"
-        :disabled="createToken.isPending.value || !tokenName || !expiresOn"
+        :disabled="createToken.isPending.value || !tokenName || !expiresOn || !tokenScopes.length"
       >
         <AppIcon name="key" :size="16" />
         {{ createToken.isPending.value ? 'Creating…' : 'Create token' }}
