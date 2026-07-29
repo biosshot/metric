@@ -730,8 +730,11 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   expect(monitorHistoryBox!.y).toBeGreaterThanOrEqual(monitorListBox!.y + monitorListBox!.height);
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Timeline' }).click();
-  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(2);
-  await page.locator('.monitor-run-chart__column').last().click();
+  const initialTimeline = page.locator('.monitor-run-chart__column');
+  await expect(initialTimeline).toHaveCount(2);
+  await expect(initialTimeline.first()).toHaveAttribute('data-started-at', '2026-07-27T15:00:00Z');
+  await expect(initialTimeline.last()).toHaveAttribute('data-started-at', '2026-07-27T15:05:00Z');
+  await initialTimeline.first().click();
   await expect(page.locator('.monitor-run-chart__details')).toContainText('HTTP 503');
   state.monitorRuns = Array.from({ length: 800 }, (_, index) => ({
     ...state.monitorRuns![index % state.monitorRuns!.length],

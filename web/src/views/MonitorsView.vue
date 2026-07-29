@@ -124,6 +124,7 @@ const runs = useQuery({
   refetchInterval: 10_000,
 });
 const visibleRuns = computed(() => sampleMonitorTimeline(runs.data.value?.items ?? []));
+const chartRuns = computed(() => [...visibleRuns.value].reverse());
 const maximumRunDuration = computed(() =>
   Math.max(1, ...visibleRuns.value.map((run) => run.duration_ms ?? 0)),
 );
@@ -730,10 +731,10 @@ function storedHistoryView(): 'list' | 'chart' {
           <div
             class="monitor-run-chart__plot"
             role="list"
-            :aria-label="`${visibleRuns.length} monitor runs over ${historyRange}`"
+            :aria-label="`${chartRuns.length} monitor runs over ${historyRange}`"
           >
             <button
-              v-for="run in visibleRuns"
+              v-for="run in chartRuns"
               :key="run.id"
               class="monitor-run-chart__column"
               :class="[
@@ -742,6 +743,7 @@ function storedHistoryView(): 'list' | 'chart' {
               ]"
               :style="{ '--run-height': runBarHeight(run) }"
               role="listitem"
+              :data-started-at="run.started_at"
               :aria-label="`${run.status}, ${timestamp(run.started_at)}, ${duration(run.duration_ms)}`"
               :aria-pressed="selectedChartRunId === run.id"
               :title="`${timestamp(run.started_at)} · ${run.status} · ${duration(run.duration_ms)}`"
@@ -749,9 +751,9 @@ function storedHistoryView(): 'list' | 'chart' {
               @click="selectedChartRunId = run.id"
             ></button>
           </div>
-          <div v-if="visibleRuns.length" class="monitor-run-chart__axis">
-            <span>{{ timestamp(visibleRuns[0].started_at) }}</span>
-            <span>{{ timestamp(visibleRuns[visibleRuns.length - 1].started_at) }}</span>
+          <div v-if="chartRuns.length" class="monitor-run-chart__axis">
+            <span>{{ timestamp(chartRuns[0].started_at) }}</span>
+            <span>{{ timestamp(chartRuns[chartRuns.length - 1].started_at) }}</span>
           </div>
           <article v-if="selectedChartRun" class="monitor-run-chart__details">
             <div class="monitor-run__title">
