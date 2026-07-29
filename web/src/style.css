@@ -274,10 +274,11 @@ strong {
 }
 
 h1 {
-  max-width: 20ch;
+  max-width: min(20ch, 100%);
   margin-bottom: 0.55rem;
   font-size: clamp(2rem, 4vw, 3.35rem);
   line-height: 1.03;
+  overflow-wrap: anywhere;
 }
 
 h2 {
@@ -523,9 +524,15 @@ input[type='checkbox'] {
 
 .main-content {
   width: 100%;
+  min-width: 0;
   max-width: 1480px;
   margin-inline: auto;
   padding: clamp(1.5rem, 4vw, 4.5rem);
+}
+
+.main-content > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .settings-shell__header {
@@ -617,6 +624,13 @@ input[type='checkbox'] {
   justify-content: space-between;
   gap: 2rem;
   margin-bottom: 2rem;
+}
+
+.page-header > :first-child,
+.issue-detail-header > :first-child,
+.event-header > :first-child {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .page-header p,
@@ -1840,7 +1854,7 @@ label small,
 
 .issue-detail-header h1,
 .event-header h1 {
-  max-width: 26ch;
+  max-width: min(26ch, 100%);
   margin-top: 0.8rem;
 }
 

@@ -1081,6 +1081,23 @@ test('mobile pagination stays outside horizontal data scrolling and dashboard ca
   expect(Math.abs(tabletTimeRangeBox!.x - tabletToolbarActionsBox!.x)).toBeLessThanOrEqual(1);
   expect(tabletTimeRangeBox!.width).toBeGreaterThan(240);
 
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/issues/${issue.id}`);
+  const detailHeading = page.locator('.issue-detail-header h1');
+  await expect(detailHeading).toHaveCount(1);
+  await detailHeading.evaluate((heading) => {
+    heading.textContent =
+      'FaultkeepSdkCompatibilityErrorWithoutAnyNaturalBreakOpportunityInTheHeading';
+  });
+  const detailWidths = await page.evaluate(() => ({
+    client: document.documentElement.clientWidth,
+    scroll: document.documentElement.scrollWidth,
+  }));
+  expect(detailWidths.scroll).toBe(detailWidths.client);
+  expect(await detailHeading.evaluate((heading) => getComputedStyle(heading).overflowWrap)).toBe(
+    'anywhere',
+  );
+
   await page.goto('/dashboard?edit=1');
   const builders = page.locator('.dashboard-builder');
   await expect(builders).toHaveCount(2);
