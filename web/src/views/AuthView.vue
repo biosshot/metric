@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import LogoMark from '../components/LogoMark.vue';
+import { suggestedSlug } from '../lib/slug';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -28,6 +29,15 @@ const setupToken = ref(typeof route.query.setup_token === 'string' ? route.query
 const displayName = ref('');
 const organizationSlug = ref('');
 const organizationName = ref('');
+const organizationSlugWasEdited = ref(false);
+
+function updateOrganizationName(event: Event): void {
+  if (!(event.target instanceof HTMLInputElement)) return;
+  organizationName.value = event.target.value;
+  if (!organizationSlugWasEdited.value) {
+    organizationSlug.value = suggestedSlug(event.target.value);
+  }
+}
 
 watch(
   () => [route.name, route.query.setup_token, route.query.organization_id],
@@ -194,11 +204,25 @@ async function setupInvitedPassword(): Promise<void> {
         <div class="form-grid">
           <label>
             Organization
-            <input v-model.trim="organizationName" required />
+            <input
+              :value="organizationName"
+              autocomplete="organization"
+              required
+              @input="updateOrganizationName"
+            />
           </label>
           <label>
             Slug
-            <input v-model.trim="organizationSlug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required />
+            <input
+              v-model.trim="organizationSlug"
+              autocomplete="off"
+              pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              required
+              @input="organizationSlugWasEdited = true"
+            />
+            <small
+              >Generated from the organization name; edit it only if you need another ID.</small
+            >
           </label>
         </div>
         <ApiErrorPanel v-if="error" :error="error" title="Setup failed" />

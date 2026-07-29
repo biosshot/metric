@@ -29,6 +29,12 @@ export const router = createRouter({
     { path: '/', redirect: '/dashboard' },
     { path: '/dashboard', name: 'dashboard', component: DashboardsView },
     { path: '/dashboards', redirect: '/dashboard' },
+    {
+      path: '/metrics',
+      name: 'metrics',
+      component: ExploreView,
+      props: { initialDataset: 'metrics', datasetLocked: true },
+    },
     { path: '/issues', name: 'issues', component: IssuesView },
     { path: '/issues/:issueId', name: 'issue', component: IssueDetailView },
     { path: '/events/:eventId', name: 'event', component: EventDetailView },

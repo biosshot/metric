@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/vue';
+import { fireEvent, render, screen, waitFor } from '@testing-library/vue';
 import { createPinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -44,5 +44,20 @@ describe('AuthView invitation route', () => {
       expect(screen.getByLabelText('Setup token')).toHaveValue(token);
       expect(screen.getByLabelText('Organization ID')).toHaveValue('7315819048328739377');
     });
+  });
+
+  it('suggests the organization slug from its name during first setup', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', name: 'auth', component: { template: '<div />' } }],
+    });
+    await router.push('/');
+    await router.isReady();
+    render(AuthView, { global: { plugins: [createPinia(), router] } });
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'First setup' }));
+    await fireEvent.update(screen.getByLabelText('Organization'), 'Платёжный сервис');
+
+    expect(screen.getByLabelText(/^Slug/)).toHaveValue('platezhnyy-servis');
   });
 });

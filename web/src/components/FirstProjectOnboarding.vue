@@ -9,6 +9,7 @@ import ApiErrorPanel from './ApiErrorPanel.vue';
 import AppIcon from './AppIcon.vue';
 import BaseSelect, { type SelectOption } from './BaseSelect.vue';
 import EmptyState from './EmptyState.vue';
+import { suggestedSlug } from '../lib/slug';
 
 const session = useSessionStore();
 const router = useRouter();
@@ -44,15 +45,6 @@ const project = reactive<CreateProjectInput>({
   max_events_per_second: null,
   burst: null,
 });
-
-function suggestedSlug(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64);
-}
 
 function updateName(event: Event): void {
   if (!(event.target instanceof HTMLInputElement)) return;

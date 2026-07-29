@@ -256,7 +256,7 @@ describe('native API client', () => {
     expect(historyUrl.pathname).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}/runs`);
     expect(historyUrl.searchParams.get('from')).toBe('1970-01-01T00:00:01.000Z');
     expect(historyUrl.searchParams.get('until')).toBe('1970-01-01T00:00:02.000Z');
-    expect(historyUrl.searchParams.get('limit')).toBe('100');
+    expect(historyUrl.searchParams.get('limit')).toBe('100000');
     expect(deletePath).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}`);
     expect(deleteInit.method).toBe('DELETE');
     expect((deleteInit.headers as Headers).get('x-csrf-token')).toBe('a'.repeat(64));

@@ -308,7 +308,7 @@ impl MongoMonitorStore {
         before: Option<MonitorAnchor>,
         limit: usize,
     ) -> Result<MonitorPage, SignalStoreError> {
-        if limit == 0 || limit > 100 {
+        if limit == 0 || limit > 100_000 {
             return Err(SignalStoreError::InvalidData);
         }
         let mut filter = doc! { "p": project_id.get() };
@@ -360,7 +360,7 @@ impl MongoMonitorStore {
         before: Option<MonitorRunAnchor>,
         limit: usize,
     ) -> Result<MonitorRunPage, SignalStoreError> {
-        if limit == 0 || limit > 100 {
+        if limit == 0 || limit > 100_000 {
             return Err(SignalStoreError::InvalidData);
         }
         let mut filter = doc! { "p": project_id.get(), "m": binary(monitor_id.as_bytes()) };

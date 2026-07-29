@@ -16,6 +16,8 @@ import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import { timeWindow, type TimeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -31,6 +33,8 @@ const savedField = ref('');
 const savedOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
 const savedValue = ref('');
 const savedRange = ref('24h');
+const savedWindow = ref<TimeWindow>(timeWindow('24h'));
+const savedMetricMeasure = ref<'value' | 'samples'>('value');
 const editingSavedId = ref('');
 const dashboardName = ref('');
 const editingDashboardId = ref('');
@@ -59,16 +63,25 @@ const refreshOptions: SelectOption[] = [
   { value: '1m', label: 'Every minute' },
   { value: '5m', label: 'Every 5 minutes' },
 ];
-const rangeOptions: SelectOption[] = [
-  { value: '24h', label: 'Last 24 hours', icon: 'history' },
-  { value: '7d', label: 'Last 7 days', icon: 'history' },
-  { value: '30d', label: 'Last 30 days', icon: 'history' },
-];
 const rangeMillis: Record<string, number> = {
   '24h': 24 * 60 * 60 * 1_000,
   '7d': 7 * 24 * 60 * 60 * 1_000,
   '30d': 30 * 24 * 60 * 60 * 1_000,
 };
+const metricMeasureOptions: SelectOption[] = [
+  {
+    value: 'value',
+    label: 'Metric value',
+    icon: 'gauge',
+    description: 'Sum the values reported by the SDK',
+  },
+  {
+    value: 'samples',
+    label: 'Sample count',
+    icon: 'activity',
+    description: 'Count observations instead of their values',
+  },
+];
 const fieldOptionsByDataset: Record<ExploreDataset, SelectOption[]> = {
   errors: [
     { value: 'level', label: 'Level' },
@@ -240,7 +253,14 @@ const mutation = useMutation({
 });
 
 function buildQuery(dataset: ExploreDataset, shape: ExploreShape): ExploreRequest {
-  const until = Date.now();
+  const now = Date.now();
+  const window =
+    savedRange.value === 'custom'
+      ? savedWindow.value
+      : {
+          from: now - rangeMillis[savedRange.value],
+          until: now,
+        };
   const predicates: ExploreRequest['predicates'] =
     savedField.value && savedValue.value.trim()
       ? [
@@ -253,10 +273,19 @@ function buildQuery(dataset: ExploreDataset, shape: ExploreShape): ExploreReques
       : [];
   return {
     dataset,
-    from: until - rangeMillis[savedRange.value],
-    until,
+    from: window.from,
+    until: window.until,
     predicates,
-    aggregates: shape === 'table' ? [] : [{ function: 'count', alias: 'count' }],
+    aggregates:
+      shape === 'table'
+        ? []
+        : dataset === 'metrics'
+          ? [
+              savedMetricMeasure.value === 'value'
+                ? { function: 'sum', field: 'metric_sum', alias: 'value' }
+                : { function: 'sum', field: 'metric_count', alias: 'samples' },
+            ]
+          : [{ function: 'count', alias: 'count' }],
     group_by: [],
     interval: shape === 'timeseries' ? '1h' : undefined,
     limit: 50,
@@ -302,7 +331,11 @@ function editSaved(saved: SavedQuery): void {
       : 'exact';
   savedValue.value = typeof predicate?.value === 'string' ? predicate.value : '';
   const age = saved.query.until - saved.query.from;
-  savedRange.value = age > rangeMillis['7d'] ? '30d' : age > rangeMillis['24h'] ? '7d' : '24h';
+  savedRange.value =
+    Object.entries(rangeMillis).find(([, duration]) => duration === age)?.[0] ?? 'custom';
+  savedWindow.value = { from: saved.query.from, until: saved.query.until };
+  savedMetricMeasure.value =
+    saved.query.aggregates[0]?.field === 'metric_count' ? 'samples' : 'value';
 }
 
 async function removeSaved(saved: SavedQuery): Promise<void> {
@@ -408,7 +441,18 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <BaseSelect v-model="savedDataset" :options="datasetOptions" label="Dataset" />
           <BaseSelect v-model="savedShape" :options="shapeOptions" label="Result" />
         </div>
-        <BaseSelect v-model="savedRange" :options="rangeOptions" label="Time window" />
+        <TimeRangeSelect
+          v-model="savedRange"
+          :window-value="savedWindow"
+          label="Time window"
+          @update:window-value="savedWindow = $event"
+        />
+        <BaseSelect
+          v-if="savedDataset === 'metrics' && savedShape !== 'table'"
+          v-model="savedMetricMeasure"
+          :options="metricMeasureOptions"
+          label="Metric measure"
+        />
         <div class="dashboard-widget-filter">
           <BaseSelect v-model="savedField" :options="widgetFieldOptions" label="Filter field" />
           <BaseSelect

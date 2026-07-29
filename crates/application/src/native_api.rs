@@ -56,6 +56,7 @@ use crate::{
 
 const DEFAULT_PAGE: usize = 50;
 const MAX_PAGE: usize = 100;
+const MAX_MONITORS_PAGE: usize = 100_000;
 const DAY_MILLIS: i64 = 86_400_000;
 const MAX_RANGE_MILLIS: i64 = 30 * DAY_MILLIS;
 
@@ -365,7 +366,7 @@ impl NativeApiService {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
         self.monitor_store()?
-            .list_monitors(project_id, None, page_size(limit)?)
+            .list_monitors(project_id, None, monitors_page_size(limit)?)
             .await
             .map_err(map_signal_error)
     }
@@ -385,7 +386,14 @@ impl NativeApiService {
             return Err(NativeApiError::InvalidRequest);
         }
         self.monitor_store()?
-            .list_monitor_runs(project_id, monitor_id, from, until, None, page_size(limit)?)
+            .list_monitor_runs(
+                project_id,
+                monitor_id,
+                from,
+                until,
+                None,
+                monitors_page_size(limit)?,
+            )
             .await
             .map_err(map_signal_error)
     }
@@ -1915,6 +1923,15 @@ fn page_size(value: Option<usize>) -> Result<usize, NativeApiError> {
     }
 }
 
+fn monitors_page_size(value: Option<usize>) -> Result<usize, NativeApiError> {
+    let value = value.unwrap_or(DEFAULT_PAGE);
+    if (1..=MAX_MONITORS_PAGE).contains(&value) {
+        Ok(value)
+    } else {
+        Err(NativeApiError::InvalidRequest)
+    }
+}
+
 fn time_range(
     now: Timestamp,
     from: Option<Timestamp>,
@@ -2227,6 +2244,16 @@ fn map_auth_error(error: AuthError) -> NativeApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_pages_have_a_dedicated_hard_ceiling() {
+        assert_eq!(monitors_page_size(Some(100_000)), Ok(100_000));
+        assert_eq!(
+            monitors_page_size(Some(100_001)),
+            Err(NativeApiError::InvalidRequest)
+        );
+        assert_eq!(page_size(Some(101)), Err(NativeApiError::InvalidRequest));
+    }
 
     #[test]
     fn attachment_and_minidump_metadata_decode_without_blob_bytes() {

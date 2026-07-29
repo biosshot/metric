@@ -8,18 +8,35 @@ import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import { timeWindow, type TimeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 type ExploreMode = 'table' | 'number' | 'timeseries';
+type MetricMeasure = 'value' | 'samples';
 
+const props = withDefaults(
+  defineProps<{
+    initialDataset?: ExploreDataset;
+    datasetLocked?: boolean;
+  }>(),
+  {
+    initialDataset: 'errors',
+    datasetLocked: false,
+  },
+);
 const session = useSessionStore();
-const dataset = ref<ExploreDataset>('errors');
+const dataset = ref<ExploreDataset>(props.initialDataset);
 const mode = ref<ExploreMode>('table');
+const metricMeasure = ref<MetricMeasure>('value');
 const filterField = ref('');
 const filterOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
 const filterValue = ref('');
 const groupField = ref('');
 const interval = ref<'5m' | '1h' | '1d'>('1h');
+const range = ref('24h');
+const selectedWindow = ref<TimeWindow>(timeWindow('24h'));
+const appliedWindow = ref<TimeWindow>({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const projectId = computed(() => session.selectedProjectId ?? '');
 
@@ -53,6 +70,20 @@ const intervalOptions: SelectOption[] = [
   { value: '5m', label: '5 minutes' },
   { value: '1h', label: '1 hour' },
   { value: '1d', label: '1 day' },
+];
+const metricMeasureOptions: SelectOption[] = [
+  {
+    value: 'value',
+    label: 'Metric value',
+    icon: 'gauge',
+    description: 'Sum the values reported by the SDK',
+  },
+  {
+    value: 'samples',
+    label: 'Sample count',
+    icon: 'activity',
+    description: 'Count the observations behind each metric',
+  },
 ];
 
 const fieldsByDataset: Record<ExploreDataset, SelectOption[]> = {
@@ -135,7 +166,13 @@ const columns = computed(() => {
   return first ? Object.keys(first) : [];
 });
 const chartMaximum = computed(() =>
-  Math.max(1, ...(query.data.value?.items ?? []).map((item) => Number(item.count ?? 0))),
+  Math.max(
+    1,
+    ...(query.data.value?.items ?? []).map((item) => Number(item[resultValueColumn.value] ?? 0)),
+  ),
+);
+const resultValueColumn = computed(() =>
+  dataset.value === 'metrics' ? (metricMeasure.value === 'value' ? 'value' : 'samples') : 'count',
 );
 
 function validSelection(options: SelectOption[], value: string): string {
@@ -150,7 +187,7 @@ async function run(nextCursor: string | null = null): Promise<void> {
   ) as typeof filterOperator.value;
   groupField.value = validSelection(groupFieldsByDataset[dataset.value], groupField.value);
   cursor.value = nextCursor;
-  const until = Date.now();
+  if (!nextCursor) appliedWindow.value = { ...selectedWindow.value };
   const predicates: ExploreRequest['predicates'] = [];
   if (filterField.value && filterValue.value.trim()) {
     const raw = filterValue.value.trim();
@@ -164,12 +201,16 @@ async function run(nextCursor: string | null = null): Promise<void> {
     mode.value === 'table'
       ? []
       : dataset.value === 'metrics'
-        ? [{ function: 'sum' as const, field: 'metric_count', alias: 'count' }]
+        ? [
+            metricMeasure.value === 'value'
+              ? { function: 'sum' as const, field: 'metric_sum', alias: 'value' }
+              : { function: 'sum' as const, field: 'metric_count', alias: 'samples' },
+          ]
         : [{ function: 'count' as const, alias: 'count' }];
   await query.mutateAsync({
     dataset: dataset.value,
-    from: until - 24 * 60 * 60 * 1000,
-    until,
+    from: appliedWindow.value.from,
+    until: appliedWindow.value.until,
     predicates,
     aggregates: aggregate,
     group_by: mode.value === 'number' || !groupField.value ? [] : [groupField.value],
@@ -193,17 +234,40 @@ function display(value: ExploreScalar, key: string): string {
   <section class="explore-page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / explore</p>
-        <h1>Unified Explore</h1>
+        <p class="eyebrow">
+          {{ session.selectedProject?.slug }} / {{ datasetLocked ? 'metrics' : 'explore' }}
+        </p>
+        <h1>{{ datasetLocked ? 'Metrics' : 'Unified Explore' }}</h1>
         <p>
-          Ask one bounded question of Errors, Logs, Spans, or Metrics without raw database syntax.
+          {{
+            datasetLocked
+              ? 'Inspect counters, gauges, and distributions reported by your SDKs.'
+              : 'Ask one bounded question of Errors, Logs, Spans, or Metrics without raw database syntax.'
+          }}
         </p>
       </div>
     </header>
 
     <form class="panel explore-builder" @submit.prevent="run(null)">
-      <BaseSelect v-model="dataset" :options="datasetOptions" label="Dataset" />
+      <BaseSelect
+        v-if="!datasetLocked"
+        v-model="dataset"
+        :options="datasetOptions"
+        label="Dataset"
+      />
       <BaseSelect v-model="mode" :options="modeOptions" label="Result" />
+      <TimeRangeSelect
+        v-model="range"
+        :window-value="selectedWindow"
+        label="Time range"
+        @update:window-value="selectedWindow = $event"
+      />
+      <BaseSelect
+        v-if="dataset === 'metrics' && mode !== 'table'"
+        v-model="metricMeasure"
+        :options="metricMeasureOptions"
+        label="Measure"
+      />
       <BaseSelect v-model="filterField" :options="optionalFields" label="Exact filter" />
       <BaseSelect
         v-if="filterField"
@@ -248,7 +312,11 @@ function display(value: ExploreScalar, key: string): string {
       v-else-if="!query.data.value"
       icon="explore"
       title="Build your first query"
-      description="Choose a dataset and result shape. Project scope and a 24-hour range are always enforced."
+      :description="
+        datasetLocked
+          ? 'Choose a result shape and whether to show reported values or sample counts.'
+          : 'Choose a dataset, result shape, and bounded time range.'
+      "
     />
     <EmptyState
       v-else-if="!query.data.value.items.length"
@@ -278,12 +346,14 @@ function display(value: ExploreScalar, key: string): string {
           :key="`${item.timestamp}:${index}`"
         >
           <div>
-            <strong>{{ Number(item.count ?? 0).toLocaleString() }}</strong>
+            <strong>{{ Number(item[resultValueColumn] ?? 0).toLocaleString() }}</strong>
             <span>{{ display(item.timestamp ?? null, 'timestamp') }}</span>
           </div>
           <span
             class="explore-chart__bar"
-            :style="{ '--bar-width': `${(Number(item.count ?? 0) / chartMaximum) * 100}%` }"
+            :style="{
+              '--bar-width': `${(Number(item[resultValueColumn] ?? 0) / chartMaximum) * 100}%`,
+            }"
           ></span>
           <small v-if="groupField">{{ display(item[groupField] ?? null, groupField) }}</small>
         </article>

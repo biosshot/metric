@@ -356,7 +356,7 @@ export const api = {
   event: (projectId: string, eventId: string) =>
     request<Event>(`/api/v1/projects/${projectId}/events/${eventId}`),
   monitors: (projectId: string) =>
-    request<{ items: CronMonitor[] }>(`/api/v1/projects/${projectId}/monitors?limit=100`),
+    request<{ items: CronMonitor[] }>(`/api/v1/projects/${projectId}/monitors?limit=100000`),
   putMonitor: (projectId: string, monitor: MonitorInput) =>
     request<CronMonitor>(`/api/v1/projects/${projectId}/monitors`, {
       method: 'POST',
@@ -375,7 +375,7 @@ export const api = {
       `/api/v1/projects/${projectId}/monitors/${monitorId}/runs${query({
         from: queryTimestamp(range.from),
         until: queryTimestamp(range.until),
-        limit: 100,
+        limit: 100000,
       })}`,
     ),
   logs: (

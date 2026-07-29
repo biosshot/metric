@@ -343,13 +343,15 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       dataset: string;
       from: number;
       until: number;
-      aggregates: Array<{ function: string }>;
+      aggregates: Array<{ function: string; field?: string; alias?: string }>;
     };
-    if (
-      body.dataset !== 'errors' ||
-      body.aggregates[0]?.function !== 'count' ||
-      body.until <= body.from
-    ) {
+    const errorCount = body.dataset === 'errors' && body.aggregates[0]?.function === 'count';
+    const metricValue =
+      body.dataset === 'metrics' &&
+      body.aggregates[0]?.function === 'sum' &&
+      body.aggregates[0]?.field === 'metric_sum' &&
+      body.aggregates[0]?.alias === 'value';
+    if ((!errorCount && !metricValue) || body.until <= body.from) {
       return json(
         {
           error: {
@@ -363,10 +365,10 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     }
     return json({
       shape: 'number',
-      dataset: 'errors',
-      normalized: 'v1|errors|bounded',
+      dataset: body.dataset,
+      normalized: `v1|${body.dataset}|bounded`,
       cost: 198,
-      items: [{ count: 17 }],
+      items: [metricValue ? { value: 42.5 } : { count: 17 }],
       next_cursor: null,
     });
   }
@@ -718,6 +720,8 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Timeline' }).click();
   await expect(page.locator('.monitor-run-chart__column')).toHaveCount(2);
+  await page.locator('.monitor-run-chart__column').last().click();
+  await expect(page.locator('.monitor-run-chart__details')).toContainText('HTTP 503');
   state.monitorRuns = Array.from({ length: 100 }, (_, index) => ({
     ...state.monitorRuns![index % state.monitorRuns!.length],
     id: index.toString(16).padStart(32, '0'),
@@ -727,7 +731,12 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await page.getByRole('combobox', { name: 'Run history period' }).click();
   await page.getByRole('option', { name: /^Last 7 days/ }).click();
   await expect.poll(() => state.monitorRangeSeen).toBe(true);
-  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(100);
+  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(50);
+  const runPages = page.getByRole('navigation', { name: 'Run history pages' });
+  await expect(runPages).toContainText('Page 1 of 2');
+  await runPages.getByRole('button', { name: 'Next' }).click();
+  await expect(runPages).toContainText('Page 2 of 2');
+  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(50);
   await expect
     .poll(() =>
       page
@@ -882,6 +891,43 @@ test('Explore submits a typed bounded query and renders a number result', async 
   await page.getByRole('button', { name: 'Run query' }).click();
   await expect(page.locator('.explore-number')).toContainText('17');
   await expect(page.getByText('Estimated cost')).toContainText('198');
+});
+
+test('Metrics uses metric values and a custom time range', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+  await page.goto('/metrics');
+  await expect(page.getByRole('heading', { name: 'Metrics', exact: true })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Result' }).click();
+  await page.getByRole('option', { name: /^Number/ }).click();
+  await page.getByRole('combobox', { name: 'Time range' }).click();
+  await page.getByRole('option', { name: /^Custom range/ }).click();
+  await page.getByLabel('From').fill('2026-07-01T10:00');
+  await page.getByLabel('Until').fill('2026-07-02T12:00');
+  await page.getByRole('button', { name: 'Apply range' }).click();
+
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/api/v1/projects/42/explore') && request.method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Run query' }).click();
+  const request = await requestPromise;
+  const body = request.postDataJSON() as {
+    dataset: string;
+    from: number;
+    until: number;
+    aggregates: Array<{ function: string; field?: string; alias?: string }>;
+  };
+  expect(body.dataset).toBe('metrics');
+  expect(body.until - body.from).toBe(26 * 60 * 60 * 1_000);
+  expect(body.aggregates).toEqual([{ function: 'sum', field: 'metric_sum', alias: 'value' }]);
+  await expect(page.locator('.explore-number')).toContainText('42.5');
 });
 
 test('Dashboard lifecycle loads current data and keeps partial widget failures visible', async ({
@@ -1271,6 +1317,7 @@ test('all routes have no serious accessibility violations at desktop and narrow 
     { name: 'replays', url: '/replays', heading: 'Session Replays' },
     { name: 'replay-detail', url: `/replays/${replayRecord.id}`, heading: 'Session Replay' },
     { name: 'explore', url: '/explore', heading: 'Unified Explore' },
+    { name: 'metrics', url: '/metrics', heading: 'Metrics' },
     { name: 'dashboard', url: '/dashboard', heading: 'Dashboard' },
     { name: 'project-new', url: '/projects/new', heading: 'Create a new project' },
     { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },
