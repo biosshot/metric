@@ -2174,10 +2174,17 @@ label small,
   position: relative;
   min-height: 28rem;
   margin: 1.25rem 0;
+  padding: clamp(0.5rem, 1.8vw, 1.25rem);
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #08090a;
+  background:
+    radial-gradient(
+      circle at 50% 0,
+      color-mix(in srgb, var(--semantic-info-surface) 46%, transparent),
+      transparent 54%
+    ),
+    var(--surface-sunken);
 }
 
 .replay-player-placeholder {
@@ -2204,11 +2211,89 @@ label small,
 }
 
 .replay-player {
-  min-width: min-content;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
 }
 
 .replay-player .rr-player {
-  margin: 0 auto;
+  float: none;
+  margin-inline: auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 34%);
+}
+
+.replay-player .rr-player__frame {
+  background: var(--canvas);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller {
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-timeline__time {
+  color: var(--text-muted);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-progress {
+  border-block-color: var(--surface-subtle);
+  background: var(--surface-strong);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-progress__step {
+  background: color-mix(in srgb, var(--semantic-info) 34%, var(--surface-strong));
+}
+
+.replay-player-shell .replay-player .rr-player .rr-progress__handler {
+  background: var(--semantic-info);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--semantic-info) 18%, transparent);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller__btns button {
+  color: var(--text-muted);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller__btns button:hover:not(:disabled) {
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller__btns button:active,
+.replay-player-shell .replay-player .rr-player .rr-controller__btns button.active {
+  background: var(--semantic-info-surface);
+  color: var(--semantic-info);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller__btns button svg {
+  fill: currentColor;
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller .switch label::before {
+  background: color-mix(in srgb, var(--semantic-info) 28%, var(--surface-strong));
+}
+
+.replay-player-shell
+  .replay-player
+  .rr-player
+  .rr-controller
+  .switch
+  input[type='checkbox']:checked
+  + label::before {
+  background: var(--semantic-info);
+}
+
+.replay-player-shell .replay-player .rr-player .rr-controller .switch label::after {
+  background: var(--text);
 }
 
 .correlation-links {
