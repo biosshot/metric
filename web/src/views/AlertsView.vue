@@ -15,6 +15,7 @@ import { useSessionStore } from '../stores/session';
 const session = useSessionStore();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
+const canAdminister = computed(() => session.has('project:admin'));
 const kind = ref('telegram');
 const ruleName = ref('');
 const ruleKind = ref('issue');
@@ -87,17 +88,17 @@ const datasetOptions: SelectOption[] = [
 const destinations = useQuery({
   queryKey: computed(() => ['notification-destinations', projectId.value]),
   queryFn: () => api.notificationDestinations(projectId.value),
-  enabled: computed(() => Boolean(projectId.value)),
+  enabled: computed(() => canAdminister.value && Boolean(projectId.value)),
 });
 const rules = useQuery({
   queryKey: computed(() => ['alert-rules', projectId.value]),
   queryFn: () => api.alertRules(projectId.value),
-  enabled: computed(() => Boolean(projectId.value)),
+  enabled: computed(() => canAdminister.value && Boolean(projectId.value)),
 });
 const monitors = useQuery({
   queryKey: computed(() => ['monitors', projectId.value]),
   queryFn: () => api.monitors(projectId.value),
-  enabled: computed(() => Boolean(projectId.value)),
+  enabled: computed(() => canAdminister.value && Boolean(projectId.value)),
 });
 const monitorOptions = computed<SelectOption[]>(() =>
   (monitors.data.value?.items ?? []).map((monitor) => ({
@@ -110,12 +111,13 @@ const monitorOptions = computed<SelectOption[]>(() =>
 const deliveries = useQuery({
   queryKey: computed(() => ['notification-deliveries', projectId.value]),
   queryFn: () => api.notificationDeliveries(projectId.value),
-  enabled: computed(() => Boolean(projectId.value)),
+  enabled: computed(() => canAdminister.value && Boolean(projectId.value)),
   refetchInterval: 5_000,
 });
 const organizationMembers = useQuery({
   queryKey: ['organization-members'],
   queryFn: api.organizationMembers,
+  enabled: canAdminister,
 });
 const activeMembers = computed(
   () => organizationMembers.data.value?.items.filter((member) => !member.disabled_at) ?? [],
@@ -320,8 +322,14 @@ function maskedDestinationEndpoint(endpoint: string): string {
     <StatusBadge status="durable_outbox" />
   </section>
 
+  <EmptyState
+    v-if="!canAdminister"
+    icon="shield"
+    title="Alert administration is restricted"
+    description="Your member role can observe project signals, but destinations, delivery credentials, and alert rules require project administration permission."
+  />
   <ApiErrorPanel
-    v-if="destinations.error.value || rules.error.value"
+    v-else-if="destinations.error.value || rules.error.value"
     :error="destinations.error.value || rules.error.value"
     title="Alert configuration was not loaded"
     @retry="
