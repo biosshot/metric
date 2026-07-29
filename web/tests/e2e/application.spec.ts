@@ -914,6 +914,10 @@ test('Metrics uses metric values and a custom time range', async ({ page }) => {
   await expect(page.locator('.metrics-overview__grid')).toContainText('checkout.requests');
   await expect(page.locator('.metrics-overview__grid')).toContainText('42.5');
   await expect(page.locator('.metrics-overview__grid')).toContainText('12 samples');
+  await expect(page.getByRole('combobox', { name: 'Result' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Query', exact: true }).click();
+  await expect(page).toHaveURL(/\/metrics\/query$/);
+  await expect(page.locator('.metrics-overview__grid')).toHaveCount(0);
   await page.getByRole('combobox', { name: 'Result' }).click();
   await page.getByRole('option', { name: /^Number/ }).click();
   await page.getByRole('combobox', { name: 'Time range' }).click();
@@ -1328,6 +1332,7 @@ test('all routes have no serious accessibility violations at desktop and narrow 
     { name: 'replay-detail', url: `/replays/${replayRecord.id}`, heading: 'Session Replay' },
     { name: 'explore', url: '/explore', heading: 'Unified Explore' },
     { name: 'metrics', url: '/metrics', heading: 'Metrics' },
+    { name: 'metrics-query', url: '/metrics/query', heading: 'Metrics' },
     { name: 'dashboard', url: '/dashboard', heading: 'Dashboard' },
     { name: 'project-new', url: '/projects/new', heading: 'Create a new project' },
     { name: 'sdk-setup', url: '/project/setup', heading: 'Connect an SDK' },

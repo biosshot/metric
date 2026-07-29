@@ -8,21 +8,25 @@ import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import MetricsSectionNav from '../components/MetricsSectionNav.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { timeWindow, type TimeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 type ExploreMode = 'table' | 'number' | 'timeseries';
 type MetricMeasure = 'value' | 'samples';
+type MetricsView = 'overview' | 'query';
 
 const props = withDefaults(
   defineProps<{
     initialDataset?: ExploreDataset;
     datasetLocked?: boolean;
+    metricsView?: MetricsView;
   }>(),
   {
     initialDataset: 'errors',
     datasetLocked: false,
+    metricsView: 'query',
   },
 );
 const session = useSessionStore();
@@ -179,7 +183,9 @@ const metricsOverview = useQuery({
       limit: 100,
     });
   },
-  enabled: computed(() => props.datasetLocked && Boolean(projectId.value)),
+  enabled: computed(
+    () => props.datasetLocked && props.metricsView === 'overview' && Boolean(projectId.value),
+  ),
   refetchInterval: 30_000,
 });
 const metricOverviewItems = computed(() =>
@@ -280,7 +286,13 @@ function metricValue(value: ExploreScalar | undefined): string {
       </div>
     </header>
 
-    <section v-if="datasetLocked" class="metrics-overview" aria-labelledby="metrics-overview-title">
+    <MetricsSectionNav v-if="datasetLocked" />
+
+    <section
+      v-if="datasetLocked && metricsView === 'overview'"
+      class="metrics-overview"
+      aria-labelledby="metrics-overview-title"
+    >
       <div class="section-heading">
         <div>
           <p class="eyebrow">Current catalog</p>
@@ -319,15 +331,11 @@ function metricValue(value: ExploreScalar | undefined): string {
       </div>
     </section>
 
-    <div v-if="datasetLocked" class="section-heading explore-advanced-heading">
-      <div>
-        <p class="eyebrow">Advanced</p>
-        <h2>Explore metrics</h2>
-        <p>Filter, group, and chart a bounded metric query.</p>
-      </div>
-    </div>
-
-    <form class="panel explore-builder" @submit.prevent="run(null)">
+    <form
+      v-if="!datasetLocked || metricsView === 'query'"
+      class="panel explore-builder"
+      @submit.prevent="run(null)"
+    >
       <BaseSelect
         v-if="!datasetLocked"
         v-model="dataset"
@@ -385,10 +393,17 @@ function metricValue(value: ExploreScalar | undefined): string {
       </button>
     </form>
 
-    <LoadingPanel v-if="query.isPending.value" label="Running bounded query…" />
-    <ApiErrorPanel v-else-if="query.error.value" :error="query.error.value" @retry="run(cursor)" />
+    <LoadingPanel
+      v-if="(!datasetLocked || metricsView === 'query') && query.isPending.value"
+      label="Running bounded query…"
+    />
+    <ApiErrorPanel
+      v-else-if="(!datasetLocked || metricsView === 'query') && query.error.value"
+      :error="query.error.value"
+      @retry="run(cursor)"
+    />
     <EmptyState
-      v-else-if="!query.data.value"
+      v-else-if="(!datasetLocked || metricsView === 'query') && !query.data.value"
       icon="explore"
       title="Build your first query"
       :description="
@@ -398,12 +413,16 @@ function metricValue(value: ExploreScalar | undefined): string {
       "
     />
     <EmptyState
-      v-else-if="!query.data.value.items.length"
+      v-else-if="
+        (!datasetLocked || metricsView === 'query') &&
+        query.data.value &&
+        !query.data.value.items.length
+      "
       icon="search"
       title="No matching signals"
       description="The query completed safely but found no rows in the selected time range."
     />
-    <template v-else>
+    <template v-else-if="(!datasetLocked || metricsView === 'query') && query.data.value">
       <div class="explore-result-meta">
         <span
           ><strong>{{ query.data.value.dataset }}</strong> dataset</span

@@ -144,7 +144,11 @@ async function logout(): Promise<void> {
             <AppIcon name="logs" :size="18" />
             Logs
           </RouterLink>
-          <RouterLink to="/metrics" @click="navigationOpen = false">
+          <RouterLink
+            to="/metrics"
+            :class="{ 'router-link-active': $route.name === 'metrics-query' }"
+            @click="navigationOpen = false"
+          >
             <AppIcon name="gauge" :size="18" />
             Metrics
           </RouterLink>

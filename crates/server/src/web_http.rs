@@ -43,6 +43,7 @@ pub fn router_with_root(root: impl AsRef<Path>) -> Router {
         .route_service("/performance", index.clone())
         .route_service("/explore", index.clone())
         .route_service("/metrics", index.clone())
+        .route_service("/metrics/query", index.clone())
         .route_service("/alerts", index.clone())
         .route_service("/monitors", index.clone())
         .route_service("/feedback", index.clone())
@@ -123,6 +124,7 @@ mod tests {
             "/performance",
             "/explore",
             "/metrics",
+            "/metrics/query",
             "/alerts",
             "/monitors",
             "/feedback",

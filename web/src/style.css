@@ -3950,10 +3950,6 @@ label small,
   font-size: 0.68rem;
 }
 
-.explore-advanced-heading {
-  margin-top: 0.25rem;
-}
-
 .explore-builder {
   display: grid;
   grid-template-columns: repeat(4, minmax(10rem, 1fr)) auto;
