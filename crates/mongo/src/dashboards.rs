@@ -38,7 +38,7 @@ impl DashboardStore for MongoDashboardStore {
         limit: usize,
     ) -> PortFuture<'_, Result<Vec<SavedQuery>, DashboardStoreError>> {
         Box::pin(async move {
-            let cursor = self
+            let mut cursor = self
                 .database
                 .collection::<Document>("saved_queries")
                 .find(doc! { "project_id": project_id.get() })
@@ -46,11 +46,13 @@ impl DashboardStore for MongoDashboardStore {
                 .limit(i64::try_from(limit).map_err(|_| DashboardStoreError::InvalidData)?)
                 .await
                 .map_err(map_mongo)?;
-            cursor
-                .map_err(map_mongo)
-                .and_then(|document| async move { decode_saved_query(document) })
-                .try_collect()
-                .await
+            let mut values = Vec::new();
+            while let Some(document) = cursor.try_next().await.map_err(map_mongo)? {
+                if let Some(value) = decode_saved_query_for_list(document) {
+                    values.push(value);
+                }
+            }
+            Ok(values)
         })
     }
 
@@ -141,7 +143,7 @@ impl DashboardStore for MongoDashboardStore {
         limit: usize,
     ) -> PortFuture<'_, Result<Vec<Dashboard>, DashboardStoreError>> {
         Box::pin(async move {
-            let cursor = self
+            let mut cursor = self
                 .database
                 .collection::<Document>("dashboards")
                 .find(doc! { "project_id": project_id.get() })
@@ -149,11 +151,13 @@ impl DashboardStore for MongoDashboardStore {
                 .limit(i64::try_from(limit).map_err(|_| DashboardStoreError::InvalidData)?)
                 .await
                 .map_err(map_mongo)?;
-            cursor
-                .map_err(map_mongo)
-                .and_then(|document| async move { decode_dashboard(document) })
-                .try_collect()
-                .await
+            let mut values = Vec::new();
+            while let Some(document) = cursor.try_next().await.map_err(map_mongo)? {
+                if let Some(value) = decode_dashboard_for_list(document) {
+                    values.push(value);
+                }
+            }
+            Ok(values)
         })
     }
 
@@ -363,6 +367,10 @@ fn decode_saved_query(document: Document) -> Result<SavedQuery, DashboardStoreEr
     Ok(value)
 }
 
+fn decode_saved_query_for_list(document: Document) -> Option<SavedQuery> {
+    decode_saved_query(document).ok()
+}
+
 fn encode_dashboard(value: &Dashboard) -> Result<Document, DashboardStoreError> {
     Ok(doc! {
         "_id": binary(value.id.as_bytes()),
@@ -424,6 +432,10 @@ fn decode_dashboard(document: Document) -> Result<Dashboard, DashboardStoreError
         .validate()
         .map_err(|_| DashboardStoreError::InvalidData)?;
     Ok(value)
+}
+
+fn decode_dashboard_for_list(document: Document) -> Option<Dashboard> {
+    decode_dashboard(document).ok()
 }
 
 fn encode_query(query: &ExploreQuery) -> Result<Document, DashboardStoreError> {
@@ -589,6 +601,12 @@ fn parse_field(value: &str) -> Result<ExploreField, DashboardStoreError> {
         "status" => Ok(ExploreField::Status),
         "name" => Ok(ExploreField::Name),
         "is_segment" => Ok(ExploreField::IsSegment),
+        "metric_kind" => Ok(ExploreField::MetricKind),
+        "unit" => Ok(ExploreField::Unit),
+        "metric_count" => Ok(ExploreField::MetricCount),
+        "metric_sum" => Ok(ExploreField::MetricSum),
+        "metric_min" => Ok(ExploreField::MetricMin),
+        "metric_max" => Ok(ExploreField::MetricMax),
         _ => Err(DashboardStoreError::InvalidData),
     }
 }
@@ -694,5 +712,68 @@ mod tests {
         ] {
             assert_eq!(parse_dataset(dataset.as_str()), Ok(dataset));
         }
+    }
+
+    #[test]
+    fn metric_saved_query_round_trips_every_persisted_field() {
+        let timestamp = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
+        let value = SavedQuery {
+            id: SavedQueryId::from_bytes([1; 16]),
+            project_id: ProjectId::new(42).unwrap(),
+            name: "Metric values".into(),
+            query: ExploreQuery {
+                dataset: ExploreDataset::Metrics,
+                from: Timestamp::from_unix_millis(timestamp.unix_millis() - 3_600_000).unwrap(),
+                until: timestamp,
+                predicates: vec![ExplorePredicate {
+                    field: ExploreField::MetricKind,
+                    op: ExplorePredicateOp::Exact,
+                    value: Some(ExploreValue::String("gauge".into())),
+                    upper: None,
+                }],
+                aggregates: vec![
+                    ExploreAggregate {
+                        kind: ExploreAggregateKind::Sum,
+                        field: Some(ExploreField::MetricCount),
+                        alias: "samples".into(),
+                    },
+                    ExploreAggregate {
+                        kind: ExploreAggregateKind::Sum,
+                        field: Some(ExploreField::MetricSum),
+                        alias: "value".into(),
+                    },
+                    ExploreAggregate {
+                        kind: ExploreAggregateKind::Min,
+                        field: Some(ExploreField::MetricMin),
+                        alias: "minimum".into(),
+                    },
+                    ExploreAggregate {
+                        kind: ExploreAggregateKind::Max,
+                        field: Some(ExploreField::MetricMax),
+                        alias: "maximum".into(),
+                    },
+                ],
+                group_by: vec![ExploreField::Name, ExploreField::Unit],
+                interval: None,
+                cursor: None,
+                limit: 50,
+            },
+            revision: 1,
+            created_by: UserId::new(7).unwrap(),
+            updated_by: UserId::new(7).unwrap(),
+            created_at: timestamp,
+            updated_at: timestamp,
+        };
+
+        let document = encode_saved_query(&value).unwrap();
+        assert_eq!(decode_saved_query(document.clone()).unwrap(), value);
+
+        let mut malformed = document.clone();
+        malformed.insert("query", "not a query");
+        let listed = [malformed, document]
+            .into_iter()
+            .filter_map(decode_saved_query_for_list)
+            .collect::<Vec<_>>();
+        assert_eq!(listed, vec![value]);
     }
 }

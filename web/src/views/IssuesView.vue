@@ -11,7 +11,7 @@ import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
-import { timeWindow } from '../lib/timeRange';
+import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 import type { Event, Issue, Page } from '../api/types';
 
@@ -24,9 +24,9 @@ const submittedStatus = ref('');
 const initialSearch = typeof route.query.q === 'string' ? route.query.q : '';
 const search = ref(initialSearch);
 const submittedSearch = ref(initialSearch);
-const range = ref('24h');
-const appliedRange = ref('24h');
-const selectedWindow = ref(timeWindow('24h'));
+const range = ref('all');
+const appliedRange = ref('all');
+const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
@@ -42,7 +42,7 @@ const hasFilters = computed(
   () =>
     Boolean(
       search.value.trim() || submittedSearch.value || status.value || submittedStatus.value,
-    ) || range.value !== '24h',
+    ) || range.value !== 'all',
 );
 const queryKey = computed(() => [
   submittedSearch.value ? 'event-search' : 'issues',
@@ -64,7 +64,7 @@ const result = useQuery<InvestigationResult>({
           projectId.value,
           submittedStatus.value || undefined,
           cursor.value,
-          appliedWindow.value,
+          optionalTimeWindow(appliedRange.value, appliedWindow.value),
         ),
   enabled: computed(() => Boolean(projectId.value)),
 });
@@ -94,9 +94,9 @@ function resetFilters(): void {
   submittedStatus.value = '';
   search.value = '';
   submittedSearch.value = '';
-  range.value = '24h';
-  appliedRange.value = '24h';
-  selectedWindow.value = timeWindow('24h');
+  range.value = 'all';
+  appliedRange.value = 'all';
+  selectedWindow.value = timeWindow('all');
   appliedWindow.value = { ...selectedWindow.value };
   resetPage(false);
 }
@@ -210,6 +210,25 @@ function formatTime(value: string): string {
     </EmptyState>
 
     <div v-else class="issue-table-wrap">
+      <nav class="pagination" aria-label="Results pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="history.length === 0"
+          @click="previousPage"
+        >
+          Previous
+        </button>
+        <span>Page {{ history.length + 1 }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="!result.data.value.next_cursor"
+          @click="nextPage"
+        >
+          Next
+        </button>
+      </nav>
       <div class="issue-table-scroll">
         <table v-if="!submittedSearch" class="issue-table">
           <thead>
@@ -252,25 +271,6 @@ function formatTime(value: string): string {
           </RouterLink>
         </div>
       </div>
-      <nav class="pagination" aria-label="Results pages">
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="history.length === 0"
-          @click="previousPage"
-        >
-          Previous
-        </button>
-        <span>Page {{ history.length + 1 }}</span>
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="!result.data.value.next_cursor"
-          @click="nextPage"
-        >
-          Next
-        </button>
-      </nav>
     </div>
   </section>
 </template>

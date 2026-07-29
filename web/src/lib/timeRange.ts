@@ -14,7 +14,15 @@ export const MAX_TIME_RANGE_MILLIS = 30 * 24 * 60 * 60 * 1_000;
 
 export function timeWindow(range: string): TimeWindow {
   const until = Date.now();
+  if (range === 'all') return { from: 0, until };
   return { from: until - (RANGE_MILLIS[range] ?? RANGE_MILLIS['24h']), until };
+}
+
+export function optionalTimeWindow(
+  range: string,
+  window: TimeWindow,
+): { from?: number; until?: number } {
+  return range === 'all' ? {} : window;
 }
 
 export function localDateTime(value: number): string {

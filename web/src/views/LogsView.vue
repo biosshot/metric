@@ -10,7 +10,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
-import { timeWindow } from '../lib/timeRange';
+import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import type { StructuredLog } from '../api/types';
 import { useSessionStore } from '../stores/session';
 
@@ -26,9 +26,9 @@ const environment = ref('');
 const appliedEnvironment = ref('');
 const release = ref(typeof route.query.release === 'string' ? route.query.release : '');
 const appliedRelease = ref(release.value);
-const range = ref('24h');
-const appliedRange = ref('24h');
-const selectedWindow = ref(timeWindow('24h'));
+const range = ref('all');
+const appliedRange = ref('all');
+const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
@@ -41,7 +41,7 @@ const hasFilters = computed(
         service.value.trim() ||
         environment.value.trim() ||
         release.value.trim(),
-    ) || range.value !== '24h',
+    ) || range.value !== 'all',
 );
 const levelOptions: SelectOption[] = [
   { value: '', label: 'All levels', icon: 'filter' },
@@ -69,7 +69,7 @@ const logs = useQuery({
   ]),
   queryFn: () =>
     api.logs(projectId.value, {
-      ...appliedWindow.value,
+      ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
       level: appliedLevel.value || undefined,
       message: submittedMessage.value || undefined,
       service: appliedService.value || undefined,
@@ -116,8 +116,8 @@ function resetFilters(): void {
   service.value = '';
   environment.value = '';
   release.value = '';
-  range.value = '24h';
-  selectedWindow.value = timeWindow('24h');
+  range.value = 'all';
+  selectedWindow.value = timeWindow('all');
   search();
 }
 
@@ -211,6 +211,25 @@ function traceLink(log: StructuredLog): string | null {
       <SdkSetupButton />
     </EmptyState>
     <div v-else class="signal-list">
+      <nav class="pagination" aria-label="Log result pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="history.length === 0"
+          @click="previousPage"
+        >
+          Previous
+        </button>
+        <span>Page {{ history.length + 1 }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="!logs.data.value.next_cursor"
+          @click="nextPage"
+        >
+          Next
+        </button>
+      </nav>
       <div class="signal-histogram" aria-label="Log levels on this page">
         <span
           v-for="entry in levelCounts"
@@ -235,25 +254,6 @@ function traceLink(log: StructuredLog): string | null {
         </RouterLink>
         <time :datetime="log.timestamp">{{ formatTime(log.timestamp) }}</time>
       </article>
-      <nav class="pagination" aria-label="Log result pages">
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="history.length === 0"
-          @click="previousPage"
-        >
-          Previous
-        </button>
-        <span>Page {{ history.length + 1 }}</span>
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="!logs.data.value.next_cursor"
-          @click="nextPage"
-        >
-          Next
-        </button>
-      </nav>
     </div>
   </section>
 </template>

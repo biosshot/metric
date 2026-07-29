@@ -10,7 +10,7 @@ import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TraceSectionNav from '../components/TraceSectionNav.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
-import { timeWindow } from '../lib/timeRange';
+import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -21,9 +21,9 @@ const release = ref(typeof route.query.release === 'string' ? route.query.releas
 const appliedService = ref('');
 const appliedEnvironment = ref('');
 const appliedRelease = ref(release.value);
-const range = ref('24h');
-const appliedRange = ref('24h');
-const selectedWindow = ref(timeWindow('24h'));
+const range = ref('all');
+const appliedRange = ref('all');
+const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
@@ -31,7 +31,7 @@ const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
   () =>
     Boolean(service.value.trim() || environment.value.trim() || release.value.trim()) ||
-    range.value !== '24h',
+    range.value !== 'all',
 );
 const transactions = useQuery({
   queryKey: computed(() => [
@@ -47,7 +47,7 @@ const transactions = useQuery({
   ]),
   queryFn: () =>
     api.transactions(projectId.value, {
-      ...appliedWindow.value,
+      ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
       service: appliedService.value || undefined,
       environment: appliedEnvironment.value || undefined,
       release: appliedRelease.value || undefined,
@@ -75,8 +75,8 @@ function resetFilters(): void {
   service.value = '';
   environment.value = '';
   release.value = '';
-  range.value = '24h';
-  selectedWindow.value = timeWindow('24h');
+  range.value = 'all';
+  selectedWindow.value = timeWindow('all');
   applyFilters();
 }
 
@@ -156,24 +156,6 @@ function previousPage(): void {
       <SdkSetupButton />
     </EmptyState>
     <div v-else class="transaction-list">
-      <RouterLink
-        v-for="transaction in transactions.data.value.items"
-        :key="transaction.id"
-        class="transaction-row"
-        :to="`/traces/${transaction.trace_id}`"
-      >
-        <div>
-          <strong>{{ transaction.name }}</strong>
-          <span>{{ transaction.service || 'unknown service' }} · {{ transaction.operation }}</span>
-        </div>
-        <span v-if="transaction.insight_flags" class="insight-pill">
-          {{ transaction.insight_flags.toString(2).replaceAll('0', '').length }} insights
-        </span>
-        <span :class="{ 'duration--slow': transaction.duration_ms >= 1000 }">
-          {{ transaction.duration_ms.toFixed(1) }} ms
-        </span>
-        <time :datetime="transaction.started_at">{{ transaction.started_at }}</time>
-      </RouterLink>
       <nav class="pagination" aria-label="Transaction pages">
         <button
           class="button button--secondary"
@@ -193,6 +175,24 @@ function previousPage(): void {
           Next
         </button>
       </nav>
+      <RouterLink
+        v-for="transaction in transactions.data.value.items"
+        :key="transaction.id"
+        class="transaction-row"
+        :to="`/traces/${transaction.trace_id}`"
+      >
+        <div>
+          <strong>{{ transaction.name }}</strong>
+          <span>{{ transaction.service || 'unknown service' }} · {{ transaction.operation }}</span>
+        </div>
+        <span v-if="transaction.insight_flags" class="insight-pill">
+          {{ transaction.insight_flags.toString(2).replaceAll('0', '').length }} insights
+        </span>
+        <span :class="{ 'duration--slow': transaction.duration_ms >= 1000 }">
+          {{ transaction.duration_ms.toFixed(1) }} ms
+        </span>
+        <time :datetime="transaction.started_at">{{ transaction.started_at }}</time>
+      </RouterLink>
     </div>
   </section>
 </template>

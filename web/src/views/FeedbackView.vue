@@ -98,22 +98,6 @@ function formatTime(value: string): string {
       <SdkSetupButton />
     </EmptyState>
     <div v-else class="feedback-list">
-      <RouterLink
-        v-for="item in feedback.data.value.items"
-        :key="item.id"
-        class="feedback-row"
-        :to="`/feedback/${item.id}`"
-      >
-        <span class="feedback-row__status"><StatusBadge :status="item.status" /></span>
-        <strong>{{ item.message }}</strong>
-        <span>{{ item.name || item.contact_email || 'Anonymous user' }}</span>
-        <span
-          >{{ item.attachments.length }} attachment{{
-            item.attachments.length === 1 ? '' : 's'
-          }}</span
-        >
-        <time :datetime="item.received_at">{{ formatTime(item.received_at) }}</time>
-      </RouterLink>
       <nav class="pagination" aria-label="Feedback result pages">
         <button
           class="button button--secondary"
@@ -133,6 +117,22 @@ function formatTime(value: string): string {
           Next
         </button>
       </nav>
+      <RouterLink
+        v-for="item in feedback.data.value.items"
+        :key="item.id"
+        class="feedback-row"
+        :to="`/feedback/${item.id}`"
+      >
+        <span class="feedback-row__status"><StatusBadge :status="item.status" /></span>
+        <strong>{{ item.message }}</strong>
+        <span>{{ item.name || item.contact_email || 'Anonymous user' }}</span>
+        <span
+          >{{ item.attachments.length }} attachment{{
+            item.attachments.length === 1 ? '' : 's'
+          }}</span
+        >
+        <time :datetime="item.received_at">{{ formatTime(item.received_at) }}</time>
+      </RouterLink>
     </div>
   </section>
 </template>

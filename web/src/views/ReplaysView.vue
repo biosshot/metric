@@ -8,7 +8,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
-import { timeWindow } from '../lib/timeRange';
+import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -17,12 +17,12 @@ const projectId = computed(() => session.selectedProjectId ?? '');
 const search = ref('');
 const submittedSearch = ref('');
 const page = ref(1);
-const range = ref('24h');
-const appliedRange = ref('24h');
-const selectedWindow = ref(timeWindow('24h'));
+const range = ref('all');
+const appliedRange = ref('all');
+const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const hasFilters = computed(
-  () => Boolean(search.value.trim() || submittedSearch.value) || range.value !== '24h',
+  () => Boolean(search.value.trim() || submittedSearch.value) || range.value !== 'all',
 );
 const replays = useQuery({
   queryKey: computed(() => [
@@ -32,7 +32,8 @@ const replays = useQuery({
     appliedWindow.value.from,
     appliedWindow.value.until,
   ]),
-  queryFn: () => api.replays(projectId.value, appliedWindow.value),
+  queryFn: () =>
+    api.replays(projectId.value, optionalTimeWindow(appliedRange.value, appliedWindow.value)),
   enabled: computed(() => Boolean(projectId.value)),
 });
 const visibleReplays = computed(() => {
@@ -66,9 +67,9 @@ function clearSearch(): void {
   page.value = 1;
   search.value = '';
   submittedSearch.value = '';
-  range.value = '24h';
-  appliedRange.value = '24h';
-  selectedWindow.value = timeWindow('24h');
+  range.value = 'all';
+  appliedRange.value = 'all';
+  selectedWindow.value = timeWindow('all');
   appliedWindow.value = { ...selectedWindow.value };
 }
 
@@ -161,6 +162,25 @@ function duration(milliseconds: number): string {
       </button>
     </EmptyState>
     <div v-else class="transaction-list">
+      <nav class="pagination" aria-label="Replay pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="page === 1"
+          @click="page -= 1"
+        >
+          Previous
+        </button>
+        <span>Page {{ page }} of {{ pageCount }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="page === pageCount"
+          @click="page += 1"
+        >
+          Next
+        </button>
+      </nav>
       <RouterLink
         v-for="replay in paginatedReplays"
         :key="replay.id"
@@ -181,25 +201,6 @@ function duration(milliseconds: number): string {
         <span>{{ duration(replay.duration_ms) }}</span>
         <time :datetime="replay.received_at">{{ replay.received_at }}</time>
       </RouterLink>
-      <nav class="pagination" aria-label="Replay pages">
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="page === 1"
-          @click="page -= 1"
-        >
-          Previous
-        </button>
-        <span>Page {{ page }} of {{ pageCount }}</span>
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="page === pageCount"
-          @click="page += 1"
-        >
-          Next
-        </button>
-      </nav>
     </div>
   </section>
 </template>

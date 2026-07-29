@@ -9,6 +9,7 @@ import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import { sampleMonitorTimeline } from '../lib/monitorRuns';
 import { suggestedSlug } from '../lib/slug';
 import { useSessionStore } from '../stores/session';
 
@@ -20,11 +21,7 @@ const editorOpen = ref(false);
 const historyView = ref<'list' | 'chart'>(storedHistoryView());
 const historyRange = ref('all');
 const deleteConfirmationId = ref('');
-const monitorPage = ref(1);
-const runPage = ref(1);
 const selectedChartRunId = ref('');
-const monitorPageSize = 20;
-const runPageSize = 50;
 const slugWasEdited = ref(false);
 const customHistoryFrom = ref(localDateTime(Date.now() - 7 * 24 * 60 * 60 * 1_000));
 const customHistoryUntil = ref(localDateTime(Date.now()));
@@ -104,22 +101,9 @@ const selectedMonitor = computed(
   () =>
     monitors.data.value?.items.find((monitor) => monitor.id === selectedMonitorId.value) ?? null,
 );
-const monitorPageCount = computed(() =>
-  Math.max(1, Math.ceil((monitors.data.value?.items.length ?? 0) / monitorPageSize)),
-);
-const visibleMonitors = computed(() => {
-  const start = (monitorPage.value - 1) * monitorPageSize;
-  return (monitors.data.value?.items ?? []).slice(start, start + monitorPageSize);
-});
-const editorMonitors = computed(() => {
-  const selected = selectedMonitor.value;
-  return selected && !visibleMonitors.value.some((monitor) => monitor.id === selected.id)
-    ? [selected, ...visibleMonitors.value]
-    : visibleMonitors.value;
-});
 const monitorDefinitionOptions = computed<SelectOption[]>(() => [
   { value: '', label: 'New monitor', icon: 'plus' },
-  ...editorMonitors.value.map((monitor) => ({
+  ...(monitors.data.value?.items ?? []).map((monitor) => ({
     value: monitor.id,
     label: monitor.name,
     description: `${monitor.slug} · ${monitor.environment}`,
@@ -139,19 +123,12 @@ const runs = useQuery({
   enabled: computed(() => Boolean(projectId.value && selectedMonitorId.value)),
   refetchInterval: 10_000,
 });
-const runPageCount = computed(() =>
-  Math.max(1, Math.ceil((runs.data.value?.items.length ?? 0) / runPageSize)),
-);
-const visibleRuns = computed(() => {
-  const start = (runPage.value - 1) * runPageSize;
-  return (runs.data.value?.items ?? []).slice(start, start + runPageSize);
-});
-const chartRuns = computed(() => [...visibleRuns.value].reverse());
+const visibleRuns = computed(() => sampleMonitorTimeline(runs.data.value?.items ?? []));
 const maximumRunDuration = computed(() =>
-  Math.max(1, ...chartRuns.value.map((run) => run.duration_ms ?? 0)),
+  Math.max(1, ...visibleRuns.value.map((run) => run.duration_ms ?? 0)),
 );
 const selectedChartRun = computed(
-  () => chartRuns.value.find((run) => run.id === selectedChartRunId.value) ?? null,
+  () => visibleRuns.value.find((run) => run.id === selectedChartRunId.value) ?? null,
 );
 
 watch(
@@ -160,21 +137,13 @@ watch(
     if (items?.length && !items.some((monitor) => monitor.id === selectedMonitorId.value)) {
       selectedMonitorId.value = items[0].id;
     }
-    monitorPage.value = Math.min(monitorPage.value, monitorPageCount.value);
   },
   { immediate: true },
 );
 watch([selectedMonitorId, historyRange], () => {
   deleteConfirmationId.value = '';
   selectedChartRunId.value = '';
-  runPage.value = 1;
 });
-watch(
-  () => runs.data.value?.items,
-  () => {
-    runPage.value = Math.min(runPage.value, runPageCount.value);
-  },
-);
 watch(
   () => form.name,
   (name) => {
@@ -280,28 +249,8 @@ function manageMonitor(monitorId: string): void {
   }
   const monitor = monitors.data.value?.items.find((item) => item.id === monitorId);
   if (monitor) {
-    const index = monitors.data.value?.items.findIndex((item) => item.id === monitorId) ?? -1;
-    if (index >= 0) monitorPage.value = Math.floor(index / monitorPageSize) + 1;
     edit(monitor);
   }
-}
-
-function previousMonitorPage(): void {
-  monitorPage.value = Math.max(1, monitorPage.value - 1);
-}
-
-function nextMonitorPage(): void {
-  monitorPage.value = Math.min(monitorPageCount.value, monitorPage.value + 1);
-}
-
-function previousRunPage(): void {
-  runPage.value = Math.max(1, runPage.value - 1);
-  selectedChartRunId.value = '';
-}
-
-function nextRunPage(): void {
-  runPage.value = Math.min(runPageCount.value, runPage.value + 1);
-  selectedChartRunId.value = '';
 }
 
 function confirmDelete(monitorId: string): void {
@@ -647,32 +596,9 @@ function storedHistoryView(): 'list' | 'chart' {
     </EmptyState>
     <div v-else class="monitor-layout">
       <aside class="monitor-browser">
-        <nav
-          v-if="monitorPageCount > 1"
-          class="pagination monitor-pagination"
-          aria-label="Monitor pages"
-        >
-          <button
-            class="button button--secondary"
-            type="button"
-            :disabled="monitorPage === 1"
-            @click="previousMonitorPage"
-          >
-            Previous
-          </button>
-          <span>Page {{ monitorPage }} of {{ monitorPageCount }}</span>
-          <button
-            class="button button--secondary"
-            type="button"
-            :disabled="monitorPage === monitorPageCount"
-            @click="nextMonitorPage"
-          >
-            Next
-          </button>
-        </nav>
         <section class="monitor-list" aria-label="Cron monitors">
           <button
-            v-for="monitor in visibleMonitors"
+            v-for="monitor in monitors.data.value?.items"
             :key="monitor.id"
             class="panel monitor-card"
             :class="{ 'monitor-card--selected': selectedMonitorId === monitor.id }"
@@ -760,29 +686,6 @@ function storedHistoryView(): 'list' | 'chart' {
             {{ customHistoryError }}
           </small>
         </form>
-        <nav
-          v-if="!runs.isPending.value && !runs.error.value && runPageCount > 1"
-          class="pagination monitor-run-pagination"
-          aria-label="Run history pages"
-        >
-          <button
-            class="button button--secondary"
-            type="button"
-            :disabled="runPage === 1"
-            @click="previousRunPage"
-          >
-            Previous
-          </button>
-          <span>Page {{ runPage }} of {{ runPageCount }}</span>
-          <button
-            class="button button--secondary"
-            type="button"
-            :disabled="runPage === runPageCount"
-            @click="nextRunPage"
-          >
-            Next
-          </button>
-        </nav>
         <LoadingPanel v-if="runs.isPending.value" label="Loading run history…" />
         <ApiErrorPanel
           v-else-if="runs.error.value"
@@ -827,10 +730,10 @@ function storedHistoryView(): 'list' | 'chart' {
           <div
             class="monitor-run-chart__plot"
             role="list"
-            :aria-label="`${chartRuns.length} monitor runs over ${historyRange}`"
+            :aria-label="`${visibleRuns.length} monitor runs over ${historyRange}`"
           >
             <button
-              v-for="run in chartRuns"
+              v-for="run in visibleRuns"
               :key="run.id"
               class="monitor-run-chart__column"
               :class="[
@@ -846,9 +749,9 @@ function storedHistoryView(): 'list' | 'chart' {
               @click="selectedChartRunId = run.id"
             ></button>
           </div>
-          <div v-if="chartRuns.length" class="monitor-run-chart__axis">
-            <span>{{ timestamp(chartRuns[0].started_at) }}</span>
-            <span>{{ timestamp(chartRuns[chartRuns.length - 1].started_at) }}</span>
+          <div v-if="visibleRuns.length" class="monitor-run-chart__axis">
+            <span>{{ timestamp(visibleRuns[0].started_at) }}</span>
+            <span>{{ timestamp(visibleRuns[visibleRuns.length - 1].started_at) }}</span>
           </div>
           <article v-if="selectedChartRun" class="monitor-run-chart__details">
             <div class="monitor-run__title">

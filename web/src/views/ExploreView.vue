@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { useMutation } from '@tanstack/vue-query';
+import { useMutation, useQuery } from '@tanstack/vue-query';
 import type { ExploreDataset, ExploreRequest, ExploreScalar } from '../api/types';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -34,8 +34,8 @@ const filterOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('
 const filterValue = ref('');
 const groupField = ref('');
 const interval = ref<'5m' | '1h' | '1d'>('1h');
-const range = ref('24h');
-const selectedWindow = ref<TimeWindow>(timeWindow('24h'));
+const range = ref('all');
+const selectedWindow = ref<TimeWindow>(timeWindow('all'));
 const appliedWindow = ref<TimeWindow>({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const projectId = computed(() => session.selectedProjectId ?? '');
@@ -161,6 +161,32 @@ const operatorOptions = computed(() =>
 const query = useMutation({
   mutationFn: (request: ExploreRequest) => api.explore(projectId.value, request),
 });
+const metricsOverview = useQuery({
+  queryKey: computed(() => ['metrics-overview', projectId.value]),
+  queryFn: () => {
+    const until = Date.now();
+    return api.explore(projectId.value, {
+      dataset: 'metrics',
+      from: 0,
+      until,
+      predicates: [],
+      aggregates: [
+        { function: 'sum', field: 'metric_sum', alias: 'value' },
+        { function: 'sum', field: 'metric_count', alias: 'samples' },
+      ],
+      group_by: ['name'],
+      cursor: null,
+      limit: 100,
+    });
+  },
+  enabled: computed(() => props.datasetLocked && Boolean(projectId.value)),
+  refetchInterval: 30_000,
+});
+const metricOverviewItems = computed(() =>
+  [...(metricsOverview.data.value?.items ?? [])].sort((left, right) =>
+    String(left.name ?? '').localeCompare(String(right.name ?? '')),
+  ),
+);
 const columns = computed(() => {
   const first = query.data.value?.items[0];
   return first ? Object.keys(first) : [];
@@ -228,6 +254,12 @@ function display(value: ExploreScalar, key: string): string {
   if (key === 'duration_ms' && typeof value === 'number') return `${value.toFixed(2)} ms`;
   return String(value);
 }
+
+function metricValue(value: ExploreScalar | undefined): string {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number)) return '—';
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(number);
+}
 </script>
 
 <template>
@@ -247,6 +279,53 @@ function display(value: ExploreScalar, key: string): string {
         </p>
       </div>
     </header>
+
+    <section v-if="datasetLocked" class="metrics-overview" aria-labelledby="metrics-overview-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Current catalog</p>
+          <h2 id="metrics-overview-title">Metric overview</h2>
+          <p>Every retained metric name with its reported value and sample count.</p>
+        </div>
+        <button
+          class="button button--secondary button--fit"
+          type="button"
+          :disabled="metricsOverview.isFetching.value"
+          @click="metricsOverview.refetch()"
+        >
+          <AppIcon name="refresh" :size="16" />
+          Refresh
+        </button>
+      </div>
+      <LoadingPanel v-if="metricsOverview.isPending.value" label="Loading metric overview…" />
+      <ApiErrorPanel
+        v-else-if="metricsOverview.error.value"
+        :error="metricsOverview.error.value"
+        title="Metric overview could not be loaded"
+        @retry="metricsOverview.refetch()"
+      />
+      <EmptyState
+        v-else-if="!metricOverviewItems.length"
+        icon="gauge"
+        title="No metrics reported yet"
+        description="Send metrics from an SDK and their names and values will appear here."
+      />
+      <div v-else class="metrics-overview__grid">
+        <article v-for="(item, index) in metricOverviewItems" :key="`${item.name}:${index}`">
+          <span>{{ item.name ?? 'Unnamed metric' }}</span>
+          <strong>{{ metricValue(item.value) }}</strong>
+          <small>{{ metricValue(item.samples) }} samples</small>
+        </article>
+      </div>
+    </section>
+
+    <div v-if="datasetLocked" class="section-heading explore-advanced-heading">
+      <div>
+        <p class="eyebrow">Advanced</p>
+        <h2>Explore metrics</h2>
+        <p>Filter, group, and chart a bounded metric query.</p>
+      </div>
+    </div>
 
     <form class="panel explore-builder" @submit.prevent="run(null)">
       <BaseSelect
@@ -360,6 +439,16 @@ function display(value: ExploreScalar, key: string): string {
       </div>
 
       <div v-else class="issue-table-wrap">
+        <div v-if="query.data.value.shape === 'table'" class="pagination">
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="!query.data.value.next_cursor"
+            @click="run(query.data.value.next_cursor)"
+          >
+            Next page
+          </button>
+        </div>
         <table class="issue-table explore-table">
           <thead>
             <tr>
@@ -372,17 +461,6 @@ function display(value: ExploreScalar, key: string): string {
             </tr>
           </tbody>
         </table>
-      </div>
-
-      <div v-if="query.data.value.shape === 'table'" class="pagination">
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="!query.data.value.next_cursor"
-          @click="run(query.data.value.next_cursor)"
-        >
-          Next page
-        </button>
       </div>
     </template>
   </section>

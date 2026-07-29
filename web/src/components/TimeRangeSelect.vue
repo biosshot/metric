@@ -21,6 +21,7 @@ const emit = defineEmits<{
 }>();
 
 const options: SelectOption[] = [
+  { value: 'all', label: 'All time', icon: 'history' },
   { value: '1h', label: 'Last hour', icon: 'history' },
   { value: '24h', label: 'Last 24 hours', icon: 'history' },
   { value: '7d', label: 'Last 7 days', icon: 'history' },
@@ -57,8 +58,10 @@ function selectRange(value: string): void {
   emit('update:modelValue', value);
   customError.value = '';
   if (value === 'custom') {
-    customFrom.value = localDateTime(props.windowValue.from);
-    customUntil.value = localDateTime(props.windowValue.until);
+    const customWindow = props.windowValue.from === 0 ? timeWindow('24h') : props.windowValue;
+    customFrom.value = localDateTime(customWindow.from);
+    customUntil.value = localDateTime(customWindow.until);
+    if (props.windowValue.from === 0) emit('update:windowValue', customWindow);
     customOpen.value = true;
     void nextTick(() => fromInput.value?.focus());
     return;

@@ -344,6 +344,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       from: number;
       until: number;
       aggregates: Array<{ function: string; field?: string; alias?: string }>;
+      group_by: string[];
     };
     const errorCount = body.dataset === 'errors' && body.aggregates[0]?.function === 'count';
     const metricValue =
@@ -362,6 +363,16 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
         },
         422,
       );
+    }
+    if (metricValue && body.group_by.includes('name')) {
+      return json({
+        shape: 'table',
+        dataset: body.dataset,
+        normalized: 'v1|metrics|overview',
+        cost: 198,
+        items: [{ name: 'checkout.requests', value: 42.5, samples: 12 }],
+        next_cursor: null,
+      });
     }
     return json({
       shape: 'number',
@@ -722,21 +733,17 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await expect(page.locator('.monitor-run-chart__column')).toHaveCount(2);
   await page.locator('.monitor-run-chart__column').last().click();
   await expect(page.locator('.monitor-run-chart__details')).toContainText('HTTP 503');
-  state.monitorRuns = Array.from({ length: 100 }, (_, index) => ({
+  state.monitorRuns = Array.from({ length: 800 }, (_, index) => ({
     ...state.monitorRuns![index % state.monitorRuns!.length],
     id: index.toString(16).padStart(32, '0'),
-    started_at: new Date(Date.now() - (100 - index) * 60_000).toISOString(),
+    started_at: new Date(Date.now() - (800 - index) * 60_000).toISOString(),
   }));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('combobox', { name: 'Run history period' }).click();
   await page.getByRole('option', { name: /^Last 7 days/ }).click();
   await expect.poll(() => state.monitorRangeSeen).toBe(true);
-  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(50);
-  const runPages = page.getByRole('navigation', { name: 'Run history pages' });
-  await expect(runPages).toContainText('Page 1 of 2');
-  await runPages.getByRole('button', { name: 'Next' }).click();
-  await expect(runPages).toContainText('Page 2 of 2');
-  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(50);
+  await expect(page.locator('.monitor-run-chart__column')).toHaveCount(512);
+  await expect(page.getByRole('navigation', { name: 'Run history pages' })).toHaveCount(0);
   await expect
     .poll(() =>
       page
@@ -904,6 +911,9 @@ test('Metrics uses metric values and a custom time range', async ({ page }) => {
   await login(page);
   await page.goto('/metrics');
   await expect(page.getByRole('heading', { name: 'Metrics', exact: true })).toBeVisible();
+  await expect(page.locator('.metrics-overview__grid')).toContainText('checkout.requests');
+  await expect(page.locator('.metrics-overview__grid')).toContainText('42.5');
+  await expect(page.locator('.metrics-overview__grid')).toContainText('12 samples');
   await page.getByRole('combobox', { name: 'Result' }).click();
   await page.getByRole('option', { name: /^Number/ }).click();
   await page.getByRole('combobox', { name: 'Time range' }).click();

@@ -32,8 +32,8 @@ const savedShape = ref<ExploreShape>('number');
 const savedField = ref('');
 const savedOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
 const savedValue = ref('');
-const savedRange = ref('24h');
-const savedWindow = ref<TimeWindow>(timeWindow('24h'));
+const savedRange = ref('all');
+const savedWindow = ref<TimeWindow>(timeWindow('all'));
 const savedMetricMeasure = ref<'value' | 'samples'>('value');
 const editingSavedId = ref('');
 const dashboardName = ref('');
@@ -253,14 +253,7 @@ const mutation = useMutation({
 });
 
 function buildQuery(dataset: ExploreDataset, shape: ExploreShape): ExploreRequest {
-  const now = Date.now();
-  const window =
-    savedRange.value === 'custom'
-      ? savedWindow.value
-      : {
-          from: now - rangeMillis[savedRange.value],
-          until: now,
-        };
+  const window = savedRange.value === 'custom' ? savedWindow.value : timeWindow(savedRange.value);
   const predicates: ExploreRequest['predicates'] =
     savedField.value && savedValue.value.trim()
       ? [
@@ -332,7 +325,9 @@ function editSaved(saved: SavedQuery): void {
   savedValue.value = typeof predicate?.value === 'string' ? predicate.value : '';
   const age = saved.query.until - saved.query.from;
   savedRange.value =
-    Object.entries(rangeMillis).find(([, duration]) => duration === age)?.[0] ?? 'custom';
+    saved.query.from === 0
+      ? 'all'
+      : (Object.entries(rangeMillis).find(([, duration]) => duration === age)?.[0] ?? 'custom');
   savedWindow.value = { from: saved.query.from, until: saved.query.until };
   savedMetricMeasure.value =
     saved.query.aggregates[0]?.field === 'metric_count' ? 'samples' : 'value';

@@ -3,6 +3,17 @@ import { describe, expect, it } from 'vitest';
 import TimeRangeSelect from './TimeRangeSelect.vue';
 
 describe('TimeRangeSelect', () => {
+  it('offers all time as the first preset', async () => {
+    const wrapper = mount(TimeRangeSelect, {
+      props: {
+        modelValue: 'all',
+        windowValue: { from: 0, until: Date.now() },
+      },
+    });
+    await wrapper.get('[role="combobox"]').trigger('click');
+    expect(wrapper.findAll('[role="option"]')[0].text()).toContain('All time');
+  });
+
   it('applies a custom period from a popover without expanding the control', async () => {
     const wrapper = mount(TimeRangeSelect, {
       props: {

@@ -161,7 +161,10 @@ impl ExploreField {
                     ExploreDataset::Spans,
                     Self::OperationClass | Self::IsSegment
                 )
-                | (ExploreDataset::Metrics, Self::MetricKind | Self::Unit)
+                | (
+                    ExploreDataset::Metrics,
+                    Self::Name | Self::MetricKind | Self::Unit
+                )
         )
     }
 
@@ -173,6 +176,7 @@ impl ExploreField {
             (ExploreDataset::Logs, Self::Level) => Some(6),
             (ExploreDataset::Spans, Self::OperationClass) => Some(12),
             (ExploreDataset::Spans, Self::IsSegment) => Some(2),
+            (ExploreDataset::Metrics, Self::Name) => Some(MAX_EXPLORE_ROWS as u32),
             (ExploreDataset::Metrics, Self::MetricKind) => Some(3),
             (ExploreDataset::Metrics, Self::Unit) => Some(64),
             _ => None,
@@ -437,6 +441,15 @@ mod tests {
         assert_eq!(
             normalize_query(&query).as_ref(),
             "v1|logs|1000|2000|limit:50|interval:-|where:service:eq:\"api\":,|aggregate:count:-:events,|group:level,"
+        );
+    }
+
+    #[test]
+    fn metric_names_are_groupable_with_bounded_cardinality() {
+        assert!(ExploreField::Name.groupable(ExploreDataset::Metrics));
+        assert_eq!(
+            ExploreField::Name.maximum_group_cardinality(ExploreDataset::Metrics),
+            Some(MAX_EXPLORE_ROWS as u32)
         );
     }
 }

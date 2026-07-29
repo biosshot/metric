@@ -9,7 +9,7 @@ import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TraceSectionNav from '../components/TraceSectionNav.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import { api } from '../api/client';
-import { timeWindow } from '../lib/timeRange';
+import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -19,15 +19,15 @@ const release = ref('');
 const appliedService = ref('');
 const appliedEnvironment = ref('');
 const appliedRelease = ref('');
-const range = ref('24h');
-const appliedRange = ref('24h');
-const selectedWindow = ref(timeWindow('24h'));
+const range = ref('all');
+const appliedRange = ref('all');
+const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
   () =>
     Boolean(service.value.trim() || environment.value.trim() || release.value.trim()) ||
-    range.value !== '24h',
+    range.value !== 'all',
 );
 const performance = useQuery({
   queryKey: computed(() => [
@@ -42,7 +42,7 @@ const performance = useQuery({
   ]),
   queryFn: () =>
     api.performance(projectId.value, {
-      ...appliedWindow.value,
+      ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
       service: appliedService.value || undefined,
       environment: appliedEnvironment.value || undefined,
       release: appliedRelease.value || undefined,
@@ -68,8 +68,8 @@ function resetFilters(): void {
   service.value = '';
   environment.value = '';
   release.value = '';
-  range.value = '24h';
-  selectedWindow.value = timeWindow('24h');
+  range.value = 'all';
+  selectedWindow.value = timeWindow('all');
   applyFilters();
 }
 </script>

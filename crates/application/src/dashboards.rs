@@ -477,13 +477,16 @@ fn refresh_query(
     now: Timestamp,
     variables: &DashboardVariables,
 ) -> Result<ExploreQuery, &'static str> {
+    let all_time = query.from.unix_millis() == 0;
     let range = query
         .until
         .unix_millis()
         .saturating_sub(query.from.unix_millis());
     query.until = now;
-    query.from = Timestamp::from_unix_millis(now.unix_millis().saturating_sub(range))
-        .map_err(|_| "saved_query_invalid")?;
+    if !all_time {
+        query.from = Timestamp::from_unix_millis(now.unix_millis().saturating_sub(range))
+            .map_err(|_| "saved_query_invalid")?;
+    }
     query.cursor = None;
     apply_variable(
         &mut query,
@@ -803,6 +806,19 @@ mod tests {
             cursor: None,
             limit: 50,
         }
+    }
+
+    #[test]
+    fn dashboard_refresh_preserves_the_all_time_epoch_sentinel() {
+        let mut query = count_query(ExploreDataset::Logs);
+        query.from = Timestamp::from_unix_millis(0).unwrap();
+        query.until = Timestamp::from_unix_millis(2_000_000).unwrap();
+        let now = Timestamp::from_unix_millis(9_000_000).unwrap();
+
+        let refreshed = refresh_query(query, now, &DashboardVariables::default()).unwrap();
+
+        assert_eq!(refreshed.from.unix_millis(), 0);
+        assert_eq!(refreshed.until, now);
     }
 
     #[tokio::test]

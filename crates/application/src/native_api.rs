@@ -889,12 +889,7 @@ impl NativeApiService {
         self.authorize(context, project_id, Permission::EventRead)
             .await?;
         let store = self.signal_store()?;
-        let until = until.unwrap_or_else(|| self.clock.now());
-        let from = from.unwrap_or_else(|| {
-            Timestamp::from_unix_millis(until.unix_millis().saturating_sub(DAY_MILLIS))
-                .expect("one-day subtraction remains in the timestamp range")
-        });
-        validate_time_range(from, until)?;
+        let (from, until) = signal_time_range(self.clock.now(), from, until, DAY_MILLIS)?;
         let normalized = format!(
             "logs:{}:{}:{}:{}:{}:{}",
             severity.map_or("*", LogSeverity::as_str),
@@ -964,12 +959,7 @@ impl NativeApiService {
         } = request;
         self.authorize(context, project_id, Permission::EventRead)
             .await?;
-        let until = until.unwrap_or_else(|| self.clock.now());
-        let from = from.unwrap_or_else(|| {
-            Timestamp::from_unix_millis(until.unix_millis().saturating_sub(DAY_MILLIS))
-                .expect("one-day subtraction remains in the timestamp range")
-        });
-        validate_time_range(from, until)?;
+        let (from, until) = signal_time_range(self.clock.now(), from, until, DAY_MILLIS)?;
         let normalized = format!(
             "transactions:{}:{}:{}",
             environment.as_deref().unwrap_or("*"),
@@ -1033,12 +1023,7 @@ impl NativeApiService {
         } = request;
         self.authorize(context, project_id, Permission::EventRead)
             .await?;
-        let until = until.unwrap_or_else(|| self.clock.now());
-        let from = from.unwrap_or_else(|| {
-            Timestamp::from_unix_millis(until.unix_millis().saturating_sub(7 * DAY_MILLIS))
-                .expect("seven-day subtraction remains in the timestamp range")
-        });
-        validate_time_range(from, until)?;
+        let (from, until) = signal_time_range(self.clock.now(), from, until, 7 * DAY_MILLIS)?;
         self.signal_store()?
             .performance(
                 project_id,
@@ -1957,6 +1942,26 @@ fn validate_time_range(from: Timestamp, until: Timestamp) -> Result<(), NativeAp
     }
 }
 
+fn signal_time_range(
+    now: Timestamp,
+    from: Option<Timestamp>,
+    until: Option<Timestamp>,
+    default_range_millis: i64,
+) -> Result<(Timestamp, Timestamp), NativeApiError> {
+    if from.is_none() && until.is_none() {
+        let from = Timestamp::from_unix_millis(0).expect("the Unix epoch is a valid timestamp");
+        let until = Timestamp::from_unix_millis(now.unix_millis().saturating_add(1)).unwrap_or(now);
+        return Ok((from, until));
+    }
+    let until = until.unwrap_or(now);
+    let from = from.unwrap_or_else(|| {
+        Timestamp::from_unix_millis(until.unix_millis().saturating_sub(default_range_millis))
+            .expect("bounded signal range remains a valid timestamp")
+    });
+    validate_time_range(from, until)?;
+    Ok((from, until))
+}
+
 fn millis_to_ns(value: Timestamp) -> Result<i64, NativeApiError> {
     value
         .unix_millis()
@@ -2253,6 +2258,22 @@ mod tests {
             Err(NativeApiError::InvalidRequest)
         );
         assert_eq!(page_size(Some(101)), Err(NativeApiError::InvalidRequest));
+    }
+
+    #[test]
+    fn omitted_signal_bounds_cover_all_retained_data() {
+        let now = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let (from, until) = signal_time_range(now, None, None, DAY_MILLIS).unwrap();
+        assert_eq!(from.unix_millis(), 0);
+        assert_eq!(until.unix_millis(), now.unix_millis() + 1);
+    }
+
+    #[test]
+    fn partial_signal_bounds_remain_bounded() {
+        let until = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let (from, actual_until) = signal_time_range(until, None, Some(until), DAY_MILLIS).unwrap();
+        assert_eq!(from.unix_millis(), until.unix_millis() - DAY_MILLIS);
+        assert_eq!(actual_until, until);
     }
 
     #[test]

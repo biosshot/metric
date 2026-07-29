@@ -16,6 +16,7 @@ use tokio::sync::Semaphore;
 
 const MAX_RANGE_MILLIS: i64 = 30 * 86_400_000;
 const MAX_INTERVALS: u32 = 1_000;
+const ALL_TIME_FROM_MILLIS: i64 = 0;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExploreConfig {
@@ -90,8 +91,9 @@ impl ExploreService {
             .until
             .unix_millis()
             .saturating_sub(query.from.unix_millis());
+        let all_time = query.from.unix_millis() == ALL_TIME_FROM_MILLIS;
         if range <= 0
-            || range > MAX_RANGE_MILLIS
+            || (!all_time && range > MAX_RANGE_MILLIS)
             || query.predicates.len() > MAX_EXPLORE_PREDICATES
             || query.aggregates.len() > MAX_EXPLORE_AGGREGATES
             || query.group_by.len() > MAX_EXPLORE_GROUPS
@@ -144,15 +146,19 @@ impl ExploreService {
                 return Err(ExploreError::InvalidQuery);
             }
         }
+        // Epoch is the explicit "all retained data" sentinel. Charge no less safely
+        // than the existing maximum bounded range; result limits and the storage
+        // timeout remain hard execution boundaries.
+        let costed_range = range.min(MAX_RANGE_MILLIS);
         let interval_count = query.interval.map_or(1, |interval| {
-            u32::try_from(range.saturating_add(interval.millis() - 1) / interval.millis())
+            u32::try_from(costed_range.saturating_add(interval.millis() - 1) / interval.millis())
                 .unwrap_or(u32::MAX)
         });
         if interval_count > MAX_INTERVALS {
             return Err(ExploreError::CostExceeded);
         }
         let range_hours =
-            u32::try_from(range.saturating_add(3_599_999) / 3_600_000).unwrap_or(u32::MAX);
+            u32::try_from(costed_range.saturating_add(3_599_999) / 3_600_000).unwrap_or(u32::MAX);
         let predicate_cost = u32::try_from(query.predicates.len()).unwrap_or(u32::MAX) * 40;
         let group_fanout = query.group_by.iter().fold(1_u32, |fanout, field| {
             fanout.saturating_mul(
@@ -403,6 +409,36 @@ mod tests {
         assert_eq!(
             service().plan(ProjectId::new(1).unwrap(), query),
             Err(ExploreError::CostExceeded)
+        );
+    }
+
+    #[test]
+    fn epoch_sentinel_allows_all_time_without_relaxing_arbitrary_ranges() {
+        let all_time = ExploreQuery {
+            dataset: ExploreDataset::Logs,
+            from: Timestamp::from_unix_millis(0).unwrap(),
+            until: Timestamp::from_unix_millis(1_800_000_000_000).unwrap(),
+            predicates: Vec::new(),
+            aggregates: vec![ExploreAggregate {
+                kind: ExploreAggregateKind::Count,
+                field: None,
+                alias: "count".into(),
+            }],
+            group_by: Vec::new(),
+            interval: None,
+            cursor: None,
+            limit: 50,
+        };
+        assert!(
+            service()
+                .plan(ProjectId::new(1).unwrap(), all_time.clone())
+                .is_ok()
+        );
+        let mut arbitrary = all_time;
+        arbitrary.from = Timestamp::from_unix_millis(1).unwrap();
+        assert_eq!(
+            service().plan(ProjectId::new(1).unwrap(), arbitrary),
+            Err(ExploreError::InvalidQuery)
         );
     }
 
