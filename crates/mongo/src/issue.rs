@@ -1063,7 +1063,14 @@ pub(crate) fn issue_validator() -> Document {
                         "additionalProperties": false,
                         "properties": {
                             "i": { "bsonType": "binData" },
-                            "k": { "bsonType": "int", "enum": [1, 2] },
+                            "k": {
+                                "bsonType": "int",
+                                "enum": [
+                                    IssueNotificationKind::NewIssue as i32,
+                                    IssueNotificationKind::Regression as i32,
+                                    IssueNotificationKind::Resolved as i32,
+                                ],
+                            },
                             "e": { "bsonType": "binData" },
                             "t": { "bsonType": "date" },
                         },
@@ -1469,5 +1476,44 @@ mod tests {
         let encoded = encode_grouping_body(&grouping, config).unwrap();
         assert_eq!(&encoded[..2], &[BODY_FORMAT_VERSION, BODY_CODEC_ZSTD]);
         assert_eq!(decode_grouping_body(&encoded, config).unwrap(), grouping);
+    }
+
+    #[test]
+    fn issue_validator_accepts_every_notification_transition_kind() {
+        let validator = issue_validator();
+        let schema = validator
+            .get_array("$and")
+            .unwrap()
+            .first()
+            .unwrap()
+            .as_document()
+            .unwrap()
+            .get_document("$jsonSchema")
+            .unwrap();
+        let notification_kind_values = schema
+            .get_document("properties")
+            .unwrap()
+            .get_document("n")
+            .unwrap()
+            .get_document("items")
+            .unwrap()
+            .get_document("properties")
+            .unwrap()
+            .get_document("k")
+            .unwrap()
+            .get_array("enum")
+            .unwrap()
+            .iter()
+            .map(|value| value.as_i32().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            notification_kind_values,
+            vec![
+                IssueNotificationKind::NewIssue as i32,
+                IssueNotificationKind::Regression as i32,
+                IssueNotificationKind::Resolved as i32,
+            ]
+        );
     }
 }
