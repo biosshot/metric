@@ -322,11 +322,20 @@ function metricValue(value: ExploreScalar | undefined): string {
         title="No metrics reported yet"
         description="Send metrics from an SDK and their names and values will appear here."
       />
-      <div v-else class="metrics-overview__grid">
-        <article v-for="(item, index) in metricOverviewItems" :key="`${item.name}:${index}`">
-          <span>{{ item.name ?? 'Unnamed metric' }}</span>
-          <strong>{{ metricValue(item.value) }}</strong>
-          <small>{{ metricValue(item.samples) }} samples</small>
+      <div v-else class="dashboard-widgets metrics-overview__grid">
+        <article
+          v-for="(item, index) in metricOverviewItems"
+          :key="`${item.name}:${index}`"
+          class="dashboard-widget"
+        >
+          <header>
+            <div>
+              <p class="eyebrow">Metric</p>
+              <h4>{{ item.name ?? 'Unnamed metric' }}</h4>
+            </div>
+            <span>{{ metricValue(item.samples) }} samples</span>
+          </header>
+          <strong class="dashboard-widget__number">{{ metricValue(item.value) }}</strong>
         </article>
       </div>
     </section>

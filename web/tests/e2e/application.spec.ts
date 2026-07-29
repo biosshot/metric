@@ -917,6 +917,10 @@ test('Metrics uses metric values and a custom time range', async ({ page }) => {
   await expect(page.locator('.metrics-overview__grid')).toContainText('checkout.requests');
   await expect(page.locator('.metrics-overview__grid')).toContainText('42.5');
   await expect(page.locator('.metrics-overview__grid')).toContainText('12 samples');
+  await expect(page.locator('.metrics-overview__grid > .dashboard-widget')).toHaveCount(1);
+  await expect(page.locator('.metrics-overview__grid .dashboard-widget__number')).toHaveText(
+    '42.5',
+  );
   await expect(page.getByRole('combobox', { name: 'Result' })).toHaveCount(0);
   await page.getByRole('link', { name: 'Query', exact: true }).click();
   await expect(page).toHaveURL(/\/metrics\/query$/);
