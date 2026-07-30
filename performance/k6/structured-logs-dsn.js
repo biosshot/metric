@@ -4,6 +4,10 @@ import { Counter, Trend } from "k6/metrics";
 
 const requests = new Counter("faultkeep_log_requests");
 const accepted = new Counter("faultkeep_log_200");
+const rateLimited = new Counter("faultkeep_log_429");
+const unavailable = new Counter("faultkeep_log_503");
+const otherStatus = new Counter("faultkeep_log_other");
+const tcpErrors = new Counter("faultkeep_log_tcp_errors");
 const duration = new Trend("faultkeep_log_duration", true);
 
 const dsn = __ENV.FAULTKEEP_DSN;
@@ -23,8 +27,8 @@ export const options = {
       rate,
       timeUnit: "1s",
       duration: testDuration,
-      preAllocatedVUs: Number(__ENV.FAULTKEEP_LOG_VUS || "16"),
-      maxVUs: Number(__ENV.FAULTKEEP_MAX_VUS || "256"),
+      preAllocatedVUs: Number(__ENV.FAULTKEEP_LOG_VUS || "64"),
+      maxVUs: Number(__ENV.FAULTKEEP_MAX_VUS || "2048"),
     },
   },
   thresholds: {
@@ -34,6 +38,7 @@ export const options = {
     dropped_iterations: ["count==0"],
   },
   discardResponseBodies: true,
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
 };
 
 function parseDsn(value) {
@@ -89,6 +94,10 @@ export default function sendLog() {
     tags: { signal: "log" },
   });
   duration.add(response.timings.duration);
-  if (response.status === 200) accepted.add(1);
+  if (response.status === 0) tcpErrors.add(1);
+  else if (response.status === 200) accepted.add(1);
+  else if (response.status === 429) rateLimited.add(1);
+  else if (response.status === 503) unavailable.add(1);
+  else otherStatus.add(1, { status: String(response.status) });
   check(response, { "Log durably accepted": (result) => result.status === 200 });
 }

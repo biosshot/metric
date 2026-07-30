@@ -1,5 +1,5 @@
 # Min profile: 1 vCPU, 1 GiB RAM, 15 GiB SSD.
-# Intended for a few small projects and a low error rate.
+# Intended for small projects and compact workloads on a 1 GiB server.
 # Symbolicator, attachments, minidumps and cold archive are disabled.
 
 role = "all"
@@ -88,9 +88,9 @@ max_compressed_request_bytes = "4 MiB"
 max_decompressed_request_bytes = "16 MiB"
 max_event_bytes = "1 MiB"
 max_envelope_items = 50
-max_active_requests = 8
-max_parsing_tasks = 1
-max_waiting_for_storage = 8
+max_active_requests = 64
+max_parsing_tasks = 2
+max_waiting_for_storage = 128
 request_timeout = "10s"
 unsupported_backoff_seconds = 3600
 
@@ -123,8 +123,8 @@ negative_ttl = "5s"
 
 [ingest.batch]
 max_wait = "50ms"
-max_documents = 100
-max_bytes = "1 MiB"
+max_documents = 128
+max_bytes = "2 MiB"
 
 [ingest.backlog]
 max_pending_events = 25000

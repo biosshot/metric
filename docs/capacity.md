@@ -13,19 +13,37 @@ request concurrency, queue sizes, file limits and retention together.
 | **High** | 8 | 16 GiB | 250 GiB | Yes | 83 GiB |
 
 Medium is the default installer profile. Min is deliberately designed for a
-small VPS: one or a few projects, a low average error rate and no continuous log
-or trace stream. Give a 1 GiB Min server 1–2 GiB of swap as an emergency buffer.
+small VPS but can still batch a continuous stream of compact logs. Its practical
+long-term limit is usually disk space and retention rather than Rust request
+handling. Give a 1 GiB Min server 1–2 GiB of swap as an emergency buffer.
 
 The profile names describe resource limits, not guaranteed traffic. Event size,
 MongoDB indexes, attachments, Replay, source maps and traffic bursts can change
 capacity substantially.
+
+## Foreground ingest
+
+The supplied profiles use aggressive but bounded admission. A larger admission
+window lets the Log and Span writers fill MongoDB batches instead of writing many
+small batches.
+
+| Profile | Active ingest requests | Parsing tasks | Storage queue | Documents per batch |
+| --- | ---: | ---: | ---: | ---: |
+| **Min** | 64 | 2 | 128 | 128 |
+| **Low** | 256 | 4 | 512 | 250 |
+| **Medium** | 1024 | 8 | 2048 | 500 |
+| **High** | 4096 | 16 | 8192 | 500 |
+
+Queue limits are ceilings, not preallocated memory. Small SDK envelopes use only
+a small part of them. Large attachments and Replay segments remain controlled by
+separate byte limits.
 
 ## Feature choices
 
 | Feature | Min | Low | Medium | High |
 | --- | --- | --- | --- | --- |
 | Errors, issues and web interface | Yes | Yes | Yes | Yes |
-| Logs, transactions, spans and metrics | Yes, use sparingly | Yes | Yes | Yes |
+| Logs, transactions, spans and metrics | Yes | Yes | Yes | Yes |
 | Attachments and feedback screenshots | No | Yes | Yes | Yes |
 | Symbolicator and source-map processing | No | No | Yes | Yes |
 | Session Replay | Keep disabled | Keep disabled | Optional per project | Optional per project |
@@ -72,7 +90,7 @@ The Min Compose profile:
 - does not start Symbolicator or its cleanup process;
 - gives MongoDB a 256 MiB WiredTiger cache and a 512 MiB container limit;
 - limits Metric to 320 MiB;
-- keeps active requests and background workers bounded;
+- batches bursts while keeping active requests and background workers bounded;
 - disables attachments and limits Replay buffering to 4 MiB;
 - rotates container logs after two 5 MiB files per service.
 
@@ -93,9 +111,10 @@ a minimum WiredTiger cache of 256 MiB. Metric uses that lower bound explicitly
 rather than letting MongoDB compete for the entire host.
 
 One GiB is still a tight machine. Use a minimal 64-bit Linux installation, keep
-swap available, avoid unrelated services and watch for container restarts. If
-Min frequently returns `429`/`503` or uses swap continuously, move to Low rather
-than raising one limit in isolation.
+swap available, avoid unrelated services and watch for container restarts. The
+profile already uses an aggressive ingest window. If Min frequently returns
+`429`/`503` or uses swap continuously, move to Low instead of removing its final
+safety bounds.
 
 ## Plan disk space
 
@@ -146,3 +165,12 @@ Watch:
 
 Start with the smallest profile that contains the features you need. Move up when
 normal traffic, not a one-time spike, repeatedly reaches its limits.
+
+The DSN load script prints `200`, `429`, `503`, other HTTP statuses and TCP errors
+separately:
+
+```bash
+k6 run -e FAULTKEEP_DSN=http://KEY@SERVER:4001/PROJECT \
+  -e FAULTKEEP_LOG_RPS=500 -e FAULTKEEP_DURATION=30s \
+  performance/k6/structured-logs-dsn.js
+```

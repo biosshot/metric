@@ -229,9 +229,9 @@ These defaults are used when an `[artifacts]` section is not present.
 | `ingest.max_decompressed_request_bytes` | `100 MiB` | Maximum size after decompression. |
 | `ingest.max_event_bytes` | `1 MiB` | Maximum event body size. |
 | `ingest.max_envelope_items` | `100` | Maximum items in one Sentry envelope. |
-| `ingest.max_active_requests` | `512` | Maximum ingest requests handled at the same time. |
-| `ingest.max_parsing_tasks` | `0` | Parsing-task limit. Zero selects it automatically. |
-| `ingest.max_waiting_for_storage` | `512` | Maximum requests waiting for storage. |
+| `ingest.max_active_requests` | `512` | Maximum ingest requests handled at the same time. Profiles use 64, 256, 1024 or 4096. |
+| `ingest.max_parsing_tasks` | `0` | Parsing-task limit. Zero selects it automatically. Profiles use 2, 4, 8 or 16. |
+| `ingest.max_waiting_for_storage` | `512` | Maximum queued storage records. Profiles use 128, 512, 2048 or 8192. |
 | `ingest.request_timeout` | `10s` | Ingest request deadline. |
 | `ingest.unsupported_backoff_seconds` | `3600` | Retry delay returned for unsupported data. |
 
@@ -271,8 +271,8 @@ These defaults are used when an `[artifacts]` section is not present.
 | `ingest.project_cache.positive_ttl` | `60s` | Cache time for a project that exists. |
 | `ingest.project_cache.negative_ttl` | `5s` | Cache time for a project that was not found. |
 | `ingest.batch.max_wait` | `20ms` | Maximum wait before a partial storage batch is written. |
-| `ingest.batch.max_documents` | `250` | Maximum documents in one storage batch. |
-| `ingest.batch.max_bytes` | `8 MiB` | Maximum estimated batch size. |
+| `ingest.batch.max_documents` | `250` | Maximum documents in one storage batch. Profiles use 128, 250, 500 or 500. |
+| `ingest.batch.max_bytes` | `8 MiB` | Maximum estimated batch size. Profiles use 2 MiB, 8 MiB, 32 MiB or 64 MiB. |
 | `ingest.event_codec.compression_level` | `3` | Compression level for stored event bodies. |
 | `ingest.event_codec.compression_min_savings` | `64` | Minimum saved bytes required to keep compression. |
 | `ingest.backlog.max_pending_events` | `1000000` | Pending-event level where ingest protection activates. |

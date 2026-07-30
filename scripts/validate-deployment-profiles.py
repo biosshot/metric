@@ -13,6 +13,11 @@ PROFILES = ("min", "low", "medium", "high")
 RAM_MIB = {"min": 1024, "low": 2048, "medium": 8192, "high": 16384}
 DISK_GIB = {"min": 15, "low": 30, "medium": 100, "high": 250}
 SYMBOLICATION = {"min": False, "low": False, "medium": True, "high": True}
+INGEST_ACTIVE = {"min": 64, "low": 256, "medium": 1024, "high": 4096}
+PARSING_TASKS = {"min": 2, "low": 4, "medium": 8, "high": 16}
+STORAGE_QUEUE = {"min": 128, "low": 512, "medium": 2048, "high": 8192}
+BATCH_DOCUMENTS = {"min": 128, "low": 250, "medium": 500, "high": 500}
+BATCH_MIB = {"min": 2, "low": 8, "medium": 32, "high": 64}
 
 
 def read(relative: str) -> str:
@@ -101,6 +106,33 @@ def main() -> int:
         if config.get("auth", {}).get("secure_cookie") is not False:
             errors.append(
                 f"{config_path}: supplied profiles must send the login cookie over HTTP"
+            )
+        ingest = config["ingest"]
+        if ingest["max_active_requests"] != INGEST_ACTIVE[profile]:
+            errors.append(
+                f"{config_path}: ingest admission must be {INGEST_ACTIVE[profile]}"
+            )
+        if ingest["max_parsing_tasks"] != PARSING_TASKS[profile]:
+            errors.append(
+                f"{config_path}: parsing concurrency must be {PARSING_TASKS[profile]}"
+            )
+        if ingest["max_waiting_for_storage"] != STORAGE_QUEUE[profile]:
+            errors.append(
+                f"{config_path}: storage queue must be {STORAGE_QUEUE[profile]}"
+            )
+        if ingest["max_waiting_for_storage"] < ingest["max_active_requests"] * 2:
+            errors.append(
+                f"{config_path}: storage queue must absorb at least two full "
+                "admission windows"
+            )
+        if ingest["batch"]["max_documents"] != BATCH_DOCUMENTS[profile]:
+            errors.append(
+                f"{config_path}: batch document limit must be "
+                f"{BATCH_DOCUMENTS[profile]}"
+            )
+        if storage_mib(ingest["batch"]["max_bytes"]) != BATCH_MIB[profile]:
+            errors.append(
+                f"{config_path}: batch byte limit must be {BATCH_MIB[profile]} MiB"
             )
 
         blob_capacity = storage_mib(config["blob"]["capacity"])
@@ -254,9 +286,17 @@ def main() -> int:
     expected_capacity_summary = (
         "Profiles use 5 GiB, 10 GiB, 33 GiB or 83 GiB."
     )
-    if expected_capacity_summary not in read("docs/configuration.md"):
+    configuration_doc = read("docs/configuration.md")
+    if expected_capacity_summary not in configuration_doc:
         errors.append(
             "docs/configuration.md: BlobStore profile capacity summary is stale"
+        )
+    expected_ingest_summary = (
+        "Profiles use 64, 256, 1024 or 4096."
+    )
+    if expected_ingest_summary not in configuration_doc:
+        errors.append(
+            "docs/configuration.md: ingest concurrency summary is stale"
         )
 
     retention_rows = {
@@ -315,8 +355,9 @@ def main() -> int:
 
     print(
         "deployment profiles valid: min/low exclude Symbolicator, medium/high "
-        "include it, HTTP sign-in is enabled, BlobStore uses one third of disk, "
-        "and resource/retention limits scale monotonically"
+        "include it, HTTP sign-in is enabled, foreground ingest uses aggressive "
+        "bounded batching, BlobStore uses one third of disk, and resource/retention "
+        "limits scale monotonically"
     )
     return 0
 

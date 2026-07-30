@@ -87,9 +87,9 @@ max_compressed_request_bytes = "32 MiB"
 max_decompressed_request_bytes = "128 MiB"
 max_event_bytes = "2 MiB"
 max_envelope_items = 250
-max_active_requests = 128
-max_parsing_tasks = 4
-max_waiting_for_storage = 128
+max_active_requests = 1024
+max_parsing_tasks = 8
+max_waiting_for_storage = 2048
 request_timeout = "10s"
 unsupported_backoff_seconds = 3600
 
@@ -122,8 +122,8 @@ negative_ttl = "5s"
 
 [ingest.batch]
 max_wait = "20ms"
-max_documents = 250
-max_bytes = "16 MiB"
+max_documents = 500
+max_bytes = "32 MiB"
 
 [ingest.backlog]
 max_pending_events = 2000000

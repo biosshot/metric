@@ -89,9 +89,9 @@ max_compressed_request_bytes = "96 MiB"
 max_decompressed_request_bytes = "256 MiB"
 max_event_bytes = "4 MiB"
 max_envelope_items = 500
-max_active_requests = 512
-max_parsing_tasks = 8
-max_waiting_for_storage = 512
+max_active_requests = 4096
+max_parsing_tasks = 16
+max_waiting_for_storage = 8192
 request_timeout = "10s"
 unsupported_backoff_seconds = 3600
 
