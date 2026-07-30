@@ -17,7 +17,7 @@ MongoDB on a 1 GiB server; Medium and High also start Symbolicator. You do not n
 to clone this repository or install Rust and Node.js. Your application data stays
 in storage that you control.
 
-> Metric 0.1.0 is an early release. Read the
+> Metric 0.1.1 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
 > for important production data.
 
@@ -26,13 +26,13 @@ in storage that you control.
 Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.1/deploy/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.1/deploy/install.ps1 | iex
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
@@ -51,7 +51,7 @@ Available profiles:
 For example, install Min on Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.1/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
@@ -94,7 +94,7 @@ for the complete list.
 Keep the official Sentry SDK used by your application and replace its DSN with
 the DSN created by Metric.
 
-Metric 0.1.0 is tested with browser JavaScript, Node.js, Python, Java, .NET, Go
+Metric 0.1.1 is tested with browser JavaScript, Node.js, Python, Java, .NET, Go
 and Rust SDKs. Exact tested versions and unsupported platforms are listed in
 [SDK compatibility](https://biosshot.github.io/metric/compatibility).
 

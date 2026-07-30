@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$version = if ($env:METRIC_VERSION) { $env:METRIC_VERSION } else { '0.1.0' }
+$version = if ($env:METRIC_VERSION) { $env:METRIC_VERSION } else { '0.1.1' }
 $installDir = if ($env:METRIC_INSTALL_DIR) {
     $env:METRIC_INSTALL_DIR
 } elseif (
@@ -91,7 +91,7 @@ if (-not (Test-Path -LiteralPath $envFile)) {
         'replace-with-64-lowercase-hex-characters',
         (New-RandomHex 32)
     ).Replace(
-        'ghcr.io/biosshot/metric:0.1.0',
+        'ghcr.io/biosshot/metric:0.1.1',
         "ghcr.io/biosshot/metric:$version"
     )
     [IO.File]::WriteAllText(

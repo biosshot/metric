@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version="${METRIC_VERSION:-0.1.0}"
+version="${METRIC_VERSION:-0.1.1}"
 download_base="${METRIC_DOWNLOAD_BASE:-https://raw.githubusercontent.com/biosshot/metric/v${version}/deploy}"
 profile="${METRIC_PROFILE:-medium}"
 
@@ -92,7 +92,7 @@ if [ ! -f "${install_dir}/.env" ]; then
   sed \
     -e "s/replace-with-a-long-url-safe-random-password/${mongo_password}/" \
     -e "s/replace-with-64-lowercase-hex-characters/${scrub_hmac_key}/" \
-    -e "s|ghcr.io/biosshot/metric:0.1.0|ghcr.io/biosshot/metric:${version}|" \
+    -e "s|ghcr.io/biosshot/metric:0.1.1|ghcr.io/biosshot/metric:${version}|" \
     "${template_file}" >"${generated_file}"
   mv "${generated_file}" "${install_dir}/.env"
   rm -f "${template_file}"

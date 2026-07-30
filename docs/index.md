@@ -30,7 +30,7 @@ errors into issues and shows the result in a web interface.
 Use Metric when you want the Sentry workflow without running the full self-hosted
 Sentry stack.
 
-Metric 0.1.0 is an early release. Review the [known limits](known-limits.md)
+Metric 0.1.1 is an early release. Review the [known limits](known-limits.md)
 before using it for important production data.
 
 ## What you need

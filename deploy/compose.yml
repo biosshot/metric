@@ -48,7 +48,7 @@ services:
         hard: 64000
 
   metric:
-    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.0}
+    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.1}
     restart: unless-stopped
     mem_limit: ${METRIC_APP_MEMORY_LIMIT:-2g}
     depends_on:
