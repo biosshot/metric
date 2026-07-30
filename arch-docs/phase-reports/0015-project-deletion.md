@@ -1,5 +1,10 @@
 # Phase 15 report: project deletion and core capacity protection
 
+> Historical test evidence, not an upgrade runbook. Its development-database
+> recreation language must never be applied to data-bearing installations. The
+> current binary requires generation 19; see
+> [the current upgrade runbook](../../docs/upgrading.md).
+
 - Status: exit gate passed; Phase 16 not started
 - Date: 2026-07-23
 - Scope: ADR-0039 Phase 15 only

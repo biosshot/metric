@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-07-28:
+Status as of 2026-07-30:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -49,6 +49,20 @@ When documents differ, use this order:
 Phase reports and module contracts are intentionally historical. Statements such as
 "the next phase has not started" describe the boundary at the report date, not the
 current roadmap.
+
+## Schema-generation safety
+
+The current binary requires schema generation **19 exactly**. The runtime constant
+[`SCHEMA_GENERATION`](../crates/mongo/src/lib.rs) is the implementation source of
+truth. Generation numbers in older ADR amendments, module contracts and phase
+reports describe the schema those phases tested; they are historical evidence, not
+current upgrade targets.
+
+Metric has no online or automatic migration and no supported data-preserving
+generation-18-to-19 conversion. Operators must not edit `schema_meta`, delete a
+data-bearing database or recreate it after an incompatibility error. The current
+upgrade decision table and backup warning, including MongoDB/BlobStore consistency
+for Session Replay, are in [`docs/upgrading.md`](../docs/upgrading.md).
 
 ## Current signal durability
 

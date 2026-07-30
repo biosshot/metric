@@ -1,5 +1,9 @@
 # Phase 37 module contract: Application Metrics
 
+> Historical phase boundary: this contract records the state before Phase 38.
+> Session Replay is now implemented and the current schema generation is 19. See
+> `arch-docs/README.md` for current runtime and upgrade guidance.
+
 ## Scope
 
 Phase 37 accepts only the pinned Sentry SDK `trace_metric` Envelope item with

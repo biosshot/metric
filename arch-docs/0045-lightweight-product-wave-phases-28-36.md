@@ -355,9 +355,9 @@ source Session receive `z` and `x`. Archive failure leaves the source in MongoDB
 raises an operational failure instead of deleting unarchived data.
 
 `session_stats_hourly` remains the normal long-term query source and uses its own
-TTL. Cold Session objects are for export/restore, not transparent Web search.
-Generation 8 Logs and Spans currently have TTL deletion only; this Phase does not
-silently claim that their deferred cold-archive paths already exist.
+TTL. Cold Session objects are for export/restore, not transparent Web search. At
+this Phase's original generation-8 boundary Logs and Spans had TTL deletion only;
+their cold-archive path was added later and is present in current generation 19.
 
 ### Exit gate
 

@@ -36,6 +36,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo dep-graph --locked
       - run: python scripts/validate-compatibility.py
+      - run: python scripts/validate-documentation.py
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-targets --all-features --locked
       - uses: actions/setup-node@v4

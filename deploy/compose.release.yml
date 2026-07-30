@@ -30,6 +30,7 @@ services:
       retries: 30
 
   metric:
+    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.0}
     build:
       context: ..
       dockerfile: Dockerfile

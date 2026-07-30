@@ -6,7 +6,13 @@
 
 Execution amendment: on 2026-07-26 the owner deferred, but did not complete or
 cancel, this program. ADR-0045 selects Phases 28-36 for the next product wave.
-Production readiness cannot be claimed until this ADR later resumes and passes.
+ADR-0046 subsequently selects and completes Phases 37-38. Production readiness
+cannot be claimed until this ADR later resumes and passes.
+
+Current-state amendment (2026-07-30): Phase 27 must resume against schema generation
+19 and the complete Phase 28-38 product surface. References below to generation 8 or
+to then-unimplemented product scopes are retained only where explicitly labelled as
+the 2026-07-25 program-start baseline; they are not current operator instructions.
 
 ## Context
 
@@ -44,8 +50,9 @@ new numbers only when product work resumes.
 
 The original decision froze new product capability until the production launch gate
 passed. ADR-0045 amends that ordering while this program is deferred and authorizes
-only its bounded Phase 28-36 wave. The production-readiness definition and gates in
-this ADR remain unchanged and unpassed.
+its bounded Phase 28-36 wave. ADR-0046 adds completed Application Metrics Phase 37
+and Session Replay Phase 38. The production-readiness definition and gates in this
+ADR remain unchanged and unpassed.
 
 The first supported production shape remains:
 
@@ -90,8 +97,9 @@ satisfy this definition.
 
 ## Scope freeze
 
-This freeze applies whenever Phase 27 execution resumes. During its documented
-deferral, ADR-0045 is the only accepted exception for new product scope.
+This freeze applies whenever Phase 27 execution resumes. ADR-0045 and ADR-0046 are
+the accepted exceptions completed during its documented deferral; the freeze starts
+from that existing Phase 28-38 surface and does not remove it.
 
 Allowed changes during Phase 27:
 
@@ -101,25 +109,27 @@ Allowed changes during Phase 27:
 - tests, fixtures, fault injection and benchmark tooling;
 - operational metrics, probes and low-cardinality diagnostics;
 - secure configuration and deployment hardening;
-- backup, restore and offline upgrade tooling/runbooks for schema generation 8;
+- backup, restore and offline upgrade tooling/runbooks for schema generation 19;
 - documentation corrections;
 - narrowly required storage compatibility fixes before the release candidate freezes.
 
 Not allowed:
 
-- Unified Explore, saved queries or Dashboards;
-- new product Alert/Monitor semantics;
+- extensions beyond the accepted Unified Explore, Saved Query and Dashboard scope;
+- new Alert/Monitor semantics beyond the accepted Phase 34-36 scope;
 - Issue collaboration, advanced grouping UI or release intelligence;
-- Sessions, Feedback, Cron, Uptime, Metrics, Profiling or Replay;
+- new signal families or Profiling;
 - Teams, integrations, drains, MCP or AI;
 - distributed roles, NATS, disk spool, sharding or a second database backend;
 - speculative refactors without a failing gate, measured bottleneck or correctness
   defect.
 
-## Known open blockers at program start
+## Historical blockers recorded at program start
 
 The documentation/code synchronization on 2026-07-25 identified these concrete
-release blockers; they are not deferred feature requests:
+release blockers. This list is dated evidence, not the current execution checklist;
+Gate 27.0 must re-baseline every item against generation 19 and Phases 28-38 before
+work resumes:
 
 1. Span release is stored in BSON `u`, while the current segment-list release filter
    targets `v` (Span status). The query field must be corrected and covered by real
@@ -131,9 +141,10 @@ release blockers; they are not deferred feature requests:
    expose a standard metrics exporter suitable for external alerting.
 4. The release compose runtime uses the MongoDB administrative bootstrap credential;
    Gate 27.2 requires a separate least-privilege application user.
-5. Current operator documents outside `arch-docs` still mention schema generation 7
-   and disabled Logs/Transactions/Spans; Gate 27.0 must make capability claims agree
-   with generation 8.
+5. Operator documents then mentioned schema generation 7 and disabled
+   Logs/Transactions/Spans. The 2026-07-30 synchronization supersedes that finding:
+   current operator documents now require generation 19 and describe Replay as
+   implemented but project-disabled by default.
 6. A coordinated restore drill, controlled mixed-signal load/soak and production
    canary have not yet passed.
 
@@ -153,8 +164,9 @@ Create one machine-readable release inventory containing:
 
 Correct all stale documentation before further claims. In particular:
 
-- current operator/capability documentation must identify schema generation 8 rather
-  than generation 7; historical phase reports retain the generation they tested;
+- current operator/capability documentation must identify schema generation 19;
+  historical phase reports retain the generation they tested and are never used as
+  upgrade runbooks;
 - Logs, Transactions, Spans and Performance Insights must no longer be described as
   disabled;
 - `/api/v1/capabilities`, compatibility documentation, configuration examples and
@@ -478,9 +490,10 @@ performance optimization. Performance changes require a before/after artifact.
 
 ## Deferred after production readiness
 
-ADR-0045 has already selected bounded forms of Explore, saved queries, Alerts and
-Monitors as Phases 28-36 during this program's deferral. After Gate 27.7, the
-remaining ADR-0040 backlog resumes from measured user value, with these items
+ADR-0045 selected bounded forms of Explore, saved queries, Alerts and Monitors as
+Phases 28-36 during this program's deferral. ADR-0046 subsequently selected and
+completed Application Metrics and Session Replay as Phases 37-38. After Gate 27.7,
+the remaining ADR-0040 backlog resumes from measured user value, with these items
 deliberately later:
 
 - advanced Explore/Dashboard/Alert/Monitor capabilities beyond ADR-0045;

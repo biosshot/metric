@@ -1,12 +1,15 @@
 # Version-one known limits
 
 - Only SDK rows marked `pass` in the compatibility matrix are supported claims.
-- Session Replay is accepted as Phase 38 but not implemented. Profiling remains
-  deliberately deferred. Legacy StatsD metric items are not accepted.
+- Session Replay is implemented for the pinned browser contract and is disabled per
+  project by default. Profiling remains deliberately deferred. Legacy StatsD metric
+  items are not accepted.
 - The runtime is one `--role all` process. Split roles, NATS, distributed claims,
   sharding and disk spool are not implemented.
-- MongoDB schema generation 18 bootstraps an empty database. There are no online
-  migrations, rolling mixed-version upgrades or downgrade rewrites.
+- The current binary requires MongoDB schema generation 19 exactly. It bootstraps
+  only an empty database. There is no supported migration from generation 18,
+  online migration, rolling mixed-version upgrade or downgrade rewrite; see
+  [Schema compatibility and upgrades](upgrading.md).
 - Archive objects cannot be searched, restored or rehydrated through Metric.
 - External Symbolicator is optional and separately operated; ProGuard, IL2CPP,
   BCSymbolMap and Hermes-specific extended pipelines are outside version one.

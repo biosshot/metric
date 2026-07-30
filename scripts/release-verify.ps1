@@ -25,6 +25,7 @@ function Get-DescendantProcessIds([int]$RootPid) {
 
 function Invoke-Contracts {
     Invoke-Checked 'compatibility manifest' { python scripts/validate-compatibility.py }
+    Invoke-Checked 'documentation contracts' { python scripts/validate-documentation.py }
     Invoke-Checked 'Rust format' { cargo fmt --all -- --check }
     Invoke-Checked 'dependency direction' { cargo dep-graph --locked }
     Invoke-Checked 'strict Rust lint' {

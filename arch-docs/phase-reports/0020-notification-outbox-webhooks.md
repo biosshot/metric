@@ -1,5 +1,10 @@
 # Phase 20 report: notification outbox and webhook delivery
 
+> Historical test evidence, not an upgrade runbook. Its fresh-database language
+> describes that phase's development environment only. The current binary requires
+> generation 19; preserve data-bearing databases and follow
+> [the current upgrade runbook](../../docs/upgrading.md).
+
 Status: complete
 Date: 2026-07-24
 Contract: `arch-docs/module-contracts/0020-notification-outbox-webhooks-phase-20.md`

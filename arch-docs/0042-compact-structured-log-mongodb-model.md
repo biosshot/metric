@@ -198,10 +198,11 @@ the related Span/Error has not arrived, has expired or was sampled out.
 
 ## Query projections and arbitrary attributes
 
-Generation 8 promotes only environment `e`, release `v` and service `j` as bounded
-optional exact-filter projections. It does not create `k` exact-search tokens or a
-multikey attribute index. Arbitrary user-controlled attributes remain inside `b` and
-never create MongoDB field paths, indexes or collections.
+The model introduced in generation 8 and retained by current generation 19 promotes
+only environment `e`, release `v` and service `j` as bounded optional exact-filter
+projections. It does not create `k` exact-search tokens or a multikey attribute
+index. Arbitrary user-controlled attributes remain inside `b` and never create
+MongoDB field paths, indexes or collections.
 
 Adding indexed arbitrary attributes remains a deferred measured decision and requires
 a schema-generation change, storage/index budget and explicit query-cost gate.
@@ -302,9 +303,10 @@ with a partial filter for documents containing `g`.
 
 ### Message search
 
-Generation 8 performs escaped case-insensitive contains matching on `m` inside a
-required project/time window. There is no text index. MongoDB first uses the
-`log_project_time` range and applies the message predicate to candidates.
+Current generation 19 retains the escaped case-insensitive contains matching on `m`
+introduced in generation 8 inside a required project/time window. There is no text
+index. MongoDB first uses the `log_project_time` range and applies the message
+predicate to candidates.
 
 ADR-0044 must measure keys/documents examined and search latency on
 production-shaped retained data. If the production query-cost gate fails, the
@@ -347,9 +349,9 @@ project deletion. They share the accepted request/item size boundary and batch
 settings while using an independent bounded writer channel. A Log overload cannot
 consume the Error writer channel.
 
-Per-project stored-byte quotas, separate Log rate/byte quotas and Log cold archival
-are not implemented in generation 8. They remain production-hardening findings or
-future backlog and must not be advertised as current capability.
+Per-project stored-byte quotas and separate Log rate/byte quotas are not implemented
+in current generation 19. Log cold archival was introduced after generation 8 and
+uses the common verified signal-archive path described above.
 
 ## Storage-budget verification
 

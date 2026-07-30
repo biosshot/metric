@@ -26,6 +26,13 @@ The release image runs one non-root `--role all` process with built Vue assets a
 local BlobStore data on a dedicated volume. MongoDB remains a separate pinned
 service.
 
+When a TLS reverse proxy terminates browser traffic, configure its exact address or
+network in `server.trusted_proxies` and overwrite `X-Forwarded-For` rather than
+appending untrusted client input. Metric ignores forwarding headers from every
+other peer. Keep an ingress-level connection/request limit as an additional outer
+boundary; Metric also enforces `server.max_active_requests` and
+`server.request_timeout` for its native API.
+
 ```powershell
 Copy-Item deploy/release.env.example deploy/release.env
 # Replace both placeholder secrets in deploy/release.env.
@@ -69,5 +76,26 @@ Use backend-native tooling, retain MongoDB and BlobStore together, test restorat
 in isolation, and do not describe that procedure as a Metric transactional
 backup.
 
-Schema generation 7 supports empty-database bootstrap only. An older generation is
-rejected; online migrations and rolling mixed-version upgrades are not implemented.
+Session Replay makes this pairing mandatory when Replay is enabled: MongoDB owns
+the compact manifest while BlobStore owns the immutable recording segments.
+
+## Schema compatibility and upgrades
+
+The current binary requires schema generation **19 exactly**. An empty database may
+be bootstrapped at generation 19 and a complete generation-19 database is validated
+before startup. Older, newer, incomplete and unmanaged non-empty databases are
+rejected.
+
+There is no online or automatic migration, no mixed-generation rolling upgrade, and
+no supported data-preserving conversion from generation 18 to 19. A startup
+rejection means "stop and preserve the data", not "recreate the database":
+
+- do not change the `schema_meta` marker manually;
+- do not drop MongoDB collections or volumes;
+- retain the old binary and configuration;
+- take a backend-native MongoDB and BlobStore backup together;
+- proceed only with an explicit tested procedure for the exact generation
+  transition.
+
+The complete decision table and pre-upgrade checklist are in [Schema compatibility
+and upgrades](upgrading.md).

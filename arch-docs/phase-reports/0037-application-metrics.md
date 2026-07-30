@@ -1,6 +1,8 @@
 # Phase 37 report: Application Metrics
 
-Phase 37 is complete for the ADR-0046 scope. Phase 38 was not started.
+Phase 37 is complete for the ADR-0046 scope. At this report's Phase 37 cutoff,
+Phase 38 had not started. Phase 38 has since completed; current status and schema
+generation are maintained in `arch-docs/README.md`.
 
 ## Exit gate
 
@@ -39,4 +41,5 @@ No Metric server, k6, Cargo, Rust compiler or Node process remained after the ru
   migrations.
 - `metric_buckets` is compact and project-scoped.
 - Legacy StatsD and `metric_buckets` Envelope items remain disabled.
-- Session Replay and Profiling remain absent.
+- At the Phase 37 cutoff, Session Replay and Profiling were absent. Session Replay
+  was subsequently delivered by Phase 38; Profiling remains deferred.

@@ -115,7 +115,7 @@ an `accepted` outcome.
 
 ### Ingest outcomes
 
-This section records the original design. The current schema generation 8 does not
+This section records the original design. The current schema generation 19 does not
 create `ingest_outcomes_hourly`: the production server currently wires a no-op
 `OutcomeSink`, while bounded internal counters are emitted through the metrics
 facade. Durable outcome aggregation remains deferred to the Phase 27 observability

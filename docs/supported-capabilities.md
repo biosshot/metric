@@ -31,13 +31,15 @@ Optional capabilities:
 - debug-file and JavaScript Artifact Bundle upload;
 - separately operated external Symbolicator;
 - S3-compatible BlobStore;
-- Parquet/Zstd cold Event archive, disabled by default and without search/restore.
+- Parquet/Zstd cold Event/Log/Span archive, disabled by default and without
+  search/restore;
+- Session Replay for the pinned `@sentry/browser` contract, disabled per project by
+  default, with compact MongoDB manifests and immutable BlobStore segments.
 
 Explicitly disabled:
 
 - legacy StatsD and Sentry `metric_buckets` Envelope items;
-- profiles; desired but deliberately deferred;
-- Session Replay; Phase 38 is accepted after Phase 37 but not implemented.
+- profiles; desired but deliberately deferred.
 
 An absent optional route is represented by capabilities rather than a placeholder
 success response.

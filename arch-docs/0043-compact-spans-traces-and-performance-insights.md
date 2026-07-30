@@ -31,8 +31,9 @@ retention and bounded Trace investigation.
    before acknowledgement and written idempotently by the dedicated Span writer.
 8. High-resolution start time and duration use signed BSON `int64` nanoseconds.
 9. Arbitrary attributes remain in a required versioned bounded accepted body.
-10. Generation 8 promotes only fixed query fields and has no arbitrary-attribute
-    search-token index.
+10. The model introduced in generation 8 and retained by current generation 19
+    promotes only fixed query fields and has no arbitrary-attribute search-token
+    index.
 11. Performance aggregates live in rebuildable `span_stats_hourly`.
 12. Per-segment Insight flags are optional derived enrichment on the root Span.
 13. Initial automatic Insights operate within one transaction/segment and its accepted
@@ -230,10 +231,10 @@ contract.
 
 ## Query projections and arbitrary attributes
 
-Generation 8 promotes operation class `c`, original operation `w`, name `m`,
-environment `e`, release `u` and service `j`. It does not store `k` exact-search
-tokens and does not create an arbitrary-attribute multikey index. Other attributes
-remain only in `b`.
+The model introduced in generation 8 and retained by current generation 19 promotes
+operation class `c`, original operation `w`, name `m`, environment `e`, release `u`
+and service `j`. It does not store `k` exact-search tokens and does not create an
+arbitrary-attribute multikey index. Other attributes remain only in `b`.
 
 Adding indexed arbitrary attributes requires a later schema-generation, storage and
 query-cost decision.
@@ -248,8 +249,8 @@ byte 1: body codec
 remaining bytes: encoded residual body
 ```
 
-Generation 8 uses body format `1`, codec `0` and bounded accepted JSON. Span-body
-compression is not enabled.
+Current generation 19 retains body format `1`, codec `0` and bounded accepted JSON
+introduced in generation 8. Span-body compression is not enabled.
 
 `b` may contain:
 
@@ -332,11 +333,12 @@ with a partial filter for `t = true`, so child Spans do not occupy the index.
 
 ### Retention
 
-Generation 8 uses `x` and the `span_expiry` TTL index. The next breaking schema
-generation adds optional Span cold-archive state: with archival enabled a new Span
-receives `h`, and only a completed, verified homogeneous Span archive segment may
-replace it with `z` and `x`, following ADR-0007. Transactions are root/segment Span
-records and use the same archive. Trace remains virtual and has no separate archive.
+Current generation 19 uses `x` and the `span_expiry` TTL index. It also includes the
+optional Span cold-archive state introduced after generation 8: with archival
+enabled a new Span receives `h`, and only a completed, verified homogeneous Span
+archive segment may replace it with `z` and `x`, following ADR-0007. Transactions
+are root/segment Span records and use the same archive. Trace remains virtual and
+has no separate archive.
 
 No wildcard index is created.
 
@@ -425,9 +427,10 @@ Phase 26 adds rebuildable hourly aggregates. A conceptual bucket is:
 
 Exact compact names/codecs are fixed by the Phase 26 storage fixtures.
 
-Generation 8 creates one deterministic bucket for the combined bounded dimensions
-project, UTC hour, root name, service, environment, release and operation class. It
-does not create buckets for arbitrary user attributes.
+Current generation 19 retains the deterministic bucket introduced in generation 8
+for the combined bounded dimensions project, UTC hour, root name, service,
+environment, release and operation class. It does not create buckets for arbitrary
+user attributes.
 
 Percentiles use nearest rank over the most recent at most 2,048 samples in `d`.
 Approximation/sample-limit semantics are visible in API metadata. These samples are
@@ -490,11 +493,12 @@ failed downstream operation
 
 Exact bit assignments receive permanent golden fixtures and are never reused.
 
-Generation 8 stores only the flags; Web/API render stable rule labels from them.
-There is no separate persisted Insight-explanation object or automatic historical
-backfill. Newly processed transaction items derive segment-local Insights while
-their accepted children are available together. The implementation does not wait for
-or repeatedly rescan an unbounded global distributed Trace.
+Current generation 19 retains the compact flags-only model introduced in generation
+8; Web/API render stable rule labels from them. There is no separate persisted
+Insight-explanation object or automatic historical backfill. Newly processed
+transaction items derive segment-local Insights while their accepted children are
+available together. The implementation does not wait for or repeatedly rescan an
+unbounded global distributed Trace.
 
 Cross-service/global Trace Insights require a later accepted trace-finalization design
 and are deliberately deferred.

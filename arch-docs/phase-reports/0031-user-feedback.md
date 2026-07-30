@@ -1,5 +1,10 @@
 # Phase 31 report: User Feedback
 
+> Historical test evidence, not an upgrade runbook. Its fresh-database language
+> describes that phase's development environment only. The current binary requires
+> generation 19; preserve data-bearing databases and follow
+> [the current upgrade runbook](../../docs/upgrading.md).
+
 - Date: 2026-07-27
 - Result: complete
 - Module contract: `module-contracts/0031-user-feedback-phase-31.md`

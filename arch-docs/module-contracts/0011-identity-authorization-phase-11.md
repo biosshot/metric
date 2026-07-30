@@ -1,5 +1,9 @@
 # Phase 11 contract: identity, credentials, authorization, and audit
 
+> Historical phase contract, not an upgrade runbook. Do not recreate a data-bearing
+> installation based on this document. The current binary requires generation 19;
+> see [the current upgrade runbook](../../docs/upgrading.md).
+
 - Status: accepted for implementation
 - Date: 2026-07-23
 - Owners: `domain::auth` (bounded identity and permission model),

@@ -1,5 +1,9 @@
 # Phase 15 contract: project deletion and core capacity protection
 
+> Historical phase contract, not an upgrade runbook. Do not recreate a data-bearing
+> installation based on this document. The current binary requires generation 19;
+> see [the current upgrade runbook](../../docs/upgrading.md).
+
 - Status: accepted for implementation
 - Date: 2026-07-23
 - Owners: `application::deletion`, `ports::ProjectDeletionStore`,

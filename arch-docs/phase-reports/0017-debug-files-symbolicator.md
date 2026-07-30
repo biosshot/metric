@@ -1,5 +1,10 @@
 # Phase 17 exit-gate report
 
+> Historical test evidence, not an upgrade runbook. Its development-database
+> recreation language must never be applied to data-bearing installations. The
+> current binary requires generation 19; see
+> [the current upgrade runbook](../../docs/upgrading.md).
+
 Date: 2026-07-23
 Status: complete
 

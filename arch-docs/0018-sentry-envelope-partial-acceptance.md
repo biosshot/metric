@@ -1,5 +1,10 @@
 # ADR-0018: Sentry Envelope partial acceptance and item capabilities
 
+> Historical compatibility note: item outcomes in the original table describe the
+> phase in which this ADR was accepted. Session Replay, Sessions, Feedback, Cron and
+> Application Metrics received later contracts. Current capability status is in
+> `docs/supported-capabilities.md`.
+
 - Status: Accepted
 - Date: 2026-07-21
 
@@ -129,7 +134,7 @@ The backoff is configurable and defaults to one hour so enabling a feature becom
 visible to SDKs without an effectively permanent stale limit. Unknown future types do
 not receive invented category names.
 
-The original design targeted `ingest_outcomes_hourly`. Schema generation 8 does not
+The original design targeted `ingest_outcomes_hourly`. Schema generation 19 does not
 create that collection and the production server currently wires a no-op
 `OutcomeSink`; no per-request discard document is created. Durable outcome
 aggregation remains deferred to the ADR-0044 observability gate.

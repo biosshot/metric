@@ -31,7 +31,9 @@ The second command is the final release gate and intentionally fails while any
 required family remains untested.
 
 Structured logs, transactions, spans, Sessions, Feedback and Cron check-ins are
-implemented through their accepted compatibility contracts. Application Metrics,
-Profiling and Session Replay remain disabled. Native minidump, debug-file, Artifact
-Bundle, attachment, Incident Capsule, webhook and cold-archive capabilities are
-separate contracts and are advertised by `/api/v1/capabilities`.
+implemented through their accepted compatibility contracts. Application Metrics
+and Session Replay are also implemented through their narrow pinned contracts;
+Replay is disabled per project by default. Profiling remains disabled and deferred.
+Native minidump, debug-file, Artifact Bundle, attachment, Incident Capsule, webhook
+and cold-archive capabilities are separate contracts and are advertised by
+`/api/v1/capabilities`.

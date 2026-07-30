@@ -147,8 +147,11 @@ are advertised; untested families are explicitly not claimed. See
 
 ```bash
 cp deploy/release.env.example deploy/release.env   # set METRIC_MONGO_PASSWORD and METRIC_SCRUB_HMAC_KEY
-docker compose -f deploy/compose.release.yml up --build
+docker compose --env-file deploy/release.env -f deploy/compose.release.yml up -d
 ```
+
+This pulls the published `ghcr.io/biosshot/metric:0.1.0` image. Add `--build`
+when testing local source changes instead.
 
 **Option B — bare binary, no container at all:**
 
@@ -163,6 +166,12 @@ On first startup the server prints a one-time `METRIC_BOOTSTRAP_TOKEN` for the
 Web setup form. Full reference: [`docs/configuration.md`](docs/configuration.md),
 [`docs/operations.md`](docs/operations.md).
 
+The current binary requires MongoDB schema generation **19 exactly**. It may
+bootstrap an empty database, but it cannot migrate an older data-bearing database.
+Do not edit `schema_meta`, drop the database or recreate it to resolve a generation
+mismatch; follow the data-safety guidance in
+[`docs/upgrading.md`](docs/upgrading.md).
+
 ## Honest limits — today
 
 Metric is **not yet** a feature-complete Sentry clone — but it is built to become
@@ -171,11 +180,11 @@ feature and surpass it in capability quality, operational reliability and raw
 performance. The performance headroom above shows the foundation is already
 there; the remaining gaps are a roadmap, not a ceiling.
 
-What is still missing today: Session Replay and Profiling are disabled. Phase 37
-Application Metrics is complete; Phase 38 Session Replay is next, while Profiling
-remains deliberately deferred. The runtime is a single `--role all`
-process: no split roles, sharding or online schema migrations, and the supplied
-compose file is a simple single-MongoDB deployment, not HA. Each boundary is tracked in
+What is still missing today: Profiling remains deliberately deferred. Application
+Metrics and Session Replay are implemented; Replay is explicitly enabled per
+project and is off by default. The runtime is a single `--role all` process: no
+split roles, sharding or online schema migrations, and the supplied compose file is
+a simple single-MongoDB deployment, not HA. Each boundary is tracked in
 [`arch-docs/`](arch-docs/). The full current list:
 [`docs/known-limits.md`](docs/known-limits.md).
 

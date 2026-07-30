@@ -66,7 +66,8 @@ selected Phase 28-36 ordering; all unselected items below remain unnumbered back
    Databases and collections are never created per project.
 2. Error Events, Logs, Spans, metric buckets, Profiles and Replays do not share one
    physical collection.
-3. Shared code is reused through typed records and ports. Generation 8 uses
+3. Shared code is reused through typed records and ports. The model introduced in
+   generation 8 and retained by current generation 19 uses
    `Arc<dyn LogSink>`, `Arc<dyn SpanSink>` and `Arc<dyn SignalStore>` at
    application/composition boundaries; bounded writer loops and Mongo codecs remain
    signal-specific. ADR-0044 measures this before any speculative dispatch rewrite.
@@ -106,11 +107,15 @@ Phase 24 performs a deliberate breaking physical rename to:
 error_events
 ```
 
-There is no migration, collection alias, dual-read, dual-write or automatic rename.
-Schema generation 8 and all runtime/test adapters use `error_events` exclusively.
-An existing generation-7 database is intentionally incompatible and must be dropped
-or recreated by its operator. Data in a legacy `events` collection is intentionally
-not imported.
+There is no collection alias, dual-read, dual-write or automatic rename. The
+physical rename was introduced in generation 8; current generation 19 and all
+runtime/test adapters use `error_events` exclusively. A legacy generation-7
+database is incompatible and its `events` data is not imported automatically.
+
+The original development-phase instruction to drop or recreate such a database is
+not valid for data-bearing installations. Operators must preserve incompatible
+databases and follow [the current upgrade runbook](../docs/upgrading.md); Metric
+currently has no supported data-preserving conversion from those generations.
 
 This owner-directed breaking decision supersedes the earlier conditional compatibility
 language in this ADR. Existing native API routes keep `/events` because they expose

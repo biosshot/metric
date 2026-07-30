@@ -1,5 +1,10 @@
 # ADR-0036: Sentry compatibility contract and minimal Web/API
 
+> Current-status note: this ADR records the initial compatibility boundary. Sessions,
+> Feedback, Cron, Application Metrics and Session Replay were implemented in later
+> accepted phases. Use `docs/supported-capabilities.md`, `docs/compatibility.md` and
+> `arch-docs/README.md` for current runtime behavior.
+
 - Status: Accepted
 - Date: 2026-07-21
 - Current scope: the Error compatibility rules remain active; ADR-0040/0042/0043
@@ -37,8 +42,10 @@ contract so an SDK using a shared Envelope transport does not require a custom f
 Feature-specific compatibility is advertised only after its module's contract suite
 passes. Native minidumps, debug-file upload, Artifact Bundles, Logs, Transactions and
 Spans now have their own accepted endpoint decisions and executable evidence.
-Sessions, Profiles, Replays, Check-ins, Metrics and Feedback remain disabled until
-their deferred backlog item is explicitly selected and completed.
+At this initial boundary, Sessions, Profiles, Replays, Check-ins, Metrics and
+Feedback remained disabled. Later accepted phases implemented all of these except
+Profiles; unsupported items still follow ADR-0018 rather than returning a false
+full-success response.
 
 ### Machine-readable compatibility matrix
 
