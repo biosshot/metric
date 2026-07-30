@@ -1,96 +1,106 @@
-# Operations
+# Running Metric
 
-## Bare-metal Windows development
+The [installer](getting-started.md) creates a directory containing
+`compose.yml`, `metric.toml` and `.env`. Run all commands on this page from that
+directory.
 
-Use a locally installed MongoDB and an explicit env file:
+## Start and stop
 
-```text
-MONGODB_URI=mongodb://127.0.0.1:27017/?retryWrites=false
-SCRUB_HMAC_KEY=<64 lowercase hexadecimal characters>
+Start Metric and wait until it is healthy:
+
+```bash
+docker compose up -d --wait --wait-timeout 120
 ```
 
-Validate and start:
+Stop Metric without deleting data:
 
-```powershell
-cargo run -p metric-server -- --config config/metric.example.toml --env-file .env.local --check-config
-cargo run -p metric-server -- --config config/metric.example.toml --env-file .env.local
-```
-
-Open `http://127.0.0.1:4001/`. `/live` reports process liveness and `/ready` reports
-required dependency/worker readiness without exposing configuration or backend
-diagnostics.
-
-## Container deployment
-
-The [installation guide](getting-started.md) creates a directory containing
-`compose.yml`, `metric.toml` and `.env`. Run Compose commands from that directory.
-The release image runs one non-root process with the web interface included.
-MongoDB runs as a separate pinned container.
-
-If you put an HTTPS proxy in front of Metric, add the proxy address or network to
-`server.trusted_proxies`. Configure the proxy to replace `X-Forwarded-For`, not add
-to a value received from the internet. Metric ignores these headers from addresses
-that are not trusted.
-
-```powershell
-docker compose config
-docker compose up -d
-```
-
-Terminate with:
-
-```powershell
+```bash
 docker compose down
 ```
 
-Do not add `-v` unless permanent MongoDB and BlobStore data should be deleted.
+Do not add `-v`. It deletes the MongoDB and file-storage volumes.
+
+## Logs and status
+
+```bash
+docker compose ps
+docker compose logs -f metric
+```
+
+Metric writes JSON logs. Passwords, tokens, DSNs and private event data should
+still be removed before sharing logs.
+
+Health endpoints:
+
+```bash
+curl http://localhost:4001/live
+curl http://localhost:4001/ready
+```
+
+`/live` confirms that the process is running. `/ready` confirms that Metric and
+its required workers are ready.
+
+Metric does not yet provide a Prometheus endpoint. The `/metrics` browser path is
+a page in the web interface, not a monitoring endpoint.
+
+For a long-running installation, monitor `/ready`, repeated container restarts
+and free disk space in both Docker volumes.
+
+## HTTPS proxy
+
+Use an HTTPS proxy when Metric is opened from another machine. You do not need a
+second Compose file.
+
+If the proxy sends `X-Forwarded-For`, add the proxy address or network to
+`server.trusted_proxies` in `metric.toml`. Configure the proxy to replace any
+`X-Forwarded-For` value received from the internet.
+
+Restart Metric after changing the configuration:
+
+```bash
+docker compose up -d --wait --wait-timeout 120
+```
+
+## Backups
+
+Metric does not yet include its own backup command. MongoDB and file storage
+contain different parts of the same data, so back them up together and test the
+restore on a separate installation.
+
+Session Replay especially depends on both: MongoDB stores the replay description
+and file storage contains the recording segments.
+
+Stop both containers while taking volume snapshots so that no new application
+data is written:
+
+```bash
+docker compose stop
+# Copy or snapshot both Docker volumes with your host or backup tool.
+docker compose up -d --wait --wait-timeout 120
+```
+
+The volumes are named `metric_mongo-data` and `metric_blob-data` in the supplied
+Compose setup. The exact copy and restore command depends on your Docker host or
+storage provider.
 
 ## Optional Symbolicator
 
-No Symbolicator image is bundled. Configure a separately operated compatible service
-with `APP__SYMBOLICATOR__ENDPOINT` and set an externally reachable
-`APP__SYMBOLICATOR__CALLBACK_BASE_URL`. Metric remains ready for ordinary Error
-Event ingest when this optional component is degraded; symbolication-specific
-capabilities report the failure.
+Metric does not include a Symbolicator container. If you operate a compatible
+Symbolicator separately, set its addresses in `metric.toml`:
 
-## Monitoring and alerts
+```toml
+[symbolicator]
+endpoint = "http://symbolicator.example:3021/symbolicate"
+callback_base_url = "https://metric.example.com/"
+```
 
-Metric currently provides JSON logs plus `/live` and `/ready`. Alert when `/ready`
-continues to fail and when the container restarts repeatedly. Monitor free disk
-space for both Docker volumes.
+Ordinary error events continue to work when this optional service is unavailable.
 
-Metric does not yet expose a Prometheus endpoint. The `/metrics` browser path is an
-application page, not a Prometheus scrape target.
+## Updates
 
-During a normal shutdown, Metric finishes active work until the configured timeout.
-Work that is not finished remains in the database and is retried after restart.
+The current binary requires schema generation **19 exactly**. It rejects a
+database created by an incompatible Metric version instead of changing or
+deleting it.
 
-## Data safety
-
-Metric does not yet include its own backup command. Back up MongoDB and BlobStore
-together with their native tools, and test the restore separately. Copies made at
-different times may not match each other.
-
-Session Replay makes this pairing mandatory when Replay is enabled: MongoDB owns
-the compact manifest while BlobStore owns the immutable recording segments.
-
-## Schema compatibility and upgrades
-
-The current binary requires schema generation **19 exactly**. An empty database may
-be bootstrapped at generation 19 and a complete generation-19 database is validated
-before startup. Older, newer, incomplete and unmanaged non-empty databases are
-rejected.
-
-There is no online or automatic migration, no mixed-generation rolling upgrade, and
-no supported data-preserving conversion from generation 18 to 19. A startup
-rejection means "stop and preserve the data", not "recreate the database":
-
-- do not change the `schema_meta` marker manually;
-- do not drop MongoDB collections or volumes;
-- retain the old binary and configuration;
-- take a backend-native MongoDB and BlobStore backup together;
-- proceed only with an explicit tested procedure for the exact generation
-  transition.
-
-The complete decision table and pre-upgrade checklist are in [Schema compatibility
-and upgrades](upgrading.md).
+Do not edit `schema_meta`, delete MongoDB collections or remove Docker volumes
+after a schema error. Follow [Update Metric](upgrading.md).

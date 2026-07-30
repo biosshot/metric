@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -17,6 +18,8 @@ def read(relative: str) -> str:
 
 def main() -> int:
     errors: list[str] = []
+    cargo = tomllib.loads(read("Cargo.toml"))
+    version = cargo["workspace"]["package"]["version"]
     runtime = read("crates/mongo/src/lib.rs")
     match = re.search(r"pub const SCHEMA_GENERATION: i32 = (\d+);", runtime)
     if match is None:
@@ -41,6 +44,42 @@ def main() -> int:
             errors.append(
                 f"{relative}: must state that schema generation {generation} is required exactly"
             )
+
+    version_documents = (
+        "README.md",
+        "deploy/.env.example",
+        "deploy/compose.yml",
+        "deploy/install.ps1",
+        "deploy/install.sh",
+        "docs/docker.md",
+        "docs/getting-started.md",
+        "docs/known-limits.md",
+    )
+    for relative in version_documents:
+        if version not in read(relative):
+            errors.append(f"{relative}: must name the current release version {version}")
+
+    current_deployment_surface = "\n".join(
+        read(relative)
+        for relative in (
+            "README.md",
+            "Dockerfile",
+            "deploy/compose.yml",
+            "docs/configuration.md",
+            "docs/docker.md",
+            "docs/getting-started.md",
+            "docs/operations.md",
+            "docs/troubleshooting.md",
+            "docs/upgrading.md",
+        )
+    )
+    for obsolete in (
+        "compose.release.yml",
+        "metric.container.toml",
+        "release.env",
+    ):
+        if obsolete in current_deployment_surface:
+            errors.append(f"current deployment documentation contains obsolete path: {obsolete}")
 
     operator_surface = "\n".join(
         read(relative)
@@ -70,6 +109,21 @@ def main() -> int:
             "docs/supported-capabilities.md: must name the tested Session Replay SDK version"
         )
 
+    compatibility = read("docs/compatibility.md")
+    sdk_guide = read("docs/sdk-setup.md")
+    matrix = tomllib.loads(read("compatibility/sentry-sdk-matrix.toml"))
+    for sdk in matrix["sdk"]:
+        if sdk["status"] != "pass":
+            continue
+        name = sdk["name"]
+        tested_version = sdk["version"]
+        if name not in compatibility or tested_version not in compatibility:
+            errors.append(
+                f"docs/compatibility.md: missing tested SDK {name} {tested_version}"
+            )
+        if name not in sdk_guide or tested_version not in sdk_guide:
+            errors.append(f"docs/sdk-setup.md: missing tested SDK {name} {tested_version}")
+
     upgrade = read("docs/upgrading.md")
     for required in (
         "never drop or recreate a data-bearing MongoDB database",
@@ -97,8 +151,8 @@ def main() -> int:
         return 1
 
     print(
-        f"documentation validation passed: runtime and operator docs agree on "
-        f"schema generation {generation}"
+        f"documentation validation passed: version {version}, schema generation "
+        f"{generation}, deployment paths and tested SDK versions agree"
     )
     return 0
 

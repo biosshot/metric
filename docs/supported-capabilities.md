@@ -1,6 +1,6 @@
 # Supported features
 
-## Available by default
+## Included
 
 - receive errors from official Sentry SDKs;
 - remove or pseudonymize private data before storage;
@@ -16,11 +16,15 @@
 - manage users, projects, roles, sessions and API tokens;
 - set retention periods and project ingest limits;
 - export an Incident Capsule for an issue;
-- deliver signed webhooks.
+- deliver signed webhooks;
+- store files on the local Docker volume.
 
-## Optional
+Some included features, such as alerts and application metrics, only receive
+data after you configure them in Metric or in your SDK.
 
-- local file storage or S3-compatible storage;
+## Optional or disabled by default
+
+- S3-compatible storage instead of local file storage;
 - minidump upload for native crashes;
 - debug files and JavaScript source maps;
 - an external Symbolicator service;

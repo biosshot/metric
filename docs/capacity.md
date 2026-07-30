@@ -1,46 +1,53 @@
-# Capacity measurement
+# Capacity and sizing
 
-The 100-million-Event/day objective is a workload envelope, not a hardware-independent
-promise. ADR-0037 translates it to 1,158 accepted Events/s average, 5,000/s steady
-headroom and a bounded 20,000/s burst.
+Metric does not have one hardware requirement that fits every installation.
+Capacity depends on:
 
-Generate a read-only aggregate report from a local MongoDB database:
+- how many events your applications send;
+- average event and attachment size;
+- enabled features and retention periods;
+- MongoDB and disk performance;
+- whether Metric and MongoDB share the same machine.
 
-```powershell
-./scripts/run-capacity-report.ps1 `
-  -MongoUri 'mongodb://127.0.0.1:27017/?retryWrites=false' `
-  -Database metric `
-  -AcceptedRps 1158 `
-  -RetentionDays 30 `
-  -ReplicationFactor 1
-```
+## Reference result
 
-The report samples at most 10,000 newest Events, calculates their actual BSON sizes,
-and combines them with MongoDB `collStats` collection storage and total index bytes.
-It publishes no Event body, identifier, database name, query or secret.
+A committed reference test reached 4,983 durable error events per second with no
+acknowledged loss. It used:
 
-Projected numbers exclude journal, oplog, temporary index builds, free-space reserve,
-BlobStore objects, backups and network copies. Add those backend-specific costs
-before sizing production hardware. A report from a small or unrepresentative dataset
-is evidence about that dataset only.
+- AMD Ryzen 5 5600H, 6 cores and 12 threads;
+- 16 GiB RAM;
+- MongoDB 8 on the same machine;
+- a 5,000 events-per-second target for 15 seconds.
 
-The retained Windows reference in `capacity/reports/phase22-local.json` measures
-11,581 durable synthetic Error Events and samples 10,000 of them. Its average Event
-BSON is 446.548 bytes and its observed average index allocation is 129.802 bytes per
-Event. The report is marked representative for the fixture shape, but it is not a
-claim that production traffic has the same payload distribution.
+This result proves that workload on that machine. It is not a guarantee for a
+different event shape, configuration or server.
 
-Run a short local durable regression profile with:
+Raw results are available in the
+[`performance/baselines`](https://github.com/biosshot/metric/tree/main/performance/baselines)
+directory.
 
-```powershell
-./performance/run-release-load.ps1 -Rps 5000 -Duration 15s
-```
+## Plan disk space
 
-The runner records achieved RPS, p95/p99, dropped iterations, TCP failures and HTTP
-`200`/`429`/`503`/other counts. It verifies that every HTTP 200 has exactly one
-durable Event, stops its benchmark process in `finally`, and drops only a validated
-`metric_phase22_*` database.
+Metric stores data in two places:
 
-The actual release gate requires controlled-hardware 5,000/s for 60 minutes,
-20,000/s for 5 minutes, backlog recovery above 1.5 times arrival, restart, retention
-interference and long soak. Short Windows runs are regression sentinels only.
+- MongoDB stores events, issues, users and settings;
+- file storage stores attachments, replays and other large objects.
+
+The supplied Docker setup keeps them in the `mongo-data` and `blob-data` volumes.
+Monitor free disk space for both volumes. Include extra space for MongoDB indexes,
+temporary work and backups.
+
+## Measure your installation
+
+For an important deployment, test with event sizes and traffic similar to your
+applications. Start below the expected peak, increase the rate gradually and
+watch:
+
+- HTTP `429` and `503` responses;
+- `/ready` failures;
+- event processing delay;
+- MongoDB CPU, memory and disk use;
+- free space in both Docker volumes.
+
+Developers who cloned the repository can use the repeatable load scripts described
+in [`performance/README.md`](https://github.com/biosshot/metric/blob/main/performance/README.md).

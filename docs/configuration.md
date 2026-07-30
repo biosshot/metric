@@ -1,8 +1,12 @@
 # Configuration
 
-The Docker setup is ready to use with its default settings. Most installations
-only need the MongoDB password, scrub key, image version and HTTP port from
-`.env`.
+The Docker setup is ready to use without changing `metric.toml`. Most
+installations only need the values already created in `.env`:
+
+- `METRIC_MONGO_PASSWORD`;
+- `METRIC_SCRUB_HMAC_KEY`;
+- `METRIC_HTTP_PORT`;
+- `METRIC_IMAGE`.
 
 Advanced settings live in `metric.toml` beside `compose.yml`. Metric reads them
 once at startup, so restart the container after a change.
@@ -10,14 +14,16 @@ once at startup, so restart the container after a change.
 ## Check changes before starting
 
 ```bash
-docker compose run --rm metric --config /etc/metric/metric.toml --check-config
+docker compose run --rm --no-deps metric \
+  --config /etc/metric/metric.toml \
+  --check-config
 ```
 
 Unknown names and invalid values stop startup instead of being ignored.
 
 The current Metric version requires MongoDB schema generation **19 exactly**. An
 empty database is prepared automatically. A database created by another schema
-generation is rejected; follow [Upgrading](upgrading.md) and do not delete data
+generation is rejected; follow [Update Metric](upgrading.md) and do not delete data
 to bypass this check.
 
 ## How values are selected
@@ -28,14 +34,16 @@ From highest to lowest priority:
 command line → APP__ environment variable → TOML file → built-in default
 ```
 
-For example, `APP__SERVER__REQUEST_TIMEOUT=45s` overrides
-`server.request_timeout` from TOML.
+For example, the environment variable `APP__SERVER__REQUEST_TIMEOUT=45s`
+overrides `server.request_timeout` from TOML.
 
 Environment files are loaded only when passed with `--env-file`. Existing process
 environment variables take priority over values in that file.
 
-The Docker setup loads `.env` automatically for Compose values. Metric secrets are
-then passed to the container by `compose.yml`.
+Docker Compose uses `.env` to fill values referenced by `compose.yml`. It does
+not pass every value from `.env` into the Metric container. For Docker, the
+simplest option is to edit `metric.toml`. If you use an `APP__...` override, also
+add that variable under `services.metric.environment` in `compose.yml`.
 
 ## Secrets
 
@@ -60,7 +68,8 @@ Durations accept values such as `250ms`, `30s`, `15m`, `24h` and `30d`. Sizes
 accept values such as `64 KiB`, `20 MiB` and `1 GiB`.
 
 The tables below list every setting. The shown values match the supplied example
-or the built-in default when the example leaves a setting out.
+or the built-in default when the example leaves a setting out. Values changed by
+the supplied Docker configuration are labeled separately.
 
 ## Server and database
 
@@ -68,13 +77,13 @@ or the built-in default when the example leaves a setting out.
 | --- | --- | --- |
 | `role` | `all` | Runs the complete application. This is the only supported role. |
 | `server.http_address` | `127.0.0.1:4001` | Address and port used by the binary. The container uses `0.0.0.0:4001`. |
-| `server.shutdown_grace` | `10s` | Time allowed for work to finish during shutdown. |
+| `server.shutdown_grace` | `10s` (Docker: `30s`) | Time allowed for work to finish during shutdown. |
 | `server.trusted_proxies` | `[]` | Proxy IP addresses or networks allowed to supply forwarding headers. |
 | `server.max_active_requests` | `512` | Maximum requests handled at the same time. |
 | `server.request_timeout` | `30s` | General HTTP request deadline. |
 | `mongodb.uri` | `MONGODB_URI` | MongoDB connection string. Keep it secret. |
 | `mongodb.database` | `metric` | MongoDB database name. |
-| `mongodb.bootstrap_timeout` | `10s` | Time allowed for database startup checks. |
+| `mongodb.bootstrap_timeout` | `10s` (Docker: `30s`) | Time allowed for database startup checks. |
 | `projects.scrub_hmac_key` | `SCRUB_HMAC_KEY` | Secret used to pseudonymize stored values such as IP addresses. |
 | `projects.identity_collision_retries` | `16` | Attempts to create a unique project identifier. |
 | `projects.max_keys_per_project` | `32` | Maximum DSN keys for one project. |
@@ -93,7 +102,7 @@ Do not enable these settings on an internet-facing installation.
 | Setting | Value | Meaning |
 | --- | --- | --- |
 | `blob.backend` | `local` | Storage type: `local` or `s3`. |
-| `blob.root` | `./metric-data/blobs` | Local storage directory. |
+| `blob.root` | `./metric-data/blobs` (Docker: `/var/lib/metric/blobs`) | Local storage directory. |
 | `blob.capacity` | `1 GiB` | Maximum space Metric may use in local storage. |
 | `blob.reserve` | `128 MiB` | Space kept free before new objects are rejected. |
 | `blob.max_object_bytes` | `100 MiB` | Maximum size of one stored object. |
@@ -129,7 +138,7 @@ Cold archive is disabled by default.
 | `native_crash.minidump.max_bytes` | `100 MiB` | Maximum minidump size. |
 | `native_crash.minidump.chunk_bytes` | `64 KiB` | Streaming read chunk size. |
 | `symbolicator.endpoint` | unset | Address of an optional external Symbolicator service. |
-| `symbolicator.callback_base_url` | `http://127.0.0.1:4001/` | Metric address that Symbolicator can call. |
+| `symbolicator.callback_base_url` | `http://127.0.0.1:4001/` (Docker: `http://metric:4001/`) | Metric address that Symbolicator can call. Change it to a reachable address when Symbolicator runs outside the Compose network. |
 | `symbolicator.request_timeout` | `20s` | Symbolicator request deadline. |
 | `symbolicator.maximum_concurrency` | `8` | Maximum Symbolicator requests at the same time. |
 | `symbolicator.circuit_failure_threshold` | `5` | Consecutive failures before requests pause. |

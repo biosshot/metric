@@ -4,251 +4,123 @@
   <img src="web/public/favicon.svg" width="72" alt="Metric logo" />
 </p>
 
-[User documentation](https://biosshot.github.io/metric/) ·
+[Documentation](https://biosshot.github.io/metric/) ·
 [Installation](https://biosshot.github.io/metric/getting-started) ·
 [Configuration](https://biosshot.github.io/metric/configuration)
 
-**Sentry-compatible error tracking, rewritten in Rust. One binary, one database,
-~5,000 durable events per second — measured on hardware matching Sentry's own
-minimum requirements.**
+Metric is a self-hosted error tracking service that works with official Sentry
+SDKs. It receives errors and other application data, groups repeated errors into
+issues, and shows everything in a built-in web interface.
 
-Metric accepts events from the official Sentry SDKs you already use, scrubs PII
-before storage, groups them into issues, and gives you a fast investigation UI —
-without the 70+ containers a self-hosted Sentry stack drags along.
+The supplied Docker setup runs two containers: Metric and MongoDB. You do not
+need to clone this repository or install Rust and Node.js. Your application data
+stays in storage that you control.
 
-## What Metric does
+> Metric 0.1.0 is an early release. Read the
+> [known limits](https://biosshot.github.io/metric/known-limits) before using it
+> for important production data.
 
-Applications fail in production — usually silently. Users hit a blank screen or
-a 500, say nothing, and leave. Error tracking exists so that you find out first,
-with the evidence already collected.
+## Install
 
-Metric is a self-hosted error tracking and observability service that closes
-that loop end to end:
-
-1. **Integrate in one line.** Add the official Sentry SDK for your platform —
-   browser, Node, Python, Java, .NET, Go, Rust — and point its DSN at Metric.
-   Unhandled exceptions, captured errors, structured logs and traces start
-   flowing automatically.
-2. **Every event arrives with context.** Stack trace, release, environment,
-   user, request data, tags and breadcrumbs — enough to reproduce the failure
-   without asking the user what they clicked.
-3. **Noise becomes signal.** PII is scrubbed *before* anything hits storage,
-   and duplicate events are grouped into issues with occurrence counts,
-   first/last seen and trends — one actionable entry instead of ten thousand
-   identical stack traces.
-4. **Investigate in the built-in web UI.** Issue list, timelines, search,
-   event details, logs, traces and performance views ship in the same binary —
-   there is no separate frontend to deploy.
-5. **React and stay in budget.** Signed webhooks push new issues to your chat
-   or ticket system; retention policies and the optional cold S3 archive keep
-   storage bounded; Incident Capsule export hands a complete evidence bundle
-   to whoever needs it.
-
-Because Metric is self-hosted, your error data — which inevitably contains
-sensitive user context — never leaves your infrastructure.
-
-**Who it is for:** teams that want the Sentry workflow without the SaaS bill,
-the data-residency questions, or the ~70-container ops burden.
-
----
-
-## Metric vs. self-hosted Sentry
-
-
-|                           | **Metric**                                                                                    | **Self-hosted Sentry**                                                                                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core technology           | Single **Rust** binary (Tokio, zero-copy parsing)                                            | Python/Django + Relay + Snuba + Kafka consumers                                                                                                                |
-| Moving parts              | `metric-server` + MongoDB - **2 containers**, or a bare binary                               | **70+ containers** in the default install¹: Kafka, ClickHouse, PostgreSQL, Redis, Snuba, workers, cron, Relay, Symbolicator, vroom, plus init/migration jobs |
-| Minimum hardware          | Benchmarked on hardware matching Sentry's official minimum class - 6-core CPU, 16 GiB RAM | [Official minimum](https://develop.sentry.dev/self-hosted/): 4 CPU, **16 GB RAM + 16 GB swap**, 20 GB disk; 32 GB RAM recommended                              |
-| Time to first event       | One image + one TOML file + one bootstrap token                                               | `install.sh` pulls gigabytes of images for 70+ containers, runs migrations, typically 30–60 minutes                                                           |
-| Durable ingest throughput | **4,983 events/s** measured, every event verified durable, zero acknowledged loss             | **~1–5 events/s** sustained (~300–400k/day) on the official minimum hardware, 10–20 events/s in short bursts²                                              |
-| Hot-state footprint       | ~103 storage bytes + ~130 index bytes per event (measured, MongoDB WiredTiger)                | Postgres + ClickHouse + Kafka retention combined                                                                                                               |
-
-¹ Counted from a default self-hosted deployment; not every container is a distinct
-long-running service — many are one-shot setup, migration and bootstrap jobs.
-² Sentry does not publish per-instance throughput; this is a field observation on
-the official minimum hardware (4 CPU, 16 GB RAM) and varies with event size and
-workload mix.
-
-On the same class of hardware that self-hosted Sentry needs merely to idle,
-Metric sustains roughly **three orders of magnitude more durable throughput**.
-Metric publishes measured baselines instead of marketing numbers — every figure
-below comes from a committed, reproducible benchmark artifact.
-
-## Measured performance
-
-All numbers were recorded on hardware corresponding to **Sentry's official
-minimum requirements** — an AMD Ryzen 5 5600H (6C/12T) with 16 GiB RAM, running
-a colocated load generator and a standalone MongoDB 8. Raw artifacts live in
-[`performance/baselines/`](performance/baselines/).
-
-
-| Workload                               | Result                       | Latency                  | Loss                               |
-| ---------------------------------------- | ------------------------------ | -------------------------- | ------------------------------------ |
-| Durable error ingest, 5,000 rps target | **4,983 events/s**           | p95 27.7 ms, p99 31.3 ms | 0 errors, 100% durability verified |
-| Saturation run, 20,000 rps target      | **7,307 durable events/s**   | p95 296.8 ms             | 0 acknowledged loss                |
-| Capacity envelope (100M events/day)    | **1,158 events/s** sustained | p95 24.9 ms              | 0 errors                           |
-| HTTP ingest path (parsing/auth/limits) | 2,500 req/s                  | **p99 0.62 ms**          | 0 errors                           |
-| Normalizer (scrub + canonicalize)      | **77,840 events/s** weighted | —                       | —                                 |
-| Span batch writer                      | **32,639 spans/s**           | —                       | 0 acknowledged loss                |
-| Backlog recovery                       | **1.56×** arrival rate      | —                       | —                                 |
-| Timeline query API                     | 511 qps                      | **p95 2.49 ms**          | —                                 |
-
-Reproduce the headline number yourself:
-
-```powershell
-./performance/run-release-load.ps1 -Rps 5000 -Duration 15s
-```
-
-The design envelope ([ADR-0037](arch-docs/0037-capacity-model-for-100-million-events-per-day.md),
-[`docs/capacity.md`](docs/capacity.md))
-targets 100 million events/day: 1,158 events/s average, 5,000/s steady headroom,
-20,000/s bounded burst.
-
-## Drop-in Sentry compatibility
-
-Keep your SDK. Change the DSN. Done.
-
-```javascript
-Sentry.init({ dsn: "http://<key>@your-metric-host:4001/<project_id>" });
-```
-
-Verified against real processes of the official SDKs — no mocks:
-
-- `@sentry/browser` 10.66.0 (Chromium 149), `@sentry/node` 10.66.0
-- Python `sentry-sdk` 2.32.0, Java `sentry-java` 8.50.1, .NET `Sentry` 6.7.0
-- Go `sentry-go` 0.48.0, Rust `sentry` 0.48.5
-- `sentry-cli` 3.6.2 / 2.58.6 (debug files, source maps, artifact bundles)
-
-Errors, structured logs (`Sentry.logger`), transactions and spans
-(`Sentry.startSpan`), envelopes, attachments and minidumps all flow through the
-standard Sentry endpoints. Compatibility claims are **fail-closed**: only SDK rows
-marked `pass` in [`compatibility/sentry-sdk-matrix.toml`](compatibility/sentry-sdk-matrix.toml)
-are advertised; untested families are explicitly not claimed. See
-[`docs/compatibility.md`](docs/compatibility.md).
-
-## What you get
-
-- **Errors** — durable ingest, mandatory pre-storage PII scrubbing (HMAC'd),
-  bounded normalization, issue grouping, full issue timeline and search.
-- **Logs, traces, performance** — structured logs and span pipelines with
-  bounded batch writers and retention policies.
-- **Web UI included** — the Vue 3 investigation UI is built into the same image
-  and served by the same binary. Nothing extra to deploy.
-- **Security boundary** — Argon2id passwords, opaque sessions with CSRF, scoped
-  personal API tokens, organization roles, bounded audit records.
-- **Lifecycle** — retention with gradual policy reduction, durable project
-  deletion with grace period, signed webhook notifications, Incident Capsule
-  export.
-- **Storage flexibility** — local BlobStore or S3-compatible object storage;
-  optional Parquet/Zstd cold event archive.
-- **Symbolication** — debug files, JS artifact bundles/source maps, optional
-  external Symbolicator.
-
-## Quick start
-
-**Option A — Docker Compose (2 containers):**
+Linux or macOS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh | sh
 ```
 
-This creates a `metric` directory, generates persistent secrets and starts the
-published `ghcr.io/biosshot/metric:0.1.0` image. No repository clone is required.
-See the [installation guide](https://biosshot.github.io/metric/getting-started)
-for Windows and manual setup.
+Windows PowerShell:
 
-**Option B — bare binary, no container at all:**
-
-```bash
-cargo build --release --bin metric-server
-export MONGODB_URI="mongodb://127.0.0.1:27017/metric"
-./target/release/metric-server --config config/metric.example.toml
+```powershell
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.ps1 | iex
 ```
 
-Point any Sentry SDK DSN at `http://<host>:4001` and watch the first event land.
-On first startup the server prints a one-time `METRIC_BOOTSTRAP_TOKEN` for the
-Web setup form. Full reference: [`docs/configuration.md`](docs/configuration.md),
-[`docs/operations.md`](docs/operations.md).
+The installer creates a `metric` directory, generates private passwords, pulls
+the container images and starts Metric.
 
-The current binary requires MongoDB schema generation **19 exactly**. It may
-bootstrap an empty database, but it cannot migrate an older data-bearing database.
-Do not edit `schema_meta`, drop the database or recreate it to resolve a generation
-mismatch; follow the data-safety guidance in
-[`docs/upgrading.md`](docs/upgrading.md).
+Open `http://localhost:4001`, then get the one-time setup token:
 
-## Honest limits — today
+```bash
+cd metric
+docker compose logs metric
+```
 
-Metric is **not yet** a feature-complete Sentry clone — but it is built to become
-one, and then some. The stated goal of the project is to match Sentry feature for
-feature and surpass it in capability quality, operational reliability and raw
-performance. The performance headroom above shows the foundation is already
-there; the remaining gaps are a roadmap, not a ceiling.
+Copy the value after `METRIC_BOOTSTRAP_TOKEN=` and follow the
+[first setup guide](https://biosshot.github.io/metric/first-setup).
 
-What is still missing today: Profiling remains deliberately deferred. Application
-Metrics and Session Replay are implemented; Replay is explicitly enabled per
-project and is off by default. The runtime is a single `--role all` process: no
-split roles, sharding or online schema migrations, and the supplied compose file is
-a simple single-MongoDB deployment, not HA. Each boundary is tracked in
-[`arch-docs/`](arch-docs/). The full current list:
-[`docs/known-limits.md`](docs/known-limits.md).
+For manual installation, Windows instructions and HTTPS, see the complete
+[installation guide](https://biosshot.github.io/metric/getting-started).
 
-## Support the project
+## What Metric includes
 
-Metric is developed in the open. If it saves you a Sentry invoice — or a weekend
-of babysitting 70+ containers — you can support development with a USDT
-donation:
+- errors, messages, logs, transactions and spans;
+- private-data removal or pseudonymization before storage;
+- issue grouping, search and event details;
+- releases, deploys and release health;
+- cron and HTTP monitors;
+- application metrics and dashboards;
+- email, Telegram and signed webhook notifications;
+- user feedback and Incident Capsule export;
+- attachments, debug files and JavaScript source maps;
+- optional Session Replay, minidumps, S3 storage and cold archives;
+- users, projects, roles, API tokens, retention and ingest limits.
 
+See [supported features](https://biosshot.github.io/metric/supported-capabilities)
+for the complete list.
 
-| Network           | USDT address                                       |
-| ------------------- | ---------------------------------------------------- |
-| TON               | `UQBo1KI8Llrp9D7xSF3o0RzMHsM3UesueXRnSTyLPDkOG7-Q` |
-| Tron (TRC-20)     | `TYiGUA56h1r19FEDzKRn33w511yTqZwy4V`               |
-| Ethereum (ERC-20) | `0x040835b43916307b4014322439a18cb33B26913F`       |
+## Sentry SDK compatibility
 
-Every donation goes directly toward closing the roadmap above: more supported
-signal types, more SDK families, more performance headroom.
+Keep the official Sentry SDK used by your application and replace its DSN with
+the DSN created by Metric.
+
+Metric 0.1.0 is tested with browser JavaScript, Node.js, Python, Java, .NET, Go
+and Rust SDKs. Exact tested versions and unsupported platforms are listed in
+[SDK compatibility](https://biosshot.github.io/metric/compatibility).
+
+## Performance
+
+A committed reference test reached 4,983 durable error events per second with
+no acknowledged loss on a 6-core AMD Ryzen 5 5600H with 16 GiB RAM. This is a
+reference result, not a guarantee for every installation. Event size, enabled
+features, storage and hardware all affect capacity.
+
+Raw results are stored in [`performance/baselines/`](performance/baselines/).
+See [capacity and sizing](https://biosshot.github.io/metric/capacity) before
+planning a large installation.
+
+## Important limits
+
+- the supplied deployment uses one Metric container and one MongoDB server;
+- high availability, sharding and multiple Metric processing nodes are not
+  included;
+- profiling is not supported;
+- Metric does not yet include its own backup and restore command;
+- automatic migration between database schema generations is not available.
+
+The current binary requires MongoDB schema generation **19 exactly**. Never
+delete the database, Docker volumes or the `schema_meta` record to fix a version
+mismatch. Follow the [update guide](https://biosshot.github.io/metric/upgrading).
+
+## Documentation
+
+- [Install Metric](https://biosshot.github.io/metric/getting-started)
+- [First setup](https://biosshot.github.io/metric/first-setup)
+- [Connect an SDK](https://biosshot.github.io/metric/sdk-setup)
+- [Docker](https://biosshot.github.io/metric/docker)
+- [Configuration](https://biosshot.github.io/metric/configuration)
+- [Troubleshooting](https://biosshot.github.io/metric/troubleshooting)
 
 ## Development
 
-Local checks:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, checks and pull requests.
+Architecture decisions and implementation notes are kept in
+[`arch-docs/`](arch-docs/).
 
-```text
-cargo fmt --all -- --check
-cargo dep-graph --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test-fast --locked
-```
+## Support the project
 
-Additional risk tiers: `cargo test-infrastructure`, `cargo test-fuzz`, and
-selected ignored performance tests. Infrastructure tests use the MongoDB image
-from `deploy/compose.dev.yml` on port `27018`. k6 workloads, baselines and
-regression comparators are documented in [`performance/README.md`](performance/README.md).
+| Network | USDT address |
+| --- | --- |
+| TON | `UQBo1KI8Llrp9D7xSF3o0RzMHsM3UesueXRnSTyLPDkOG7-Q` |
+| Tron (TRC-20) | `TYiGUA56h1r19FEDzKRn33w511yTqZwy4V` |
+| Ethereum (ERC-20) | `0x040835b43916307b4014322439a18cb33B26913F` |
 
-Run the server locally:
-
-```text
-cargo run -p metric-server --bin metric-server -- --env-file .env.local --config config/metric.example.toml
-```
-
-Copy `.env.local.example` to `.env.local` first and replace the placeholder
-secret. Metric never searches for dotenv files implicitly; existing process
-environment variables take precedence. Validate configuration without starting
-via `--check-config`, or print it redacted with `--print-effective-config`.
-
-**Web development:** the Vue 3 client lives in `web/` and consumes only
-`/api/v1`. Run `npm install` once, then `npm run dev` while Metric listens on
-`127.0.0.1:4001`. Web checks: `npm run format:check`, `npm run lint`,
-`npm test`, `npm run build`, `npm run test:e2e`.
-
-**SDK compatibility harnesses** live in `sdk-tests/` with isolated dependency
-graphs. The initial Node gate:
-
-```text
-cd sdk-tests/node
-npm ci
-cd ../..
-cargo test -p metric-server --test sdk_compatibility_e2e real_node_sdk_sends_an_error_event -- --ignored --nocapture
-```
-
-Architecture decisions are recorded in [`arch-docs/`](arch-docs/).
+Metric is released under the [MIT License](LICENSE).

@@ -1,7 +1,8 @@
 # SDK compatibility
 
 Metric works with official Sentry SDKs. The versions below are tested by running
-the real SDK and sending an event to Metric.
+the real SDK and sending an error event to Metric. This does not mean that every
+optional SDK feature is tested on every platform.
 
 | Platform | Tested version |
 | --- | --- |
@@ -16,9 +17,9 @@ the real SDK and sending an event to Metric.
 
 A version not listed here may work, but it has not passed the release tests.
 
-## Supported data
+## Other supported data
 
-Metric accepts:
+Metric also accepts:
 
 - errors and messages;
 - structured logs;
@@ -32,7 +33,11 @@ Metric accepts:
 - debug files and JavaScript source-map bundles.
 
 Some features depend on the SDK. Session Replay is tested with the listed browser
-SDK and is disabled for each new project until you enable it.
+SDK, attachments are tested with the listed Node.js SDK, and debug-file uploads
+are tested with the listed Sentry CLI versions. Other SDK and data-type
+combinations may work but are not all part of the release tests.
+
+Session Replay is disabled for each new project until you enable it.
 
 ## Not currently tested
 

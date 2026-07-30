@@ -7,15 +7,19 @@ production data.
 
 This version requires MongoDB schema generation **19 exactly**. It can prepare an
 empty database, but it cannot migrate data from an older generation. Read
-[Upgrading](upgrading.md) before changing versions.
+[Update Metric](upgrading.md) before changing versions.
 
 ## Deployment
 
 - Metric currently runs as one application container.
 - The supplied MongoDB deployment is a single server, not a high-availability
   cluster.
+- Metric uses the MongoDB administrator account created inside the supplied
+  container. The MongoDB port is not published; do not use that database for
+  other applications.
 - Sharding and multiple Metric processing nodes are not supported.
-- The supplied Compose file is not a promise of a particular event rate.
+- Capacity depends on your hardware, event size and enabled features. Measure
+  your own workload before relying on a particular event rate.
 
 ## Backup and archive
 

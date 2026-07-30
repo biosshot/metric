@@ -19,7 +19,7 @@ https://PROJECT_KEY@metric.example.com/PROJECT_ID
 ## JavaScript in a browser
 
 ```bash
-npm install @sentry/browser
+npm install @sentry/browser@10.66.0
 ```
 
 ```javascript
@@ -36,7 +36,7 @@ Sentry.captureException(new Error("Metric test event"));
 ## Node.js
 
 ```bash
-npm install @sentry/node
+npm install @sentry/node@10.66.0
 ```
 
 ```javascript
@@ -53,7 +53,7 @@ Sentry.captureException(new Error("Metric test event"));
 ## Python
 
 ```bash
-pip install sentry-sdk
+pip install sentry-sdk==2.32.0
 ```
 
 ```python
@@ -65,7 +65,12 @@ sentry_sdk.capture_message("Metric test event")
 
 ## Java
 
-Use the official `io.sentry:sentry` package:
+Use the official `sentry-java` package version 8.50.1. Its Gradle coordinate is
+`io.sentry:sentry`:
+
+```kotlin
+implementation("io.sentry:sentry:8.50.1")
+```
 
 ```java
 import io.sentry.Sentry;
@@ -80,7 +85,11 @@ Sentry.captureMessage("Metric test event");
 
 ## .NET
 
-Use the official `Sentry` package:
+Install the tested `Sentry` package:
+
+```bash
+dotnet add package Sentry --version 6.7.0
+```
 
 ```csharp
 using Sentry;
@@ -92,6 +101,46 @@ SentrySdk.Init(options =>
 });
 
 SentrySdk.CaptureMessage("Metric test event");
+```
+
+## Go
+
+```bash
+go get github.com/getsentry/sentry-go@v0.48.0
+```
+
+```go
+package main
+
+import (
+    "time"
+
+    "github.com/getsentry/sentry-go"
+)
+
+func main() {
+    if err := sentry.Init(sentry.ClientOptions{
+        Dsn: "YOUR_METRIC_DSN",
+    }); err != nil {
+        panic(err)
+    }
+
+    sentry.CaptureMessage("Metric test event")
+    sentry.Flush(2 * time.Second)
+}
+```
+
+## Rust
+
+```bash
+cargo add sentry@0.48.5
+```
+
+```rust
+fn main() {
+    let _guard = sentry::init("YOUR_METRIC_DSN");
+    sentry::capture_message("Metric test event", sentry::Level::Error);
+}
 ```
 
 ## Check the result

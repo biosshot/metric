@@ -77,16 +77,30 @@ the three example files:
 
 Save `.env.example` as `.env`. Replace the two placeholder secrets:
 
+Linux or macOS:
+
 ```bash
 openssl rand -hex 24
 openssl rand -hex 32
+```
+
+Windows PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 24
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+[BitConverter]::ToString($bytes).Replace('-', '').ToLower()
+
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+[BitConverter]::ToString($bytes).Replace('-', '').ToLower()
 ```
 
 Use the first value for `METRIC_MONGO_PASSWORD` and the second for
 `METRIC_SCRUB_HMAC_KEY`. Then run this command from that directory:
 
 ```bash
-docker compose up -d
+docker compose up -d --wait --wait-timeout 120
 ```
 
 Check the result:
@@ -124,7 +138,7 @@ docker compose down
 Start again:
 
 ```bash
-docker compose up -d
+docker compose up -d --wait --wait-timeout 120
 ```
 
 ::: danger Keep your data

@@ -1,5 +1,8 @@
 # Troubleshooting
 
+Run the Docker commands below from the directory containing `compose.yml`,
+`metric.toml` and `.env`.
+
 ## Metric does not start
 
 Show the logs:
@@ -20,7 +23,9 @@ Common causes:
 ## Check the configuration
 
 ```bash
-docker compose run --rm metric --config /etc/metric/metric.toml --check-config
+docker compose run --rm --no-deps metric \
+  --config /etc/metric/metric.toml \
+  --check-config
 ```
 
 Metric reports unknown settings and invalid values before starting.
@@ -58,7 +63,7 @@ docker compose logs mongodb
 ## Schema mismatch
 
 Stop the update and keep the data unchanged. Do not edit `schema_meta`, drop the
-database or delete Docker volumes. Follow [Upgrading](upgrading.md).
+database or delete Docker volumes. Follow [Update Metric](upgrading.md).
 
 ## Ask for help
 
