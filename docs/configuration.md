@@ -1,19 +1,16 @@
 # Configuration
 
 The Docker setup is ready to use with its default settings. Most installations
-only need the MongoDB password, scrub key and HTTP port from
-`deploy/release.env`.
+only need the MongoDB password, scrub key, image version and HTTP port from
+`.env`.
 
-Advanced settings live in `deploy/metric.container.toml`. Metric reads them once
-at startup, so restart the container after a change.
+Advanced settings live in `metric.toml` beside `compose.yml`. Metric reads them
+once at startup, so restart the container after a change.
 
 ## Check changes before starting
 
 ```bash
-docker compose \
-  --env-file deploy/release.env \
-  -f deploy/compose.release.yml \
-  run --rm metric --check-config
+docker compose run --rm metric --config /etc/metric/metric.toml --check-config
 ```
 
 Unknown names and invalid values stop startup instead of being ignored.
@@ -36,6 +33,9 @@ For example, `APP__SERVER__REQUEST_TIMEOUT=45s` overrides
 
 Environment files are loaded only when passed with `--env-file`. Existing process
 environment variables take priority over values in that file.
+
+The Docker setup loads `.env` automatically for Compose values. Metric secrets are
+then passed to the container by `compose.yml`.
 
 ## Secrets
 

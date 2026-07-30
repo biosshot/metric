@@ -23,7 +23,7 @@ RUN apt-get update \
 
 COPY --from=rust-builder /source/target/release/metric-server /usr/local/bin/metric-server
 COPY --from=web-builder /source/web/dist/ /opt/metric/web/
-COPY deploy/metric.container.toml /etc/metric/metric.toml
+COPY deploy/metric.toml /etc/metric/metric.toml
 
 ENV METRIC_WEB_DIR=/opt/metric/web
 USER metric:metric

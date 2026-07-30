@@ -150,12 +150,13 @@ are advertised; untested families are explicitly not claimed. See
 **Option A — Docker Compose (2 containers):**
 
 ```bash
-cp deploy/release.env.example deploy/release.env   # set METRIC_MONGO_PASSWORD and METRIC_SCRUB_HMAC_KEY
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml up -d
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh | sh
 ```
 
-This pulls the published `ghcr.io/biosshot/metric:0.1.0` image. Add `--build`
-when testing local source changes instead.
+This creates a `metric` directory, generates persistent secrets and starts the
+published `ghcr.io/biosshot/metric:0.1.0` image. No repository clone is required.
+See the [installation guide](https://biosshot.github.io/metric/getting-started)
+for Windows and manual setup.
 
 **Option B — bare binary, no container at all:**
 

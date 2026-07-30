@@ -41,4 +41,5 @@ sdk-tests/*/obj/
 sdk-tests/*/__pycache__/
 .env.local
 .env.*.local
+deploy/.env
 metric-data/

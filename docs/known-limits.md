@@ -1,26 +1,43 @@
-# Version-one known limits
+# Known limits
 
-- Only SDK rows marked `pass` in the compatibility matrix are supported claims.
-- Session Replay is implemented for the pinned browser contract and is disabled per
-  project by default. Profiling remains deliberately deferred. Legacy StatsD metric
-  items are not accepted.
-- The runtime is one `--role all` process. Split roles, NATS, distributed claims,
-  sharding and disk spool are not implemented.
-- The current binary requires MongoDB schema generation 19 exactly. It bootstraps
-  only an empty database. There is no supported migration from generation 18,
-  online migration, rolling mixed-version upgrade or downgrade rewrite; see
-  [Schema compatibility and upgrades](upgrading.md).
-- Archive objects cannot be searched, restored or rehydrated through Metric.
-- External Symbolicator is optional and separately operated; ProGuard, IL2CPP,
-  BCSymbolMap and Hermes-specific extended pipelines are outside version one.
-- Webhook delivery is at least once. Receivers must deduplicate the stable delivery
-  identifier.
-- Application Metric increments are at least once. Retrying a container after an
-  ambiguous response can apply its counter/sum/count values again.
-- There is no application-consistent backup/restore protocol or universal
-  MongoDB/BlobStore reconciliation scanner.
-- The supplied compose file is a simple single-MongoDB/local-BlobStore deployment,
-  not high availability or a 100-million-Event/day capacity guarantee.
-- MCP, teams, SSO/SCIM/MFA/passkeys and advanced permission models are not included.
-- Replay privacy will rely on the configured pinned Sentry browser SDK/rrweb masking
-  policy. No server-side DOM-aware privacy masking layer is planned.
+Metric 0.1.0 is an early release. Read these limits before using it for important
+production data.
+
+## Updates
+
+This version requires MongoDB schema generation **19 exactly**. It can prepare an
+empty database, but it cannot migrate data from an older generation. Read
+[Upgrading](upgrading.md) before changing versions.
+
+## Deployment
+
+- Metric currently runs as one application container.
+- The supplied MongoDB deployment is a single server, not a high-availability
+  cluster.
+- Sharding and multiple Metric processing nodes are not supported.
+- The supplied Compose file is not a promise of a particular event rate.
+
+## Backup and archive
+
+- Metric does not yet provide its own backup and restore command.
+- MongoDB and file storage must be retained together.
+- Cold archives cannot be searched or restored through Metric.
+
+## Features
+
+- Profiling is not supported.
+- Session Replay must be enabled for each project.
+- An external Symbolicator is optional and operated separately.
+- Advanced ProGuard, IL2CPP, BCSymbolMap and Hermes processing is not included.
+- Single sign-on, SCIM, MFA and passkeys are not included.
+
+## Delivery behavior
+
+- Webhooks may be delivered more than once. Receivers should ignore a repeated
+  delivery ID.
+- Retrying an application metric after an unclear response can count it twice.
+- Replay privacy depends on masking configured in the browser SDK. Metric does not
+  add server-side DOM masking.
+
+Only SDK versions listed in [SDK compatibility](compatibility.md) are tested
+release claims.

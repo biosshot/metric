@@ -5,12 +5,13 @@
 Show the logs:
 
 ```bash
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml logs metric
+docker compose logs metric
 ```
 
 Common causes:
 
-- a placeholder remains in `deploy/release.env`;
+- a placeholder remains in `.env`;
+- `metric.toml` is not beside `compose.yml`;
 - `METRIC_SCRUB_HMAC_KEY` is not 64 hexadecimal characters;
 - port 4001 is already used;
 - MongoDB is still starting;
@@ -19,10 +20,7 @@ Common causes:
 ## Check the configuration
 
 ```bash
-docker compose \
-  --env-file deploy/release.env \
-  -f deploy/compose.release.yml \
-  run --rm metric --check-config
+docker compose run --rm metric --config /etc/metric/metric.toml --check-config
 ```
 
 Metric reports unknown settings and invalid values before starting.
@@ -48,13 +46,13 @@ Then inspect the SDK debug log and the Metric container log.
 
 ```bash
 curl -i http://localhost:4001/ready
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml ps
+docker compose ps
 ```
 
 Check the MongoDB container first. If it is unhealthy, inspect its logs:
 
 ```bash
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml logs mongodb
+docker compose logs mongodb
 ```
 
 ## Schema mismatch

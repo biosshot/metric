@@ -22,28 +22,25 @@ diagnostics.
 
 ## Container deployment
 
-The release image runs one non-root `--role all` process with built Vue assets and
-local BlobStore data on a dedicated volume. MongoDB remains a separate pinned
-service.
+The [installation guide](getting-started.md) creates a directory containing
+`compose.yml`, `metric.toml` and `.env`. Run Compose commands from that directory.
+The release image runs one non-root process with the web interface included.
+MongoDB runs as a separate pinned container.
 
-When a TLS reverse proxy terminates browser traffic, configure its exact address or
-network in `server.trusted_proxies` and overwrite `X-Forwarded-For` rather than
-appending untrusted client input. Metric ignores forwarding headers from every
-other peer. Keep an ingress-level connection/request limit as an additional outer
-boundary; Metric also enforces `server.max_active_requests` and
-`server.request_timeout` for its native API.
+If you put an HTTPS proxy in front of Metric, add the proxy address or network to
+`server.trusted_proxies`. Configure the proxy to replace `X-Forwarded-For`, not add
+to a value received from the internet. Metric ignores these headers from addresses
+that are not trusted.
 
 ```powershell
-Copy-Item deploy/release.env.example deploy/release.env
-# Replace both placeholder secrets in deploy/release.env.
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml config
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml up --build -d
+docker compose config
+docker compose up -d
 ```
 
 Terminate with:
 
 ```powershell
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml down
+docker compose down
 ```
 
 Do not add `-v` unless permanent MongoDB and BlobStore data should be deleted.
@@ -58,23 +55,21 @@ capabilities report the failure.
 
 ## Monitoring and alerts
 
-Alert on sustained readiness failure, MongoDB/BlobStore errors, local disk reserve,
-Dispatcher queue saturation, oldest pending age, Processor lag, retention/archive
-lag, upload/GC failures and notification backlog. Metric labels are closed,
-low-cardinality values; never attach project, Event, Issue, URL, release, filename or
-user values.
+Metric currently provides JSON logs plus `/live` and `/ready`. Alert when `/ready`
+continues to fail and when the container restarts repeatedly. Monitor free disk
+space for both Docker volumes.
 
-Graceful shutdown stops admission, drains bounded writer/finalizer work through the
-configured grace period, and leaves durable pending/claimed work retryable after
-restart.
+Metric does not yet expose a Prometheus endpoint. The `/metrics` browser path is an
+application page, not a Prometheus scrape target.
+
+During a normal shutdown, Metric finishes active work until the configured timeout.
+Work that is not finished remains in the database and is retried after restart.
 
 ## Data safety
 
-Metric does not claim an application-consistent backup/restore command. Backend
-snapshots taken independently are not guaranteed to form one consistent restore.
-Use backend-native tooling, retain MongoDB and BlobStore together, test restoration
-in isolation, and do not describe that procedure as a Metric transactional
-backup.
+Metric does not yet include its own backup command. Back up MongoDB and BlobStore
+together with their native tools, and test the restore separately. Copies made at
+different times may not match each other.
 
 Session Replay makes this pairing mandatory when Replay is enabled: MongoDB owns
 the compact manifest while BlobStore owns the immutable recording segments.

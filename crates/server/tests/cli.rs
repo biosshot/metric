@@ -29,8 +29,7 @@ fn check_config_succeeds_with_clean_defaults() {
 
 #[test]
 fn container_config_passes_the_production_config_gate() {
-    let config =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/metric.container.toml");
+    let config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/metric.toml");
     let output = Command::new(binary())
         .args(["--config", config.to_str().unwrap(), "--check-config"])
         .env("MONGODB_URI", "mongodb://mongo:27017/?retryWrites=false")

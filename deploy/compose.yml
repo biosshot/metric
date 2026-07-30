@@ -7,7 +7,7 @@ services:
     command: ["mongod", "--bind_ip_all"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: metric
-      MONGO_INITDB_ROOT_PASSWORD: ${METRIC_MONGO_PASSWORD:?set in release.env}
+      MONGO_INITDB_ROOT_PASSWORD: ${METRIC_MONGO_PASSWORD:?set in .env}
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -31,9 +31,6 @@ services:
 
   metric:
     image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.0}
-    build:
-      context: ..
-      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       mongodb:
@@ -45,7 +42,7 @@ services:
     ports:
       - "${METRIC_HTTP_PORT:-4001}:4001"
     volumes:
-      - ./metric.container.toml:/etc/metric/metric.toml:ro
+      - ./metric.toml:/etc/metric/metric.toml:ro
       - blob-data:/var/lib/metric/blobs
     read_only: true
     tmpfs:

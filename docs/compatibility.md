@@ -1,39 +1,52 @@
-# Compatibility
+# SDK compatibility
 
-Metric claims Sentry SDK compatibility only for exact executable rows and
-capabilities marked `pass` in `compatibility/sentry-sdk-matrix.toml`. A passing
-Error Event row does not implicitly claim Logs, Spans, Sessions, Feedback, Check-ins
-or any future signal for the same SDK.
+Metric works with official Sentry SDKs. The versions below are tested by running
+the real SDK and sending an event to Metric.
 
-Currently verified:
+| Platform | Tested version |
+| --- | --- |
+| JavaScript in a browser | `@sentry/browser` 10.66.0 |
+| Node.js | `@sentry/node` 10.66.0 |
+| Python | `sentry-sdk` 2.32.0 |
+| Java | `sentry-java` 8.50.1 |
+| .NET | `Sentry` 6.7.0 |
+| Go | `sentry-go` 0.48.0 |
+| Rust | `sentry` 0.48.5 |
+| Sentry CLI | 3.6.2 and 2.58.6 |
 
-- official `@sentry/browser` 10.66.0 through Chromium 149.0.7827.55;
-- official `@sentry/node` 10.66.0 through a real Node process, with separate base
-  Error and safe JSON attachment gates;
-- official Python `sentry-sdk` 2.32.0 through a real CPython 3.11 process;
-- official Java `sentry-java` 8.50.1 through a real Java 25 process;
-- official .NET `Sentry` 6.7.0 through a real .NET 9 process;
-- official Go `sentry-go` 0.48.0 through a real Go 1.25.1 process;
-- official Rust `sentry` 0.48.5 through a real Rust 1.88.0 process;
-- `sentry-cli` 3.6.2 and 2.58.6 debug-file and Artifact Bundle contracts.
+A version not listed here may work, but it has not passed the release tests.
 
-Python, Java and .NET are the Phase 22 release-required SDK families. The remaining
-seven untested inventory families are not implicitly supported and do not block this
-selected version-one scope.
-The fail-closed validator is:
+## Supported data
 
-```text
-python scripts/validate-compatibility.py
-python scripts/validate-compatibility.py --require-all
-```
+Metric accepts:
 
-The second command is the final release gate and intentionally fails while any
-required family remains untested.
+- errors and messages;
+- structured logs;
+- transactions and spans;
+- release sessions;
+- user feedback;
+- cron check-ins;
+- application metrics;
+- browser Session Replay;
+- safe attachments;
+- debug files and JavaScript source-map bundles.
 
-Structured logs, transactions, spans, Sessions, Feedback and Cron check-ins are
-implemented through their accepted compatibility contracts. Application Metrics
-and Session Replay are also implemented through their narrow pinned contracts;
-Replay is disabled per project by default. Profiling remains disabled and deferred.
-Native minidump, debug-file, Artifact Bundle, attachment, Incident Capsule, webhook
-and cold-archive capabilities are separate contracts and are advertised by
-`/api/v1/capabilities`.
+Some features depend on the SDK. Session Replay is tested with the listed browser
+SDK and is disabled for each new project until you enable it.
+
+## Not currently tested
+
+Metric does not currently claim compatibility with:
+
+- Apple and Cocoa;
+- Flutter and Dart;
+- Android and Kotlin;
+- native C++;
+- PHP;
+- React Native;
+- Ruby.
+
+Profiling and legacy StatsD metric items are not supported.
+
+The exact test inventory is stored in
+[`compatibility/sentry-sdk-matrix.toml`](https://github.com/biosshot/metric/blob/main/compatibility/sentry-sdk-matrix.toml).

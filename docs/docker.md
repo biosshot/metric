@@ -16,11 +16,12 @@ Use an exact version in production. Avoid changing to an untested image tag.
 ## Start and stop
 
 ```bash
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml up -d
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml down
+docker compose up -d
+docker compose down
 ```
 
-Stopping the containers does not delete data.
+Run these commands from the directory containing `compose.yml`, `metric.toml` and
+`.env`. Stopping the containers does not delete data.
 
 ## Data
 
@@ -52,11 +53,12 @@ its required workers can serve requests.
 
 ## Update the image
 
-Read [Upgrading](upgrading.md) before changing versions. Then:
+Read [Upgrading](upgrading.md) before changing versions. Change `METRIC_IMAGE`
+in `.env` to the exact new version, then:
 
 ```bash
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml pull
-docker compose --env-file deploy/release.env -f deploy/compose.release.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 Never delete the MongoDB volume to fix a schema-version error.

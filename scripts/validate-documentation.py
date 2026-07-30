@@ -64,9 +64,10 @@ def main() -> int:
             errors.append(f"operator documentation contains stale claim: {pattern}")
 
     capabilities = read("docs/supported-capabilities.md")
-    if "Session Replay for the pinned `@sentry/browser` contract" not in capabilities:
+    replay_contract = ("Session Replay", "`@sentry/browser`", "10.66.0")
+    if not all(value in capabilities for value in replay_contract):
         errors.append(
-            "docs/supported-capabilities.md: must describe the implemented pinned Replay contract"
+            "docs/supported-capabilities.md: must name the tested Session Replay SDK version"
         )
 
     upgrade = read("docs/upgrading.md")
