@@ -113,9 +113,14 @@ All four files must stay in the same directory:
 Keep `.env` private and retain its secret values during updates.
 
 ::: warning Existing installation
-The installer does not overwrite an existing `.env` or `metric.toml`. Setting
-`METRIC_PROFILE` and running it again does not silently change a live
-installation.
+The installer does not overwrite an existing `.env` or `metric.toml`. You can
+rerun it from the directory that contains `metric/` or from inside `metric/`;
+both reuse the same files and passwords. Setting `METRIC_PROFILE` and running it
+again does not silently change a live installation.
+
+If the MongoDB volume exists but `.env` is missing, the installer stops and asks
+you to restore the original file. It never generates a new password for existing
+data.
 :::
 
 ## Manual installation

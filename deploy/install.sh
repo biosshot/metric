@@ -2,9 +2,17 @@
 set -eu
 
 version="${METRIC_VERSION:-0.1.0}"
-install_dir="${METRIC_INSTALL_DIR:-metric}"
 download_base="${METRIC_DOWNLOAD_BASE:-https://raw.githubusercontent.com/biosshot/metric/v${version}/deploy}"
 profile="${METRIC_PROFILE:-medium}"
+
+if [ -n "${METRIC_INSTALL_DIR:-}" ]; then
+  install_dir="${METRIC_INSTALL_DIR}"
+elif [ -f "./compose.yml" ] \
+  && { [ -f "./metric.toml" ] || [ -f "./.env" ]; }; then
+  install_dir="."
+else
+  install_dir="metric"
+fi
 
 case "${profile}" in
   min|low|medium|high) ;;
@@ -42,6 +50,14 @@ random_hex() {
 }
 
 mkdir -p "${install_dir}"
+
+if [ ! -f "${install_dir}/.env" ] \
+  && docker volume inspect metric_mongo-data >/dev/null 2>&1; then
+  echo "MongoDB data already exists, but ${install_dir}/.env is missing." >&2
+  echo "Restore the original .env so Metric can reuse the existing database password." >&2
+  echo "The installer will not generate a different password for existing data." >&2
+  exit 1
+fi
 
 for file in compose.yml symbolicator.yml; do
   if [ ! -f "${install_dir}/${file}" ]; then

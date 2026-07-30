@@ -1,7 +1,19 @@
 $ErrorActionPreference = 'Stop'
 
 $version = if ($env:METRIC_VERSION) { $env:METRIC_VERSION } else { '0.1.0' }
-$installDir = if ($env:METRIC_INSTALL_DIR) { $env:METRIC_INSTALL_DIR } else { 'metric' }
+$installDir = if ($env:METRIC_INSTALL_DIR) {
+    $env:METRIC_INSTALL_DIR
+} elseif (
+    (Test-Path -LiteralPath './compose.yml') -and
+    (
+        (Test-Path -LiteralPath './metric.toml') -or
+        (Test-Path -LiteralPath './.env')
+    )
+) {
+    '.'
+} else {
+    'metric'
+}
 $profile = if ($env:METRIC_PROFILE) { $env:METRIC_PROFILE } else { 'medium' }
 $downloadBase = if ($env:METRIC_DOWNLOAD_BASE) {
     $env:METRIC_DOWNLOAD_BASE
@@ -22,6 +34,19 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker Compose is required.'
 }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+$envFile = Join-Path $installDir '.env'
+if (-not (Test-Path -LiteralPath $envFile)) {
+    docker volume inspect metric_mongo-data *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw (
+            "MongoDB data already exists, but $envFile is missing. " +
+            'Restore the original .env so Metric can reuse the existing database ' +
+            'password. The installer will not generate a different password for ' +
+            'existing data.'
+        )
+    }
+}
 
 foreach ($file in @('compose.yml', 'symbolicator.yml')) {
     $target = Join-Path $installDir $file
@@ -52,7 +77,6 @@ function New-RandomHex([int]$ByteCount) {
     return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
 }
 
-$envFile = Join-Path $installDir '.env'
 if (-not (Test-Path -LiteralPath $envFile)) {
     $temporaryTarget = "$envFile.tmp"
     Remove-Item -LiteralPath $temporaryTarget -Force -ErrorAction SilentlyContinue

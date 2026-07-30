@@ -40,6 +40,14 @@ jobs:
       - run: python scripts/validate-compatibility.py
       - run: python scripts/validate-deployment-profiles.py
       - run: python scripts/validate-documentation.py
+      - name: Verify Linux installer syntax
+        run: sh -n deploy/install.sh
+      - name: Verify PowerShell installer syntax
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create(
+            (Get-Content deploy/install.ps1 -Raw)
+          )
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-targets --all-features --locked
       - uses: actions/setup-node@v4

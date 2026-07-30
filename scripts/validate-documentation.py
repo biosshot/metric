@@ -147,6 +147,36 @@ def main() -> int:
         if obsolete in current_deployment_surface:
             errors.append(f"current deployment documentation contains obsolete path: {obsolete}")
 
+    installer_contract = {
+        "deploy/install.sh": (
+            'install_dir="."',
+            "docker volume inspect metric_mongo-data",
+            "The installer will not generate a different password for existing data.",
+        ),
+        "deploy/install.ps1": (
+            "(Test-Path -LiteralPath './compose.yml')",
+            "docker volume inspect metric_mongo-data",
+            "The installer will not generate a different password",
+        ),
+    }
+    for relative, required_values in installer_contract.items():
+        contents = read(relative)
+        for required in required_values:
+            if required not in contents:
+                errors.append(
+                    f"{relative}: missing repeat-install safety contract: {required}"
+                )
+
+    for relative in ("docs/getting-started.md", "docs/operations.md"):
+        contents = read(relative)
+        if (
+            ("volume exists" not in contents and "data exists" not in contents)
+            or "generat" not in contents
+        ):
+            errors.append(
+                f"{relative}: must explain password preservation for existing data"
+            )
+
     operator_surface = "\n".join(
         read(relative)
         for relative in (

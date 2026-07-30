@@ -36,7 +36,8 @@ irm https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.ps1 
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
-the container images and starts the recommended Medium profile.
+the container images and starts the recommended Medium profile. Running it again
+reuses the existing `.env` and passwords.
 
 Available profiles:
 

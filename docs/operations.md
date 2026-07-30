@@ -123,10 +123,12 @@ grep '^METRIC_PROFILE=' .env
 docker stats
 ```
 
-The installer preserves an existing `.env` and `metric.toml`, so rerunning it
-with another `METRIC_PROFILE` does not change a live installation. Before
-changing retention or resource limits, back up the data and compare the complete
-target profile in [Configuration](configuration.md#supplied-profiles).
+The installer preserves an existing `.env` and `metric.toml`, including when it
+is rerun from inside the installation directory. If MongoDB data exists but
+`.env` is missing, it stops instead of generating an incompatible password.
+Rerunning with another `METRIC_PROFILE` does not change a live installation.
+Before changing retention or resource limits, back up the data and compare the
+complete target profile in [Configuration](configuration.md#supplied-profiles).
 
 ## Updates
 

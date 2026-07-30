@@ -32,6 +32,23 @@ docker compose run --rm --no-deps metric \
 
 Metric reports unknown settings and invalid values before starting.
 
+## MongoDB reports `Authentication failed` after restart
+
+MongoDB creates its `metric` user only when the data volume is empty. Its password
+must continue to match `METRIC_MONGO_PASSWORD` in the original `.env`.
+
+Do not delete `metric_mongo-data`. Restore the original `.env`, remove any shell
+override with `unset METRIC_MONGO_PASSWORD`, and recreate the containers:
+
+```bash
+cd /root/metric
+unset METRIC_MONGO_PASSWORD
+docker compose up -d --force-recreate
+```
+
+The installer preserves an existing `.env`. If the volume exists but that file
+is missing, it stops instead of generating a new password.
+
 ## The browser returns to the sign-in page
 
 The supplied Docker profiles support sign-in over HTTP. Check that `metric.toml`
