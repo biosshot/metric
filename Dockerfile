@@ -1,7 +1,24 @@
 FROM node:24-bookworm-slim AS web-builder
 WORKDIR /source/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN set -eu; \
+    attempt=1; \
+    until npm ci \
+        --no-audit \
+        --no-fund \
+        --prefer-offline \
+        --fetch-retries=5 \
+        --fetch-retry-mintimeout=20000 \
+        --fetch-retry-maxtimeout=120000 \
+        --fetch-timeout=600000; do \
+      if [ "${attempt}" -ge 3 ]; then \
+        echo "npm ci failed after ${attempt} attempts." >&2; \
+        exit 1; \
+      fi; \
+      attempt=$((attempt + 1)); \
+      echo "npm registry request failed; retrying (${attempt}/3)." >&2; \
+      sleep 10; \
+    done
 COPY web/ ./
 RUN npm run build
 
