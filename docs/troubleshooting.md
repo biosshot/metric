@@ -14,8 +14,9 @@ docker compose logs metric
 Common causes:
 
 - a placeholder remains in `.env`;
+- `METRIC_PROFILE` in `.env` does not match the installed `metric.toml`;
 - `metric.toml` is not beside `compose.yml`;
-- `symbolicator.yml` is not beside `compose.yml`;
+- on Medium or High, `symbolicator.yml` is not beside `compose.yml`;
 - `METRIC_SCRUB_HMAC_KEY` is not 64 hexadecimal characters;
 - port 4001 is already used;
 - MongoDB is still starting;
@@ -61,7 +62,7 @@ Check the MongoDB container first. If it is unhealthy, inspect its logs:
 docker compose logs mongodb
 ```
 
-If Symbolicator is unhealthy, inspect its logs:
+On Medium or High, inspect Symbolicator when it is unhealthy:
 
 ```bash
 docker compose logs symbolicator
@@ -70,6 +71,38 @@ docker compose logs symbolicator
 Its cache is rebuildable. If the logs report corrupted cache data, stop the
 installation and remove only the `metric_symbolicator-cache` volume. Never remove
 `metric_mongo-data` or `metric_blob-data` while troubleshooting Symbolicator.
+
+Min and Low do not show a Symbolicator container in `docker compose ps`. That is
+expected.
+
+## Container restarts or out-of-memory errors
+
+Check current use and the selected profile:
+
+```bash
+docker stats
+grep '^METRIC_PROFILE=' .env
+```
+
+On Min, configure 1–2 GiB of host swap and stop unrelated services. Do not raise
+the Metric limit without leaving memory for MongoDB and Linux. Repeated restarts
+under normal traffic mean the installation should move to the next profile.
+
+If the server stays up but returns `429` or `503` during a brief spike, its
+bounded queues are protecting it from running out of memory.
+
+## Disk is filling
+
+Check Docker and volume use:
+
+```bash
+docker system df
+docker compose logs --tail=50 metric mongodb
+```
+
+Do not delete files directly from `mongo-data` or `blob-data`. Reduce SDK log,
+trace or Replay volume, shorten retention in `metric.toml`, or move to a larger
+disk. Container logs already rotate according to the selected profile.
 
 ## Schema mismatch
 

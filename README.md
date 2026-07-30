@@ -12,10 +12,10 @@ Metric is a self-hosted error tracking service that works with official Sentry
 SDKs. It receives errors and other application data, groups repeated errors into
 issues, and shows everything in a built-in web interface.
 
-The supplied Docker setup starts Metric, MongoDB and Symbolicator. A small cleanup
-container keeps Symbolicator's rebuildable cache bounded. You do not need to clone
-this repository or install Rust and Node.js. Your application data stays in storage
-that you control.
+The supplied Docker setup has four resource profiles. The smallest runs Metric and
+MongoDB on a 1 GiB server; Medium and High also start Symbolicator. You do not need
+to clone this repository or install Rust and Node.js. Your application data stays
+in storage that you control.
 
 > Metric 0.1.0 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
@@ -36,7 +36,23 @@ irm https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.ps1 
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
-the container images and starts Metric.
+the container images and starts the recommended Medium profile.
+
+Available profiles:
+
+| Profile | Suggested server | Symbolicator | Raw error retention |
+| --- | --- | --- | --- |
+| Min | 1 vCPU, 1 GiB RAM, 15 GiB SSD | No | 7 days |
+| Low | 2 vCPU, 2 GiB RAM, 30 GiB SSD | No | 14 days |
+| Medium | 4 vCPU, 8 GiB RAM, 100 GiB SSD | Yes | 30 days |
+| High | 8 vCPU, 16 GiB RAM, 250 GiB SSD | Yes | 90 days |
+
+For example, install Min on Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh \
+  | METRIC_PROFILE=min sh
+```
 
 Open `http://localhost:4001`, then get the one-time setup token:
 
@@ -61,7 +77,7 @@ For manual installation, Windows instructions and HTTPS, see the complete
 - application metrics and dashboards;
 - email, Telegram and signed webhook notifications;
 - user feedback and Incident Capsule export;
-- attachments, debug files and JavaScript source maps;
+- attachments, plus debug-file and source-map processing in Medium and High;
 - optional Session Replay, minidumps, S3 storage and cold archives;
 - users, projects, roles, API tokens, retention and ingest limits.
 
@@ -90,8 +106,8 @@ planning a large installation.
 
 ## Important limits
 
-- the supplied deployment uses one Metric process, one MongoDB server and one
-  Symbolicator process;
+- every supplied profile uses one Metric process and one MongoDB server;
+- Medium and High also use one Symbolicator process;
 - high availability, sharding and multiple Metric processing nodes are not
   included;
 - profiling is not supported;
@@ -125,6 +141,6 @@ Architecture decisions and implementation notes are kept in
 | Tron (TRC-20) | `TYiGUA56h1r19FEDzKRn33w511yTqZwy4V` |
 | Ethereum (ERC-20) | `0x040835b43916307b4014322439a18cb33B26913F` |
 
-Metric is released under the [MIT License](LICENSE). The default Compose setup
-also pulls Symbolicator under its own license; see
+Metric is released under the [MIT License](LICENSE). Medium and High also pull
+Symbolicator under its own license; see
 [third-party notices](THIRD_PARTY_NOTICES.md).

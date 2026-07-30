@@ -61,11 +61,11 @@ this application open source does not itself change a third party's license. Pub
 release packaging therefore records the exact external component/license and does
 not claim that an unreviewed bundled image is covered by this project's license.
 
-Release packaging amendment (2026-07-30): the default Compose setup references the
-pinned publisher image directly and enables the adapter automatically. The image is
-still a separate process, is not copied into the Metric image, and is covered by
-`THIRD_PARTY_NOTICES.md`. Standalone deployments may leave the adapter disabled or
-select another protocol-compatible endpoint.
+Release packaging amendment (2026-07-30): the Medium and High Compose profiles
+reference the pinned publisher image directly and enable the adapter automatically.
+Min and Low omit the process. The image is not copied into the Metric image and is
+covered by `THIRD_PARTY_NOTICES.md`. Standalone deployments may leave the adapter
+disabled or select another protocol-compatible endpoint.
 
 This is a distribution/release check rather than an implementation blocker. If the
 optional integration becomes unavailable, incompatible, or disputed, the adapter can

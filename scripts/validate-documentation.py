@@ -53,6 +53,10 @@ def main() -> int:
     version_documents = (
         "README.md",
         "deploy/.env.example",
+        "deploy/profiles/min.env.example",
+        "deploy/profiles/low.env.example",
+        "deploy/profiles/medium.env.example",
+        "deploy/profiles/high.env.example",
         "deploy/compose.yml",
         "deploy/install.ps1",
         "deploy/install.sh",
@@ -66,9 +70,11 @@ def main() -> int:
 
     symbolicator_image_documents = (
         "deploy/.env.example",
+        "deploy/profiles/min.env.example",
+        "deploy/profiles/low.env.example",
+        "deploy/profiles/medium.env.example",
+        "deploy/profiles/high.env.example",
         "deploy/compose.yml",
-        "deploy/install.ps1",
-        "deploy/install.sh",
         "docs/docker.md",
         "THIRD_PARTY_NOTICES.md",
     )
@@ -95,11 +101,29 @@ def main() -> int:
     symbolicator_endpoint = (
         f'endpoint = "http://symbolicator:3021{symbolicator_contract["endpoint"]}"'
     )
-    if symbolicator_endpoint not in read("deploy/metric.toml"):
-        errors.append(
-            "deploy/metric.toml: must use the tested Symbolicator endpoint "
-            f"{symbolicator_endpoint}"
-        )
+    for relative in (
+        "deploy/metric.toml",
+        "deploy/profiles/medium.toml",
+        "deploy/profiles/high.toml",
+    ):
+        if symbolicator_endpoint not in read(relative):
+            errors.append(
+                f"{relative}: must use the tested Symbolicator endpoint "
+                f"{symbolicator_endpoint}"
+            )
+
+    profile_documents = (
+        "README.md",
+        "docs/capacity.md",
+        "docs/configuration.md",
+        "docs/docker.md",
+        "docs/getting-started.md",
+    )
+    for relative in profile_documents:
+        contents = read(relative)
+        for profile in ("Min", "Low", "Medium", "High"):
+            if profile not in contents:
+                errors.append(f"{relative}: must explain the {profile} profile")
 
     current_deployment_surface = "\n".join(
         read(relative)
@@ -142,6 +166,7 @@ def main() -> int:
         r"runs two containers",
         r"does not include a Symbolicator container",
         r"external Symbolicator is optional and operated separately",
+        r"default Compose setup starts Symbolicator automatically",
     )
     for pattern in stale_patterns:
         if re.search(pattern, operator_surface, re.IGNORECASE):
@@ -179,7 +204,11 @@ def main() -> int:
             errors.append(f"docs/upgrading.md: missing data-safety invariant: {required}")
 
     project_markdown = [ROOT / "README.md", ROOT / "THIRD_PARTY_NOTICES.md"]
-    project_markdown.extend((ROOT / "docs").rglob("*.md"))
+    project_markdown.extend(
+        path
+        for path in (ROOT / "docs").rglob("*.md")
+        if "node_modules" not in path.parts
+    )
     project_markdown.extend((ROOT / "arch-docs").rglob("*.md"))
     all_markdown = "\n".join(
         path.read_text(encoding="utf-8") for path in project_markdown

@@ -1,5 +1,7 @@
-# This is the default Medium profile used inside the container image.
-# Installers replace it with the selected file from deploy/profiles/.
+# Medium profile: 4 vCPU, 8 GiB RAM, 100 GiB SSD.
+# Recommended default with Symbolicator, attachments and optional Replay.
+# Minidumps and cold archive remain disabled until explicitly reviewed.
+
 role = "all"
 
 [server]

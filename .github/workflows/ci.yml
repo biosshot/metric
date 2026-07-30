@@ -38,6 +38,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo dep-graph --locked
       - run: python scripts/validate-compatibility.py
+      - run: python scripts/validate-deployment-profiles.py
       - run: python scripts/validate-documentation.py
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-targets --all-features --locked
@@ -115,13 +116,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: docker build --tag metric:ci .
       - name: Validate Docker Compose
-        run: docker compose --env-file deploy/.env.example -f deploy/compose.yml config --quiet
+        shell: bash
+        run: |
+          set -euo pipefail
+          for profile in min low medium high; do
+            docker compose \
+              --env-file "deploy/profiles/${profile}.env.example" \
+              -f deploy/compose.yml \
+              config --quiet
+          done
+      - name: Verify Min deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployment="${RUNNER_TEMP}/metric-min"
+          mkdir -p "${deployment}"
+          cp deploy/compose.yml "${deployment}/compose.yml"
+          cp deploy/profiles/min.toml "${deployment}/metric.toml"
+          cp deploy/profiles/min.env.example "${deployment}/.env"
+          cp deploy/symbolicator.yml "${deployment}/symbolicator.yml"
+          export METRIC_IMAGE=metric:ci
+          export METRIC_MONGO_PASSWORD=metric-ci-password
+          export METRIC_SCRUB_HMAC_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          compose=(docker compose --env-file "${deployment}/.env" -f "${deployment}/compose.yml")
+          cleanup() {
+            "${compose[@]}" down --volumes
+          }
+          trap cleanup EXIT
+          if ! "${compose[@]}" up -d --wait --wait-timeout 120; then
+            "${compose[@]}" logs
+            exit 1
+          fi
+          curl --fail --silent http://127.0.0.1:4001/ready
       - name: Verify Symbolicator container
         shell: bash
         run: |
           set -euo pipefail
-          compose=(docker compose --env-file deploy/.env.example -f deploy/compose.yml)
+          compose=(docker compose --env-file deploy/profiles/medium.env.example -f deploy/compose.yml)
           cleanup() {
             "${compose[@]}" down --volumes
           }
@@ -130,4 +163,3 @@ jobs:
             "${compose[@]}" logs symbolicator
             exit 1
           fi
-      - run: docker build --tag metric:ci .

@@ -3,27 +3,67 @@
 You need Docker with Docker Compose. You do not need Git, Rust, Node.js or a copy
 of the source repository.
 
+## Choose a profile
+
+| Profile | Suggested server | What it is for |
+| --- | --- | --- |
+| **Min** | 1 vCPU, 1 GiB RAM, 15 GiB SSD | A few small projects and rare errors. |
+| **Low** | 2 vCPU, 2 GiB RAM, 30 GiB SSD | A small everyday installation. |
+| **Medium** | 4 vCPU, 8 GiB RAM, 100 GiB SSD | The recommended full-featured default. |
+| **High** | 8 vCPU, 16 GiB RAM, 250 GiB SSD | Higher traffic, longer retention and larger files. |
+
+Min and Low do not start Symbolicator. They still receive, group and display
+ordinary errors, but they do not process uploaded debug files or source maps.
+Medium and High start Symbolicator and its cache cleanup automatically.
+
+These are starting points, not event-rate guarantees. See
+[Capacity and profiles](capacity.md) for the complete feature and retention
+comparison.
+
 ## Install with one command
 
+Medium is used when no profile is specified.
+
 ### Linux or macOS
+
+Medium:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh | sh
 ```
 
+Another profile:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.sh \
+  | METRIC_PROFILE=min sh
+```
+
+Replace `min` with `low` or `high` when needed.
+
 ### Windows PowerShell
+
+Medium:
 
 ```powershell
 irm https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.ps1 | iex
 ```
 
+Another profile:
+
+```powershell
+$env:METRIC_PROFILE = 'min'
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/install.ps1 | iex
+Remove-Item Env:METRIC_PROFILE
+```
+
 The installer:
 
 1. creates a `metric` directory;
-2. downloads the Compose, Metric and Symbolicator configuration files;
+2. downloads one Compose file and the selected Metric profile;
 3. generates random passwords and stores them in `metric/.env`;
-4. pulls the Metric, MongoDB and Symbolicator images;
-5. starts all containers and waits until they are healthy.
+4. pulls only the images used by that profile;
+5. starts the containers and waits until they are healthy.
 
 You can review the
 [Linux installer](https://github.com/biosshot/metric/blob/v0.1.0/deploy/install.sh)
@@ -60,26 +100,38 @@ metric/
 All four files must stay in the same directory:
 
 - [`compose.yml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/compose.yml)
-  describes all containers;
-- [`metric.toml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/metric.toml)
-  contains the container settings;
+  describes all available containers;
+- `metric.toml` is the selected Min, Low, Medium or High configuration;
 - [`symbolicator.yml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/symbolicator.yml)
-  contains the Symbolicator cache and server settings;
-- `.env` contains passwords, image versions and the public port.
+  is used only by Medium and High;
+- `.env` contains the selected profile, passwords, image versions and Docker
+  resource limits.
 
-Keep `.env` private and retain its values during updates.
+Keep `.env` private and retain its secret values during updates.
+
+::: warning Existing installation
+The installer does not overwrite an existing `.env` or `metric.toml`. Setting
+`METRIC_PROFILE` and running it again does not silently change a live
+installation.
+:::
 
 ## Manual installation
 
-If you do not want to run an installer, create an empty directory and download
-the four example files:
+Create an empty directory and download:
 
 - [compose.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/compose.yml)
-- [metric.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/metric.toml)
 - [symbolicator.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/symbolicator.yml)
-- [.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/.env.example)
 
-Save `.env.example` as `.env`. Replace the two placeholder secrets:
+Then choose one pair and save it under the name shown:
+
+| Profile | Save as `metric.toml` | Save as `.env` |
+| --- | --- | --- |
+| Min | [min.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/min.toml) | [min.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/min.env.example) |
+| Low | [low.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/low.toml) | [low.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/low.env.example) |
+| Medium | [medium.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/medium.toml) | [medium.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/medium.env.example) |
+| High | [high.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/high.toml) | [high.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/profiles/high.env.example) |
+
+Replace the two placeholder secrets in `.env`:
 
 Linux or macOS:
 
@@ -101,7 +153,7 @@ $bytes = New-Object byte[] 32
 ```
 
 Use the first value for `METRIC_MONGO_PASSWORD` and the second for
-`METRIC_SCRUB_HMAC_KEY`. Then run this command from that directory:
+`METRIC_SCRUB_HMAC_KEY`. Start the selected profile:
 
 ```bash
 docker compose up -d --wait --wait-timeout 120
@@ -114,36 +166,13 @@ docker compose ps
 curl http://localhost:4001/ready
 ```
 
-## Configuration examples
-
-- [Container configuration](https://github.com/biosshot/metric/blob/v0.1.0/deploy/metric.toml)
-  is ready for Docker and must be saved beside `compose.yml`.
-- [Symbolicator configuration](https://github.com/biosshot/metric/blob/v0.1.0/deploy/symbolicator.yml)
-  is ready to use and normally does not need changes.
-- [Complete configuration example](https://github.com/biosshot/metric/blob/v0.1.0/config/metric.example.toml)
-  shows advanced settings for the standalone binary. Its local paths and listen
-  address are not intended to replace the container configuration unchanged.
-- [Configuration reference](configuration.md) explains every setting.
-
 ## Useful commands
 
 Run these commands inside the `metric` directory.
 
-View logs:
-
 ```bash
 docker compose logs -f metric
-```
-
-Stop without deleting data:
-
-```bash
 docker compose down
-```
-
-Start again:
-
-```bash
 docker compose up -d --wait --wait-timeout 120
 ```
 
@@ -152,8 +181,8 @@ Do not add `-v` to `docker compose down`. That option deletes the MongoDB and fi
 storage volumes.
 :::
 
-::: warning Symbolicator license
-The default setup pulls Sentry Symbolicator 26.6.0 as an independent third-party
+::: warning Optional Symbolicator license
+Medium and High pull Sentry Symbolicator 26.6.0 as an independent third-party
 container. It is not covered by Metric's MIT License. Review the
 [third-party notice](https://github.com/biosshot/metric/blob/main/THIRD_PARTY_NOTICES.md).
 :::

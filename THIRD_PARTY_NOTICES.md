@@ -1,7 +1,7 @@
 # Third-party containers
 
-Metric is released under the MIT License. The Docker Compose setup also downloads
-the following independent container directly from its publisher:
+Metric is released under the MIT License. The Medium and High Docker profiles
+also download the following independent container directly from its publisher:
 
 ## Sentry Symbolicator
 

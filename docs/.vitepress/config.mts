@@ -42,7 +42,7 @@ export default defineConfig({
           { text: 'Supported features', link: '/supported-capabilities' },
           { text: 'SDK compatibility', link: '/compatibility' },
           { text: 'Known limits', link: '/known-limits' },
-          { text: 'Capacity and sizing', link: '/capacity' },
+          { text: 'Capacity and profiles', link: '/capacity' },
         ],
       },
     ],

@@ -28,22 +28,32 @@ fn check_config_succeeds_with_clean_defaults() {
 }
 
 #[test]
-fn container_config_passes_the_production_config_gate() {
-    let config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/metric.toml");
-    let output = Command::new(binary())
-        .args(["--config", config.to_str().unwrap(), "--check-config"])
-        .env("MONGODB_URI", "mongodb://mongo:27017/?retryWrites=false")
-        .env(
-            "SCRUB_HMAC_KEY",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn deployment_profiles_pass_the_production_config_gate() {
+    let deploy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy");
+    let configs = [
+        deploy.join("metric.toml"),
+        deploy.join("profiles/min.toml"),
+        deploy.join("profiles/low.toml"),
+        deploy.join("profiles/medium.toml"),
+        deploy.join("profiles/high.toml"),
+    ];
+    for config in configs {
+        let output = Command::new(binary())
+            .args(["--config", config.to_str().unwrap(), "--check-config"])
+            .env("MONGODB_URI", "mongodb://mongo:27017/?retryWrites=false")
+            .env(
+                "SCRUB_HMAC_KEY",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            config.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

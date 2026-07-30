@@ -17,9 +17,13 @@ empty database, but it cannot migrate data from an older generation. Read
 - Metric uses the MongoDB administrator account created inside the supplied
   container. The MongoDB port is not published; do not use that database for
   other applications.
-- The supplied Symbolicator 26.6.0 image is a third-party component under
-  FSL-1.1-MIT, not Metric's MIT License. Read the
+- Medium and High use the supplied Symbolicator 26.6.0 image. It is a
+  third-party component under FSL-1.1-MIT, not Metric's MIT License. Read the
   [third-party notice](https://github.com/biosshot/metric/blob/main/THIRD_PARTY_NOTICES.md).
+- Min and Low retain raw stack frames but do not process debug files or source
+  maps because they omit Symbolicator.
+- Profile hardware sizes are starting recommendations, not guaranteed event
+  rates. Min and Low do not yet have retained long-duration soak evidence.
 - Sharding and multiple Metric processing nodes are not supported.
 - Capacity depends on your hardware, event size and enabled features. Measure
   your own workload before relying on a particular event rate.

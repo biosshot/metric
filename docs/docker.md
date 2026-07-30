@@ -1,13 +1,19 @@
 # Docker
 
-The supplied Compose file starts:
+Metric uses one `compose.yml` for every resource profile. The selected `.env`
+controls container memory, MongoDB cache, log rotation and whether Symbolicator
+is active. The selected `metric.toml` controls application limits and retention.
 
-- Metric;
-- MongoDB;
-- Sentry Symbolicator;
-- a small Symbolicator cache-cleanup process.
+## Containers by profile
 
-The web interface is already inside the Metric image.
+| Container | Min | Low | Medium | High |
+| --- | --- | --- | --- | --- |
+| Metric | Yes | Yes | Yes | Yes |
+| MongoDB | Yes | Yes | Yes | Yes |
+| Symbolicator | No | No | Yes | Yes |
+| Symbolicator cache cleanup | No | No | Yes | Yes |
+
+The web interface is included in the Metric image.
 
 ## Images
 
@@ -17,10 +23,8 @@ The web interface is already inside the Metric image.
 | MongoDB | `mongo:8.0.12` |
 | Symbolicator | `ghcr.io/getsentry/symbolicator:26.6.0` |
 
-Use an exact version in production. Avoid changing to an untested image tag.
-
-Symbolicator is an independent third-party image under FSL-1.1-MIT. It is not
-covered by Metric's MIT License. See the
+Use exact image versions. Symbolicator is an independent third-party image under
+FSL-1.1-MIT and is used only by Medium and High. See the
 [third-party notice](https://github.com/biosshot/metric/blob/main/THIRD_PARTY_NOTICES.md).
 
 ## Start and stop
@@ -31,22 +35,52 @@ docker compose down
 ```
 
 Run these commands from the directory containing `compose.yml`, `metric.toml`,
-`symbolicator.yml` and `.env`. Stopping the containers does not delete data.
+`symbolicator.yml` and `.env`. Do not pass a profile flag manually: the installer
+has already stored the correct `COMPOSE_PROFILES` value in `.env`.
+
+Check the selected profile:
+
+```bash
+grep '^METRIC_PROFILE=' .env
+```
+
+On PowerShell:
+
+```powershell
+Select-String '^METRIC_PROFILE=' .env
+```
+
+## Resource limits
+
+| Setting in `.env` | Meaning |
+| --- | --- |
+| `METRIC_PROFILE` | Name recorded for the operator. |
+| `COMPOSE_PROFILES` | Starts Symbolicator for Medium and High. |
+| `METRIC_MONGO_CACHE_GB` | MongoDB WiredTiger cache. |
+| `METRIC_MONGO_MEMORY_LIMIT` | MongoDB container memory ceiling. |
+| `METRIC_APP_MEMORY_LIMIT` | Metric container memory ceiling. |
+| `METRIC_SYMBOLICATOR_MEMORY_LIMIT` | Symbolicator memory ceiling when active. |
+| `METRIC_LOG_MAX_SIZE` | Size of one rotated container log. |
+| `METRIC_LOG_MAX_FILES` | Number of container log files retained. |
+
+If a container reaches its memory ceiling, Docker may restart it. Do not increase
+one limit beyond the server size without considering MongoDB, Metric, the
+operating system and optional Symbolicator together.
 
 ## Data
 
-Compose creates three volumes:
+Compose defines three volumes:
 
 - `mongo-data` stores events, issues, users and settings;
 - `blob-data` stores attachments, replays and other files;
-- `symbolicator-cache` stores downloaded symbols and generated caches.
+- `symbolicator-cache` stores rebuildable caches for Medium and High.
 
-Keep `mongo-data` and `blob-data` together. The Symbolicator cache can be rebuilt
-and does not need to be backed up. Do not run `docker compose down -v` unless you
-intend to delete the complete installation.
+Min and Low do not create or use the Symbolicator cache during a normal start.
+Keep `mongo-data` and `blob-data` together. Do not run
+`docker compose down -v` unless you intend to delete the complete installation.
 
-The supplied Compose file does not publish the MongoDB port. Do not reuse this
-MongoDB container for other applications.
+The supplied Compose file does not publish the MongoDB or Symbolicator ports.
+Do not reuse its MongoDB container for other applications.
 
 ## HTTPS
 
@@ -70,15 +104,14 @@ its required workers can serve requests.
 
 ## Update the image
 
-Read [Update Metric](upgrading.md) before changing versions. Change `METRIC_IMAGE`
-in `.env` to the exact new version, then:
+Read [Update Metric](upgrading.md) before changing versions. Change
+`METRIC_IMAGE` in `.env` to the exact new version, then:
 
 ```bash
-docker compose pull metric
+docker compose pull
 docker compose up -d --wait --wait-timeout 120
 ```
 
-Never delete the MongoDB volume to fix a schema-version error.
-
-Change `METRIC_SYMBOLICATOR_IMAGE` only when the Metric release notes name a
-compatible Symbolicator version.
+Never delete the MongoDB volume to fix a schema-version error. Change
+`METRIC_SYMBOLICATOR_IMAGE` only when Metric release notes name a compatible
+version.

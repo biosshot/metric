@@ -9,6 +9,7 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 2. Check which MongoDB schema generation it requires.
 3. Back up MongoDB and file storage together.
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
+5. Note `METRIC_PROFILE` from `.env`.
 
 The current Metric binary requires MongoDB schema generation **19 exactly**.
 
@@ -20,7 +21,8 @@ Changing that number does not migrate the stored data.
 
 ## Install the new image
 
-Open `.env` and change only `METRIC_IMAGE`:
+If the release notes do not require new profile files, open `.env` and change
+only `METRIC_IMAGE`:
 
 ```text
 METRIC_IMAGE=ghcr.io/biosshot/metric:<new version>
@@ -40,6 +42,11 @@ If Metric does not become ready, read its logs:
 ```bash
 docker compose logs --tail=200 metric
 ```
+
+When release notes publish changed Compose or profile settings, compare them
+with your saved files before restarting. Do not replace `.env` wholesale: it
+contains the installation secrets. Do not silently switch Min, Low, Medium or
+High as part of an ordinary version update.
 
 ## Schema compatibility
 

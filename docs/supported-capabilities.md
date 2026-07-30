@@ -18,8 +18,8 @@
 - export an Incident Capsule for an issue;
 - deliver signed webhooks;
 - store files on the local Docker volume;
-- symbolicate native and JavaScript stack traces with the supplied external
-  Symbolicator container.
+- symbolicate native and JavaScript stack traces with the Symbolicator container
+  included in Medium and High.
 
 Some included features, such as alerts and application metrics, only receive
 data after you configure them in Metric or in your SDK.
@@ -28,12 +28,15 @@ data after you configure them in Metric or in your SDK.
 
 - S3-compatible storage instead of local file storage;
 - minidump upload for native crashes;
-- debug files and JavaScript source maps;
+- debug files and JavaScript source maps (processed by Medium and High);
 - cold archive for older data;
 - browser Session Replay with `@sentry/browser` 10.66.0.
 
 Minidumps and Session Replay are disabled by default because they need an explicit
 privacy decision.
+
+Min disables attachments. Min and Low omit Symbolicator. See
+[Capacity and profiles](capacity.md) before selecting a server size.
 
 ## Not available yet
 

@@ -1,10 +1,23 @@
 name: metric
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${METRIC_LOG_MAX_SIZE:-25m}
+    max-file: ${METRIC_LOG_MAX_FILES:-4}
+
 services:
   mongodb:
     image: mongo:8.0.12
     restart: unless-stopped
-    command: ["mongod", "--bind_ip_all"]
+    command:
+      [
+        "mongod",
+        "--bind_ip_all",
+        "--wiredTigerCacheSizeGB",
+        "${METRIC_MONGO_CACHE_GB:-2}",
+      ]
+    mem_limit: ${METRIC_MONGO_MEMORY_LIMIT:-3g}
     environment:
       MONGO_INITDB_ROOT_USERNAME: metric
       MONGO_INITDB_ROOT_PASSWORD: ${METRIC_MONGO_PASSWORD:?set in .env}
@@ -28,15 +41,22 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+    logging: *default-logging
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
 
   metric:
     image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.0}
     restart: unless-stopped
+    mem_limit: ${METRIC_APP_MEMORY_LIMIT:-2g}
     depends_on:
       mongodb:
         condition: service_healthy
       symbolicator:
         condition: service_healthy
+        required: false
     environment:
       MONGODB_URI: mongodb://metric:${METRIC_MONGO_PASSWORD}@mongodb:27017/?authSource=admin
       SCRUB_HMAC_KEY: ${METRIC_SCRUB_HMAC_KEY:?64 lowercase hex characters}
@@ -52,10 +72,13 @@ services:
     stop_grace_period: 40s
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   symbolicator:
+    profiles: ["symbolication"]
     image: ${METRIC_SYMBOLICATOR_IMAGE:-ghcr.io/getsentry/symbolicator:26.6.0}
     restart: unless-stopped
+    mem_limit: ${METRIC_SYMBOLICATOR_MEMORY_LIMIT:-2g}
     command: ["run", "-c", "/etc/symbolicator/config.yml"]
     volumes:
       - ./symbolicator.yml:/etc/symbolicator/config.yml:ro
@@ -75,10 +98,13 @@ services:
       start_period: 20s
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   symbolicator-cleanup:
+    profiles: ["symbolication"]
     image: ${METRIC_SYMBOLICATOR_IMAGE:-ghcr.io/getsentry/symbolicator:26.6.0}
     restart: unless-stopped
+    mem_limit: ${METRIC_CLEANUP_MEMORY_LIMIT:-128m}
     command:
       [
         "cleanup",
@@ -95,6 +121,7 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
 volumes:
   mongo-data:

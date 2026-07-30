@@ -14,8 +14,8 @@ hero:
       link: /sdk-setup
 
 features:
-  - title: Small Docker stack
-    details: Metric runs with MongoDB and Symbolicator. The web interface and cache cleanup are included.
+  - title: Starts at 1 GiB
+    details: Choose Min, Low, Medium or High. Small profiles omit Symbolicator and bound memory, disk and retention.
   - title: Keep your SDK
     details: Use the official Sentry SDK for your language and point its DSN to Metric.
   - title: Keep your data
@@ -36,8 +36,8 @@ before using it for important production data.
 ## What you need
 
 - Docker with Docker Compose;
-- a machine that can keep its MongoDB data;
+- a 64-bit machine starting at 1 vCPU, 1 GiB RAM and 15 GiB SSD;
 - HTTPS when Metric is available over the internet.
 
-Start with [Install Metric](getting-started.md). Most users do not need to change
-the advanced settings.
+Start with [Install Metric](getting-started.md) and choose a resource profile.
+Most users do not need to change its individual settings.

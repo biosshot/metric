@@ -1,16 +1,42 @@
 # Configuration
 
-The Docker setup is ready to use without changing `metric.toml`. Most
-installations only need the values already created in `.env`:
+The Docker setup is ready to use without changing `metric.toml`. The installer
+chooses one tested file from `deploy/profiles/` and saves it as `metric.toml`.
+Most installations only need the values already created in `.env`:
 
+- `METRIC_PROFILE`;
+- `COMPOSE_PROFILES`;
 - `METRIC_MONGO_PASSWORD`;
 - `METRIC_SCRUB_HMAC_KEY`;
 - `METRIC_HTTP_PORT`;
 - `METRIC_IMAGE`;
-- `METRIC_SYMBOLICATOR_IMAGE`.
+- `METRIC_SYMBOLICATOR_IMAGE`;
+- `METRIC_MONGO_CACHE_GB`;
+- `METRIC_MONGO_MEMORY_LIMIT`;
+- `METRIC_APP_MEMORY_LIMIT`;
+- `METRIC_SYMBOLICATOR_MEMORY_LIMIT`;
+- `METRIC_CLEANUP_MEMORY_LIMIT`;
+- `METRIC_LOG_MAX_SIZE`;
+- `METRIC_LOG_MAX_FILES`.
 
 Advanced settings live in `metric.toml` beside `compose.yml`. Metric reads them
 once at startup, so restart the container after a change.
+
+## Supplied profiles
+
+| Profile file | Main purpose |
+| --- | --- |
+| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
+| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
+| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
+| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.0/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
+
+Profile settings are designed as a group. Copying only High queue sizes into Min
+can make a 1 GiB server run out of memory. Copying only High retention into a
+smaller profile can fill its disk.
+
+Minidumps and cold archive stay disabled in all supplied profiles. Session Replay
+still requires an explicit per-project choice.
 
 ## Check changes before starting
 
@@ -68,9 +94,10 @@ same value while the installation contains data.
 Durations accept values such as `250ms`, `30s`, `15m`, `24h` and `30d`. Sizes
 accept values such as `64 KiB`, `20 MiB` and `1 GiB`.
 
-The tables below list every setting. The shown values match the supplied example
-or the built-in default when the example leaves a setting out. Values changed by
-the supplied Docker configuration are labeled separately.
+The tables below list every setting and its standalone default. Docker profiles
+override many of these values; use the selected `metric.toml` as the exact source
+for that installation. The main profile differences are summarized in
+[Capacity and profiles](capacity.md).
 
 ## Server and database
 
@@ -80,7 +107,7 @@ the supplied Docker configuration are labeled separately.
 | `server.http_address` | `127.0.0.1:4001` | Address and port used by the binary. The container uses `0.0.0.0:4001`. |
 | `server.shutdown_grace` | `10s` (Docker: `30s`) | Time allowed for work to finish during shutdown. |
 | `server.trusted_proxies` | `[]` | Proxy IP addresses or networks allowed to supply forwarding headers. |
-| `server.max_active_requests` | `512` | Maximum requests handled at the same time. |
+| `server.max_active_requests` | `512` | Maximum requests handled at the same time. Profiles use 16, 64, 256 or 1024. |
 | `server.request_timeout` | `30s` | General HTTP request deadline. |
 | `mongodb.uri` | `MONGODB_URI` | MongoDB connection string. Keep it secret. |
 | `mongodb.database` | `metric` | MongoDB database name. |
@@ -104,7 +131,7 @@ Do not enable these settings on an internet-facing installation.
 | --- | --- | --- |
 | `blob.backend` | `local` | Storage type: `local` or `s3`. |
 | `blob.root` | `./metric-data/blobs` (Docker: `/var/lib/metric/blobs`) | Local storage directory. |
-| `blob.capacity` | `1 GiB` | Maximum space Metric may use in local storage. |
+| `blob.capacity` | `1 GiB` | Maximum space Metric may use in local storage. Profiles use 256 MiB, 2 GiB, 10 GiB or 50 GiB. |
 | `blob.reserve` | `128 MiB` | Space kept free before new objects are rejected. |
 | `blob.max_object_bytes` | `100 MiB` | Maximum size of one stored object. |
 | `blob.s3.endpoint` | unset | Custom S3-compatible endpoint. Leave unset for AWS S3. |
@@ -138,7 +165,7 @@ Cold archive is disabled by default.
 | `native_crash.minidump.enabled` | `false` | Accepts minidumps. They may contain raw process memory. |
 | `native_crash.minidump.max_bytes` | `100 MiB` | Maximum minidump size. |
 | `native_crash.minidump.chunk_bytes` | `64 KiB` | Streaming read chunk size. |
-| `symbolicator.endpoint` | unset (Docker: `http://symbolicator:3021/symbolicate`) | Symbolicator API address. The supplied Docker setup configures it automatically. |
+| `symbolicator.endpoint` | unset (Medium/High: `http://symbolicator:3021/symbolicate`) | Symbolicator API address. Min and Low leave it unset. |
 | `symbolicator.callback_base_url` | `http://127.0.0.1:4001/` (Docker: `http://metric:4001/`) | Metric address that Symbolicator can call. Change it to a reachable address when Symbolicator runs outside the Compose network. |
 | `symbolicator.request_timeout` | `20s` | Symbolicator request deadline. |
 | `symbolicator.maximum_concurrency` | `8` | Maximum Symbolicator requests at the same time. |
@@ -146,9 +173,9 @@ Cold archive is disabled by default.
 | `symbolicator.circuit_cooldown` | `30s` | Pause after the failure threshold is reached. |
 | `symbolicator.maximum_response_bytes` | `4 MiB` | Maximum accepted Symbolicator response size. |
 
-The default Docker setup also reads `symbolicator.yml` beside `compose.yml`.
-This file configures Symbolicator's internal server, cache and logging. Most
-installations should keep the supplied values unchanged.
+Medium and High also read `symbolicator.yml` beside `compose.yml`. This file
+configures Symbolicator's internal server, cache and logging. Min and Low keep
+the file for easy upgrades but do not start its container.
 
 ## Debug files and artifact bundles
 
@@ -246,8 +273,8 @@ These defaults are used when an `[artifacts]` section is not present.
 
 | Setting | Value | Meaning |
 | --- | --- | --- |
-| `dispatcher.queue_capacity` | `4096` | In-memory processing queue size. |
-| `dispatcher.worker_concurrency` | `32` | Dispatcher workers running at the same time. |
+| `dispatcher.queue_capacity` | `4096` | In-memory processing queue size. Profiles use 128, 512, 2048 or 8192. |
+| `dispatcher.worker_concurrency` | `32` | Dispatcher workers running at the same time. Profiles use 1, 4, 16 or 64. |
 | `dispatcher.low_watermark` | `1024` | Queue level that triggers a refill. |
 | `dispatcher.refill_target` | `3072` | Queue level targeted by a refill. |
 | `dispatcher.refill_batch_size` | `512` | Maximum records fetched per refill. |
@@ -262,7 +289,7 @@ These defaults are used when an `[artifacts]` section is not present.
 | `scheduler.retry_base` | `1s` | First scheduler retry delay. |
 | `scheduler.retry_max` | `1m` | Maximum scheduler retry delay. |
 | `scheduler.batch_size` | `500` | Maximum records handled in one scheduler batch. |
-| `processor.max_concurrency` | `32` | Events processed at the same time. |
+| `processor.max_concurrency` | `32` | Events processed at the same time. Profiles use 1, 4, 16 or 64. |
 | `processor.max_attempts` | `5` | Maximum attempts before processing stops retrying. |
 | `processor.retry_base` | `1s` | First processing retry delay. |
 | `processor.retry_max` | `5m` | Maximum processing retry delay. |

@@ -2,10 +2,15 @@ $ErrorActionPreference = 'Stop'
 
 $version = if ($env:METRIC_VERSION) { $env:METRIC_VERSION } else { '0.1.0' }
 $installDir = if ($env:METRIC_INSTALL_DIR) { $env:METRIC_INSTALL_DIR } else { 'metric' }
+$profile = if ($env:METRIC_PROFILE) { $env:METRIC_PROFILE } else { 'medium' }
 $downloadBase = if ($env:METRIC_DOWNLOAD_BASE) {
     $env:METRIC_DOWNLOAD_BASE
 } else {
     "https://raw.githubusercontent.com/biosshot/metric/v$version/deploy"
+}
+
+if ($profile -notin @('min', 'low', 'medium', 'high')) {
+    throw 'METRIC_PROFILE must be min, low, medium or high.'
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -18,7 +23,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-foreach ($file in @('compose.yml', 'metric.toml', 'symbolicator.yml')) {
+foreach ($file in @('compose.yml', 'symbolicator.yml')) {
     $target = Join-Path $installDir $file
     if (-not (Test-Path -LiteralPath $target)) {
         $temporaryTarget = "$target.tmp"
@@ -26,6 +31,14 @@ foreach ($file in @('compose.yml', 'metric.toml', 'symbolicator.yml')) {
         Invoke-WebRequest -Uri "$downloadBase/$file" -OutFile $temporaryTarget
         Move-Item -LiteralPath $temporaryTarget -Destination $target
     }
+}
+
+$metricConfig = Join-Path $installDir 'metric.toml'
+if (-not (Test-Path -LiteralPath $metricConfig)) {
+    $temporaryTarget = "$metricConfig.tmp"
+    Remove-Item -LiteralPath $temporaryTarget -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri "$downloadBase/profiles/$profile.toml" -OutFile $temporaryTarget
+    Move-Item -LiteralPath $temporaryTarget -Destination $metricConfig
 }
 
 function New-RandomHex([int]$ByteCount) {
@@ -41,18 +54,44 @@ function New-RandomHex([int]$ByteCount) {
 
 $envFile = Join-Path $installDir '.env'
 if (-not (Test-Path -LiteralPath $envFile)) {
-    $content = @(
-        "METRIC_MONGO_PASSWORD=$(New-RandomHex 24)"
-        "METRIC_SCRUB_HMAC_KEY=$(New-RandomHex 32)"
-        'METRIC_HTTP_PORT=4001'
-        "METRIC_IMAGE=ghcr.io/biosshot/metric:$version"
-        'METRIC_SYMBOLICATOR_IMAGE=ghcr.io/getsentry/symbolicator:26.6.0'
-        ''
-    ) -join [Environment]::NewLine
+    $temporaryTarget = "$envFile.tmp"
+    Remove-Item -LiteralPath $temporaryTarget -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest `
+        -Uri "$downloadBase/profiles/$profile.env.example" `
+        -OutFile $temporaryTarget
+    $content = [IO.File]::ReadAllText($temporaryTarget)
+    $content = $content.Replace(
+        'replace-with-a-long-url-safe-random-password',
+        (New-RandomHex 24)
+    ).Replace(
+        'replace-with-64-lowercase-hex-characters',
+        (New-RandomHex 32)
+    ).Replace(
+        'ghcr.io/biosshot/metric:0.1.0',
+        "ghcr.io/biosshot/metric:$version"
+    )
     [IO.File]::WriteAllText(
-        (Join-Path (Get-Location) $envFile),
+        [IO.Path]::GetFullPath($temporaryTarget),
         $content,
         [Text.UTF8Encoding]::new($false)
+    )
+    Move-Item -LiteralPath $temporaryTarget -Destination $envFile
+}
+
+$activeProfile = (
+    Get-Content -LiteralPath $envFile |
+        Where-Object { $_ -like 'METRIC_PROFILE=*' } |
+        Select-Object -First 1
+)
+if ($activeProfile) {
+    $activeProfile = $activeProfile.Substring('METRIC_PROFILE='.Length)
+} else {
+    $activeProfile = 'unknown'
+}
+if ($activeProfile -ne 'unknown' -and $activeProfile -ne $profile) {
+    Write-Warning (
+        "Existing installation keeps profile $activeProfile; " +
+        "requested $profile was not applied."
     )
 }
 
@@ -75,5 +114,6 @@ try {
 }
 
 Write-Host ''
+Write-Host "Profile: $activeProfile"
 Write-Host 'Metric is ready at http://localhost:4001'
 Write-Host "First setup token: cd $installDir; docker compose logs metric"

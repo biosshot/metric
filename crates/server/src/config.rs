@@ -33,6 +33,7 @@ pub type BacklogAge = BoundedDuration<604_800_000>;
 pub type AuthDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 pub type ProjectDeletionDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
+type StorageBytes = ByteSize<{ 1024_u64 * 1024 * 1024 * 1024 }>;
 type ArtifactLogicalBytes = ByteSize<{ 4_u64 * 1024 * 1024 * 1024 }>;
 type ArtifactQuotaBytes = ByteSize<{ 1024_u64 * 1024 * 1024 * 1024 * 1024 }>;
 
@@ -1685,9 +1686,9 @@ impl TryFrom<RawConfig> for AppConfig {
             return Err(ConfigError::InvalidProjectConfig);
         }
         let ingest = IngestConfig::try_from(raw.ingest)?;
-        let capacity = ConfiguredBytes::from_str(&raw.blob.capacity)
+        let capacity = StorageBytes::from_str(&raw.blob.capacity)
             .map_err(|_| ConfigError::InvalidBlobConfig)?;
-        let reserve = ConfiguredBytes::from_str(&raw.blob.reserve)
+        let reserve = StorageBytes::from_str(&raw.blob.reserve)
             .map_err(|_| ConfigError::InvalidBlobConfig)?;
         let max_object = ConfiguredBytes::from_str(&raw.blob.max_object_bytes)
             .map_err(|_| ConfigError::InvalidBlobConfig)?;

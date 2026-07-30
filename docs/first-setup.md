@@ -22,7 +22,8 @@ After signing in:
 1. Select **Create your first project**.
 2. Enter the application or service name, for example `Payments API`.
 3. Keep **HMAC pseudonymization** unless you need another IP-address policy.
-4. Keep the default signal types enabled.
+4. On Medium or High, keep the signal types you need. On Min or Low, begin with
+   Error Events and add sampled logs or traces only after watching disk use.
 5. Leave Session Replay disabled until you have reviewed its privacy settings.
 6. Create the project.
 
