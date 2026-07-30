@@ -7,7 +7,8 @@ Capacity depends on:
 - average event and attachment size;
 - enabled features and retention periods;
 - MongoDB and disk performance;
-- whether Metric and MongoDB share the same machine.
+- Symbolicator workload and cache size;
+- whether all containers share the same machine.
 
 ## Reference result
 
@@ -37,6 +38,9 @@ The supplied Docker setup keeps them in the `mongo-data` and `blob-data` volumes
 Monitor free disk space for both volumes. Include extra space for MongoDB indexes,
 temporary work and backups.
 
+Symbolicator uses a third `symbolicator-cache` volume. It can be rebuilt, but it
+also needs free disk space while Metric is running.
+
 ## Measure your installation
 
 For an important deployment, test with event sizes and traffic similar to your
@@ -47,7 +51,7 @@ watch:
 - `/ready` failures;
 - event processing delay;
 - MongoDB CPU, memory and disk use;
-- free space in both Docker volumes.
+- free space in the data and Symbolicator cache volumes.
 
 Developers who cloned the repository can use the repeatable load scripts described
 in [`performance/README.md`](https://github.com/biosshot/metric/blob/main/performance/README.md).

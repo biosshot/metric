@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import tomllib
@@ -20,6 +21,10 @@ def main() -> int:
     errors: list[str] = []
     cargo = tomllib.loads(read("Cargo.toml"))
     version = cargo["workspace"]["package"]["version"]
+    symbolicator_contract = json.loads(
+        read("sdk-tests/symbolicator/26.6.0-native-contract.json")
+    )
+    symbolicator_image = symbolicator_contract["image"]
     runtime = read("crates/mongo/src/lib.rs")
     match = re.search(r"pub const SCHEMA_GENERATION: i32 = (\d+);", runtime)
     if match is None:
@@ -59,6 +64,43 @@ def main() -> int:
         if version not in read(relative):
             errors.append(f"{relative}: must name the current release version {version}")
 
+    symbolicator_image_documents = (
+        "deploy/.env.example",
+        "deploy/compose.yml",
+        "deploy/install.ps1",
+        "deploy/install.sh",
+        "docs/docker.md",
+        "THIRD_PARTY_NOTICES.md",
+    )
+    for relative in symbolicator_image_documents:
+        if symbolicator_image not in read(relative):
+            errors.append(
+                f"{relative}: must name the tested Symbolicator image {symbolicator_image}"
+            )
+
+    symbolicator_config_documents = (
+        "deploy/compose.yml",
+        "deploy/install.ps1",
+        "deploy/install.sh",
+        "docs/docker.md",
+        "docs/getting-started.md",
+        "docs/operations.md",
+    )
+    for relative in symbolicator_config_documents:
+        if "symbolicator.yml" not in read(relative):
+            errors.append(
+                f"{relative}: must include the deployed symbolicator.yml configuration"
+            )
+
+    symbolicator_endpoint = (
+        f'endpoint = "http://symbolicator:3021{symbolicator_contract["endpoint"]}"'
+    )
+    if symbolicator_endpoint not in read("deploy/metric.toml"):
+        errors.append(
+            "deploy/metric.toml: must use the tested Symbolicator endpoint "
+            f"{symbolicator_endpoint}"
+        )
+
     current_deployment_surface = "\n".join(
         read(relative)
         for relative in (
@@ -97,6 +139,9 @@ def main() -> int:
         r"Session Replay and Profiling are disabled",
         r"Profiling and Session Replay remain disabled",
         r"Session Replay[^.\n]*(?:not implemented|is next)",
+        r"runs two containers",
+        r"does not include a Symbolicator container",
+        r"external Symbolicator is optional and operated separately",
     )
     for pattern in stale_patterns:
         if re.search(pattern, operator_surface, re.IGNORECASE):
@@ -133,7 +178,7 @@ def main() -> int:
         if required not in upgrade:
             errors.append(f"docs/upgrading.md: missing data-safety invariant: {required}")
 
-    project_markdown = [ROOT / "README.md"]
+    project_markdown = [ROOT / "README.md", ROOT / "THIRD_PARTY_NOTICES.md"]
     project_markdown.extend((ROOT / "docs").rglob("*.md"))
     project_markdown.extend((ROOT / "arch-docs").rglob("*.md"))
     all_markdown = "\n".join(
@@ -152,7 +197,8 @@ def main() -> int:
 
     print(
         f"documentation validation passed: version {version}, schema generation "
-        f"{generation}, deployment paths and tested SDK versions agree"
+        f"{generation}, Symbolicator {symbolicator_image}, deployment paths and "
+        "tested SDK versions agree"
     )
     return 0
 

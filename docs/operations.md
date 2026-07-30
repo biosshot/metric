@@ -1,8 +1,8 @@
 # Running Metric
 
 The [installer](getting-started.md) creates a directory containing
-`compose.yml`, `metric.toml` and `.env`. Run all commands on this page from that
-directory.
+`compose.yml`, `metric.toml`, `symbolicator.yml` and `.env`. Run all commands on
+this page from that directory.
 
 ## Start and stop
 
@@ -25,6 +25,7 @@ Do not add `-v`. It deletes the MongoDB and file-storage volumes.
 ```bash
 docker compose ps
 docker compose logs -f metric
+docker compose logs -f symbolicator
 ```
 
 Metric writes JSON logs. Passwords, tokens, DSNs and private event data should
@@ -44,7 +45,7 @@ Metric does not yet provide a Prometheus endpoint. The `/metrics` browser path i
 a page in the web interface, not a monitoring endpoint.
 
 For a long-running installation, monitor `/ready`, repeated container restarts
-and free disk space in both Docker volumes.
+and free disk space in the data and cache volumes.
 
 ## HTTPS proxy
 
@@ -70,31 +71,39 @@ restore on a separate installation.
 Session Replay especially depends on both: MongoDB stores the replay description
 and file storage contains the recording segments.
 
-Stop both containers while taking volume snapshots so that no new application
-data is written:
+Stop the Compose services while taking volume snapshots so that no new
+application data is written:
 
 ```bash
 docker compose stop
-# Copy or snapshot both Docker volumes with your host or backup tool.
+# Copy or snapshot the two data volumes with your host or backup tool.
 docker compose up -d --wait --wait-timeout 120
 ```
 
 The volumes are named `metric_mongo-data` and `metric_blob-data` in the supplied
 Compose setup. The exact copy and restore command depends on your Docker host or
-storage provider.
+storage provider. The `metric_symbolicator-cache` volume is rebuildable and does
+not need to be included in the backup.
 
-## Optional Symbolicator
+## Symbolicator
 
-Metric does not include a Symbolicator container. If you operate a compatible
-Symbolicator separately, set its addresses in `metric.toml`:
+The default Compose setup starts Symbolicator automatically. It resolves native
+and JavaScript stack traces using debug files and source maps uploaded to Metric.
+Its API port is available only inside the Compose network.
 
-```toml
-[symbolicator]
-endpoint = "http://symbolicator.example:3021/symbolicate"
-callback_base_url = "https://metric.example.com/"
+The `symbolicator-cleanup` container removes expired cache files. The cache is
+stored in `metric_symbolicator-cache` and may be deleted and rebuilt without
+losing Metric data.
+
+After a successful startup, Metric can continue storing ordinary error events
+during a temporary Symbolicator outage. Check both logs when symbolication fails:
+
+```bash
+docker compose logs --tail=200 metric symbolicator
 ```
 
-Ordinary error events continue to work when this optional service is unavailable.
+Symbolicator is a third-party component under FSL-1.1-MIT. Review the
+[third-party notice](https://github.com/biosshot/metric/blob/main/THIRD_PARTY_NOTICES.md).
 
 ## Updates
 

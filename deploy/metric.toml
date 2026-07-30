@@ -20,5 +20,5 @@ reserve = "128 MiB"
 max_object_bytes = "100 MiB"
 
 [symbolicator]
-# Optional: set APP__SYMBOLICATOR__ENDPOINT in the environment.
+endpoint = "http://symbolicator:3021/symbolicate"
 callback_base_url = "http://metric:4001/"

@@ -14,8 +14,8 @@ hero:
       link: /sdk-setup
 
 features:
-  - title: Two containers
-    details: Metric runs as one application container with MongoDB. The web interface is included.
+  - title: Small Docker stack
+    details: Metric runs with MongoDB and Symbolicator. The web interface and cache cleanup are included.
   - title: Keep your SDK
     details: Use the official Sentry SDK for your language and point its DSN to Metric.
   - title: Keep your data

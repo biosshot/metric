@@ -1,0 +1,15 @@
+cache_dir: /data
+bind: 0.0.0.0:3021
+
+logging:
+  level: warn
+  format: simplified
+  enable_backtraces: true
+
+metrics:
+  statsd: null
+
+sentry_dsn: null
+connect_to_reserved_ips: false
+symstore_proxy: false
+max_concurrent_requests: 8

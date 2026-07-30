@@ -34,7 +34,7 @@ random_hex() {
 
 mkdir -p "${install_dir}"
 
-for file in compose.yml metric.toml; do
+for file in compose.yml metric.toml symbolicator.yml; do
   if [ ! -f "${install_dir}/${file}" ]; then
     temporary_file="${install_dir}/${file}.tmp"
     rm -f "${temporary_file}"
@@ -54,6 +54,7 @@ if [ ! -f "${install_dir}/.env" ]; then
     echo "METRIC_SCRUB_HMAC_KEY=${scrub_hmac_key}"
     echo "METRIC_HTTP_PORT=4001"
     echo "METRIC_IMAGE=ghcr.io/biosshot/metric:${version}"
+    echo "METRIC_SYMBOLICATOR_IMAGE=ghcr.io/getsentry/symbolicator:26.6.0"
   } >"${install_dir}/.env"
 fi
 

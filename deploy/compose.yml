@@ -35,6 +35,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      symbolicator:
+        condition: service_healthy
     environment:
       MONGODB_URI: mongodb://metric:${METRIC_MONGO_PASSWORD}@mongodb:27017/?authSource=admin
       SCRUB_HMAC_KEY: ${METRIC_SCRUB_HMAC_KEY:?64 lowercase hex characters}
@@ -51,6 +53,50 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  symbolicator:
+    image: ${METRIC_SYMBOLICATOR_IMAGE:-ghcr.io/getsentry/symbolicator:26.6.0}
+    restart: unless-stopped
+    command: ["run", "-c", "/etc/symbolicator/config.yml"]
+    volumes:
+      - ./symbolicator.yml:/etc/symbolicator/config.yml:ro
+      - symbolicator-cache:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/bin/symbolicator",
+          "healthcheck",
+          "-c",
+          "/etc/symbolicator/config.yml",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  symbolicator-cleanup:
+    image: ${METRIC_SYMBOLICATOR_IMAGE:-ghcr.io/getsentry/symbolicator:26.6.0}
+    restart: unless-stopped
+    command:
+      [
+        "cleanup",
+        "-c",
+        "/etc/symbolicator/config.yml",
+        "--repeat",
+        "1h",
+      ]
+    volumes:
+      - ./symbolicator.yml:/etc/symbolicator/config.yml:ro
+      - symbolicator-cache:/data
+    depends_on:
+      symbolicator:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   mongo-data:
   blob-data:
+  symbolicator-cache:

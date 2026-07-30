@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Run the Docker commands below from the directory containing `compose.yml`,
-`metric.toml` and `.env`.
+`metric.toml`, `symbolicator.yml` and `.env`.
 
 ## Metric does not start
 
@@ -15,6 +15,7 @@ Common causes:
 
 - a placeholder remains in `.env`;
 - `metric.toml` is not beside `compose.yml`;
+- `symbolicator.yml` is not beside `compose.yml`;
 - `METRIC_SCRUB_HMAC_KEY` is not 64 hexadecimal characters;
 - port 4001 is already used;
 - MongoDB is still starting;
@@ -59,6 +60,16 @@ Check the MongoDB container first. If it is unhealthy, inspect its logs:
 ```bash
 docker compose logs mongodb
 ```
+
+If Symbolicator is unhealthy, inspect its logs:
+
+```bash
+docker compose logs symbolicator
+```
+
+Its cache is rebuildable. If the logs report corrupted cache data, stop the
+installation and remove only the `metric_symbolicator-cache` volume. Never remove
+`metric_mongo-data` or `metric_blob-data` while troubleshooting Symbolicator.
 
 ## Schema mismatch
 

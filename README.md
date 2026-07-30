@@ -12,9 +12,10 @@ Metric is a self-hosted error tracking service that works with official Sentry
 SDKs. It receives errors and other application data, groups repeated errors into
 issues, and shows everything in a built-in web interface.
 
-The supplied Docker setup runs two containers: Metric and MongoDB. You do not
-need to clone this repository or install Rust and Node.js. Your application data
-stays in storage that you control.
+The supplied Docker setup starts Metric, MongoDB and Symbolicator. A small cleanup
+container keeps Symbolicator's rebuildable cache bounded. You do not need to clone
+this repository or install Rust and Node.js. Your application data stays in storage
+that you control.
 
 > Metric 0.1.0 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
@@ -89,7 +90,8 @@ planning a large installation.
 
 ## Important limits
 
-- the supplied deployment uses one Metric container and one MongoDB server;
+- the supplied deployment uses one Metric process, one MongoDB server and one
+  Symbolicator process;
 - high availability, sharding and multiple Metric processing nodes are not
   included;
 - profiling is not supported;
@@ -123,4 +125,6 @@ Architecture decisions and implementation notes are kept in
 | Tron (TRC-20) | `TYiGUA56h1r19FEDzKRn33w511yTqZwy4V` |
 | Ethereum (ERC-20) | `0x040835b43916307b4014322439a18cb33B26913F` |
 
-Metric is released under the [MIT License](LICENSE).
+Metric is released under the [MIT License](LICENSE). The default Compose setup
+also pulls Symbolicator under its own license; see
+[third-party notices](THIRD_PARTY_NOTICES.md).

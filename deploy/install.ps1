@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-foreach ($file in @('compose.yml', 'metric.toml')) {
+foreach ($file in @('compose.yml', 'metric.toml', 'symbolicator.yml')) {
     $target = Join-Path $installDir $file
     if (-not (Test-Path -LiteralPath $target)) {
         $temporaryTarget = "$target.tmp"
@@ -46,6 +46,7 @@ if (-not (Test-Path -LiteralPath $envFile)) {
         "METRIC_SCRUB_HMAC_KEY=$(New-RandomHex 32)"
         'METRIC_HTTP_PORT=4001'
         "METRIC_IMAGE=ghcr.io/biosshot/metric:$version"
+        'METRIC_SYMBOLICATOR_IMAGE=ghcr.io/getsentry/symbolicator:26.6.0'
         ''
     ) -join [Environment]::NewLine
     [IO.File]::WriteAllText(

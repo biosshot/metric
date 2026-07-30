@@ -17,6 +17,9 @@ empty database, but it cannot migrate data from an older generation. Read
 - Metric uses the MongoDB administrator account created inside the supplied
   container. The MongoDB port is not published; do not use that database for
   other applications.
+- The supplied Symbolicator 26.6.0 image is a third-party component under
+  FSL-1.1-MIT, not Metric's MIT License. Read the
+  [third-party notice](https://github.com/biosshot/metric/blob/main/THIRD_PARTY_NOTICES.md).
 - Sharding and multiple Metric processing nodes are not supported.
 - Capacity depends on your hardware, event size and enabled features. Measure
   your own workload before relying on a particular event rate.
@@ -31,7 +34,6 @@ empty database, but it cannot migrate data from an older generation. Read
 
 - Profiling is not supported.
 - Session Replay must be enabled for each project.
-- An external Symbolicator is optional and operated separately.
 - Advanced ProGuard, IL2CPP, BCSymbolMap and Hermes processing is not included.
 - Single sign-on, SCIM, MFA and passkeys are not included.
 

@@ -61,6 +61,12 @@ this application open source does not itself change a third party's license. Pub
 release packaging therefore records the exact external component/license and does
 not claim that an unreviewed bundled image is covered by this project's license.
 
+Release packaging amendment (2026-07-30): the default Compose setup references the
+pinned publisher image directly and enables the adapter automatically. The image is
+still a separate process, is not copied into the Metric image, and is covered by
+`THIRD_PARTY_NOTICES.md`. Standalone deployments may leave the adapter disabled or
+select another protocol-compatible endpoint.
+
 This is a distribution/release check rather than an implementation blocker. If the
 optional integration becomes unavailable, incompatible, or disputed, the adapter can
 be removed and replaced with a backend built on suitably licensed `symbolic`-family
@@ -200,7 +206,5 @@ orphan reconciliation instead of a premature distributed fencing protocol.
 
 ## Deferred questions
 
-- Exact optional Symbolicator packaging choice for a public release, if it is ever
-  bundled rather than operator-supplied.
 - ProGuard/R8, minidump, source-bundle, and IL2CPP stages.
 - Automatic affected-event discovery after symbol upload.

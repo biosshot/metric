@@ -17,7 +17,9 @@
 - set retention periods and project ingest limits;
 - export an Incident Capsule for an issue;
 - deliver signed webhooks;
-- store files on the local Docker volume.
+- store files on the local Docker volume;
+- symbolicate native and JavaScript stack traces with the supplied external
+  Symbolicator container.
 
 Some included features, such as alerts and application metrics, only receive
 data after you configure them in Metric or in your SDK.
@@ -27,7 +29,6 @@ data after you configure them in Metric or in your SDK.
 - S3-compatible storage instead of local file storage;
 - minidump upload for native crashes;
 - debug files and JavaScript source maps;
-- an external Symbolicator service;
 - cold archive for older data;
 - browser Session Replay with `@sentry/browser` 10.66.0.
 

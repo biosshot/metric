@@ -6,7 +6,8 @@ installations only need the values already created in `.env`:
 - `METRIC_MONGO_PASSWORD`;
 - `METRIC_SCRUB_HMAC_KEY`;
 - `METRIC_HTTP_PORT`;
-- `METRIC_IMAGE`.
+- `METRIC_IMAGE`;
+- `METRIC_SYMBOLICATOR_IMAGE`.
 
 Advanced settings live in `metric.toml` beside `compose.yml`. Metric reads them
 once at startup, so restart the container after a change.
@@ -137,13 +138,17 @@ Cold archive is disabled by default.
 | `native_crash.minidump.enabled` | `false` | Accepts minidumps. They may contain raw process memory. |
 | `native_crash.minidump.max_bytes` | `100 MiB` | Maximum minidump size. |
 | `native_crash.minidump.chunk_bytes` | `64 KiB` | Streaming read chunk size. |
-| `symbolicator.endpoint` | unset | Address of an optional external Symbolicator service. |
+| `symbolicator.endpoint` | unset (Docker: `http://symbolicator:3021/symbolicate`) | Symbolicator API address. The supplied Docker setup configures it automatically. |
 | `symbolicator.callback_base_url` | `http://127.0.0.1:4001/` (Docker: `http://metric:4001/`) | Metric address that Symbolicator can call. Change it to a reachable address when Symbolicator runs outside the Compose network. |
 | `symbolicator.request_timeout` | `20s` | Symbolicator request deadline. |
 | `symbolicator.maximum_concurrency` | `8` | Maximum Symbolicator requests at the same time. |
 | `symbolicator.circuit_failure_threshold` | `5` | Consecutive failures before requests pause. |
 | `symbolicator.circuit_cooldown` | `30s` | Pause after the failure threshold is reached. |
 | `symbolicator.maximum_response_bytes` | `4 MiB` | Maximum accepted Symbolicator response size. |
+
+The default Docker setup also reads `symbolicator.yml` beside `compose.yml`.
+This file configures Symbolicator's internal server, cache and logging. Most
+installations should keep the supplied values unchanged.
 
 ## Debug files and artifact bundles
 

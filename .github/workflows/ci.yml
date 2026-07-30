@@ -115,4 +115,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Docker Compose
+        run: docker compose --env-file deploy/.env.example -f deploy/compose.yml config --quiet
+      - name: Verify Symbolicator container
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose=(docker compose --env-file deploy/.env.example -f deploy/compose.yml)
+          cleanup() {
+            "${compose[@]}" down --volumes
+          }
+          trap cleanup EXIT
+          if ! "${compose[@]}" up -d --wait --wait-timeout 120 symbolicator; then
+            "${compose[@]}" logs symbolicator
+            exit 1
+          fi
       - run: docker build --tag metric:ci .

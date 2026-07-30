@@ -1,17 +1,27 @@
 # Docker
 
-The supplied Compose file runs Metric and MongoDB. The web interface is already
-inside the Metric image.
+The supplied Compose file starts:
 
-## Image
+- Metric;
+- MongoDB;
+- Sentry Symbolicator;
+- a small Symbolicator cache-cleanup process.
 
-The release image is:
+The web interface is already inside the Metric image.
 
-```text
-ghcr.io/biosshot/metric:0.1.0
-```
+## Images
+
+| Service | Image |
+| --- | --- |
+| Metric | `ghcr.io/biosshot/metric:0.1.0` |
+| MongoDB | `mongo:8.0.12` |
+| Symbolicator | `ghcr.io/getsentry/symbolicator:26.6.0` |
 
 Use an exact version in production. Avoid changing to an untested image tag.
+
+Symbolicator is an independent third-party image under FSL-1.1-MIT. It is not
+covered by Metric's MIT License. See the
+[third-party notice](https://github.com/biosshot/metric/blob/main/THIRD_PARTY_NOTICES.md).
 
 ## Start and stop
 
@@ -20,18 +30,20 @@ docker compose up -d --wait --wait-timeout 120
 docker compose down
 ```
 
-Run these commands from the directory containing `compose.yml`, `metric.toml` and
-`.env`. Stopping the containers does not delete data.
+Run these commands from the directory containing `compose.yml`, `metric.toml`,
+`symbolicator.yml` and `.env`. Stopping the containers does not delete data.
 
 ## Data
 
-Compose creates two volumes:
+Compose creates three volumes:
 
 - `mongo-data` stores events, issues, users and settings;
-- `blob-data` stores attachments, replays and other files.
+- `blob-data` stores attachments, replays and other files;
+- `symbolicator-cache` stores downloaded symbols and generated caches.
 
-Keep both volumes. Do not run `docker compose down -v` unless you intend to delete
-the complete installation.
+Keep `mongo-data` and `blob-data` together. The Symbolicator cache can be rebuilt
+and does not need to be backed up. Do not run `docker compose down -v` unless you
+intend to delete the complete installation.
 
 The supplied Compose file does not publish the MongoDB port. Do not reuse this
 MongoDB container for other applications.
@@ -67,3 +79,6 @@ docker compose up -d --wait --wait-timeout 120
 ```
 
 Never delete the MongoDB volume to fix a schema-version error.
+
+Change `METRIC_SYMBOLICATOR_IMAGE` only when the Metric release notes name a
+compatible Symbolicator version.
