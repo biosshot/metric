@@ -4,6 +4,10 @@
   <img src="web/public/favicon.svg" width="72" alt="Metric logo" />
 </p>
 
+[User documentation](https://biosshot.github.io/metric/) ·
+[Installation](https://biosshot.github.io/metric/getting-started) ·
+[Configuration](https://biosshot.github.io/metric/configuration)
+
 **Sentry-compatible error tracking, rewritten in Rust. One binary, one database,
 ~5,000 durable events per second — measured on hardware matching Sentry's own
 minimum requirements.**

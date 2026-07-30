@@ -45,6 +45,7 @@ services:
     ports:
       - "${METRIC_HTTP_PORT:-4001}:4001"
     volumes:
+      - ./metric.container.toml:/etc/metric/metric.toml:ro
       - blob-data:/var/lib/metric/blobs
     read_only: true
     tmpfs:

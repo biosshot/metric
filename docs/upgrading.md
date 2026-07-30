@@ -4,8 +4,10 @@
 
 The current Metric binary requires MongoDB schema generation **19 exactly**. The
 runtime constant
-[`SCHEMA_GENERATION`](../crates/mongo/src/lib.rs) is the source of truth; this page
-and [`arch-docs/README.md`](../arch-docs/README.md) are its operator-facing
+[`SCHEMA_GENERATION`](https://github.com/biosshot/metric/blob/main/crates/mongo/src/lib.rs)
+is the source of truth; this page and
+[`arch-docs/README.md`](https://github.com/biosshot/metric/blob/main/arch-docs/README.md)
+are its operator-facing
 summaries.
 
 Startup behavior is fail-closed:
@@ -68,5 +70,6 @@ restored together.
 Phase reports and module contracts record the schema generation that their phase
 actually tested. Their generation numbers are historical evidence, not current
 upgrade targets or runbooks. Use
-[`arch-docs/README.md`](../arch-docs/README.md) to interpret them and use this page
+[`arch-docs/README.md`](https://github.com/biosshot/metric/blob/main/arch-docs/README.md)
+to interpret them and use this page
 for current operator decisions.
