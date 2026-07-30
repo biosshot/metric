@@ -124,6 +124,10 @@ pub struct SessionMaintenanceTask {
 }
 
 impl SessionMaintenanceTask {
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.join.abort_handle()
+    }
+
     pub async fn wait(self) {
         let _ = self.join.await;
     }
@@ -154,6 +158,10 @@ pub fn start_session_maintenance(
 }
 
 impl SessionWriterTask {
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.join.abort_handle()
+    }
+
     pub async fn wait(self) {
         let _ = self.join.await;
     }

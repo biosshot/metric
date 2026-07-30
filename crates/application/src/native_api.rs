@@ -74,6 +74,14 @@ pub enum NativeApiError {
     NotFound,
     #[error("target conflicts with existing state")]
     Conflict,
+    #[error("project is disabled")]
+    ProjectDisabled,
+    #[error("project deletion is pending")]
+    ProjectDeletionPending,
+    #[error("project purge is in progress")]
+    ProjectPurging,
+    #[error("project is deleted")]
+    ProjectDeleted,
     #[error("request is rate limited")]
     RateLimited,
     #[error(transparent)]
@@ -96,6 +104,10 @@ impl NativeApiError {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
+            Self::ProjectDisabled => "project_disabled",
+            Self::ProjectDeletionPending => "project_deletion_pending",
+            Self::ProjectPurging => "project_purging",
+            Self::ProjectDeleted => "project_deleted",
             Self::RateLimited => "rate_limited",
             Self::Search(error) => error.code(),
             Self::Explore(error) => error.code(),
@@ -1819,17 +1831,10 @@ impl NativeApiService {
         project_id: ProjectId,
         permission: Permission,
     ) -> Result<(), NativeApiError> {
-        self.authorize(context, project_id, permission).await?;
-        let project = self
-            .projects
-            .load_project_view(project_id)
+        self.identity
+            .authorize_project_mutation(context, project_id, permission)
             .await
-            .map_err(map_project_error)?;
-        if project.state == metric_domain::ProjectAcceptanceState::Active {
-            Ok(())
-        } else {
-            Err(NativeApiError::Conflict)
-        }
+            .map_err(map_auth_error)
     }
 }
 
@@ -2290,6 +2295,10 @@ fn map_auth_error(error: AuthError) -> NativeApiError {
         }
         AuthError::RateLimited => NativeApiError::RateLimited,
         AuthError::AlreadyExists | AuthError::FinalOwner => NativeApiError::Conflict,
+        AuthError::ProjectDisabled => NativeApiError::ProjectDisabled,
+        AuthError::ProjectDeletionPending => NativeApiError::ProjectDeletionPending,
+        AuthError::ProjectPurging => NativeApiError::ProjectPurging,
+        AuthError::ProjectDeleted => NativeApiError::ProjectDeleted,
         AuthError::NotFound => NativeApiError::NotFound,
         AuthError::InvalidPassword | AuthError::InvalidTokenPolicy => {
             NativeApiError::InvalidRequest

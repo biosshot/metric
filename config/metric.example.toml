@@ -3,6 +3,10 @@ role = "all"
 [server]
 http_address = "127.0.0.1:4001"
 shutdown_grace = "10s"
+# Trust forwarding headers only when the direct peer matches one of these IP/CIDR ranges.
+trusted_proxies = []
+max_active_requests = 512
+request_timeout = "30s"
 
 [mongodb]
 uri = { env = "MONGODB_URI" }

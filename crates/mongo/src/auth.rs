@@ -7,7 +7,8 @@ use std::{
 
 use futures_util::TryStreamExt;
 use metric_domain::{
-    DisplayName, OrganizationId, OrganizationIdentity, ProjectId, Slug, Timestamp,
+    DisplayName, OrganizationId, OrganizationIdentity, ProjectAcceptanceState, ProjectId, Slug,
+    Timestamp,
     api::{ApiTokenView, AuditLogView, OrganizationMemberView},
     auth::{
         Actor, ApiToken, AuditRecord, BootstrapIdentity, CredentialId, EmailAddress,
@@ -1068,24 +1069,36 @@ impl AuthStore for MongoAuthStore {
         })
     }
 
-    fn project_organization(
+    fn project_access(
         &self,
         project_id: ProjectId,
-    ) -> PortFuture<'_, Result<OrganizationId, AuthStoreError>> {
+    ) -> PortFuture<'_, Result<(OrganizationId, ProjectAcceptanceState), AuthStoreError>> {
         Box::pin(async move {
             let document = self
                 .database
                 .collection::<Document>("projects")
                 .find_one(doc! { "_id": project_id.get() })
-                .projection(doc! { "organization_id": 1 })
+                .projection(doc! { "organization_id": 1, "state": 1 })
                 .await
                 .map_err(unavailable)?
                 .ok_or(AuthStoreError::NotFound)?;
-            parse_organization_id(
+            let organization_id = parse_organization_id(
                 document
                     .get_i64("organization_id")
                     .map_err(|_| AuthStoreError::InvalidData)?,
-            )
+            )?;
+            let state = match document
+                .get_str("state")
+                .map_err(|_| AuthStoreError::InvalidData)?
+            {
+                "active" => ProjectAcceptanceState::Active,
+                "disabled" => ProjectAcceptanceState::Disabled,
+                "pending_delete" => ProjectAcceptanceState::PendingDelete,
+                "purging" => ProjectAcceptanceState::Purging,
+                "deleted" => ProjectAcceptanceState::Deleted,
+                _ => return Err(AuthStoreError::InvalidData),
+            };
+            Ok((organization_id, state))
         })
     }
 

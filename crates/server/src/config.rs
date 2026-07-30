@@ -1,4 +1,10 @@
-use std::{env, fmt, fs, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
+use std::{
+    env, fmt, fs,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    str::FromStr,
+    time::Duration,
+};
 
 use clap::{Parser, ValueEnum};
 use figment::{
@@ -29,6 +35,58 @@ pub type ProjectDeletionDuration = BoundedDuration<MAX_AUTH_DURATION_MILLIS>;
 type ConfiguredBytes = ByteSize<{ 1024 * 1024 * 1024 }>;
 type ArtifactLogicalBytes = ByteSize<{ 4_u64 * 1024 * 1024 * 1024 }>;
 type ArtifactQuotaBytes = ByteSize<{ 1024_u64 * 1024 * 1024 * 1024 * 1024 }>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedProxy {
+    network: IpAddr,
+    prefix: u8,
+}
+
+impl TrustedProxy {
+    #[must_use]
+    pub fn contains(self, address: IpAddr) -> bool {
+        match (self.network, address) {
+            (IpAddr::V4(network), IpAddr::V4(address)) => {
+                let prefix = u32::from(self.prefix);
+                let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+                u32::from(network) & mask == u32::from(address) & mask
+            }
+            (IpAddr::V6(network), IpAddr::V6(address)) => {
+                let prefix = u32::from(self.prefix);
+                let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+                u128::from(network) & mask == u128::from(address) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+impl FromStr for TrustedProxy {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (address, prefix) = value
+            .split_once('/')
+            .map_or((value, None), |(address, prefix)| (address, Some(prefix)));
+        let network = address.parse::<IpAddr>().map_err(|_| ())?;
+        let maximum = if network.is_ipv4() { 32 } else { 128 };
+        let prefix = prefix
+            .map(str::parse::<u8>)
+            .transpose()
+            .map_err(|_| ())?
+            .unwrap_or(maximum);
+        if prefix > maximum {
+            return Err(());
+        }
+        Ok(Self { network, prefix })
+    }
+}
+
+impl fmt::Display for TrustedProxy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}/{}", self.network, self.prefix)
+    }
+}
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "metric", version, about = "Metric all-in-one server")]
@@ -215,6 +273,9 @@ pub struct ArchiveSettings {
 pub struct ServerConfig {
     pub http_address: SocketAddr,
     pub shutdown_grace: ShutdownGrace,
+    pub trusted_proxies: Vec<TrustedProxy>,
+    pub max_active_requests: usize,
+    pub request_timeout: RequestTimeout,
 }
 
 #[derive(Debug, Clone)]
@@ -994,6 +1055,9 @@ impl Default for RawArchiveSettings {
 struct RawServerConfig {
     http_address: String,
     shutdown_grace: String,
+    trusted_proxies: Vec<String>,
+    max_active_requests: usize,
+    request_timeout: String,
 }
 
 impl Default for RawServerConfig {
@@ -1001,6 +1065,9 @@ impl Default for RawServerConfig {
         Self {
             http_address: "127.0.0.1:3000".to_owned(),
             shutdown_grace: "10s".to_owned(),
+            trusted_proxies: Vec::new(),
+            max_active_requests: 512,
+            request_timeout: "30s".to_owned(),
         }
     }
 }
@@ -1473,6 +1540,8 @@ pub enum ConfigError {
     InvalidEnvironmentFile,
     #[error("server.shutdown_grace is invalid or exceeds five minutes")]
     InvalidShutdownGrace,
+    #[error("server request bounds or trusted proxy configuration is invalid")]
+    InvalidServerConfig,
     #[error("ingest configuration is invalid or outside supported bounds")]
     InvalidIngestConfig,
     #[error("blob configuration is invalid or outside supported bounds")]
@@ -1577,6 +1646,21 @@ impl TryFrom<RawConfig> for AppConfig {
             .map_err(|_| ConfigError::InvalidHttpAddress)?;
         let shutdown_grace = ShutdownGrace::from_str(&raw.server.shutdown_grace)
             .map_err(|_| ConfigError::InvalidShutdownGrace)?;
+        let request_timeout = RequestTimeout::from_str(&raw.server.request_timeout)
+            .map_err(|_| ConfigError::InvalidServerConfig)?;
+        let trusted_proxies = raw
+            .server
+            .trusted_proxies
+            .iter()
+            .map(|value| TrustedProxy::from_str(value))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| ConfigError::InvalidServerConfig)?;
+        if !(1..=100_000).contains(&raw.server.max_active_requests)
+            || request_timeout.get().is_zero()
+            || trusted_proxies.len() > 64
+        {
+            return Err(ConfigError::InvalidServerConfig);
+        }
         if let Some(reference) = &raw.mongodb.uri {
             reference.validate(raw.development.allow_literal_secrets)?;
         }
@@ -1806,6 +1890,9 @@ impl TryFrom<RawConfig> for AppConfig {
             server: ServerConfig {
                 http_address,
                 shutdown_grace,
+                trusted_proxies,
+                max_active_requests: raw.server.max_active_requests,
+                request_timeout,
             },
             mongodb: MongoConfig {
                 uri: raw.mongodb.uri,
@@ -1976,11 +2063,21 @@ impl AppConfig {
             .scrub_hmac_key
             .as_ref()
             .map_or("<not-configured>", SecretReference::redacted_origin);
+        let trusted_proxies = self
+            .server
+            .trusted_proxies
+            .iter()
+            .map(|proxy| format!("\"{proxy}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
         let rendered = format!(
-            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.replay]\nmax_segment_bytes = {}\nmax_decompressed_segment_bytes = {}\nmax_events_per_segment = {}\nqueue_capacity = {}\nmax_queued_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nfeedback_days = {}\nissue_stats_hourly_days = {}\nlogs_days = {}\nspans_days = {}\nspan_stats_hourly_days = {}\nsessions_days = {}\nsession_stats_hourly_days = {}\nsession_active_max_hours = {}\nmonitor_runs_days = {}\nmetrics_days = {}\nmetric_max_series_per_project = {}\nmetric_archive = {}\nreplays_days = {}\nreplay_archive = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
+            "role = \"{}\"\n\n[server]\nhttp_address = \"{}\"\nshutdown_grace = \"{}\"\ntrusted_proxies = [{}]\nmax_active_requests = {}\nrequest_timeout = \"{}\"\n\n[mongodb]\nuri = \"{}\"\ndatabase = \"{}\"\nbootstrap_timeout = \"{}\"\n\n[projects]\nscrub_hmac_key = \"{}\"\nidentity_collision_retries = {}\nmax_keys_per_project = {}\n\n[development]\nallow_literal_secrets = {}\nallow_insecure_cookies = {}\n\n[blob]\nbackend = \"{}\"\nroot = \"{}\"\ncapacity = {}\nreserve = {}\nmax_object_bytes = {}\n\n[native_crash.minidump]\nenabled = {}\nmax_bytes = {}\nchunk_bytes = {}\n\n[ingest]\nmax_compressed_request_bytes = {}\nmax_decompressed_request_bytes = {}\nmax_event_bytes = {}\nmax_envelope_items = {}\nmax_active_requests = {}\nmax_parsing_tasks = {}\nmax_waiting_for_storage = {}\nrequest_timeout = \"{}\"\nunsupported_backoff_seconds = {}\n\n[ingest.attachments]\nenabled = {}\nmax_count = {}\nmax_item_bytes = {}\nmax_total_bytes = {}\nchunk_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\ncleanup_max_pages = {}\n\n[ingest.replay]\nmax_segment_bytes = {}\nmax_decompressed_segment_bytes = {}\nmax_events_per_segment = {}\nqueue_capacity = {}\nmax_queued_bytes = {}\norphan_grace = \"{}\"\ncleanup_interval = \"{}\"\ncleanup_batch_size = {}\n\n[ingest.project_cache]\ncapacity = {}\nmax_inflight = {}\npositive_ttl = \"{}\"\nnegative_ttl = \"{}\"\n\n[ingest.batch]\nmax_wait = \"{}\"\nmax_documents = {}\nmax_bytes = {}\n\n[ingest.event_codec]\ncompression_level = {}\ncompression_min_savings = {}\n\n[ingest.backlog]\nmax_pending_events = {}\nmax_oldest_pending_age = \"{}\"\n\n[dispatcher]\nqueue_capacity = {}\nworker_concurrency = {}\nlow_watermark = {}\nrefill_target = {}\nrefill_batch_size = {}\npoll_interval = \"{}\"\nmetrics_interval = \"{}\"\nsource_timeout = \"{}\"\n\n[scheduler]\npoll_interval = \"{}\"\nmaintenance_interval = \"{}\"\nreconciliation_interval = \"{}\"\nbacklog_interval = \"{}\"\ntask_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\nbatch_size = {}\n\n[retention]\nevents_days = {}\nfeedback_days = {}\nissue_stats_hourly_days = {}\nlogs_days = {}\nspans_days = {}\nspan_stats_hourly_days = {}\nsessions_days = {}\nsession_stats_hourly_days = {}\nsession_active_max_hours = {}\nmonitor_runs_days = {}\nmetrics_days = {}\nmetric_max_series_per_project = {}\nmetric_archive = {}\nreplays_days = {}\nreplay_archive = {}\n\n[project_deletion]\ngrace_period = \"{}\"\ndelete_batch_documents = {}\ncompleted_job_retention = \"{}\"\nslug_reservation = \"{}\"\npoll_interval = \"{}\"\noperation_timeout = \"{}\"\ndrain_timeout = \"{}\"\nretry_base = \"{}\"\nretry_max = \"{}\"\n\n[processor]\nmax_concurrency = {}\nmax_attempts = {}\nretry_base = \"{}\"\nretry_max = \"{}\"\nstage_timeout = \"{}\"\ntotal_timeout = \"{}\"\nstate_timeout = \"{}\"\n\n[auth]\nidentity_collision_retries = {}\nstore_timeout = \"{}\"\nsetup_token_timeout = \"{}\"\nmax_api_token_lifetime = \"{}\"\nactivity_touch_interval = \"{}\"\nsecure_cookie = {}\n\n[auth.session]\nidle_timeout = \"{}\"\nabsolute_timeout = \"{}\"\n\n[auth.password]\nmemory_kib = {}\niterations = {}\nparallelism = {}\nmax_concurrency = {}\n\n[auth.login]\nmax_attempts = {}\nwindow = \"{}\"\ncapacity = {}\n",
             self.role,
             self.server.http_address,
             humantime::format_duration(self.server.shutdown_grace.get()),
+            trusted_proxies,
+            self.server.max_active_requests,
+            humantime::format_duration(self.server.request_timeout.get()),
             uri,
             self.mongodb.database,
             humantime::format_duration(self.mongodb.bootstrap_timeout.get()),
@@ -2711,6 +2808,9 @@ mod tests {
         let config = load(&cli).unwrap();
         assert_eq!(config.role, Role::All);
         assert_eq!(config.server.shutdown_grace.get().as_secs(), 10);
+        assert_eq!(config.server.max_active_requests, 512);
+        assert_eq!(config.server.request_timeout.get(), Duration::from_secs(30));
+        assert!(config.server.trusted_proxies.is_empty());
         assert!(config.dispatcher.low_watermark < config.dispatcher.refill_target);
         assert!(config.dispatcher.refill_target <= config.dispatcher.queue_capacity);
         assert_eq!(config.processor.max_attempts, 5);
@@ -2737,6 +2837,15 @@ mod tests {
             config.ingest.backlog.max_oldest_pending_age.get(),
             std::time::Duration::from_secs(60 * 60)
         );
+    }
+
+    #[test]
+    fn trusted_proxy_cidrs_match_only_their_address_family_and_prefix() {
+        let proxy = TrustedProxy::from_str("10.0.0.0/8").unwrap();
+        assert!(proxy.contains("10.2.3.4".parse().unwrap()));
+        assert!(!proxy.contains("11.2.3.4".parse().unwrap()));
+        assert!(!proxy.contains("::1".parse().unwrap()));
+        assert!(TrustedProxy::from_str("10.0.0.1/33").is_err());
     }
 
     #[test]

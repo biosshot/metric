@@ -124,6 +124,14 @@ pub enum AuthError {
     CollisionExhausted,
     #[error("identity does not exist")]
     NotFound,
+    #[error("project is disabled")]
+    ProjectDisabled,
+    #[error("project deletion is pending")]
+    ProjectDeletionPending,
+    #[error("project purge is in progress")]
+    ProjectPurging,
+    #[error("project is deleted")]
+    ProjectDeleted,
     #[error("the final organization owner cannot be removed, disabled, or demoted")]
     FinalOwner,
     #[error("bootstrap is unavailable")]
@@ -151,6 +159,10 @@ impl AuthError {
             Self::IdentityCollision => "auth_identity_collision",
             Self::CollisionExhausted => "auth_identity_collision_exhausted",
             Self::NotFound => "auth_identity_not_found",
+            Self::ProjectDisabled => "project_disabled",
+            Self::ProjectDeletionPending => "project_deletion_pending",
+            Self::ProjectPurging => "project_purging",
+            Self::ProjectDeleted => "project_deleted",
             Self::FinalOwner => "auth_final_owner",
             Self::BootstrapClosed => "auth_bootstrap_closed",
             Self::InvalidPassword => "auth_invalid_password",
@@ -1175,13 +1187,45 @@ impl IdentityService {
         project_id: ProjectId,
         permission: Permission,
     ) -> Result<(), AuthError> {
-        let organization_id = self
-            .call(self.store.project_organization(project_id))
-            .await?;
+        let (organization_id, _) = self.project_access(project_id).await?;
         if organization_id != context.organization_id || !context.permissions.contains(permission) {
             return Err(AuthError::Forbidden);
         }
         Ok(())
+    }
+
+    pub async fn authorize_project_mutation(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        permission: Permission,
+    ) -> Result<(), AuthError> {
+        let (organization_id, state) = self.project_access(project_id).await?;
+        if organization_id != context.organization_id || !context.permissions.contains(permission) {
+            return Err(AuthError::Forbidden);
+        }
+        match state {
+            metric_domain::ProjectAcceptanceState::Active => Ok(()),
+            metric_domain::ProjectAcceptanceState::Disabled => Err(AuthError::ProjectDisabled),
+            metric_domain::ProjectAcceptanceState::PendingDelete => {
+                Err(AuthError::ProjectDeletionPending)
+            }
+            metric_domain::ProjectAcceptanceState::Purging => Err(AuthError::ProjectPurging),
+            metric_domain::ProjectAcceptanceState::Deleted => Err(AuthError::ProjectDeleted),
+        }
+    }
+
+    async fn project_access(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<
+        (
+            metric_domain::OrganizationId,
+            metric_domain::ProjectAcceptanceState,
+        ),
+        AuthError,
+    > {
+        self.call(self.store.project_access(project_id)).await
     }
 
     async fn create_session(
@@ -1668,7 +1712,7 @@ mod tests {
         sessions: HashMap<SecretDigest, WebSession>,
         tokens: HashMap<SecretDigest, ApiToken>,
         audits: Vec<AuditRecord>,
-        project_organizations: HashMap<ProjectId, OrganizationId>,
+        project_access: HashMap<ProjectId, (OrganizationId, metric_domain::ProjectAcceptanceState)>,
     }
 
     impl AuthStore for MemoryStore {
@@ -2095,15 +2139,18 @@ mod tests {
             })
         }
 
-        fn project_organization(
+        fn project_access(
             &self,
             project_id: ProjectId,
-        ) -> PortFuture<'_, Result<OrganizationId, AuthStoreError>> {
+        ) -> PortFuture<
+            '_,
+            Result<(OrganizationId, metric_domain::ProjectAcceptanceState), AuthStoreError>,
+        > {
             Box::pin(async move {
                 self.state
                     .lock()
                     .unwrap()
-                    .project_organizations
+                    .project_access
                     .get(&project_id)
                     .copied()
                     .ok_or(AuthStoreError::NotFound)
@@ -2427,12 +2474,20 @@ mod tests {
         let foreign_organization = OrganizationId::new(999).unwrap();
         {
             let mut state = store.state.lock().unwrap();
-            state
-                .project_organizations
-                .insert(own_project, owner.organization_id);
-            state
-                .project_organizations
-                .insert(foreign_project, foreign_organization);
+            state.project_access.insert(
+                own_project,
+                (
+                    owner.organization_id,
+                    metric_domain::ProjectAcceptanceState::Active,
+                ),
+            );
+            state.project_access.insert(
+                foreign_project,
+                (
+                    foreign_organization,
+                    metric_domain::ProjectAcceptanceState::Active,
+                ),
+            );
         }
         assert!(
             service
@@ -2451,6 +2506,25 @@ mod tests {
                 .authorize_project(&token_context, foreign_project, Permission::IssueRead)
                 .await,
             Err(AuthError::Forbidden)
+        );
+        store.state.lock().unwrap().project_access.insert(
+            own_project,
+            (
+                owner.organization_id,
+                metric_domain::ProjectAcceptanceState::PendingDelete,
+            ),
+        );
+        assert!(
+            service
+                .authorize_project(&owner, own_project, Permission::ProjectRead)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            service
+                .authorize_project_mutation(&owner, own_project, Permission::ProjectAdmin)
+                .await,
+            Err(AuthError::ProjectDeletionPending)
         );
     }
 

@@ -181,6 +181,14 @@ impl MongoProjectStore {
         ))
     }
 
+    pub async fn ping(&self) -> Result<(), MongoBootstrapError> {
+        self.database
+            .run_command(doc! { "ping": 1 })
+            .await
+            .map(|_| ())
+            .map_err(MongoBootstrapError::from)
+    }
+
     #[must_use]
     pub fn from_database(
         database: Database,

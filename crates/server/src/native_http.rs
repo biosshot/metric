@@ -1,6 +1,12 @@
 //! Versioned native `/api/v1` HTTP adapter.
 
-use std::{collections::BTreeMap, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddr},
+    num::NonZeroU32,
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
     Json, Router,
@@ -82,7 +88,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::{sync::Semaphore, time::timeout};
 
+use crate::config::TrustedProxy;
 const SESSION_COOKIE: &str = "metric_session";
 const ORGANIZATION_HEADER: &str = "x-metric-organization-id";
 const CSRF_HEADER: &str = "x-csrf-token";
@@ -104,6 +112,30 @@ struct NativeHttpState {
     notifications: bool,
     notification_admin: Option<Arc<NotificationAdminService>>,
     notification_secret_box: Option<crate::webhook::WebhookSecretBox>,
+    trusted_proxies: Arc<[TrustedProxy]>,
+}
+
+#[derive(Clone)]
+struct NativeAdmissionState {
+    permits: Arc<Semaphore>,
+    request_timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeHttpLimits {
+    pub trusted_proxies: Vec<TrustedProxy>,
+    pub max_active_requests: usize,
+    pub request_timeout: Duration,
+}
+
+impl Default for NativeHttpLimits {
+    fn default() -> Self {
+        Self {
+            trusted_proxies: Vec::new(),
+            max_active_requests: 512,
+            request_timeout: Duration::from_secs(30),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -191,7 +223,11 @@ impl IntoResponse for HttpApiError {
                     NativeApiError::InvalidCredentials => StatusCode::UNAUTHORIZED,
                     NativeApiError::Forbidden => StatusCode::FORBIDDEN,
                     NativeApiError::NotFound => StatusCode::NOT_FOUND,
-                    NativeApiError::Conflict => StatusCode::CONFLICT,
+                    NativeApiError::Conflict
+                    | NativeApiError::ProjectDisabled
+                    | NativeApiError::ProjectDeletionPending
+                    | NativeApiError::ProjectPurging
+                    | NativeApiError::ProjectDeleted => StatusCode::CONFLICT,
                     NativeApiError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
                     NativeApiError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
                     NativeApiError::Search(search) => match search {
@@ -259,6 +295,10 @@ impl IntoResponse for HttpApiError {
                         StatusCode::BAD_REQUEST
                     }
                     NotificationError::Forbidden => StatusCode::FORBIDDEN,
+                    NotificationError::ProjectDisabled
+                    | NotificationError::ProjectDeletionPending
+                    | NotificationError::ProjectPurging
+                    | NotificationError::ProjectDeleted => StatusCode::CONFLICT,
                     NotificationError::StorageUnavailable => StatusCode::SERVICE_UNAVAILABLE,
                 };
                 (status, error.code(), notification_public_message(error))
@@ -291,6 +331,10 @@ fn notification_public_message(error: &NotificationError) -> &'static str {
             "notification configuration is invalid"
         }
         NotificationError::Forbidden => "notification administration is forbidden",
+        NotificationError::ProjectDisabled => "project is disabled",
+        NotificationError::ProjectDeletionPending => "project deletion is pending",
+        NotificationError::ProjectPurging => "project purge is in progress",
+        NotificationError::ProjectDeleted => "project is deleted",
         NotificationError::StorageUnavailable => "notification storage is temporarily unavailable",
     }
 }
@@ -315,6 +359,10 @@ fn public_message(error: &NativeApiError) -> &'static str {
         NativeApiError::Forbidden => "request is forbidden",
         NativeApiError::NotFound => "target was not found",
         NativeApiError::Conflict => "request conflicts with current state",
+        NativeApiError::ProjectDisabled => "project is disabled",
+        NativeApiError::ProjectDeletionPending => "project deletion is pending",
+        NativeApiError::ProjectPurging => "project purge is in progress",
+        NativeApiError::ProjectDeleted => "project is deleted",
         NativeApiError::RateLimited => "request is rate limited",
         NativeApiError::Search(_) => "search request cannot be completed",
         NativeApiError::Explore(error) => match error {
@@ -360,6 +408,24 @@ pub fn router(
     required_ready: bool,
     modules: NativeHttpModules,
 ) -> Router {
+    router_with_limits(
+        identity,
+        api,
+        secure_cookie,
+        required_ready,
+        NativeHttpLimits::default(),
+        modules,
+    )
+}
+
+pub fn router_with_limits(
+    identity: Option<Arc<IdentityService>>,
+    api: Option<Arc<NativeApiService>>,
+    secure_cookie: bool,
+    required_ready: bool,
+    limits: NativeHttpLimits,
+    modules: NativeHttpModules,
+) -> Router {
     let state = NativeHttpState {
         identity,
         api,
@@ -372,6 +438,11 @@ pub fn router(
         notifications: modules.notifications,
         notification_admin: modules.notification_admin,
         notification_secret_box: modules.notification_secret_box,
+        trusted_proxies: limits.trusted_proxies.into(),
+    };
+    let admission = NativeAdmissionState {
+        permits: Arc::new(Semaphore::new(limits.max_active_requests)),
+        request_timeout: limits.request_timeout,
     };
     Router::new()
         .route("/api/v1/auth/bootstrap", post(bootstrap))
@@ -584,6 +655,20 @@ pub fn router(
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(native_error_context))
         .with_state(state)
+        .layer(middleware::from_fn_with_state(admission, native_admission))
+}
+
+async fn native_admission(
+    State(state): State<NativeAdmissionState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Ok(permit) = Arc::clone(&state.permits).try_acquire_owned() else {
+        return HttpApiError::Api(NativeApiError::RateLimited).into_response();
+    };
+    let response = timeout(state.request_timeout, next.run(request)).await;
+    drop(permit);
+    response.unwrap_or_else(|_| HttpApiError::Unavailable.into_response())
 }
 
 async fn event_attachments(
@@ -2375,6 +2460,7 @@ async fn login(
     State(state): State<NativeHttpState>,
     Extension(request_id): Extension<RequestId>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     body: Result<Json<LoginBody>, JsonRejection>,
 ) -> Result<Response, HttpApiError> {
     let body = json_body(body)?;
@@ -2384,7 +2470,11 @@ async fn login(
             email: body.email.into(),
             password: body.password.into(),
             organization_id,
-            client_network_digest: network_digest(Some(peer)),
+            client_network_digest: network_digest(Some(client_address(
+                peer,
+                &headers,
+                &state.trusted_proxies,
+            ))),
             request_id: correlation_id(request_id)?,
         })
         .await
@@ -4128,6 +4218,38 @@ fn network_digest(peer: Option<SocketAddr>) -> SecretDigest {
     SecretDigest::new(hasher.finalize().into())
 }
 
+fn client_address(
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    trusted_proxies: &[TrustedProxy],
+) -> SocketAddr {
+    if !trusted_proxies
+        .iter()
+        .any(|proxy| proxy.contains(peer.ip()))
+    {
+        return peer;
+    }
+    let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return peer;
+    };
+    let addresses = forwarded
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<IpAddr>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(addresses) = addresses else {
+        return peer;
+    };
+    addresses
+        .into_iter()
+        .rev()
+        .find(|address| !trusted_proxies.iter().any(|proxy| proxy.contains(*address)))
+        .map_or(peer, |address| SocketAddr::new(address, peer.port()))
+}
+
 fn query_map(raw: Option<&str>) -> Result<BTreeMap<String, String>, HttpApiError> {
     let mut values = BTreeMap::new();
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
@@ -4325,6 +4447,10 @@ fn map_auth(error: metric_application::auth::AuthError) -> NativeApiError {
         }
         AuthError::RateLimited => NativeApiError::RateLimited,
         AuthError::AlreadyExists | AuthError::FinalOwner => NativeApiError::Conflict,
+        AuthError::ProjectDisabled => NativeApiError::ProjectDisabled,
+        AuthError::ProjectDeletionPending => NativeApiError::ProjectDeletionPending,
+        AuthError::ProjectPurging => NativeApiError::ProjectPurging,
+        AuthError::ProjectDeleted => NativeApiError::ProjectDeleted,
         AuthError::NotFound => NativeApiError::NotFound,
         AuthError::InvalidPassword | AuthError::InvalidTokenPolicy => {
             NativeApiError::InvalidRequest
@@ -4800,12 +4926,34 @@ fn environment_value(environment: &EnvironmentView) -> Result<Value, HttpApiErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr as _;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum RouteAccess {
         Public,
         Authenticated,
         Permission(Permission),
+    }
+
+    #[test]
+    fn forwarding_headers_are_used_only_for_trusted_proxy_peers() {
+        let proxies = [TrustedProxy::from_str("10.0.0.0/8").unwrap()];
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.8, 10.1.2.3"),
+        );
+        let trusted_peer = "10.2.3.4:443".parse().unwrap();
+        assert_eq!(
+            client_address(trusted_peer, &headers, &proxies).ip(),
+            "198.51.100.8".parse::<IpAddr>().unwrap()
+        );
+
+        let untrusted_peer = "203.0.113.9:443".parse().unwrap();
+        assert_eq!(
+            client_address(untrusted_peer, &headers, &proxies),
+            untrusted_peer
+        );
     }
 
     #[test]

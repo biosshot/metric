@@ -796,13 +796,18 @@ where
             Err(StageFailure::temporary(ProcessingErrorCode::Cancelled))
         }
         result = timeout_at(stage_deadline, future) => {
-            result.map_err(|_| {
+            let deadline_failure = || {
                 if stage_deadline == total_deadline {
                     StageFailure::temporary(ProcessingErrorCode::TotalDeadline)
                 } else {
                     StageFailure::temporary(ProcessingErrorCode::StageDeadline)
                 }
-            })
+            };
+            match result {
+                Ok(_) if Instant::now() >= stage_deadline => Err(deadline_failure()),
+                Ok(value) => Ok(value),
+                Err(_) => Err(deadline_failure()),
+            }
         }
     };
     metrics::histogram!(
@@ -1493,5 +1498,23 @@ mod tests {
             ..retryable
         };
         assert!(!should_retry_symbolication(&terminal, 0, 3));
+    }
+
+    #[tokio::test]
+    async fn stage_result_is_rejected_when_runtime_resumes_after_deadline() {
+        let cancellation = CancellationToken::new();
+        let failure = run_stage(
+            "deadline_test",
+            Duration::from_millis(1),
+            Instant::now() + Duration::from_secs(1),
+            &cancellation,
+            async {
+                std::thread::sleep(Duration::from_millis(10));
+                1_u8
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.code, ProcessingErrorCode::StageDeadline);
     }
 }

@@ -1,8 +1,8 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    extract::{MatchedPath, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -12,6 +12,7 @@ use metric_application::{
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
 };
+use metric_ports::PortFuture;
 use serde::Serialize;
 use tokio::{net::TcpListener, task::JoinHandle, time::timeout};
 use tracing::{Instrument, info_span};
@@ -20,7 +21,47 @@ use tracing::{Instrument, info_span};
 struct HttpState {
     shutdown: ShutdownSignal,
     metrics: Metrics,
-    required_ready: bool,
+    readiness: Readiness,
+}
+
+pub trait DependencyReadiness: Send + Sync + 'static {
+    fn check(&self) -> PortFuture<'_, bool>;
+}
+
+#[derive(Clone)]
+pub struct Readiness {
+    composed: bool,
+    tasks: Arc<[tokio::task::AbortHandle]>,
+    dependency: Option<Arc<dyn DependencyReadiness>>,
+}
+
+impl Readiness {
+    #[must_use]
+    pub fn new(
+        composed: bool,
+        tasks: Vec<tokio::task::AbortHandle>,
+        dependency: Option<Arc<dyn DependencyReadiness>>,
+    ) -> Self {
+        Self {
+            composed,
+            tasks: tasks.into(),
+            dependency,
+        }
+    }
+
+    #[must_use]
+    pub fn fixed(ready: bool) -> Self {
+        Self::new(ready, Vec::new(), None)
+    }
+
+    pub async fn is_ready(&self) -> bool {
+        self.composed
+            && self.tasks.iter().all(|task| !task.is_finished())
+            && match &self.dependency {
+                Some(dependency) => dependency.check().await,
+                None => true,
+            }
+    }
 }
 
 #[derive(Serialize)]
@@ -38,10 +79,24 @@ pub fn router_with_readiness(
     application_routes: Router,
     required_ready: bool,
 ) -> Router {
+    router_with_probe(
+        shutdown,
+        metrics,
+        application_routes,
+        Readiness::fixed(required_ready),
+    )
+}
+
+pub fn router_with_probe(
+    shutdown: ShutdownSignal,
+    metrics: Metrics,
+    application_routes: Router,
+    readiness: Readiness,
+) -> Router {
     let state = HttpState {
         shutdown,
         metrics,
-        required_ready,
+        readiness,
     };
     let live_routes = Router::new()
         .route("/live", get(live))
@@ -65,7 +120,7 @@ async fn ready(State(state): State<HttpState>) -> Response {
         )
             .into_response();
     }
-    if !state.required_ready {
+    if !state.readiness.is_ready().await {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ProbeResponse {
@@ -97,19 +152,43 @@ async fn request_context(
 ) -> Response {
     let request_id = RequestId::from_bytes(*uuid::Uuid::new_v4().as_bytes());
     request.extensions_mut().insert(request_id);
+    let method = request.method().clone();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or_else(|| request.uri().path(), MatchedPath::as_str)
+        .to_owned();
     let span = info_span!(
         "http.request",
         request_id = %request_id,
         operation = "http.request",
+        http.method = %method,
+        http.route = %route,
+        http.status_code = tracing::field::Empty,
+        http.status_class = tracing::field::Empty,
+        outcome = tracing::field::Empty,
     );
-    let response = next.run(request).instrument(span).await;
-    let outcome = if response.status().is_server_error() {
-        Outcome::Error
-    } else {
-        Outcome::Ok
-    };
+    let response = next.run(request).instrument(span.clone()).await;
+    let status = response.status();
+    let (outcome, outcome_label) = response_outcome(status);
+    span.record("http.status_code", status.as_u16());
+    span.record(
+        "http.status_class",
+        tracing::field::display(format_args!("{}xx", status.as_u16() / 100)),
+    );
+    span.record("outcome", outcome_label);
     state.metrics.increment(Metric::HttpRequests, outcome);
     response
+}
+
+fn response_outcome(status: StatusCode) -> (Outcome, &'static str) {
+    if status.is_server_error() {
+        (Outcome::Error, "error")
+    } else if status.is_client_error() {
+        (Outcome::Rejected, "rejected")
+    } else {
+        (Outcome::Ok, "ok")
+    }
 }
 
 pub async fn run(
@@ -192,6 +271,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn readiness_fails_when_a_required_worker_finishes() {
+        let task = tokio::spawn(async {});
+        let handle = task.abort_handle();
+        task.await.unwrap();
+        assert!(!Readiness::new(true, vec![handle], None).is_ready().await);
+    }
+
+    #[tokio::test]
     async fn server_stops_within_grace_after_root_cancellation() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let root = ShutdownRoot::new();
@@ -205,5 +292,22 @@ mod tests {
             .expect("server did not stop")
             .expect("server task failed")
             .expect("server returned an error");
+    }
+
+    #[test]
+    fn client_failures_are_not_reported_as_successful_http_traffic() {
+        assert_eq!(response_outcome(StatusCode::OK).0, Outcome::Ok);
+        assert_eq!(
+            response_outcome(StatusCode::BAD_REQUEST).0,
+            Outcome::Rejected
+        );
+        assert_eq!(
+            response_outcome(StatusCode::TOO_MANY_REQUESTS).0,
+            Outcome::Rejected
+        );
+        assert_eq!(
+            response_outcome(StatusCode::SERVICE_UNAVAILABLE).0,
+            Outcome::Error
+        );
     }
 }

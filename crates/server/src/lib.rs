@@ -155,6 +155,7 @@ pub enum ServerError {
 }
 
 struct RuntimeModules {
+    readiness_dependency: Option<std::sync::Arc<dyn http::DependencyReadiness>>,
     project_resolver: std::sync::Arc<dyn ProjectResolver>,
     event_sink: std::sync::Arc<dyn EventSink>,
     log_sink: Option<std::sync::Arc<dyn LogSink>>,
@@ -270,6 +271,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         })
         .transpose()?;
     let RuntimeModules {
+        readiness_dependency,
         project_resolver,
         event_sink,
         log_sink,
@@ -913,6 +915,14 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         )
         .await?;
         RuntimeModules {
+            readiness_dependency: Some(std::sync::Arc::new(MongoReadiness {
+                store: store.clone(),
+                timeout: config
+                    .server
+                    .request_timeout
+                    .get()
+                    .min(std::time::Duration::from_secs(2)),
+            })),
             project_resolver,
             event_sink,
             log_sink: Some(log_sink),
@@ -955,6 +965,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         }
     } else {
         RuntimeModules {
+            readiness_dependency: None,
             project_resolver: std::sync::Arc::new(UnavailableProjectResolver),
             event_sink: std::sync::Arc::new(UnavailableEventSink),
             log_sink: None,
@@ -1076,12 +1087,65 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         && aggregate_alert_task.is_some()
         && monitor_alert_task.is_some()
         && (!config.archive.enabled || archive_task.is_some());
+    let mut required_tasks = Vec::new();
+    required_tasks.extend(writer_task.as_ref().map(MongoWriterTask::abort_handle));
+    required_tasks.extend(log_writer_task.as_ref().map(LogWriterTask::abort_handle));
+    required_tasks.extend(
+        metric_writer_task
+            .as_ref()
+            .map(MetricWriterTask::abort_handle),
+    );
+    required_tasks.extend(
+        replay_writer_task
+            .as_ref()
+            .map(ReplayWriterTask::abort_handle),
+    );
+    required_tasks.extend(span_writer_task.as_ref().map(SpanWriterTask::abort_handle));
+    required_tasks.extend(
+        session_writer_task
+            .as_ref()
+            .map(SessionWriterTask::abort_handle),
+    );
+    required_tasks.extend(
+        monitor_writer_task
+            .as_ref()
+            .map(MonitorWriterTask::abort_handle),
+    );
+    required_tasks.extend(
+        session_maintenance_task
+            .as_ref()
+            .map(SessionMaintenanceTask::abort_handle),
+    );
+    required_tasks.extend(dispatcher_task.as_ref().map(DispatcherTask::abort_handle));
+    required_tasks.extend(scheduler_task.as_ref().map(SchedulerTask::abort_handle));
+    if config.archive.enabled {
+        required_tasks.extend(archive_task.as_ref().map(ArchiveTask::abort_handle));
+    }
+    if let Some(task) = &notification_task {
+        required_tasks.extend(task.abort_handles());
+    }
+    required_tasks.extend(
+        aggregate_alert_task
+            .as_ref()
+            .map(tokio::task::JoinHandle::abort_handle),
+    );
+    required_tasks.extend(
+        monitor_alert_task
+            .as_ref()
+            .map(tokio::task::JoinHandle::abort_handle),
+    );
+    let readiness = http::Readiness::new(required_ready, required_tasks, readiness_dependency);
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
-        .merge(native_http::router(
+        .merge(native_http::router_with_limits(
             identity_service.clone(),
             native_api_service,
             config.auth.secure_cookie,
             required_ready,
+            native_http::NativeHttpLimits {
+                trusted_proxies: config.server.trusted_proxies.clone(),
+                max_active_requests: config.server.max_active_requests,
+                request_timeout: config.server.request_timeout.get(),
+            },
             native_http::NativeHttpModules {
                 retention: required_ready.then_some(native_http::RetentionCapability {
                     events_days: config.retention.events_days,
@@ -1132,12 +1196,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             release_service,
         ))
         .merge(web_http::router());
-    let app = http::router_with_readiness(
-        shutdown.signal(),
-        metrics,
-        application_routes,
-        required_ready,
-    );
+    let app = http::router_with_probe(shutdown.signal(), metrics, application_routes, readiness);
     let listener = TcpListener::bind(config.server.http_address).await?;
     info!(
         operation = "runtime.ready",
@@ -1231,6 +1290,21 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
 }
 
 struct UnavailableProjectResolver;
+
+struct MongoReadiness {
+    store: MongoProjectStore,
+    timeout: std::time::Duration,
+}
+
+impl http::DependencyReadiness for MongoReadiness {
+    fn check(&self) -> PortFuture<'_, bool> {
+        Box::pin(async move {
+            timeout(self.timeout, self.store.ping())
+                .await
+                .is_ok_and(|result| result.is_ok())
+        })
+    }
+}
 
 impl ProjectResolver for UnavailableProjectResolver {
     fn resolve(

@@ -83,6 +83,14 @@ pub enum NotificationError {
     InvalidData,
     #[error("notification administration is forbidden")]
     Forbidden,
+    #[error("project is disabled")]
+    ProjectDisabled,
+    #[error("project deletion is pending")]
+    ProjectDeletionPending,
+    #[error("project purge is in progress")]
+    ProjectPurging,
+    #[error("project is deleted")]
+    ProjectDeleted,
 }
 
 impl NotificationError {
@@ -93,6 +101,10 @@ impl NotificationError {
             Self::StorageUnavailable => "notification_temporarily_unavailable",
             Self::InvalidData => "notification_invalid_data",
             Self::Forbidden => "notification_forbidden",
+            Self::ProjectDisabled => "project_disabled",
+            Self::ProjectDeletionPending => "project_deletion_pending",
+            Self::ProjectPurging => "project_purging",
+            Self::ProjectDeleted => "project_deleted",
         }
     }
 }
@@ -124,7 +136,7 @@ impl NotificationAdminAccess for IdentityService {
         project_id: metric_domain::ProjectId,
     ) -> NotificationAccessFuture<'a> {
         Box::pin(async move {
-            self.authorize_project(context, project_id, Permission::ProjectAdmin)
+            self.authorize_project_mutation(context, project_id, Permission::ProjectAdmin)
                 .await
                 .map_err(map_auth_error)
         })
@@ -311,6 +323,10 @@ fn map_auth_error(error: AuthError) -> NotificationError {
         AuthError::Forbidden | AuthError::InvalidCredentials | AuthError::InvalidCredential => {
             NotificationError::Forbidden
         }
+        AuthError::ProjectDisabled => NotificationError::ProjectDisabled,
+        AuthError::ProjectDeletionPending => NotificationError::ProjectDeletionPending,
+        AuthError::ProjectPurging => NotificationError::ProjectPurging,
+        AuthError::ProjectDeleted => NotificationError::ProjectDeleted,
         _ => NotificationError::StorageUnavailable,
     }
 }
@@ -1003,6 +1019,10 @@ fn add_duration_signed(timestamp: Timestamp, millis: i64) -> Result<Timestamp, N
 }
 
 impl NotificationTask {
+    pub fn abort_handles(&self) -> Vec<tokio::task::AbortHandle> {
+        self.joins.iter().map(JoinHandle::abort_handle).collect()
+    }
+
     pub async fn wait(self) {
         for join in self.joins {
             let _ = join.await;

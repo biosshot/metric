@@ -298,7 +298,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         })
         .await?;
     assert_eq!(
-        store.project_organization(ProjectId::new(44)?).await?,
+        store.project_access(ProjectId::new(44)?).await?.0,
         organization_id
     );
 

@@ -1255,10 +1255,19 @@ pub trait AuthStore: Send + Sync + 'static {
         revoked_at: Timestamp,
     ) -> PortFuture<'_, Result<(), AuthStoreError>>;
 
-    fn project_organization(
+    fn project_access(
         &self,
         project_id: ProjectId,
-    ) -> PortFuture<'_, Result<metric_domain::OrganizationId, AuthStoreError>>;
+    ) -> PortFuture<
+        '_,
+        Result<
+            (
+                metric_domain::OrganizationId,
+                metric_domain::ProjectAcceptanceState,
+            ),
+            AuthStoreError,
+        >,
+    >;
 
     fn append_audit(&self, record: AuditRecord) -> PortFuture<'_, Result<(), AuthStoreError>>;
 

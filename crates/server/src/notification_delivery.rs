@@ -4,8 +4,12 @@ use std::{sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
-    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::Mailbox,
+    transport::smtp::{
+        authentication::Credentials,
+        client::{Tls, TlsParameters},
+    },
 };
 use metric_domain::notifications::{
     ClaimedNotificationDelivery, NotificationDestinationKind, SmtpSecurity,
@@ -136,22 +140,25 @@ impl ProviderDeliveryAdapter {
             .as_ref()
             .ok_or(NotificationDeliveryError::Rejected)?;
         let host = claim.destination.endpoint.as_str();
-        validate_smtp_host(host, smtp.port, self.config.allow_private_networks).await?;
+        let address =
+            resolve_smtp_host(host, smtp.port, self.config.allow_private_networks).await?;
         let password = self.secret_box.open(&claim.destination.sealed_secret)?;
         let password =
             String::from_utf8(password).map_err(|_| NotificationDeliveryError::InvalidSecret)?;
         let credentials = Credentials::new(smtp.username.as_str().to_owned(), password);
-        let builder = match smtp.security {
-            SmtpSecurity::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
-                .map_err(|_| NotificationDeliveryError::Rejected)?,
-            SmtpSecurity::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(host)
-                .map_err(|_| NotificationDeliveryError::Rejected)?,
+        let tls =
+            TlsParameters::new(host.to_owned()).map_err(|_| NotificationDeliveryError::Rejected)?;
+        let tls = match smtp.security {
+            SmtpSecurity::StartTls => Tls::Required(tls),
+            SmtpSecurity::Tls => Tls::Wrapper(tls),
         };
-        let transport = builder
-            .port(smtp.port)
-            .credentials(credentials)
-            .timeout(Some(self.config.timeout))
-            .build();
+        let transport =
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(address.ip().to_string())
+                .port(smtp.port)
+                .tls(tls)
+                .credentials(credentials)
+                .timeout(Some(self.config.timeout))
+                .build();
         let summary = notification_summary(claim.delivery.payload.as_bytes());
         let mut message = Message::builder()
             .from(parse_mailbox(smtp.from.as_str())?)
@@ -238,11 +245,11 @@ pub(crate) fn valid_telegram_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-async fn validate_smtp_host(
+async fn resolve_smtp_host(
     host: &str,
     port: u16,
     allow_private_networks: bool,
-) -> Result<(), NotificationDeliveryError> {
+) -> Result<std::net::SocketAddr, NotificationDeliveryError> {
     if host.is_empty()
         || host.len() > 253
         || host.eq_ignore_ascii_case("localhost")
@@ -254,12 +261,16 @@ async fn validate_smtp_host(
         .await
         .map_err(|_| NotificationDeliveryError::Retryable)?
         .collect::<Vec<_>>();
-    if addresses.is_empty()
-        || (!allow_private_networks && addresses.iter().any(|address| forbidden_ip(address.ip())))
-    {
+    if addresses.is_empty() {
         return Err(NotificationDeliveryError::Rejected);
     }
-    Ok(())
+    if !allow_private_networks && addresses.iter().any(|address| forbidden_ip(address.ip())) {
+        return Err(NotificationDeliveryError::Rejected);
+    }
+    addresses
+        .into_iter()
+        .next()
+        .ok_or(NotificationDeliveryError::Rejected)
 }
 
 fn parse_mailbox(value: &str) -> Result<Mailbox, NotificationDeliveryError> {

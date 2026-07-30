@@ -75,7 +75,7 @@ impl MongoDebugFileStore {
                 "organization_id": i64::try_from(organization_id.get())
                     .map_err(|_| DebugFileStoreError::InvalidData)?,
                 "slug": project_slug,
-                "state": { "$in": ["active", "disabled"] },
+                "state": "active",
             })
             .await
             .map_err(|_| DebugFileStoreError::Unavailable)?
@@ -359,7 +359,7 @@ impl DebugFileStore for MongoDebugFileStore {
             let document = self
                 .database
                 .collection::<Document>("projects")
-                .find_one(doc! { "_id": project_id.get(), "state": { "$ne": "deleted" } })
+                .find_one(doc! { "_id": project_id.get(), "state": "active" })
                 .await
                 .map_err(|_| DebugFileStoreError::Unavailable)?
                 .ok_or(DebugFileStoreError::NotFound)?;

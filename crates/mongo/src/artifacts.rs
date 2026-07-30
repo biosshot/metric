@@ -69,7 +69,7 @@ impl MongoArtifactStore {
             .find(doc! {
                 "organization_id": i64::try_from(organization_id.get()).map_err(|_| ArtifactStoreError::InvalidData)?,
                 "slug": { "$in": &slugs },
-                "state": { "$in": ["active", "disabled"] },
+                "state": "active",
             })
             .await
             .map_err(unavailable)?;
@@ -733,7 +733,7 @@ impl ArtifactStore for MongoArtifactStore {
             let document = self
                 .database
                 .collection::<Document>("projects")
-                .find_one(doc! { "_id": project_id.get(), "state": { "$ne": "deleted" } })
+                .find_one(doc! { "_id": project_id.get(), "state": "active" })
                 .await
                 .map_err(unavailable)?
                 .ok_or(ArtifactStoreError::NotFound)?;
