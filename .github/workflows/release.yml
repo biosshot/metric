@@ -1,4 +1,5 @@
-name: release
+# Publishes a versioned container image and creates a GitHub Release.
+name: Release
 
 on:
   push:
@@ -39,8 +40,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 

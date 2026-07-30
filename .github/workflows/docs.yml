@@ -1,4 +1,5 @@
-name: docs
+# Builds and publishes the user documentation to GitHub Pages.
+name: Documentation
 
 on:
   push:
@@ -17,7 +18,11 @@ concurrency:
 
 jobs:
   build:
+    name: Build site
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +47,7 @@ jobs:
           path: docs/.vitepress/dist
 
   deploy:
+    name: Publish site
     needs: build
     runs-on: ubuntu-latest
     permissions:

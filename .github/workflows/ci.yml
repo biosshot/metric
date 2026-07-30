@@ -1,4 +1,5 @@
-name: ci
+# Checks code and containers. This workflow never publishes anything.
+name: Checks
 
 on:
   pull_request:
@@ -9,7 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  foundation:
+  tests:
+    name: Code and tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +97,8 @@ jobs:
           npm ci
           npm run versions
 
-  package:
+  container:
+    name: Container build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
