@@ -72,10 +72,13 @@ before running it.
 
 ## Open Metric
 
-Open `http://localhost:4001` in your browser.
+Open `http://localhost:4001` in your browser. From another machine, open
+`http://SERVER_IP:4001`. The supplied profiles allow sign-in over HTTP so the
+first start works without a proxy.
 
-If you open Metric from another machine, place an HTTPS proxy in front of port
-4001. Remote sign-in over plain HTTP is not supported. See [Docker](docker.md).
+HTTP does not encrypt passwords, session cookies or application data. Use HTTPS
+before exposing Metric to the internet or storing important data. See
+[Docker](docker.md#https).
 
 Show the first setup token:
 

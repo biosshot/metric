@@ -86,8 +86,10 @@ Do not reuse its MongoDB container for other applications.
 
 ## HTTPS
 
-When Metric is available over the internet, put an HTTPS proxy in front of port
-4001. Caddy, Nginx, Traefik and cloud load balancers can all do this.
+The supplied profiles work over HTTP, including sign-in from another machine.
+HTTP does not encrypt passwords, session cookies or application data. For a
+public or long-running installation, put an HTTPS proxy in front of port 4001.
+Caddy, Nginx, Traefik and cloud load balancers can all do this.
 
 The public DSN must use the same HTTPS hostname that your applications can reach.
 You do not need another Compose file. If the proxy sends forwarding headers, set

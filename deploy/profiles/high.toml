@@ -20,6 +20,12 @@ scrub_hmac_key = { env = "SCRUB_HMAC_KEY" }
 identity_collision_retries = 32
 max_keys_per_project = 64
 
+[development]
+allow_insecure_cookies = true
+
+[auth]
+secure_cookie = false
+
 [blob]
 backend = "local"
 root = "/var/lib/metric/blobs"

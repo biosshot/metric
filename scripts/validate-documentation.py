@@ -153,7 +153,10 @@ def main() -> int:
             "README.md",
             "docs/configuration.md",
             "docs/known-limits.md",
+            "docs/index.md",
+            "docs/getting-started.md",
             "docs/operations.md",
+            "docs/troubleshooting.md",
             "docs/supported-capabilities.md",
             "docs/compatibility.md",
         )
@@ -167,6 +170,8 @@ def main() -> int:
         r"does not include a Symbolicator container",
         r"external Symbolicator is optional and operated separately",
         r"default Compose setup starts Symbolicator automatically",
+        r"Remote sign-in over plain HTTP is not supported",
+        r"Secure login cookies are not sent over ordinary remote HTTP",
     )
     for pattern in stale_patterns:
         if re.search(pattern, operator_surface, re.IGNORECASE):

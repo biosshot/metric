@@ -34,8 +34,19 @@ Metric reports unknown settings and invalid values before starting.
 
 ## The browser returns to the sign-in page
 
-When opening Metric through a remote hostname, use HTTPS. Secure login cookies are
-not sent over ordinary remote HTTP connections.
+The supplied Docker profiles support sign-in over HTTP. Check that `metric.toml`
+contains both settings:
+
+```toml
+[development]
+allow_insecure_cookies = true
+
+[auth]
+secure_cookie = false
+```
+
+Then restart Metric with `docker compose up -d`. If you use a custom
+configuration with `auth.secure_cookie = true`, open Metric through HTTPS.
 
 ## The SDK sends no events
 

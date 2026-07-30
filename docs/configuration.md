@@ -116,14 +116,21 @@ for that installation. The main profile differences are summarized in
 | `projects.identity_collision_retries` | `16` | Attempts to create a unique project identifier. |
 | `projects.max_keys_per_project` | `32` | Maximum DSN keys for one project. |
 
-## Development safety
+## HTTP login and development settings
 
-Do not enable these settings on an internet-facing installation.
+The built-in defaults require HTTPS. The supplied Docker profiles deliberately
+set `development.allow_insecure_cookies = true` and
+`auth.secure_cookie = false`, so sign-in works immediately over HTTP. These two
+values must be changed together.
+
+HTTP does not encrypt passwords, cookies or application data. After adding
+HTTPS, set `development.allow_insecure_cookies = false` and
+`auth.secure_cookie = true`.
 
 | Setting | Value | Meaning |
 | --- | --- | --- |
 | `development.allow_literal_secrets` | `false` | Allows secrets to be written directly in TOML. |
-| `development.allow_insecure_cookies` | `false` | Allows login cookies without HTTPS. |
+| `development.allow_insecure_cookies` | `false` (Docker profiles: `true`) | Allows login cookies without HTTPS. |
 
 ## File and S3 storage
 
@@ -342,7 +349,7 @@ These defaults are used when an `[artifacts]` section is not present.
 | `auth.setup_token_timeout` | `24h` | Lifetime of setup and invitation tokens. |
 | `auth.max_api_token_lifetime` | `365d` | Longest allowed personal API-token lifetime. |
 | `auth.activity_touch_interval` | `5m` | Minimum interval between user activity updates. |
-| `auth.secure_cookie` | `true` | Sends login cookies only over HTTPS. |
+| `auth.secure_cookie` | `true` (Docker profiles: `false`) | Sends login cookies only over HTTPS. |
 | `auth.session.idle_timeout` | `7d` | Signs out a session after this inactive period. |
 | `auth.session.absolute_timeout` | `30d` | Maximum session lifetime, even when active. |
 | `auth.password.memory_kib` | `19456` | Memory used when hashing one password. |

@@ -54,7 +54,9 @@ container restarts and free disk space in the data and active cache volumes.
 
 ## HTTPS proxy
 
-Use an HTTPS proxy when Metric is opened from another machine. You do not need a
+The supplied profiles allow sign-in over HTTP, including from another machine.
+Use an HTTPS proxy for a public or long-running installation because HTTP does
+not encrypt passwords, session cookies or application data. You do not need a
 second Compose file.
 
 If the proxy sends `X-Forwarded-For`, add the proxy address or network to

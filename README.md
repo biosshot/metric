@@ -54,7 +54,8 @@ curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.0/deploy/insta
   | METRIC_PROFILE=min sh
 ```
 
-Open `http://localhost:4001`, then get the one-time setup token:
+Open `http://localhost:4001` or `http://SERVER_IP:4001`, then get the one-time
+setup token:
 
 ```bash
 cd metric
@@ -63,6 +64,9 @@ docker compose logs metric
 
 Copy the value after `METRIC_BOOTSTRAP_TOKEN=` and follow the
 [first setup guide](https://biosshot.github.io/metric/first-setup).
+
+The supplied profiles allow sign-in over HTTP for a simple first start. Use
+HTTPS before exposing Metric to the internet or storing important data.
 
 For manual installation, Windows instructions and HTTPS, see the complete
 [installation guide](https://biosshot.github.io/metric/getting-started).

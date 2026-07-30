@@ -37,7 +37,7 @@ before using it for important production data.
 
 - Docker with Docker Compose;
 - a 64-bit machine starting at 1 vCPU, 1 GiB RAM and 15 GiB SSD;
-- HTTPS when Metric is available over the internet.
+- HTTPS is strongly recommended when Metric is available over the internet.
 
 Start with [Install Metric](getting-started.md) and choose a resource profile.
 Most users do not need to change its individual settings.

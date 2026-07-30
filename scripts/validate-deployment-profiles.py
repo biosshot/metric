@@ -94,6 +94,14 @@ def main() -> int:
             errors.append(f"{config_path}: minidumps must remain an explicit privacy choice")
         if config["ingest"]["attachments"]["enabled"] != (profile != "min"):
             errors.append(f"{config_path}: attachment policy is incorrect")
+        if config.get("development", {}).get("allow_insecure_cookies") is not True:
+            errors.append(
+                f"{config_path}: supplied profiles must allow sign-in over HTTP"
+            )
+        if config.get("auth", {}).get("secure_cookie") is not False:
+            errors.append(
+                f"{config_path}: supplied profiles must send the login cookie over HTTP"
+            )
 
         blob_capacity = storage_mib(config["blob"]["capacity"])
         expected_capacity = DISK_GIB[profile] // 3 * 1024
@@ -307,8 +315,8 @@ def main() -> int:
 
     print(
         "deployment profiles valid: min/low exclude Symbolicator, medium/high "
-        "include it, BlobStore uses one third of disk, and resource/retention "
-        "limits scale monotonically"
+        "include it, HTTP sign-in is enabled, BlobStore uses one third of disk, "
+        "and resource/retention limits scale monotonically"
     )
     return 0
 
