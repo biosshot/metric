@@ -5,12 +5,12 @@ request concurrency, queue sizes, file limits and retention together.
 
 ## Recommended starting point
 
-| Profile | vCPU | RAM | SSD/NVMe | Symbolicator | Local file limit |
+| Profile | vCPU | RAM | SSD/NVMe | Symbolicator | BlobStore capacity |
 | --- | ---: | ---: | ---: | --- | ---: |
-| **Min** | 1 | 1 GiB | 15 GiB | No | 256 MiB |
-| **Low** | 2 | 2 GiB | 30 GiB | No | 2 GiB |
-| **Medium** | 4 | 8 GiB | 100 GiB | Yes | 10 GiB |
-| **High** | 8 | 16 GiB | 250 GiB | Yes | 50 GiB |
+| **Min** | 1 | 1 GiB | 15 GiB | No | 5 GiB |
+| **Low** | 2 | 2 GiB | 30 GiB | No | 10 GiB |
+| **Medium** | 4 | 8 GiB | 100 GiB | Yes | 33 GiB |
+| **High** | 8 | 16 GiB | 250 GiB | Yes | 83 GiB |
 
 Medium is the default installer profile. Min is deliberately designed for a
 small VPS: one or a few projects, a low average error rate and no continuous log
@@ -43,22 +43,24 @@ separate Symbolicator processing step.
 
 High-volume raw data is kept for less time than compact hourly statistics.
 This preserves useful trends without filling a small disk with individual rows.
+Cold archive is disabled in the supplied profiles, so every period below is for
+searchable hot data.
 
 | Data | Min | Low | Medium | High |
 | --- | ---: | ---: | ---: | ---: |
-| Error events | 7 days | 14 days | 30 days | 90 days |
-| Logs | 3 days | 7 days | 14 days | 30 days |
-| Spans | 3 days | 7 days | 14 days | 30 days |
-| Hourly span statistics | 30 days | 60 days | 90 days | 180 days |
-| Feedback | 30 days | 60 days | 90 days | 180 days |
-| Hourly issue statistics | 90 days | 180 days | 400 days | 730 days |
-| Individual release sessions | 3 days | 7 days | 7 days | 14 days |
-| Hourly release statistics | 90 days | 180 days | 400 days | 730 days |
-| Monitor runs | 30 days | 60 days | 90 days | 180 days |
-| Application metrics | 30 days | 60 days | 90 days | 180 days |
-| Session Replay, when enabled | 1 day | 3 days | 7 days | 30 days |
-| Delivered notification history | 7 days | 14 days | 30 days | 90 days |
-| Failed notification history | 30 days | 60 days | 90 days | 180 days |
+| Error events | 30 days | 60 days | 90 days | 180 days |
+| Logs | 7 days | 14 days | 30 days | 90 days |
+| Spans | 7 days | 14 days | 30 days | 90 days |
+| Hourly span statistics | 180 days | 1 year | 2 years | 3 years |
+| Feedback | 90 days | 180 days | 1 year | 2 years |
+| Hourly issue statistics | 1 year | 2 years | 3 years | 5 years |
+| Individual release sessions | 14 days | 30 days | 60 days | 90 days |
+| Hourly release statistics | 1 year | 2 years | 3 years | 5 years |
+| Monitor runs | 90 days | 180 days | 1 year | 2 years |
+| Application metrics | 60 days | 120 days | 180 days | 1 year |
+| Session Replay, when enabled | 7 days | 14 days | 30 days | 90 days |
+| Delivered notification history | 30 days | 60 days | 90 days | 180 days |
+| Failed notification history | 90 days | 180 days | 1 year | 2 years |
 
 MongoDB TTL cleanup is asynchronous. Data can remain for a short time after its
 retention period, so never size a disk with zero free space.
@@ -70,8 +72,8 @@ The Min Compose profile:
 - does not start Symbolicator or its cleanup process;
 - gives MongoDB a 256 MiB WiredTiger cache and a 512 MiB container limit;
 - limits Metric to 320 MiB;
-- reduces active requests, background workers and queues;
-- disables attachments and limits Replay buffering to 1 MiB;
+- keeps active requests and background workers bounded;
+- disables attachments and limits Replay buffering to 4 MiB;
 - rotates container logs after two 5 MiB files per service.
 
 The limits leave part of the recommended RAM to Linux, Docker and short memory
@@ -106,6 +108,12 @@ Metric stores data in:
 The SSD recommendation includes the operating system, container images, swap and
 working space. Backups must be stored on another disk or machine and are not
 included in the table.
+
+Each supplied profile gives BlobStore about one third of the recommended disk.
+Its internal reserve keeps 256 MiB, 512 MiB, 2 GiB or 4 GiB of that allocation
+unwritable so one large upload cannot consume the last available bytes. MongoDB,
+the operating system, images and swap share the rest of the disk. This is a
+ceiling, not preallocated space.
 
 One event per second is 2,592,000 events over 30 days. Even a 10 KiB stored event
 would be about 25 GiB before indexes and other collections. Sampling SDK traces

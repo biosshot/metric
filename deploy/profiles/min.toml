@@ -7,7 +7,7 @@ role = "all"
 [server]
 http_address = "0.0.0.0:4001"
 shutdown_grace = "30s"
-max_active_requests = 16
+max_active_requests = 32
 request_timeout = "20s"
 
 [mongodb]
@@ -23,9 +23,9 @@ max_keys_per_project = 8
 [blob]
 backend = "local"
 root = "/var/lib/metric/blobs"
-capacity = "256 MiB"
-reserve = "32 MiB"
-max_object_bytes = "32 MiB"
+capacity = "5 GiB"
+reserve = "256 MiB"
+max_object_bytes = "64 MiB"
 
 [archive]
 enabled = false
@@ -51,10 +51,10 @@ circuit_cooldown = "30s"
 maximum_response_bytes = "1 MiB"
 
 [artifacts]
-maximum_bundle_bytes = "8 MiB"
-maximum_logical_bytes = "32 MiB"
-maximum_entries = 1000
-maximum_entry_bytes = "4 MiB"
+maximum_bundle_bytes = "16 MiB"
+maximum_logical_bytes = "64 MiB"
+maximum_entries = 2500
+maximum_entry_bytes = "8 MiB"
 maximum_concurrent_assemblies = 1
 parse_timeout = "20s"
 orphan_grace = "24h"
@@ -64,24 +64,24 @@ tombstone_retention = "24h"
 gc_interval = "30m"
 gc_batch_size = 10
 gc_max_concurrency = 1
-maximum_bytes_per_organization = "128 MiB"
-maximum_bundles_per_organization = 20
+maximum_bytes_per_organization = "512 MiB"
+maximum_bundles_per_organization = 100
 
 [incident_capsule]
-max_events = 5
-max_activities = 25
-max_total_uncompressed_bytes = "8 MiB"
-max_entry_bytes = "2 MiB"
+max_events = 10
+max_activities = 50
+max_total_uncompressed_bytes = "32 MiB"
+max_entry_bytes = "8 MiB"
 generation_timeout = "20s"
 max_concurrency = 1
 stream_chunk_bytes = "16 KiB"
 stream_buffer_chunks = 1
 
 [ingest]
-max_compressed_request_bytes = "2 MiB"
-max_decompressed_request_bytes = "8 MiB"
-max_event_bytes = "512 KiB"
-max_envelope_items = 20
+max_compressed_request_bytes = "4 MiB"
+max_decompressed_request_bytes = "16 MiB"
+max_event_bytes = "1 MiB"
+max_envelope_items = 50
 max_active_requests = 8
 max_parsing_tasks = 1
 max_waiting_for_storage = 8
@@ -91,8 +91,8 @@ unsupported_backoff_seconds = 3600
 [ingest.attachments]
 enabled = false
 max_count = 3
-max_item_bytes = "512 KiB"
-max_total_bytes = "1 MiB"
+max_item_bytes = "1 MiB"
+max_total_bytes = "4 MiB"
 chunk_bytes = "16 KiB"
 orphan_grace = "24h"
 cleanup_interval = "30m"
@@ -100,36 +100,36 @@ cleanup_batch_size = 32
 cleanup_max_pages = 2
 
 [ingest.replay]
-max_segment_bytes = "1 MiB"
-max_decompressed_segment_bytes = "4 MiB"
-max_events_per_segment = 25000
-queue_capacity = 1
-max_queued_bytes = "1 MiB"
+max_segment_bytes = "2 MiB"
+max_decompressed_segment_bytes = "8 MiB"
+max_events_per_segment = 50000
+queue_capacity = 2
+max_queued_bytes = "4 MiB"
 orphan_grace = "1h"
 cleanup_interval = "15m"
 cleanup_batch_size = 20
 
 [ingest.project_cache]
-capacity = 1000
-max_inflight = 16
+capacity = 2000
+max_inflight = 32
 positive_ttl = "60s"
 negative_ttl = "5s"
 
 [ingest.batch]
 max_wait = "50ms"
 max_documents = 100
-max_bytes = "512 KiB"
+max_bytes = "1 MiB"
 
 [ingest.backlog]
-max_pending_events = 10000
+max_pending_events = 25000
 max_oldest_pending_age = "1h"
 
 [dispatcher]
-queue_capacity = 128
+queue_capacity = 256
 worker_concurrency = 1
-low_watermark = 32
-refill_target = 96
-refill_batch_size = 32
+low_watermark = 64
+refill_target = 192
+refill_batch_size = 64
 poll_interval = "250ms"
 metrics_interval = "10s"
 source_timeout = "5s"
@@ -142,23 +142,23 @@ backlog_interval = "10s"
 task_timeout = "10s"
 retry_base = "1s"
 retry_max = "1m"
-batch_size = 50
+batch_size = 100
 
 [retention]
-events_days = 7
-feedback_days = 30
-issue_stats_hourly_days = 90
-logs_days = 3
-spans_days = 3
-span_stats_hourly_days = 30
-sessions_days = 3
-session_stats_hourly_days = 90
+events_days = 30
+feedback_days = 90
+issue_stats_hourly_days = 365
+logs_days = 7
+spans_days = 7
+span_stats_hourly_days = 180
+sessions_days = 14
+session_stats_hourly_days = 365
 session_active_max_hours = 24
-monitor_runs_days = 30
-metrics_days = 30
+monitor_runs_days = 90
+metrics_days = 60
 metric_max_series_per_project = 1000
 metric_archive = false
-replays_days = 1
+replays_days = 7
 replay_archive = false
 
 [project_deletion]
@@ -190,7 +190,7 @@ max_concurrency = 1
 [auth.login]
 max_attempts = 5
 window = "1m"
-capacity = 1000
+capacity = 2000
 
 [notifications]
 transition_batch_size = 20
@@ -198,9 +198,9 @@ due_scan_limit = 20
 poll_interval = "1s"
 
 [notifications.queue]
-capacity = 32
+capacity = 64
 worker_concurrency = 1
 
 [notifications.retention]
-delivered_days = 7
-dead_days = 30
+delivered_days = 30
+dead_days = 90

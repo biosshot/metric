@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ("min", "low", "medium", "high")
 RAM_MIB = {"min": 1024, "low": 2048, "medium": 8192, "high": 16384}
+DISK_GIB = {"min": 15, "low": 30, "medium": 100, "high": 250}
 SYMBOLICATION = {"min": False, "low": False, "medium": True, "high": True}
 
 
@@ -38,6 +39,30 @@ def memory_mib(value: str) -> int:
     if normalized.endswith("m"):
         return int(normalized[:-1])
     raise ValueError(f"unsupported memory value: {value}")
+
+
+def storage_mib(value: str) -> int:
+    number, unit = value.strip().split()
+    amount = int(number)
+    if unit == "GiB":
+        return amount * 1024
+    if unit == "MiB":
+        return amount
+    raise ValueError(f"unsupported storage value: {value}")
+
+
+def retention_label(days: int) -> str:
+    if days % 365 == 0:
+        years = days // 365
+        return f"{years} {'year' if years == 1 else 'years'}"
+    return f"{days} {'day' if days == 1 else 'days'}"
+
+
+def nested(config: dict, path: tuple[str, ...]):
+    value = config
+    for key in path:
+        value = value[key]
+    return value
 
 
 def main() -> int:
@@ -70,6 +95,51 @@ def main() -> int:
         if config["ingest"]["attachments"]["enabled"] != (profile != "min"):
             errors.append(f"{config_path}: attachment policy is incorrect")
 
+        blob_capacity = storage_mib(config["blob"]["capacity"])
+        expected_capacity = DISK_GIB[profile] // 3 * 1024
+        if blob_capacity != expected_capacity:
+            errors.append(
+                f"{config_path}: BlobStore must use one third of the recommended "
+                f"disk ({expected_capacity // 1024} GiB)"
+            )
+        blob_reserve = storage_mib(config["blob"]["reserve"])
+        if not blob_capacity * 4 // 100 <= blob_reserve <= blob_capacity // 10:
+            errors.append(
+                f"{config_path}: BlobStore reserve must stay between 4% and 10% "
+                "of capacity"
+            )
+        blob_object = storage_mib(config["blob"]["max_object_bytes"])
+        object_consumers = (
+            storage_mib(config["artifacts"]["maximum_bundle_bytes"]),
+            storage_mib(config["incident_capsule"]["max_total_uncompressed_bytes"]),
+            storage_mib(config["ingest"]["attachments"]["max_total_bytes"]),
+            storage_mib(config["ingest"]["replay"]["max_segment_bytes"]),
+        )
+        if any(value > blob_object for value in object_consumers):
+            errors.append(
+                f"{config_path}: an upload limit exceeds blob.max_object_bytes"
+            )
+        artifact_quota = storage_mib(
+            config["artifacts"]["maximum_bytes_per_organization"]
+        )
+        if artifact_quota > blob_capacity - blob_reserve:
+            errors.append(
+                f"{config_path}: one organization artifact quota exceeds writable "
+                "BlobStore capacity"
+            )
+
+        retention = config["retention"]
+        if (
+            retention["logs_days"] > retention["events_days"]
+            or retention["spans_days"] > retention["events_days"]
+            or retention["issue_stats_hourly_days"] < retention["events_days"]
+            or retention["span_stats_hourly_days"] < retention["spans_days"]
+            or retention["session_stats_hourly_days"] < retention["sessions_days"]
+        ):
+            errors.append(
+                f"{config_path}: compact statistics must outlive high-volume raw data"
+            )
+
         active_memory = memory_mib(env["METRIC_MONGO_MEMORY_LIMIT"]) + memory_mib(
             env["METRIC_APP_MEMORY_LIMIT"]
         )
@@ -92,6 +162,7 @@ def main() -> int:
         ("server", "max_active_requests"),
         ("ingest", "max_active_requests"),
         ("ingest", "max_waiting_for_storage"),
+        ("ingest", "max_envelope_items"),
         ("dispatcher", "queue_capacity"),
         ("dispatcher", "worker_concurrency"),
         ("processor", "max_concurrency"),
@@ -114,7 +185,72 @@ def main() -> int:
                 f"deployment profiles: {section}.{key} must not decrease: {values}"
             )
 
+    monotonic_size_paths = (
+        ("blob", "capacity"),
+        ("blob", "reserve"),
+        ("blob", "max_object_bytes"),
+        ("artifacts", "maximum_bundle_bytes"),
+        ("artifacts", "maximum_logical_bytes"),
+        ("artifacts", "maximum_bytes_per_organization"),
+        ("incident_capsule", "max_total_uncompressed_bytes"),
+        ("ingest", "max_compressed_request_bytes"),
+        ("ingest", "max_decompressed_request_bytes"),
+        ("ingest", "max_event_bytes"),
+        ("ingest", "attachments", "max_item_bytes"),
+        ("ingest", "attachments", "max_total_bytes"),
+        ("ingest", "replay", "max_segment_bytes"),
+        ("ingest", "replay", "max_queued_bytes"),
+        ("ingest", "batch", "max_bytes"),
+    )
+    for path in monotonic_size_paths:
+        values = [
+            storage_mib(nested(configs[profile], path))
+            for profile in PROFILES
+        ]
+        if values != sorted(values):
+            errors.append(
+                f"deployment profiles: {'.'.join(path)} must not decrease: {values}"
+            )
+
     capacity_doc = read("docs/capacity.md")
+    readme = read("README.md")
+    for profile in PROFILES:
+        expected_capacity = DISK_GIB[profile] // 3
+        expected_cell = f"| **{profile.title()}** | "
+        matching_rows = [
+            line
+            for line in capacity_doc.splitlines()
+            if line.startswith(expected_cell)
+        ]
+        if not matching_rows or f"| {expected_capacity} GiB |" not in matching_rows[0]:
+            errors.append(
+                f"docs/capacity.md: {profile} BlobStore capacity must be "
+                f"{expected_capacity} GiB"
+            )
+
+        error_days = configs[profile]["retention"]["events_days"]
+        readme_values = {
+            "min": ("1 vCPU, 1 GiB RAM, 15 GiB SSD", "No"),
+            "low": ("2 vCPU, 2 GiB RAM, 30 GiB SSD", "No"),
+            "medium": ("4 vCPU, 8 GiB RAM, 100 GiB SSD", "Yes"),
+            "high": ("8 vCPU, 16 GiB RAM, 250 GiB SSD", "Yes"),
+        }
+        server, symbols = readme_values[profile]
+        expected_readme_row = (
+            f"| {profile.title()} | {server} | {expected_capacity} GiB | "
+            f"{symbols} | {error_days} days |"
+        )
+        if expected_readme_row not in readme:
+            errors.append(f"README.md: deployment row is stale: {expected_readme_row}")
+
+    expected_capacity_summary = (
+        "Profiles use 5 GiB, 10 GiB, 33 GiB or 83 GiB."
+    )
+    if expected_capacity_summary not in read("docs/configuration.md"):
+        errors.append(
+            "docs/configuration.md: BlobStore profile capacity summary is stale"
+        )
+
     retention_rows = {
         "Error events": "events_days",
         "Logs": "logs_days",
@@ -131,7 +267,7 @@ def main() -> int:
     for label, key in retention_rows.items():
         values = [configs[profile]["retention"][key] for profile in PROFILES]
         expected = f"| {label} | " + " | ".join(
-            f"{value} {'day' if value == 1 else 'days'}" for value in values
+            retention_label(value) for value in values
         ) + " |"
         if expected not in capacity_doc:
             errors.append(f"docs/capacity.md: retention row is stale: {expected}")
@@ -146,7 +282,7 @@ def main() -> int:
             for profile in PROFILES
         ]
         expected = f"| {label} | " + " | ".join(
-            f"{value} {'day' if value == 1 else 'days'}" for value in values
+            retention_label(value) for value in values
         ) + " |"
         if expected not in capacity_doc:
             errors.append(f"docs/capacity.md: retention row is stale: {expected}")
@@ -171,7 +307,8 @@ def main() -> int:
 
     print(
         "deployment profiles valid: min/low exclude Symbolicator, medium/high "
-        "include it, and resource/retention limits scale monotonically"
+        "include it, BlobStore uses one third of disk, and resource/retention "
+        "limits scale monotonically"
     )
     return 0
 

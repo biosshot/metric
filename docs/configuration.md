@@ -107,7 +107,7 @@ for that installation. The main profile differences are summarized in
 | `server.http_address` | `127.0.0.1:4001` | Address and port used by the binary. The container uses `0.0.0.0:4001`. |
 | `server.shutdown_grace` | `10s` (Docker: `30s`) | Time allowed for work to finish during shutdown. |
 | `server.trusted_proxies` | `[]` | Proxy IP addresses or networks allowed to supply forwarding headers. |
-| `server.max_active_requests` | `512` | Maximum requests handled at the same time. Profiles use 16, 64, 256 or 1024. |
+| `server.max_active_requests` | `512` | Maximum requests handled at the same time. Profiles use 32, 128, 512 or 1536. |
 | `server.request_timeout` | `30s` | General HTTP request deadline. |
 | `mongodb.uri` | `MONGODB_URI` | MongoDB connection string. Keep it secret. |
 | `mongodb.database` | `metric` | MongoDB database name. |
@@ -131,7 +131,7 @@ Do not enable these settings on an internet-facing installation.
 | --- | --- | --- |
 | `blob.backend` | `local` | Storage type: `local` or `s3`. |
 | `blob.root` | `./metric-data/blobs` (Docker: `/var/lib/metric/blobs`) | Local storage directory. |
-| `blob.capacity` | `1 GiB` | Maximum space Metric may use in local storage. Profiles use 256 MiB, 2 GiB, 10 GiB or 50 GiB. |
+| `blob.capacity` | `1 GiB` | Maximum space Metric may use in local storage. Profiles use 5 GiB, 10 GiB, 33 GiB or 83 GiB. |
 | `blob.reserve` | `128 MiB` | Space kept free before new objects are rejected. |
 | `blob.max_object_bytes` | `100 MiB` | Maximum size of one stored object. |
 | `blob.s3.endpoint` | unset | Custom S3-compatible endpoint. Leave unset for AWS S3. |
@@ -174,8 +174,10 @@ Cold archive is disabled by default.
 | `symbolicator.maximum_response_bytes` | `4 MiB` | Maximum accepted Symbolicator response size. |
 
 Medium and High also read `symbolicator.yml` beside `compose.yml`. This file
-configures Symbolicator's internal server, cache and logging. Min and Low keep
-the file for easy upgrades but do not start its container.
+configures Symbolicator's internal server, cache and logging. Min and Low omit
+`symbolicator.endpoint`; that is what disables processing and preserves raw
+frames. Their empty `COMPOSE_PROFILES` value also avoids starting the unused
+container.
 
 ## Debug files and artifact bundles
 
@@ -273,7 +275,7 @@ These defaults are used when an `[artifacts]` section is not present.
 
 | Setting | Value | Meaning |
 | --- | --- | --- |
-| `dispatcher.queue_capacity` | `4096` | In-memory processing queue size. Profiles use 128, 512, 2048 or 8192. |
+| `dispatcher.queue_capacity` | `4096` | In-memory processing queue size. Profiles use 256, 1024, 4096 or 12288. |
 | `dispatcher.worker_concurrency` | `32` | Dispatcher workers running at the same time. Profiles use 1, 4, 16 or 64. |
 | `dispatcher.low_watermark` | `1024` | Queue level that triggers a refill. |
 | `dispatcher.refill_target` | `3072` | Queue level targeted by a refill. |

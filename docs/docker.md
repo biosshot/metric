@@ -3,6 +3,8 @@
 Metric uses one `compose.yml` for every resource profile. The selected `.env`
 controls container memory, MongoDB cache, log rotation and whether Symbolicator
 is active. The selected `metric.toml` controls application limits and retention.
+BlobStore receives about one third of the recommended disk for each profile; see
+[Capacity and profiles](capacity.md).
 
 ## Containers by profile
 

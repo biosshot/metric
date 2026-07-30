@@ -40,12 +40,12 @@ the container images and starts the recommended Medium profile.
 
 Available profiles:
 
-| Profile | Suggested server | Symbolicator | Raw error retention |
-| --- | --- | --- | --- |
-| Min | 1 vCPU, 1 GiB RAM, 15 GiB SSD | No | 7 days |
-| Low | 2 vCPU, 2 GiB RAM, 30 GiB SSD | No | 14 days |
-| Medium | 4 vCPU, 8 GiB RAM, 100 GiB SSD | Yes | 30 days |
-| High | 8 vCPU, 16 GiB RAM, 250 GiB SSD | Yes | 90 days |
+| Profile | Suggested server | BlobStore | Symbolicator | Error retention |
+| --- | --- | ---: | --- | ---: |
+| Min | 1 vCPU, 1 GiB RAM, 15 GiB SSD | 5 GiB | No | 30 days |
+| Low | 2 vCPU, 2 GiB RAM, 30 GiB SSD | 10 GiB | No | 60 days |
+| Medium | 4 vCPU, 8 GiB RAM, 100 GiB SSD | 33 GiB | Yes | 90 days |
+| High | 8 vCPU, 16 GiB RAM, 250 GiB SSD | 83 GiB | Yes | 180 days |
 
 For example, install Min on Linux or macOS:
 
