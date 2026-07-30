@@ -47,7 +47,6 @@ jobs:
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
-            sdk-tests/browser/package-lock.json
             sdk-tests/node/package-lock.json
             sdk-tests/sentry-cli/package-lock.json
       - name: Verify Web
@@ -64,14 +63,6 @@ jobs:
           npm ci
           npm run format:check
           npm run lint
-      - name: Verify real Browser SDK
-        working-directory: sdk-tests/browser
-        run: |
-          npm ci
-          npm run format:check
-          npm run lint
-          npm run build
-          npx playwright install --with-deps chromium
       - name: Verify real Go SDK
         working-directory: sdk-tests/go
         run: |
@@ -90,12 +81,34 @@ jobs:
       - name: Verify real Rust SDK
         run: cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
       - name: Run real SDK gates
-        run: cargo test -p metric-server --test sdk_compatibility_e2e -- --ignored --nocapture
+        run: cargo test -p metric-server --test sdk_compatibility_e2e -- --ignored --skip real_browser_sdk_ --nocapture
       - name: Verify pinned Sentry CLI versions
         working-directory: sdk-tests/sentry-cli
         run: |
           npm ci
           npm run versions
+
+  browser:
+    name: Browser SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk-tests/browser/package-lock.json
+      - name: Prepare Browser SDK
+        working-directory: sdk-tests/browser
+        run: |
+          npm ci
+          npm run format:check
+          npm run lint
+          npm run build
+          npx playwright install --with-deps chromium
+      - name: Run Browser SDK gates
+        run: cargo test -p metric-server --test sdk_compatibility_e2e real_browser_sdk_ -- --ignored --nocapture
 
   container:
     name: Container build
