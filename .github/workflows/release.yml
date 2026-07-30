@@ -1,0 +1,101 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/metric
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Match Git tag and Cargo version
+        shell: bash
+        run: |
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${tag_version}" != "${cargo_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match Cargo version ${cargo_version}."
+            exit 1
+          fi
+
+  image:
+    name: Publish container image
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image tags and labels
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=Metric
+            org.opencontainers.image.description=Sentry-compatible error tracking and observability
+
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
+          provenance: mode=max
+          sbom: true
+
+  github-release:
+    name: Publish GitHub Release
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --generate-notes \
+            --title "Metric ${GITHUB_REF_NAME#v}"
