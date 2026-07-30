@@ -23,8 +23,8 @@ use metric_domain::{
         IssueStatus,
     },
     monitors::{
-        MonitorConfig, MonitorDefinition, MonitorId, MonitorPage, MonitorRunPage, MonitorSchedule,
-        UptimeMonitorConfig,
+        MonitorConfig, MonitorDefinition, MonitorId, MonitorPage, MonitorRun, MonitorRunAnchor,
+        MonitorRunId, MonitorSchedule, UptimeMonitorConfig,
     },
     releases::{DeployRecord, ReleaseIssueSummary, ReleaseRecord, RepositoryReference},
     replays::{ReplayPage, ReplayRecord, ReplaySegment},
@@ -114,6 +114,14 @@ pub struct NativePage<T> {
 #[derive(Debug, Clone, Copy)]
 pub struct EventListRequest<'a> {
     pub issue_id: Option<IssueId>,
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
+    pub cursor: Option<&'a str>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MonitorRunListRequest<'a> {
     pub from: Option<Timestamp>,
     pub until: Option<Timestamp>,
     pub cursor: Option<&'a str>,
@@ -376,26 +384,46 @@ impl NativeApiService {
         context: &AuthContext,
         project_id: ProjectId,
         monitor_id: MonitorId,
-        from: Option<Timestamp>,
-        until: Option<Timestamp>,
-        limit: Option<usize>,
-    ) -> Result<MonitorRunPage, NativeApiError> {
+        request: MonitorRunListRequest<'_>,
+    ) -> Result<NativePage<MonitorRun>, NativeApiError> {
         self.authorize(context, project_id, Permission::ProjectRead)
             .await?;
-        if from.zip(until).is_some_and(|(from, until)| from >= until) {
+        if request
+            .from
+            .zip(request.until)
+            .is_some_and(|(from, until)| from >= until)
+        {
             return Err(NativeApiError::InvalidRequest);
         }
-        self.monitor_store()?
+        let normalized = monitor_run_cursor_scope(monitor_id, request.from, request.until);
+        let digest = cursor_digest(project_id, &normalized, CursorKind::MonitorRun);
+        let before = request
+            .cursor
+            .map(|value| decode_monitor_run_anchor(value, digest))
+            .transpose()?;
+        let page = self
+            .monitor_store()?
             .list_monitor_runs(
                 project_id,
                 monitor_id,
-                from,
-                until,
-                None,
-                monitors_page_size(limit)?,
+                request.from,
+                request.until,
+                before,
+                monitors_page_size(request.limit)?,
             )
             .await
-            .map_err(map_signal_error)
+            .map_err(map_signal_error)?;
+        Ok(NativePage {
+            next_cursor: page.next.map(|anchor| {
+                encode_cursor(
+                    CursorKind::MonitorRun,
+                    anchor.started_at,
+                    &anchor.run_id.as_bytes(),
+                    digest,
+                )
+            }),
+            items: page.items,
+        })
     }
 
     pub async fn delete_monitor(
@@ -1917,6 +1945,18 @@ fn monitors_page_size(value: Option<usize>) -> Result<usize, NativeApiError> {
     }
 }
 
+fn monitor_run_cursor_scope(
+    monitor_id: MonitorId,
+    from: Option<Timestamp>,
+    until: Option<Timestamp>,
+) -> String {
+    format!(
+        "monitor-runs:{monitor_id}:{}:{}",
+        from.map_or_else(|| "all".to_owned(), |value| value.unix_millis().to_string()),
+        until.map_or_else(|| "all".to_owned(), |value| value.unix_millis().to_string())
+    )
+}
+
 fn time_range(
     now: Timestamp,
     from: Option<Timestamp>,
@@ -2113,6 +2153,18 @@ fn decode_feedback_anchor(value: &str, digest: [u8; 16]) -> Result<FeedbackAncho
     })
 }
 
+fn decode_monitor_run_anchor(
+    value: &str,
+    digest: [u8; 16],
+) -> Result<MonitorRunAnchor, NativeApiError> {
+    let (started_at, id) =
+        decode_cursor(value, CursorKind::MonitorRun, 16, digest).map_err(map_cursor_error)?;
+    Ok(MonitorRunAnchor {
+        started_at,
+        run_id: MonitorRunId::from_bytes(id.try_into().map_err(|_| NativeApiError::InvalidCursor)?),
+    })
+}
+
 fn decode_activity_anchor(value: &str, digest: [u8; 16]) -> Result<ActivityAnchor, NativeApiError> {
     let (at, id) =
         decode_cursor(value, CursorKind::Activity, 16, digest).map_err(map_cursor_error)?;
@@ -2258,6 +2310,34 @@ mod tests {
             Err(NativeApiError::InvalidRequest)
         );
         assert_eq!(page_size(Some(101)), Err(NativeApiError::InvalidRequest));
+    }
+
+    #[test]
+    fn monitor_run_cursor_is_bound_to_monitor_and_time_range() {
+        let project_id = ProjectId::new(7).unwrap();
+        let monitor_id = MonitorId::from_bytes([3; 16]);
+        let started_at = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let run_id = MonitorRunId::from_bytes([4; 16]);
+        let scope = monitor_run_cursor_scope(monitor_id, None, None);
+        let digest = cursor_digest(project_id, &scope, CursorKind::MonitorRun);
+        let cursor = encode_cursor(
+            CursorKind::MonitorRun,
+            started_at,
+            &run_id.as_bytes(),
+            digest,
+        );
+
+        assert_eq!(
+            decode_monitor_run_anchor(&cursor, digest),
+            Ok(MonitorRunAnchor { started_at, run_id })
+        );
+
+        let other_scope = monitor_run_cursor_scope(MonitorId::from_bytes([5; 16]), None, None);
+        let other_digest = cursor_digest(project_id, &other_scope, CursorKind::MonitorRun);
+        assert_eq!(
+            decode_monitor_run_anchor(&cursor, other_digest),
+            Err(NativeApiError::InvalidCursor)
+        );
     }
 
     #[test]

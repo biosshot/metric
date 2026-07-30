@@ -790,6 +790,7 @@ pub enum CursorKind {
     Release = 4,
     Environment = 5,
     Feedback = 6,
+    MonitorRun = 7,
 }
 
 #[must_use]

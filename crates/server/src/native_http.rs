@@ -782,14 +782,18 @@ async fn list_monitor_runs(
             &context,
             project_id_from(&project_id)?,
             MonitorId::from_bytes(hex_16(&monitor_id)?),
-            from,
-            until,
-            query_limit(&query)?,
+            metric_application::native_api::MonitorRunListRequest {
+                from,
+                until,
+                cursor: query.get("cursor").map(String::as_str),
+                limit: query_limit(&query)?,
+            },
         )
         .await
         .map_err(HttpApiError::Api)?;
     Ok(Json(json!({
-        "items": page.items.iter().map(monitor_run_value).collect::<Result<Vec<_>, _>>()?
+        "items": page.items.iter().map(monitor_run_value).collect::<Result<Vec<_>, _>>()?,
+        "next_cursor": page.next_cursor,
     })))
 }
 

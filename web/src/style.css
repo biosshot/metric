@@ -2690,6 +2690,10 @@ label small,
   margin-top: 1rem;
 }
 
+.monitor-run-list-view > .pagination {
+  margin-top: 1rem;
+}
+
 .monitor-run__title {
   display: flex;
   align-items: center;

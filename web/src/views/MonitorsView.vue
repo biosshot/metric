@@ -20,13 +20,14 @@ const selectedMonitorId = ref('');
 const editorOpen = ref(false);
 const historyView = ref<'list' | 'chart'>(storedHistoryView());
 const historyRange = ref('all');
+const appliedHistoryWindow = ref<{ from?: number; until?: number }>({});
+const runCursor = ref<string | null>(null);
+const runPageHistory = ref<(string | null)[]>([]);
 const deleteConfirmationId = ref('');
 const selectedChartRunId = ref('');
 const slugWasEdited = ref(false);
 const customHistoryFrom = ref(localDateTime(Date.now() - 7 * 24 * 60 * 60 * 1_000));
 const customHistoryUntil = ref(localDateTime(Date.now()));
-const appliedCustomFrom = ref(Date.now() - 7 * 24 * 60 * 60 * 1_000);
-const appliedCustomUntil = ref(Date.now());
 const customHistoryError = ref('');
 const kindOptions: SelectOption[] = [
   {
@@ -115,21 +116,30 @@ const runs = useQuery({
     'monitor-runs',
     projectId.value,
     selectedMonitorId.value,
+    historyView.value,
     historyRange.value,
-    appliedCustomFrom.value,
-    appliedCustomUntil.value,
+    appliedHistoryWindow.value.from,
+    appliedHistoryWindow.value.until,
+    runCursor.value,
   ]),
-  queryFn: () => api.monitorRuns(projectId.value, selectedMonitorId.value, currentHistoryWindow()),
+  queryFn: () =>
+    api.monitorRuns(
+      projectId.value,
+      selectedMonitorId.value,
+      appliedHistoryWindow.value,
+      historyView.value === 'list' ? { cursor: runCursor.value, limit: 100 } : { limit: 100000 },
+    ),
   enabled: computed(() => Boolean(projectId.value && selectedMonitorId.value)),
   refetchInterval: 10_000,
 });
-const visibleRuns = computed(() => sampleMonitorTimeline(runs.data.value?.items ?? []));
-const chartRuns = computed(() => [...visibleRuns.value].reverse());
+const listRuns = computed(() => runs.data.value?.items ?? []);
+const timelineRuns = computed(() => sampleMonitorTimeline(runs.data.value?.items ?? []));
+const chartRuns = computed(() => [...timelineRuns.value].reverse());
 const maximumRunDuration = computed(() =>
-  Math.max(1, ...visibleRuns.value.map((run) => run.duration_ms ?? 0)),
+  Math.max(1, ...timelineRuns.value.map((run) => run.duration_ms ?? 0)),
 );
 const selectedChartRun = computed(
-  () => visibleRuns.value.find((run) => run.id === selectedChartRunId.value) ?? null,
+  () => timelineRuns.value.find((run) => run.id === selectedChartRunId.value) ?? null,
 );
 
 watch(
@@ -141,8 +151,14 @@ watch(
   },
   { immediate: true },
 );
-watch([selectedMonitorId, historyRange], () => {
+watch(selectedMonitorId, () => {
+  resetRunPage();
   deleteConfirmationId.value = '';
+  selectedChartRunId.value = '';
+});
+watch(historyRange, (range) => {
+  if (range !== 'custom') appliedHistoryWindow.value = historyWindow(range);
+  resetRunPage();
   selectedChartRunId.value = '';
 });
 watch(
@@ -297,16 +313,29 @@ function runBarHeight(run: MonitorRun): string {
   return `${Math.max(18, Math.round(24 + ratio * 72))}px`;
 }
 
-function currentHistoryWindow(): { from?: number; until?: number } {
-  if (historyRange.value === 'custom') {
-    return { from: appliedCustomFrom.value, until: appliedCustomUntil.value };
-  }
-  if (historyRange.value === 'all') return {};
+function historyWindow(range: string): { from?: number; until?: number } {
+  if (range === 'all') return {};
   const until = Date.now();
   return {
-    from: until - historyRangeMillis[historyRange.value],
+    from: until - historyRangeMillis[range],
     until,
   };
+}
+
+function resetRunPage(): void {
+  runCursor.value = null;
+  runPageHistory.value = [];
+}
+
+function nextRunPage(): void {
+  const next = runs.data.value?.next_cursor;
+  if (!next) return;
+  runPageHistory.value.push(runCursor.value);
+  runCursor.value = next;
+}
+
+function previousRunPage(): void {
+  runCursor.value = runPageHistory.value.pop() ?? null;
 }
 
 function applyCustomHistory(): void {
@@ -317,8 +346,8 @@ function applyCustomHistory(): void {
     return;
   }
   customHistoryError.value = '';
-  appliedCustomFrom.value = from;
-  appliedCustomUntil.value = until;
+  appliedHistoryWindow.value = { from, until };
+  resetRunPage();
 }
 
 function localDateTime(value: number): string {
@@ -700,28 +729,49 @@ function storedHistoryView(): 'list' | 'chart' {
           title="No executions recorded"
           description="The monitor definition exists, but no SDK check-in or scheduler outcome exists yet."
         />
-        <ol v-else-if="historyView === 'list'" class="timeline monitor-run-list">
-          <li v-for="run in visibleRuns" :key="run.id">
-            <span class="timeline__dot"></span>
-            <div>
-              <div class="monitor-run__title">
-                <StatusBadge :status="run.status" />
-                <strong>{{ timestamp(run.started_at) }}</strong>
-                <span>{{ duration(run.duration_ms) }}</span>
+        <div v-else-if="historyView === 'list'" class="monitor-run-list-view">
+          <nav class="pagination" aria-label="Run history pages">
+            <button
+              class="button button--secondary"
+              type="button"
+              :disabled="runPageHistory.length === 0"
+              @click="previousRunPage"
+            >
+              Previous
+            </button>
+            <span>Page {{ runPageHistory.length + 1 }}</span>
+            <button
+              class="button button--secondary"
+              type="button"
+              :disabled="!runs.data.value?.next_cursor"
+              @click="nextRunPage"
+            >
+              Next
+            </button>
+          </nav>
+          <ol class="timeline monitor-run-list">
+            <li v-for="run in listRuns" :key="run.id">
+              <span class="timeline__dot"></span>
+              <div>
+                <div class="monitor-run__title">
+                  <StatusBadge :status="run.status" />
+                  <strong>{{ timestamp(run.started_at) }}</strong>
+                  <span>{{ duration(run.duration_ms) }}</span>
+                </div>
+                <p>
+                  {{ run.source === 'sdk' ? 'Reported by SDK' : 'Detected by scheduler' }}
+                  <template v-if="run.scheduled_for">
+                    · scheduled {{ timestamp(run.scheduled_for) }}
+                  </template>
+                </p>
+                <p v-if="run.http_status || run.uptime_failure">
+                  <span v-if="run.http_status">HTTP {{ run.http_status }}</span>
+                  <span v-if="run.uptime_failure"> · {{ run.uptime_failure }}</span>
+                </p>
               </div>
-              <p>
-                {{ run.source === 'sdk' ? 'Reported by SDK' : 'Detected by scheduler' }}
-                <template v-if="run.scheduled_for">
-                  · scheduled {{ timestamp(run.scheduled_for) }}
-                </template>
-              </p>
-              <p v-if="run.http_status || run.uptime_failure">
-                <span v-if="run.http_status">HTTP {{ run.http_status }}</span>
-                <span v-if="run.uptime_failure"> · {{ run.uptime_failure }}</span>
-              </p>
-            </div>
-          </li>
-        </ol>
+            </li>
+          </ol>
+        </div>
         <div v-else class="monitor-run-chart">
           <div class="monitor-run-chart__legend" aria-hidden="true">
             <span class="monitor-run-chart__key monitor-run-chart__key--success">Success</span>

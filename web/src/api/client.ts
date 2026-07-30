@@ -370,12 +370,14 @@ export const api = {
     projectId: string,
     monitorId: string,
     range: { from?: number; until?: number } = {},
+    page: { cursor?: string | null; limit?: number } = {},
   ) =>
-    request<{ items: MonitorRun[] }>(
+    request<Page<MonitorRun>>(
       `/api/v1/projects/${projectId}/monitors/${monitorId}/runs${query({
         from: queryTimestamp(range.from),
         until: queryTimestamp(range.until),
-        limit: 100000,
+        cursor: page.cursor,
+        limit: page.limit ?? 100000,
       })}`,
     ),
   logs: (

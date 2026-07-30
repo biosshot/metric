@@ -181,6 +181,7 @@ interface ApiState {
   monitorRuns?: Array<Record<string, any>>;
   monitorRangeSeen?: boolean;
   monitorFromSeen?: number;
+  monitorRunLimitsSeen?: number[];
   signalFromSeen?: number;
   replays?: Array<Record<string, any>>;
   monitorDeleted?: boolean;
@@ -563,7 +564,15 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}/runs`) {
     state.monitorRangeSeen = Boolean(url.searchParams.get('from') && url.searchParams.get('until'));
     state.monitorFromSeen = Date.parse(url.searchParams.get('from') ?? '');
-    return json({ items: state.monitorRuns ?? [] });
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+    const offset = Number(url.searchParams.get('cursor')?.replace('offset-', '') ?? 0);
+    const runs = state.monitorRuns ?? [];
+    state.monitorRunLimitsSeen ??= [];
+    state.monitorRunLimitsSeen.push(limit);
+    return json({
+      items: runs.slice(offset, offset + limit),
+      next_cursor: offset + limit < runs.length ? `offset-${offset + limit}` : null,
+    });
   }
   if (path === `/api/v1/projects/42/monitors/${'36'.repeat(16)}` && request.method() === 'DELETE') {
     state.monitorDeleted = request.headers()['x-csrf-token'] === 'c'.repeat(64);
@@ -747,6 +756,7 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await expect.poll(() => state.monitorRangeSeen).toBe(true);
   await expect(page.locator('.monitor-run-chart__column')).toHaveCount(512);
   await expect(page.getByRole('navigation', { name: 'Run history pages' })).toHaveCount(0);
+  expect(state.monitorRunLimitsSeen).toContain(100000);
   await expect
     .poll(() =>
       page
@@ -754,6 +764,16 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
         .evaluate((plot) => plot.scrollWidth <= plot.clientWidth + 1),
     )
     .toBe(true);
+  await page.getByRole('button', { name: 'List' }).click();
+  await expect(page.getByRole('navigation', { name: 'Run history pages' })).toBeVisible();
+  await expect(page.locator('.monitor-run-list > li')).toHaveCount(100);
+  await page
+    .getByRole('navigation', { name: 'Run history pages' })
+    .getByRole('button', { name: 'Next' })
+    .click();
+  await expect(page.getByText('Page 2')).toBeVisible();
+  expect(state.monitorRunLimitsSeen).toContain(100);
+  await page.getByRole('button', { name: 'Timeline' }).click();
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('combobox', { name: 'Run history period' }).click();
   await page.getByRole('option', { name: /^Custom period/ }).click();

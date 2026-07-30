@@ -247,7 +247,12 @@ describe('native API client', () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await api.monitorRuns('42', 'b'.repeat(32), { from: 1_000, until: 2_000 });
+    await api.monitorRuns(
+      '42',
+      'b'.repeat(32),
+      { from: 1_000, until: 2_000 },
+      { cursor: 'next-page', limit: 100 },
+    );
     await api.deleteMonitor('42', 'b'.repeat(32));
 
     const [historyPath] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -256,7 +261,8 @@ describe('native API client', () => {
     expect(historyUrl.pathname).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}/runs`);
     expect(historyUrl.searchParams.get('from')).toBe('1970-01-01T00:00:01.000Z');
     expect(historyUrl.searchParams.get('until')).toBe('1970-01-01T00:00:02.000Z');
-    expect(historyUrl.searchParams.get('limit')).toBe('100000');
+    expect(historyUrl.searchParams.get('cursor')).toBe('next-page');
+    expect(historyUrl.searchParams.get('limit')).toBe('100');
     expect(deletePath).toBe(`/api/v1/projects/42/monitors/${'b'.repeat(32)}`);
     expect(deleteInit.method).toBe('DELETE');
     expect((deleteInit.headers as Headers).get('x-csrf-token')).toBe('a'.repeat(64));
