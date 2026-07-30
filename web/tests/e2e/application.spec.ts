@@ -156,7 +156,16 @@ const feedbackRecord = {
   issue_id: null,
   trace_id: null,
   replay_id: null,
-  attachments: [],
+  attachments: [
+    {
+      attachment_id: '72'.repeat(16),
+      filename: 'feedback.txt',
+      content_type: 'text/plain',
+      attachment_type: 'event.attachment',
+      size: 15,
+      checksum: 'a'.repeat(64),
+    },
+  ],
   expires_at: '2026-08-23T09:00:00Z',
 };
 
@@ -166,6 +175,9 @@ interface ApiState {
   logoutCsrfSeen?: boolean;
   sessionCookieSeen: boolean;
   failIssues: boolean;
+  expireIssues?: boolean;
+  issueRequests?: number;
+  logoutExpired?: boolean;
   emptyIssues?: boolean;
   slowIssues?: boolean;
   noProjects?: boolean;
@@ -182,6 +194,7 @@ interface ApiState {
   monitorRangeSeen?: boolean;
   monitorFromSeen?: number;
   monitorRunLimitsSeen?: number[];
+  feedbackAttachmentHeaderSeen?: boolean;
   signalFromSeen?: number;
   replays?: Array<Record<string, any>>;
   monitorDeleted?: boolean;
@@ -250,6 +263,18 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   }
   if (path === '/api/v1/auth/logout' && request.method() === 'POST') {
     state.logoutCsrfSeen = request.headers()['x-csrf-token'] === 'c'.repeat(64);
+    if (state.logoutExpired) {
+      return json(
+        {
+          error: {
+            code: 'invalid_credentials',
+            message: 'session expired',
+            request_id: 'logout-expired',
+          },
+        },
+        401,
+      );
+    }
     return route.fulfill({ status: 204 });
   }
   if (path === '/api/v1/projects' && request.method() === 'POST') {
@@ -286,7 +311,20 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json({ ...project.policy, revision: 2, ip_policy: body.ip_policy });
   }
   if (path === '/api/v1/projects/42/issues') {
+    state.issueRequests = (state.issueRequests ?? 0) + 1;
     if (state.slowIssues) await new Promise((resolve) => setTimeout(resolve, 700));
+    if (state.expireIssues) {
+      return json(
+        {
+          error: {
+            code: 'invalid_credentials',
+            message: 'session expired',
+            request_id: 'issues-expired',
+          },
+        },
+        401,
+      );
+    }
     if (state.failIssues) {
       return json(
         {
@@ -331,6 +369,25 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   }
   if (path === '/api/v1/projects/42/feedback') {
     return json({ items: [feedbackRecord], next_cursor: null });
+  }
+  if (path === `/api/v1/projects/42/feedback/${feedbackRecord.id}`) {
+    return json(feedbackRecord);
+  }
+  if (
+    path ===
+    `/api/v1/projects/42/feedback/${feedbackRecord.id}/attachments/${feedbackRecord.attachments[0].attachment_id}`
+  ) {
+    state.feedbackAttachmentHeaderSeen =
+      request.headers()['x-metric-organization-id'] === '7' &&
+      request.headers().accept === 'application/octet-stream';
+    return route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/plain',
+        'content-disposition': 'attachment; filename="feedback.txt"',
+      },
+      body: 'attachment body',
+    });
   }
   if (path === `/api/v1/projects/42/replays/${replayRecord.id}`) {
     return json(replayRecord);
@@ -885,6 +942,68 @@ test('server failures expose status, code and request ID', async ({ page }) => {
   await expect(alert).toContainText('HTTP');
   await expect(alert).toContainText('503');
   await expect(alert).toContainText('browser-request-503');
+  const requestsBeforeRetry = state.issueRequests ?? 0;
+  state.failIssues = false;
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('link', { name: /TypeError/ })).toBeVisible();
+  expect(state.issueRequests).toBeGreaterThan(requestsBeforeRetry);
+});
+
+test('expired requests and logout return immediately to sign in', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+    expireIssues: true,
+  };
+  await installApi(page, state);
+  await login(page);
+
+  await page.getByRole('link', { name: 'Issues', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in to Metric' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('metric.csrf'))).toBeNull();
+
+  state.expireIssues = false;
+  await login(page);
+  state.logoutExpired = true;
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in to Metric' })).toBeVisible();
+  await expect(page.getByText('Sign out failed')).toHaveCount(0);
+});
+
+test('Feedback attachment download carries organization context', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+
+  await page.goto(`/feedback/${feedbackRecord.id}`);
+  await expect(page.getByRole('heading', { name: 'Attachments' })).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: /feedback.txt/ }).click();
+  await download;
+  expect(state.feedbackAttachmentHeaderSeen).toBe(true);
+});
+
+test('unknown routes show a clear 404 instead of redirecting', async ({ page }) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+
+  await page.goto('/missing/resource?from=old-link');
+  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+  await expect(page.getByText('/missing/resource?from=old-link')).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe('/missing/resource');
 });
 
 test('loading and empty states explain what is happening', async ({ page }) => {

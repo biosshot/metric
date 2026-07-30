@@ -21,6 +21,7 @@ import DashboardsView from './views/DashboardsView.vue';
 import AlertsView from './views/AlertsView.vue';
 import MonitorsView from './views/MonitorsView.vue';
 import SettingsView from './views/SettingsView.vue';
+import NotFoundView from './views/NotFoundView.vue';
 import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
 
 export const router = createRouter({
@@ -84,7 +85,7 @@ export const router = createRouter({
       ],
     },
     { path: '/system', redirect: '/settings/system' },
-    { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
+    { path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundView },
   ],
   scrollBehavior: (to) => (to.hash ? { el: to.hash, top: 24 } : { top: 0 }),
 });

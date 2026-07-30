@@ -50,6 +50,7 @@ import type {
 } from './types';
 
 type SessionProvider = () => { organizationId: string | null; csrfToken: string | null };
+type SessionInvalidator = () => void;
 
 const messages: Record<string, string> = {
   invalid_credentials: 'The session or credentials are no longer valid.',
@@ -92,9 +93,14 @@ export class ApiError extends Error {
 }
 
 let sessionProvider: SessionProvider = () => ({ organizationId: null, csrfToken: null });
+let invalidateSession: SessionInvalidator = () => undefined;
 
-export function configureSession(provider: SessionProvider): void {
+export function configureSession(
+  provider: SessionProvider,
+  invalidator: SessionInvalidator = () => undefined,
+): void {
   sessionProvider = provider;
+  invalidateSession = invalidator;
 }
 
 function isMutation(method: string): boolean {
@@ -116,12 +122,14 @@ async function request<T>(
   }
   if (!options.public && isMutation(method)) {
     if (!session.csrfToken) {
-      throw new ApiError(
+      const error = new ApiError(
         403,
         'csrf_missing',
         null,
         'This tab cannot safely change data. Sign in again to restore the security token.',
       );
+      invalidateSession();
+      throw error;
     }
     headers.set('x-csrf-token', session.csrfToken);
   }
@@ -140,24 +148,9 @@ async function request<T>(
   }
 
   if (!response.ok) {
-    let body: ApiErrorBody | null = null;
-    try {
-      body = (await response.json()) as ApiErrorBody;
-    } catch {
-      // A proxy may return a non-JSON failure. The status remains visible below.
-    }
-    const code = body?.error?.code ?? `http_${response.status}`;
-    const message =
-      messages[code] ??
-      body?.error?.message ??
-      `Metric returned HTTP ${response.status} without a recognized error.`;
-    throw new ApiError(
-      response.status,
-      code,
-      body?.error?.request_id ?? response.headers.get('x-request-id'),
-      message,
-      response.status === 429 || response.status >= 500,
-    );
+    const error = await responseError(response);
+    if (!options.public && invalidatesSession(error)) invalidateSession();
+    throw error;
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -177,10 +170,8 @@ function queryTimestamp(value: number | undefined): string | undefined {
 }
 
 async function binaryRequest(path: string): Promise<ArrayBuffer> {
-  const session = sessionProvider();
-  const headers = new Headers();
+  const headers = authenticatedHeaders();
   headers.set('accept', 'application/vnd.sentry.items.replay-recording');
-  if (session.organizationId) headers.set('x-metric-organization-id', session.organizationId);
   let response: Response;
   try {
     response = await fetch(path, { headers, credentials: 'include' });
@@ -194,15 +185,78 @@ async function binaryRequest(path: string): Promise<ArrayBuffer> {
     );
   }
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      `http_${response.status}`,
-      response.headers.get('x-request-id'),
+    const error = await responseError(
+      response,
       `Metric could not load this Replay segment (HTTP ${response.status}).`,
-      response.status === 429 || response.status >= 500,
     );
+    if (invalidatesSession(error)) invalidateSession();
+    throw error;
   }
   return response.arrayBuffer();
+}
+
+async function blobRequest(path: string): Promise<Blob> {
+  const headers = authenticatedHeaders();
+  headers.set('accept', 'application/octet-stream');
+  let response: Response;
+  try {
+    response = await fetch(path, { headers, credentials: 'include' });
+  } catch {
+    throw new ApiError(
+      0,
+      'network_error',
+      null,
+      'Cannot reach Metric. Check the connection and server status.',
+      true,
+    );
+  }
+  if (!response.ok) {
+    const error = await responseError(
+      response,
+      `Metric could not download this attachment (HTTP ${response.status}).`,
+    );
+    if (invalidatesSession(error)) invalidateSession();
+    throw error;
+  }
+  return response.blob();
+}
+
+function authenticatedHeaders(): Headers {
+  const headers = new Headers();
+  const session = sessionProvider();
+  if (session.organizationId) headers.set('x-metric-organization-id', session.organizationId);
+  return headers;
+}
+
+async function responseError(response: Response, fallbackMessage?: string): Promise<ApiError> {
+  let body: ApiErrorBody | null = null;
+  try {
+    body = (await response.json()) as ApiErrorBody;
+  } catch {
+    // A proxy or binary endpoint may return a non-JSON failure.
+  }
+  const code = body?.error?.code ?? `http_${response.status}`;
+  const message =
+    messages[code] ??
+    body?.error?.message ??
+    fallbackMessage ??
+    `Metric returned HTTP ${response.status} without a recognized error.`;
+  return new ApiError(
+    response.status,
+    code,
+    body?.error?.request_id ?? response.headers.get('x-request-id'),
+    message,
+    response.status === 429 || response.status >= 500,
+  );
+}
+
+function invalidatesSession(error: ApiError): boolean {
+  return (
+    error.status === 401 ||
+    error.code === 'invalid_credentials' ||
+    error.code === 'csrf_failed' ||
+    error.code === 'csrf_missing'
+  );
 }
 
 export const api = {
@@ -578,8 +632,8 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
-  feedbackAttachmentUrl: (projectId: string, feedbackId: string, attachmentId: string) =>
-    `/api/v1/projects/${projectId}/feedback/${feedbackId}/attachments/${attachmentId}`,
+  feedbackAttachment: (projectId: string, feedbackId: string, attachmentId: string) =>
+    blobRequest(`/api/v1/projects/${projectId}/feedback/${feedbackId}/attachments/${attachmentId}`),
   releases: (projectId: string, cursor?: string | null) =>
     request<Page<ReleaseSummary>>(
       `/api/v1/projects/${projectId}/releases${query({ cursor, limit: 50 })}`,

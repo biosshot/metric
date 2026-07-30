@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError } from '../api/client';
+import { ApiError, api } from '../api/client';
 import { useSessionStore } from './session';
 
 function memoryStorage(): Storage {
@@ -80,5 +80,54 @@ describe('session restoration', () => {
     expect(session.csrfToken).toBe('b'.repeat(64));
     expect(localStorage.getItem('metric.csrf')).toBe('b'.repeat(64));
     expect(sessionStorage.getItem('metric.csrf')).toBeNull();
+  });
+
+  it('clears local authentication as soon as a protected request reports an expired session', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'invalid_credentials',
+              message: 'expired',
+              request_id: 'expired-session',
+            },
+          }),
+          { status: 401, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+    const session = useSessionStore();
+
+    await expect(api.projects()).rejects.toMatchObject({ status: 401 });
+
+    expect(session.csrfToken).toBeNull();
+    expect(localStorage.getItem('metric.csrf')).toBeNull();
+    expect(session.authenticated).toBe(false);
+  });
+
+  it('finishes local logout when the server session has already expired', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'invalid_credentials',
+              message: 'expired',
+              request_id: 'expired-logout',
+            },
+          }),
+          { status: 401, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+    const session = useSessionStore();
+
+    await expect(session.logout()).resolves.toBeUndefined();
+
+    expect(session.csrfToken).toBeNull();
+    expect(localStorage.getItem('metric.csrf')).toBeNull();
   });
 });

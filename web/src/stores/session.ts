@@ -23,10 +23,13 @@ export const useSessionStore = defineStore('session', () => {
   const restoring = ref(true);
   const restoreError = ref<unknown>(null);
 
-  configureSession(() => ({
-    organizationId: organizationId.value,
-    csrfToken: csrfToken.value,
-  }));
+  configureSession(
+    () => ({
+      organizationId: organizationId.value,
+      csrfToken: csrfToken.value,
+    }),
+    clear,
+  );
 
   const authenticated = computed(() => identity.value !== null);
   const selectedProject = computed(
@@ -54,7 +57,7 @@ export const useSessionStore = defineStore('session', () => {
       identity.value = await api.me();
       await refreshProjects();
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      if (isInvalidSession(error)) {
         clear();
       } else {
         restoreError.value = error;
@@ -80,8 +83,13 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function logout(): Promise<void> {
-    if (csrfToken.value) await api.logout();
-    clear();
+    try {
+      if (csrfToken.value) await api.logout();
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+    } finally {
+      clear();
+    }
   }
 
   async function refreshProjects(): Promise<void> {
@@ -111,6 +119,16 @@ export const useSessionStore = defineStore('session', () => {
 
   function dismissRestoreError(): void {
     restoreError.value = null;
+  }
+
+  function isInvalidSession(error: unknown): boolean {
+    return (
+      error instanceof ApiError &&
+      (error.status === 401 ||
+        error.code === 'invalid_credentials' ||
+        error.code === 'csrf_failed' ||
+        error.code === 'csrf_missing')
+    );
   }
 
   return {

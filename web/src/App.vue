@@ -16,6 +16,7 @@ const router = useRouter();
 const navigationOpen = ref(false);
 const logoutError = ref<unknown>(null);
 const createProjectAction = '__create_project__';
+const routesWithoutProject = new Set(['settings-system', 'settings-organization', 'not-found']);
 const projectOptions = computed<SelectOption[]>(() => [
   ...session.projects.map((project) => ({
     value: project.id,
@@ -220,15 +221,12 @@ async function logout(): Promise<void> {
       <FirstProjectOnboarding
         v-if="
           !session.selectedProject &&
-          !['settings-system', 'settings-organization'].includes(String($route.name)) &&
+          !routesWithoutProject.has(String($route.name)) &&
           session.has('organization:admin')
         "
       />
       <EmptyState
-        v-else-if="
-          !session.selectedProject &&
-          !['settings-system', 'settings-organization'].includes(String($route.name))
-        "
+        v-else-if="!session.selectedProject && !routesWithoutProject.has(String($route.name))"
         icon="blocked"
         title="No accessible projects"
         description="Your account is valid, but an organization administrator must grant access to a project."

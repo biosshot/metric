@@ -8,7 +8,7 @@ import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { api } from '../api/client';
-import type { FeedbackStatus } from '../api/types';
+import type { FeedbackAttachment, FeedbackStatus } from '../api/types';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
@@ -17,6 +17,8 @@ const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const feedbackId = computed(() => String(route.params.feedbackId ?? ''));
 const selectedStatus = ref<FeedbackStatus>('open');
+const attachmentError = ref<unknown>(null);
+const downloadingAttachmentId = ref('');
 const statusOptions: SelectOption[] = [
   { value: 'open', label: 'Open', icon: 'alert' },
   { value: 'resolved', label: 'Resolved', icon: 'success' },
@@ -54,6 +56,34 @@ function setStatus(value: string): void {
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} KiB`;
+}
+
+async function downloadAttachment(attachment: FeedbackAttachment): Promise<void> {
+  attachmentError.value = null;
+  downloadingAttachmentId.value = attachment.attachment_id;
+  try {
+    const blob = await api.feedbackAttachment(
+      projectId.value,
+      feedbackId.value,
+      attachment.attachment_id,
+    );
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = attachment.filename;
+    link.hidden = true;
+    document.body.append(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    }
+  } catch (error) {
+    attachmentError.value = error;
+  } finally {
+    downloadingAttachmentId.value = '';
+  }
 }
 </script>
 
@@ -163,20 +193,36 @@ function formatBytes(bytes: number): string {
             <h2>Attachments</h2>
           </div>
         </div>
+        <ApiErrorPanel
+          v-if="attachmentError"
+          :error="attachmentError"
+          title="Feedback attachment was not downloaded"
+        />
         <div class="feedback-attachments">
-          <a
+          <button
             v-for="attachment in feedback.data.value.attachments"
             :key="attachment.attachment_id"
             class="feedback-attachment"
-            :href="api.feedbackAttachmentUrl(projectId, feedbackId, attachment.attachment_id)"
+            type="button"
+            :disabled="downloadingAttachmentId === attachment.attachment_id"
+            @click="downloadAttachment(attachment)"
           >
-            <AppIcon name="fileCode" :size="18" />
+            <AppIcon
+              :name="downloadingAttachmentId === attachment.attachment_id ? 'loading' : 'fileCode'"
+              :size="18"
+            />
             <span
               ><strong>{{ attachment.filename }}</strong
               ><small>{{ attachment.content_type }}</small></span
             >
-            <span>{{ formatBytes(attachment.size) }}</span>
-          </a>
+            <span>
+              {{
+                downloadingAttachmentId === attachment.attachment_id
+                  ? 'Downloading…'
+                  : formatBytes(attachment.size)
+              }}
+            </span>
+          </button>
         </div>
       </section>
 

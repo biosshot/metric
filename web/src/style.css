@@ -1654,6 +1654,18 @@ label small,
   margin-top: 0.75rem;
 }
 
+.empty-state__actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.not-found-view .page-header code {
+  overflow-wrap: anywhere;
+}
+
 .issue-table-wrap {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -3982,14 +3994,29 @@ label small,
 
 .feedback-attachment {
   display: grid;
+  width: 100%;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 0.75rem;
   padding: 0.85rem 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-small);
+  background: transparent;
   color: inherit;
+  font: inherit;
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
+}
+
+.feedback-attachment:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.feedback-attachment:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .feedback-attachment span {

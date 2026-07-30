@@ -7,9 +7,8 @@ const props = defineProps<{
   error: unknown;
   title?: string;
   retryLabel?: string;
+  onRetry?: () => void;
 }>();
-
-defineEmits<{ retry: [] }>();
 
 const apiError = computed(() =>
   props.error instanceof ApiError
@@ -48,10 +47,10 @@ const apiError = computed(() =>
         </div>
       </dl>
       <button
-        v-if="apiError.retryable"
+        v-if="apiError.retryable && onRetry"
         class="button button--secondary"
         type="button"
-        @click="$emit('retry')"
+        @click="onRetry"
       >
         <AppIcon name="refresh" :size="16" />
         {{ retryLabel ?? 'Try again' }}

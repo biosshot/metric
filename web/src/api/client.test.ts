@@ -270,14 +270,67 @@ describe('native API client', () => {
 
   it('refuses a mutation when this tab lost its CSRF token', async () => {
     const fetchMock = vi.fn();
+    const invalidate = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    configureSession(() => ({ organizationId: '7', csrfToken: null }));
+    configureSession(() => ({ organizationId: '7', csrfToken: null }), invalidate);
 
     await expect(api.logout()).rejects.toMatchObject({
       code: 'csrf_missing',
       status: 403,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates expired sessions without treating an ordinary forbidden response as logout', async () => {
+    const invalidate = vi.fn();
+    configureSession(() => ({ organizationId: '7', csrfToken: 'a'.repeat(64) }), invalidate);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { code: 'invalid_credentials', message: 'expired', request_id: 'expired-1' },
+          }),
+          { status: 401, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { code: 'forbidden', message: 'forbidden', request_id: 'forbidden-1' },
+          }),
+          { status: 403, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.projects()).rejects.toMatchObject({ status: 401 });
+    expect(invalidate).toHaveBeenCalledOnce();
+    await expect(api.projects()).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
+
+  it('downloads Feedback attachments with cookie and organization context', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('attachment body', {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const blob = await api.feedbackAttachment('42', 'f'.repeat(32), 'a'.repeat(32));
+
+    expect(blob.size).toBe(15);
+    expect(blob.type).toBe('text/plain');
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(
+      `/api/v1/projects/42/feedback/${'f'.repeat(32)}/attachments/${'a'.repeat(32)}`,
+    );
+    expect(init.credentials).toBe('include');
+    expect((init.headers as Headers).get('x-metric-organization-id')).toBe('7');
+    expect((init.headers as Headers).get('accept')).toBe('application/octet-stream');
   });
 
   it('sends an explicit confirmation and idempotency key for project deletion', async () => {
