@@ -1,6 +1,6 @@
 <template>
-  <nav class="section-tabs" aria-label="Tracing views">
-    <RouterLink to="/traces">Traces</RouterLink>
-    <RouterLink to="/performance">Performance</RouterLink>
+  <nav class="section-tabs" :aria-label="$t('sectionNav.tracingViews')">
+    <RouterLink to="/traces">{{ $t('sectionNav.traces') }}</RouterLink>
+    <RouterLink to="/performance">{{ $t('sectionNav.performance') }}</RouterLink>
   </nav>
 </template>

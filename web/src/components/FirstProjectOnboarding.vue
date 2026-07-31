@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMutation } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
 import { api } from '../api/client';
@@ -13,20 +14,21 @@ import { suggestedSlug } from '../lib/slug';
 
 const session = useSessionStore();
 const router = useRouter();
+const { t } = useI18n();
 const canCreateProject = computed(() => session.has('organization:admin'));
 const firstProject = computed(() => session.projects.length === 0);
 const slugWasEdited = ref(false);
-const ipPolicyOptions: SelectOption[] = [
+const ipPolicyOptions = computed<SelectOption[]>(() => [
   {
     value: 'hmac',
-    label: 'HMAC pseudonymization',
-    description: 'Recommended for investigation without retaining the original address.',
+    label: t('onboarding.ipHmac'),
+    description: t('onboarding.ipHmacDescription'),
     icon: 'shield',
   },
-  { value: 'remove', label: 'Remove completely', icon: 'blocked' },
-  { value: 'truncate', label: 'Truncate address', icon: 'shield' },
-  { value: 'keep', label: 'Keep original address', icon: 'view' },
-];
+  { value: 'remove', label: t('onboarding.ipRemove'), icon: 'blocked' },
+  { value: 'truncate', label: t('onboarding.ipTruncate'), icon: 'shield' },
+  { value: 'keep', label: t('onboarding.ipKeep'), icon: 'view' },
+]);
 
 const project = reactive<CreateProjectInput>({
   display_name: '',
@@ -79,23 +81,29 @@ const createProject = useMutation({
   <section v-if="!canCreateProject">
     <EmptyState
       icon="blocked"
-      title="Project creation is restricted"
-      description="Only an organization administrator can create a project and its initial DSN key."
+      :title="$t('onboarding.restrictedTitle')"
+      :description="$t('onboarding.restrictedDescription')"
     >
       <RouterLink class="button button--secondary" to="/dashboard">
         <AppIcon name="back" :size="16" />
-        Back to dashboard
+        {{ $t('onboarding.backToDashboard') }}
       </RouterLink>
     </EmptyState>
   </section>
   <section v-else class="onboarding-layout" aria-labelledby="first-project-title">
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ firstProject ? 'Organization ready' : 'Project administration' }}</p>
+        <p class="eyebrow">
+          {{
+            firstProject
+              ? $t('onboarding.organizationReady')
+              : $t('onboarding.projectAdministration')
+          }}
+        </p>
         <h1 id="first-project-title">
-          {{ firstProject ? 'Create your first project' : 'Create a new project' }}
+          {{ firstProject ? $t('onboarding.firstProjectTitle') : $t('onboarding.newProjectTitle') }}
         </h1>
-        <p>A project isolates its Events, Issues, privacy policy, limits, and SDK credentials.</p>
+        <p>{{ $t('onboarding.projectDescription') }}</p>
       </div>
     </header>
 
@@ -107,15 +115,15 @@ const createProject = useMutation({
               <AppIcon name="server" :size="18" />
             </span>
             <div>
-              <p class="eyebrow">Project identity</p>
-              <h2>Name the service you want to monitor</h2>
+              <p class="eyebrow">{{ $t('onboarding.identity') }}</p>
+              <h2>{{ $t('onboarding.nameService') }}</h2>
             </div>
           </div>
         </div>
 
         <div class="form-grid">
           <label>
-            Project name
+            {{ $t('onboarding.projectName') }}
             <input
               :value="project.display_name"
               autocomplete="off"
@@ -126,7 +134,7 @@ const createProject = useMutation({
             />
           </label>
           <label>
-            Slug
+            {{ $t('onboarding.slug') }}
             <input
               v-model.trim="project.slug"
               autocomplete="off"
@@ -136,7 +144,7 @@ const createProject = useMutation({
               required
               @input="slugWasEdited = true"
             />
-            <small>Stable lowercase identifier used in project administration.</small>
+            <small>{{ $t('onboarding.slugHelp') }}</small>
           </label>
         </div>
 
@@ -144,12 +152,10 @@ const createProject = useMutation({
           <BaseSelect
             :model-value="project.ip_policy"
             :options="ipPolicyOptions"
-            label="IP address handling"
+            :label="$t('onboarding.ipHandling')"
             @update:model-value="setIpPolicy"
           />
-          <small class="field-help"
-            >This policy is applied before an Event reaches durable storage.</small
-          >
+          <small class="field-help">{{ $t('onboarding.ipHelp') }}</small>
         </div>
 
         <div class="check-grid">
@@ -158,9 +164,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="bug" :size="17" />
-                <strong>Error Events</strong>
+                <strong>{{ $t('onboarding.errorEvents') }}</strong>
               </span>
-              <small>Required for Issue investigation.</small>
+              <small>{{ $t('onboarding.errorEventsHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -168,9 +174,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="activity" :size="17" />
-                <strong>Client reports</strong>
+                <strong>{{ $t('onboarding.clientReports') }}</strong>
               </span>
-              <small>Accept SDK delivery outcome reports.</small>
+              <small>{{ $t('onboarding.clientReportsHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -178,9 +184,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="logs" :size="17" />
-                <strong>Structured Logs</strong>
+                <strong>{{ $t('onboarding.structuredLogs') }}</strong>
               </span>
-              <small>Accept SDK log records.</small>
+              <small>{{ $t('onboarding.structuredLogsHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -188,9 +194,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="traces" :size="17" />
-                <strong>Transactions</strong>
+                <strong>{{ $t('onboarding.transactions') }}</strong>
               </span>
-              <small>Accept root performance segments.</small>
+              <small>{{ $t('onboarding.transactionsHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -198,9 +204,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="activity" :size="17" />
-                <strong>Spans</strong>
+                <strong>{{ $t('onboarding.spans') }}</strong>
               </span>
-              <small>Accept child and standalone spans.</small>
+              <small>{{ $t('onboarding.spansHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -208,9 +214,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="message" :size="17" />
-                <strong>User Feedback</strong>
+                <strong>{{ $t('onboarding.userFeedback') }}</strong>
               </span>
-              <small>Accept bounded reports from the Feedback SDK.</small>
+              <small>{{ $t('onboarding.userFeedbackHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -218,9 +224,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="monitors" :size="17" />
-                <strong>Cron check-ins</strong>
+                <strong>{{ $t('onboarding.cronCheckIns') }}</strong>
               </span>
-              <small>Track scheduled jobs and missed executions.</small>
+              <small>{{ $t('onboarding.cronCheckInsHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -228,9 +234,9 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="gauge" :size="17" />
-                <strong>Application Metrics</strong>
+                <strong>{{ $t('onboarding.applicationMetrics') }}</strong>
               </span>
-              <small>Accept bounded SDK counters, gauges, and distributions.</small>
+              <small>{{ $t('onboarding.applicationMetricsHelp') }}</small>
             </span>
           </label>
           <label class="check-control">
@@ -238,16 +244,16 @@ const createProject = useMutation({
             <span class="check-control__copy">
               <span class="check-control__title">
                 <AppIcon name="view" :size="17" />
-                <strong>Session Replay</strong>
+                <strong>{{ $t('onboarding.sessionReplay') }}</strong>
               </span>
-              <small>Accept browser recordings masked by the pinned SDK.</small>
+              <small>{{ $t('onboarding.sessionReplayHelp') }}</small>
             </span>
           </label>
         </div>
 
         <div class="form-grid form-grid--three">
           <label>
-            Maximum Event bytes
+            {{ $t('onboarding.maxEventBytes') }}
             <input
               v-model.number="project.max_event_bytes"
               type="number"
@@ -257,24 +263,29 @@ const createProject = useMutation({
             />
           </label>
           <label>
-            Events per second
+            {{ $t('onboarding.eventsPerSecond') }}
             <input
               v-model.number="project.max_events_per_second"
               type="number"
               min="1"
-              placeholder="Unlimited"
+              :placeholder="$t('onboarding.unlimited')"
             />
           </label>
           <label>
-            Burst
-            <input v-model.number="project.burst" type="number" min="1" placeholder="Automatic" />
+            {{ $t('onboarding.burst') }}
+            <input
+              v-model.number="project.burst"
+              type="number"
+              min="1"
+              :placeholder="$t('onboarding.automatic')"
+            />
           </label>
         </div>
 
         <ApiErrorPanel
           v-if="createProject.error.value"
           :error="createProject.error.value"
-          title="Project was not created"
+          :title="$t('onboarding.createFailed')"
         />
         <button
           class="button button--primary"
@@ -282,7 +293,11 @@ const createProject = useMutation({
           :disabled="createProject.isPending.value"
         >
           <AppIcon :name="createProject.isPending.value ? 'loading' : 'plus'" :size="16" />
-          {{ createProject.isPending.value ? 'Creating…' : 'Create project and DSN' }}
+          {{
+            createProject.isPending.value
+              ? $t('onboarding.creating')
+              : $t('onboarding.createProject')
+          }}
         </button>
       </form>
 
@@ -292,17 +307,17 @@ const createProject = useMutation({
             <AppIcon name="connect" :size="18" />
           </span>
           <div>
-            <p class="eyebrow">What happens next</p>
-            <h2>Connect without hidden setup</h2>
+            <p class="eyebrow">{{ $t('onboarding.next') }}</p>
+            <h2>{{ $t('onboarding.connectTitle') }}</h2>
           </div>
         </div>
         <ol>
-          <li><span>1</span>Metric creates the project and its first DSN key.</li>
-          <li><span>2</span>The new project becomes the active investigation context.</li>
-          <li><span>3</span>You receive exact Sentry SDK configuration instructions.</li>
+          <li><span>1</span>{{ $t('onboarding.stepProject') }}</li>
+          <li><span>2</span>{{ $t('onboarding.stepContext') }}</li>
+          <li><span>3</span>{{ $t('onboarding.stepInstructions') }}</li>
         </ol>
         <p class="info-note">
-          No Event is accepted before its project policy and DSN are durably stored.
+          {{ $t('onboarding.durableNote') }}
         </p>
       </aside>
     </div>

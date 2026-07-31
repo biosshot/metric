@@ -38,9 +38,15 @@ export const i18n = createI18n({
   messages: localeMessages,
 });
 
+function applyDocumentLocale(locale: AppLocale): void {
+  document.documentElement.lang = locale;
+  const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+  if (description) description.content = i18n.global.t('meta.description');
+}
+
 export function setLocale(locale: AppLocale): void {
   i18n.global.locale.value = locale;
-  document.documentElement.lang = locale;
+  applyDocumentLocale(locale);
   try {
     window.localStorage.setItem(localeStorageKey, locale);
   } catch {
@@ -48,4 +54,4 @@ export function setLocale(locale: AppLocale): void {
   }
 }
 
-document.documentElement.lang = i18n.global.locale.value;
+applyDocumentLocale(i18n.global.locale.value);

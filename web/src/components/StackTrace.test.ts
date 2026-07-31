@@ -96,7 +96,7 @@ describe('StackTrace', () => {
       },
     });
 
-    expect(screen.getByRole('heading', { name: '1 frames' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: '1 frame' })).toBeVisible();
     expect(screen.getByText('metric_sdk_compatibility_rust::main')).toBeVisible();
     expect(screen.getByText('src/main.rs')).toBeVisible();
   });

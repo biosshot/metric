@@ -36,7 +36,7 @@ onBeforeUnmount(() => clearTimeout(copyTimer));
 </script>
 
 <template>
-  <section class="code-block" :aria-label="`${language} code example`">
+  <section class="code-block" :aria-label="$t('common.codeExample', { language })">
     <header class="code-block__header">
       <span>
         <AppIcon name="code" :size="15" />
@@ -44,10 +44,12 @@ onBeforeUnmount(() => clearTimeout(copyTimer));
       </span>
       <button class="code-block__copy" type="button" @click="copyCode">
         <AppIcon :name="copyFailed ? 'alert' : copied ? 'check' : 'copy'" :size="15" />
-        {{ copyFailed ? 'Copy failed' : copied ? 'Copied' : 'Copy' }}
+        {{
+          copyFailed ? $t('common.copyFailed') : copied ? $t('common.copied') : $t('common.copy')
+        }}
       </button>
     </header>
-    <ol class="code-block__lines" tabindex="0" aria-label="Scrollable code lines">
+    <ol class="code-block__lines" tabindex="0" :aria-label="$t('common.scrollableCode')">
       <li v-for="(line, lineIndex) in lines" :key="lineIndex">
         <code
           ><span

@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import LogoMark from '../components/LogoMark.vue';
+import LocaleSelect from '../components/LocaleSelect.vue';
 import { suggestedSlug } from '../lib/slug';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const router = useRouter();
 const route = useRoute();
+const { t } = useI18n();
 const invited = route.name === 'password-setup' || typeof route.query.setup_token === 'string';
 const mode = ref<'login' | 'bootstrap' | 'setup'>(invited ? 'setup' : 'login');
 const busy = ref(false);
@@ -81,7 +84,7 @@ async function bootstrap(): Promise<void> {
       organization_name: organizationName.value,
     });
     organizationId.value = identity.organization_id;
-    successNotice.value = `Organization created. Its ID is ${identity.organization_id}. Sign in to continue.`;
+    successNotice.value = t('auth.organizationCreated', { id: identity.organization_id });
     mode.value = 'login';
   } catch (cause) {
     error.value = cause;
@@ -96,7 +99,7 @@ async function setupInvitedPassword(): Promise<void> {
   try {
     await api.setupPassword(setupToken.value, password.value, organizationId.value);
     password.value = '';
-    successNotice.value = 'Password set. Sign in with your invited email to continue.';
+    successNotice.value = t('auth.passwordSet');
     mode.value = 'login';
   } catch (cause) {
     error.value = cause;
@@ -113,21 +116,19 @@ async function setupInvitedPassword(): Promise<void> {
         <LogoMark :size="30" />
       </div>
       <p class="eyebrow">Metric</p>
-      <h1>Understand failures.<br />Keep the signal.</h1>
-      <p>
-        A focused error investigation workspace for teams that need clear evidence, stable
-        workflows, and no hidden failure states.
-      </p>
+      <h1>{{ $t('auth.taglineLead') }}<br />{{ $t('auth.taglineEnd') }}</h1>
+      <p>{{ $t('auth.introduction') }}</p>
       <ul>
-        <li>Exact event and Issue history</li>
-        <li>Project-isolated access</li>
-        <li>Request IDs on every server error</li>
+        <li>{{ $t('auth.exactHistory') }}</li>
+        <li>{{ $t('auth.isolatedAccess') }}</li>
+        <li>{{ $t('auth.requestIds') }}</li>
       </ul>
     </section>
     <section class="auth-card" aria-labelledby="auth-title">
-      <div class="auth-tabs" role="tablist" aria-label="Authentication mode">
+      <LocaleSelect class="auth-card__locale" />
+      <div class="auth-tabs" role="tablist" :aria-label="$t('auth.mode')">
         <button type="button" role="tab" :aria-selected="mode === 'login'" @click="mode = 'login'">
-          Sign in
+          {{ $t('auth.signIn') }}
         </button>
         <button
           type="button"
@@ -135,22 +136,22 @@ async function setupInvitedPassword(): Promise<void> {
           :aria-selected="mode === 'bootstrap'"
           @click="mode = 'bootstrap'"
         >
-          First setup
+          {{ $t('auth.firstSetup') }}
         </button>
         <button type="button" role="tab" :aria-selected="mode === 'setup'" @click="mode = 'setup'">
-          Invitation
+          {{ $t('auth.invitation') }}
         </button>
       </div>
       <div v-if="successNotice" class="success-notice" role="status">{{ successNotice }}</div>
       <form v-if="mode === 'login'" @submit.prevent="login">
-        <p class="eyebrow">Secure session</p>
-        <h2 id="auth-title">Sign in to Metric</h2>
+        <p class="eyebrow">{{ $t('auth.secureSession') }}</p>
+        <h2 id="auth-title">{{ $t('auth.signInTitle') }}</h2>
         <label>
-          Email
+          {{ $t('auth.email') }}
           <input v-model.trim="email" type="email" autocomplete="username" required />
         </label>
         <label>
-          Password
+          {{ $t('auth.password') }}
           <input
             v-model="password"
             type="password"
@@ -160,21 +161,21 @@ async function setupInvitedPassword(): Promise<void> {
           />
         </label>
         <label>
-          Organization ID
+          {{ $t('auth.organizationId') }}
           <input v-model.trim="organizationId" inputmode="numeric" pattern="[1-9][0-9]*" required />
-          <small>Shown after first setup or provided by your administrator.</small>
+          <small>{{ $t('auth.organizationIdHelp') }}</small>
         </label>
-        <ApiErrorPanel v-if="error" :error="error" title="Sign in failed" />
+        <ApiErrorPanel v-if="error" :error="error" :title="$t('auth.signInFailed')" />
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
           <AppIcon :name="busy ? 'loading' : 'signOut'" :size="16" />
-          {{ busy ? 'Signing in…' : 'Sign in' }}
+          {{ busy ? $t('auth.signingIn') : $t('auth.signIn') }}
         </button>
       </form>
       <form v-else-if="mode === 'bootstrap'" @submit.prevent="bootstrap">
-        <p class="eyebrow">One-time initialization</p>
-        <h2 id="auth-title">Create the first owner</h2>
+        <p class="eyebrow">{{ $t('auth.initialization') }}</p>
+        <h2 id="auth-title">{{ $t('auth.createOwner') }}</h2>
         <label>
-          Setup token
+          {{ $t('auth.setupToken') }}
           <input
             v-model.trim="setupToken"
             autocomplete="off"
@@ -184,15 +185,15 @@ async function setupInvitedPassword(): Promise<void> {
           />
         </label>
         <label>
-          Your name
+          {{ $t('auth.yourName') }}
           <input v-model.trim="displayName" autocomplete="name" required />
         </label>
         <label>
-          Email
+          {{ $t('auth.email') }}
           <input v-model.trim="email" type="email" autocomplete="username" required />
         </label>
         <label>
-          Password
+          {{ $t('auth.password') }}
           <input
             v-model="password"
             type="password"
@@ -203,7 +204,7 @@ async function setupInvitedPassword(): Promise<void> {
         </label>
         <div class="form-grid">
           <label>
-            Organization
+            {{ $t('auth.organization') }}
             <input
               :value="organizationName"
               autocomplete="organization"
@@ -212,7 +213,7 @@ async function setupInvitedPassword(): Promise<void> {
             />
           </label>
           <label>
-            Slug
+            {{ $t('auth.slug') }}
             <input
               v-model.trim="organizationSlug"
               autocomplete="off"
@@ -220,22 +221,20 @@ async function setupInvitedPassword(): Promise<void> {
               required
               @input="organizationSlugWasEdited = true"
             />
-            <small
-              >Generated from the organization name; edit it only if you need another ID.</small
-            >
+            <small>{{ $t('auth.slugHelp') }}</small>
           </label>
         </div>
-        <ApiErrorPanel v-if="error" :error="error" title="Setup failed" />
+        <ApiErrorPanel v-if="error" :error="error" :title="$t('auth.setupFailed')" />
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
           <AppIcon :name="busy ? 'loading' : 'plus'" :size="16" />
-          {{ busy ? 'Creating…' : 'Create owner and organization' }}
+          {{ busy ? $t('auth.creating') : $t('auth.createOwnerAndOrganization') }}
         </button>
       </form>
       <form v-else @submit.prevent="setupInvitedPassword">
-        <p class="eyebrow">Organization invitation</p>
-        <h2 id="auth-title">Set your password</h2>
+        <p class="eyebrow">{{ $t('auth.organizationInvitation') }}</p>
+        <h2 id="auth-title">{{ $t('auth.setPasswordTitle') }}</h2>
         <label>
-          Setup token
+          {{ $t('auth.setupToken') }}
           <input
             v-model.trim="setupToken"
             autocomplete="off"
@@ -245,11 +244,11 @@ async function setupInvitedPassword(): Promise<void> {
           />
         </label>
         <label>
-          Organization ID
+          {{ $t('auth.organizationId') }}
           <input v-model.trim="organizationId" inputmode="numeric" pattern="[1-9][0-9]*" required />
         </label>
         <label>
-          New password
+          {{ $t('auth.newPassword') }}
           <input
             v-model="password"
             type="password"
@@ -258,10 +257,10 @@ async function setupInvitedPassword(): Promise<void> {
             required
           />
         </label>
-        <ApiErrorPanel v-if="error" :error="error" title="Password was not set" />
+        <ApiErrorPanel v-if="error" :error="error" :title="$t('auth.passwordNotSet')" />
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
           <AppIcon :name="busy ? 'loading' : 'key'" :size="16" />
-          {{ busy ? 'Saving…' : 'Set password' }}
+          {{ busy ? $t('auth.saving') : $t('auth.setPassword') }}
         </button>
       </form>
     </section>

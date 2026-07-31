@@ -5,6 +5,6 @@ import AppIcon from './AppIcon.vue';
 <template>
   <RouterLink class="button button--primary" to="/project/setup">
     <AppIcon name="connect" :size="16" />
-    View SDK setup
+    {{ $t('sectionNav.viewSdkSetup') }}
   </RouterLink>
 </template>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { ApiError } from '../api/client';
 import AppIcon from './AppIcon.vue';
 
@@ -9,16 +10,12 @@ const props = defineProps<{
   retryLabel?: string;
   onRetry?: () => void;
 }>();
+const { t } = useI18n();
 
 const apiError = computed(() =>
   props.error instanceof ApiError
     ? props.error
-    : new ApiError(
-        0,
-        'unexpected_error',
-        null,
-        'An unexpected client error interrupted this view.',
-      ),
+    : new ApiError(0, 'unexpected_error', null, t('errors.unexpectedClient')),
 );
 </script>
 
@@ -28,19 +25,19 @@ const apiError = computed(() =>
       <AppIcon name="failure" :size="22" />
     </div>
     <div>
-      <h2>{{ title ?? 'Unable to load this view' }}</h2>
+      <h2>{{ title ?? $t('errors.unableToLoad') }}</h2>
       <p>{{ apiError.message }}</p>
       <dl class="error-details">
         <div>
-          <dt>Code</dt>
+          <dt>{{ $t('common.code') }}</dt>
           <dd>{{ apiError.code }}</dd>
         </div>
         <div v-if="apiError.status">
-          <dt>HTTP</dt>
+          <dt>{{ $t('common.http') }}</dt>
           <dd>{{ apiError.status }}</dd>
         </div>
         <div v-if="apiError.requestId">
-          <dt>Request ID</dt>
+          <dt>{{ $t('common.requestId') }}</dt>
           <dd>
             <code>{{ apiError.requestId }}</code>
           </dd>
@@ -53,7 +50,7 @@ const apiError = computed(() =>
         @click="onRetry"
       >
         <AppIcon name="refresh" :size="16" />
-        {{ retryLabel ?? 'Try again' }}
+        {{ retryLabel ?? $t('common.tryAgain') }}
       </button>
     </div>
   </section>

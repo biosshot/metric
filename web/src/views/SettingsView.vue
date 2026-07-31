@@ -8,40 +8,40 @@ const session = useSessionStore();
 <template>
   <section class="settings-shell">
     <header class="settings-shell__header">
-      <p class="eyebrow">Configure</p>
-      <h1>Settings</h1>
-      <p>Project controls, notifications, organization access, and system state in one place.</p>
+      <p class="eyebrow">{{ $t('settingsShell.eyebrow') }}</p>
+      <h1>{{ $t('settingsShell.title') }}</h1>
+      <p>{{ $t('settingsShell.description') }}</p>
     </header>
 
     <div class="settings-shell__layout">
-      <nav class="settings-navigation" aria-label="Settings sections">
+      <nav class="settings-navigation" :aria-label="$t('settingsShell.sections')">
         <div>
-          <span>Project</span>
+          <span>{{ $t('settingsShell.project') }}</span>
           <RouterLink to="/settings/project">
             <AppIcon name="settings" :size="17" />
-            Data & access
+            {{ $t('settingsShell.dataAccess') }}
           </RouterLink>
           <RouterLink to="/dashboard?edit=1">
             <AppIcon name="dashboard" :size="17" />
-            Dashboards
+            {{ $t('settingsShell.dashboards') }}
           </RouterLink>
         </div>
         <div>
-          <span>Automation</span>
+          <span>{{ $t('settingsShell.automation') }}</span>
           <RouterLink v-if="session.has('project:admin')" to="/settings/notifications">
             <AppIcon name="alerts" :size="17" />
-            Notifications
+            {{ $t('settingsShell.notifications') }}
           </RouterLink>
         </div>
         <div>
-          <span>Workspace</span>
+          <span>{{ $t('settingsShell.workspace') }}</span>
           <RouterLink to="/settings/organization">
             <AppIcon name="organization" :size="17" />
-            Organization
+            {{ $t('settingsShell.organization') }}
           </RouterLink>
           <RouterLink to="/settings/system">
             <AppIcon name="activity" :size="17" />
-            System
+            {{ $t('settingsShell.system') }}
           </RouterLink>
         </div>
       </nav>

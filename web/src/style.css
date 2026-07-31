@@ -4483,4 +4483,20 @@ label small,
 
 .locale-select select {
   min-width: 7rem;
+  min-height: 34px;
+  padding: 0.4rem 2rem 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+}
+
+.sidebar__locale {
+  margin-top: 0.75rem;
+}
+
+.auth-card__locale {
+  width: fit-content;
+  margin: 0 0 1rem auto;
 }

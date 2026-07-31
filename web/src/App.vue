@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import ApiErrorPanel from './components/ApiErrorPanel.vue';
 import AppIcon from './components/AppIcon.vue';
@@ -7,12 +8,14 @@ import BaseSelect, { type SelectOption } from './components/BaseSelect.vue';
 import EmptyState from './components/EmptyState.vue';
 import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
 import LoadingPanel from './components/LoadingPanel.vue';
+import LocaleSelect from './components/LocaleSelect.vue';
 import LogoMark from './components/LogoMark.vue';
 import { useSessionStore } from './stores/session';
 import AuthView from './views/AuthView.vue';
 
 const session = useSessionStore();
 const router = useRouter();
+const { t } = useI18n();
 const navigationOpen = ref(false);
 const logoutError = ref<unknown>(null);
 const createProjectAction = '__create_project__';
@@ -27,8 +30,8 @@ const projectOptions = computed<SelectOption[]>(() => [
     ? [
         {
           value: createProjectAction,
-          label: 'New project',
-          description: 'Create another isolated project',
+          label: t('app.newProject'),
+          description: t('app.newProjectDescription'),
           icon: 'plus' as const,
           action: true,
         },
@@ -61,19 +64,19 @@ async function logout(): Promise<void> {
 </script>
 
 <template>
-  <a class="skip-link" href="#main-content">Skip to content</a>
+  <a class="skip-link" href="#main-content">{{ $t('app.skipToContent') }}</a>
   <div v-if="session.restoring" class="app-loading">
-    <LoadingPanel label="Restoring your secure session…" />
+    <LoadingPanel :label="$t('app.restoringSession')" />
   </div>
   <div v-else-if="session.restoreError" class="app-loading restore-failure">
     <ApiErrorPanel
       :error="session.restoreError"
-      title="Session could not be checked"
+      :title="$t('app.sessionCheckFailed')"
       @retry="session.restore()"
     />
     <button class="button button--secondary" type="button" @click="session.dismissRestoreError()">
       <AppIcon name="back" :size="16" />
-      Open sign-in instead
+      {{ $t('app.openSignIn') }}
     </button>
   </div>
   <AuthView
@@ -88,7 +91,7 @@ async function logout(): Promise<void> {
       <button
         class="icon-button"
         type="button"
-        aria-label="Toggle navigation"
+        :aria-label="$t('app.toggleNavigation')"
         :aria-expanded="navigationOpen"
         @click="navigationOpen = !navigationOpen"
       >
@@ -104,7 +107,7 @@ async function logout(): Promise<void> {
       v-if="navigationOpen"
       class="navigation-backdrop"
       type="button"
-      aria-label="Close navigation"
+      :aria-label="$t('app.closeNavigation')"
       @click="navigationOpen = false"
     ></button>
 
@@ -121,29 +124,30 @@ async function logout(): Promise<void> {
           class="project-switcher"
           :model-value="session.selectedProjectId ?? ''"
           :options="projectOptions"
-          label="Project"
+          :label="$t('app.project')"
           @update:model-value="changeProject"
         />
+        <LocaleSelect class="sidebar__locale" />
       </div>
 
-      <nav aria-label="Primary">
+      <nav :aria-label="$t('app.primaryNavigation')">
         <div class="sidebar__nav-group">
-          <span class="sidebar__nav-label">Overview</span>
+          <span class="sidebar__nav-label">{{ $t('app.overview') }}</span>
           <RouterLink to="/dashboard" @click="navigationOpen = false">
             <AppIcon name="dashboard" :size="18" />
-            Dashboard
+            {{ $t('app.dashboard') }}
           </RouterLink>
         </div>
 
         <div class="sidebar__nav-group">
-          <span class="sidebar__nav-label">Observe</span>
+          <span class="sidebar__nav-label">{{ $t('app.observe') }}</span>
           <RouterLink to="/issues" @click="navigationOpen = false">
             <AppIcon name="clipboard" :size="18" />
-            Issues
+            {{ $t('app.issues') }}
           </RouterLink>
           <RouterLink to="/logs" @click="navigationOpen = false">
             <AppIcon name="logs" :size="18" />
-            Logs
+            {{ $t('app.logs') }}
           </RouterLink>
           <RouterLink
             to="/metrics"
@@ -151,7 +155,7 @@ async function logout(): Promise<void> {
             @click="navigationOpen = false"
           >
             <AppIcon name="gauge" :size="18" />
-            Metrics
+            {{ $t('app.metrics') }}
           </RouterLink>
           <RouterLink
             to="/traces"
@@ -159,43 +163,43 @@ async function logout(): Promise<void> {
             @click="navigationOpen = false"
           >
             <AppIcon name="traces" :size="18" />
-            Traces
+            {{ $t('app.traces') }}
           </RouterLink>
           <RouterLink to="/replays" @click="navigationOpen = false">
             <AppIcon name="replay" :size="18" />
-            Replays
+            {{ $t('app.replays') }}
           </RouterLink>
           <RouterLink to="/monitors" @click="navigationOpen = false">
             <AppIcon name="monitors" :size="18" />
-            Monitors
+            {{ $t('app.monitors') }}
           </RouterLink>
           <RouterLink to="/feedback" @click="navigationOpen = false">
             <AppIcon name="message" :size="18" />
-            Feedback
+            {{ $t('app.feedback') }}
           </RouterLink>
         </div>
 
         <div class="sidebar__nav-group">
-          <span class="sidebar__nav-label">Delivery</span>
+          <span class="sidebar__nav-label">{{ $t('app.delivery') }}</span>
           <RouterLink to="/releases" @click="navigationOpen = false">
             <AppIcon name="release" :size="18" />
-            Releases
+            {{ $t('app.releases') }}
           </RouterLink>
         </div>
 
         <div class="sidebar__nav-group">
-          <span class="sidebar__nav-label">Configure</span>
+          <span class="sidebar__nav-label">{{ $t('app.configure') }}</span>
           <RouterLink
             v-if="session.has('project:admin')"
             to="/project/setup"
             @click="navigationOpen = false"
           >
             <AppIcon name="connect" :size="18" />
-            SDK setup
+            {{ $t('app.sdkSetup') }}
           </RouterLink>
           <RouterLink to="/settings" @click="navigationOpen = false">
             <AppIcon name="settings" :size="18" />
-            Settings
+            {{ $t('app.settings') }}
           </RouterLink>
         </div>
       </nav>
@@ -207,17 +211,17 @@ async function logout(): Promise<void> {
           @click="navigationOpen = false"
         >
           <strong>{{ session.identity?.role }}</strong>
-          <span>Org {{ session.organizationId }}</span>
+          <span>{{ $t('app.organizationShort', { id: session.organizationId }) }}</span>
         </RouterLink>
         <button type="button" @click="logout">
           <AppIcon name="signOut" :size="16" />
-          Sign out
+          {{ $t('app.signOut') }}
         </button>
       </div>
     </aside>
 
     <main id="main-content" class="main-content">
-      <ApiErrorPanel v-if="logoutError" :error="logoutError" title="Sign out failed" />
+      <ApiErrorPanel v-if="logoutError" :error="logoutError" :title="$t('app.signOutFailed')" />
       <FirstProjectOnboarding
         v-if="
           !session.selectedProject &&
@@ -228,8 +232,8 @@ async function logout(): Promise<void> {
       <EmptyState
         v-else-if="!session.selectedProject && !routesWithoutProject.has(String($route.name))"
         icon="blocked"
-        title="No accessible projects"
-        description="Your account is valid, but an organization administrator must grant access to a project."
+        :title="$t('app.noProjects')"
+        :description="$t('app.noProjectsDescription')"
       />
       <RouterView v-else />
     </main>

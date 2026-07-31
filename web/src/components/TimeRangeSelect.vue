@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import BaseSelect, { type SelectOption } from './BaseSelect.vue';
 import {
   localDateTime,
@@ -15,19 +16,20 @@ const props = defineProps<{
 }>();
 defineOptions({ inheritAttrs: false });
 const attrs = useAttrs();
+const { locale, t } = useI18n();
 const emit = defineEmits<{
   'update:modelValue': [value: string];
   'update:windowValue': [value: TimeWindow];
 }>();
 
-const options: SelectOption[] = [
-  { value: 'all', label: 'All time', icon: 'history' },
-  { value: '1h', label: 'Last hour', icon: 'history' },
-  { value: '24h', label: 'Last 24 hours', icon: 'history' },
-  { value: '7d', label: 'Last 7 days', icon: 'history' },
-  { value: '30d', label: 'Last 30 days', icon: 'history' },
-  { value: 'custom', label: 'Custom range', icon: 'settings' },
-];
+const options = computed<SelectOption[]>(() => [
+  { value: 'all', label: t('timeRange.all'), icon: 'history' },
+  { value: '1h', label: t('timeRange.hour'), icon: 'history' },
+  { value: '24h', label: t('timeRange.hours24'), icon: 'history' },
+  { value: '7d', label: t('timeRange.days7'), icon: 'history' },
+  { value: '30d', label: t('timeRange.days30'), icon: 'history' },
+  { value: 'custom', label: t('timeRange.custom'), icon: 'settings' },
+]);
 const customFrom = ref(localDateTime(props.windowValue.from));
 const customUntil = ref(localDateTime(props.windowValue.until));
 const customError = ref('');
@@ -36,7 +38,7 @@ const root = ref<HTMLElement>();
 const fromInput = ref<HTMLInputElement>();
 const selectedLabel = computed(() => {
   if (props.modelValue !== 'custom') return undefined;
-  const format = new Intl.DateTimeFormat(undefined, {
+  const format = new Intl.DateTimeFormat(locale.value, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -73,7 +75,7 @@ function selectRange(value: string): void {
 function applyCustom(): void {
   const value = parseCustomTimeWindow(customFrom.value, customUntil.value);
   if (!value) {
-    customError.value = 'Choose a valid period up to 30 days.';
+    customError.value = t('timeRange.invalid');
     return;
   }
   customError.value = '';
@@ -109,18 +111,18 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
       v-if="modelValue === 'custom' && customOpen"
       class="time-range-custom"
       role="dialog"
-      aria-label="Custom time range"
+      :aria-label="$t('timeRange.customDialog')"
     >
       <label>
-        <span>From</span>
+        <span>{{ $t('timeRange.from') }}</span>
         <input ref="fromInput" v-model="customFrom" type="datetime-local" required />
       </label>
       <label>
-        <span>Until</span>
+        <span>{{ $t('timeRange.until') }}</span>
         <input v-model="customUntil" type="datetime-local" required />
       </label>
       <button class="button button--secondary button--fit" type="button" @click="applyCustom">
-        Apply range
+        {{ $t('timeRange.apply') }}
       </button>
       <small v-if="customError" class="field-error" role="alert">{{ customError }}</small>
     </div>

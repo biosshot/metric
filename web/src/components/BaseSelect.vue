@@ -132,7 +132,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
     >
       <span class="base-select__value">
         <AppIcon v-if="selected?.icon" :name="selected.icon" :size="16" />
-        <span>{{ selectedLabel ?? selected?.label ?? 'Select an option' }}</span>
+        <span>{{ selectedLabel ?? selected?.label ?? $t('common.selectOption') }}</span>
       </span>
       <AppIcon class="base-select__chevron" name="chevronDown" :size="16" />
     </button>

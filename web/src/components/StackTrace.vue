@@ -84,8 +84,8 @@ function sourceLines(frame: Frame): SourceLine[] {
   <section class="stack-section" aria-labelledby="stack-heading">
     <div class="section-heading">
       <div>
-        <p class="eyebrow">Stack trace</p>
-        <h2 id="stack-heading">{{ frames.length }} frames</h2>
+        <p class="eyebrow">{{ $t('stack.title') }}</p>
+        <h2 id="stack-heading">{{ $t('stack.frames', frames.length) }}</h2>
       </div>
       <button
         v-if="frames.length > INITIAL_FRAMES"
@@ -95,7 +95,7 @@ function sourceLines(frame: Frame): SourceLine[] {
         @click="expanded = !expanded"
       >
         <AppIcon name="view" :size="16" />
-        {{ expanded ? 'Show first 40' : `Show all ${frames.length}` }}
+        {{ expanded ? $t('stack.showFirst') : $t('stack.showAll', { count: frames.length }) }}
       </button>
     </div>
     <div v-if="frames.length" class="stack-list">
@@ -107,9 +107,9 @@ function sourceLines(frame: Frame): SourceLine[] {
       >
         <div class="stack-frame__number">{{ index + 1 }}</div>
         <div>
-          <strong>{{ frame.function || '&lt;unknown function&gt;' }}</strong>
+          <strong>{{ frame.function || $t('stack.unknownFunction') }}</strong>
           <p>
-            {{ frame.filename || frame.abs_path || frame.module || 'unknown source' }}
+            {{ frame.filename || frame.abs_path || frame.module || $t('stack.unknownSource') }}
             <span v-if="frame.lineno"
               >:{{ frame.lineno }}<template v-if="frame.colno">:{{ frame.colno }}</template></span
             >
@@ -118,7 +118,11 @@ function sourceLines(frame: Frame): SourceLine[] {
             v-if="sourceLines(frame).length"
             class="source-context"
             tabindex="0"
-            :aria-label="`Source context for ${frame.filename || frame.abs_path || 'frame'}`"
+            :aria-label="
+              $t('stack.sourceContext', {
+                source: frame.filename || frame.abs_path || $t('stack.frame'),
+              })
+            "
           >
             <li
               v-for="(line, lineIndex) in sourceLines(frame)"
@@ -139,9 +143,9 @@ function sourceLines(frame: Frame): SourceLine[] {
             </li>
           </ol>
         </div>
-        <span v-if="frame.in_app" class="frame-label">in app</span>
+        <span v-if="frame.in_app" class="frame-label">{{ $t('stack.inApp') }}</span>
       </article>
     </div>
-    <p v-else class="muted">This event does not contain stack frames.</p>
+    <p v-else class="muted">{{ $t('stack.empty') }}</p>
   </section>
 </template>

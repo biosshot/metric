@@ -12,27 +12,27 @@ const requestedPath = computed(() => route.fullPath);
   <section class="not-found-view">
     <header class="page-header">
       <div>
-        <p class="eyebrow">404 / route not found</p>
-        <h1>Page not found</h1>
+        <p class="eyebrow">{{ $t('notFound.eyebrow') }}</p>
+        <h1>{{ $t('notFound.title') }}</h1>
         <p>
           <code>{{ requestedPath }}</code>
-          does not match a Metric page.
+          {{ $t('notFound.pathDescription') }}
         </p>
       </div>
     </header>
     <EmptyState
       icon="blocked"
-      title="This page is unavailable"
-      description="The address may be incorrect, or the linked resource may have been removed."
+      :title="$t('notFound.unavailable')"
+      :description="$t('notFound.description')"
     >
       <div class="empty-state__actions">
         <RouterLink class="button button--primary" to="/dashboard">
           <AppIcon name="dashboard" :size="16" />
-          Dashboard
+          {{ $t('app.dashboard') }}
         </RouterLink>
         <RouterLink class="button button--secondary" to="/issues">
           <AppIcon name="clipboard" :size="16" />
-          Issues
+          {{ $t('app.issues') }}
         </RouterLink>
       </div>
     </EmptyState>
