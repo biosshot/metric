@@ -1,7 +1,10 @@
+# syntax=docker/dockerfile:1
+
 FROM node:24-bookworm-slim AS web-builder
 WORKDIR /source/web
 COPY web/package.json web/package-lock.json ./
-RUN set -eu; \
+RUN --mount=type=cache,target=/root/.npm \
+    set -eu; \
     attempt=1; \
     until npm ci \
         --no-audit \
@@ -27,7 +30,11 @@ WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY tools/ tools/
-RUN cargo build --locked --release --bin metric-server
+RUN --mount=type=cache,target=/var/cache/cargo \
+    --mount=type=cache,target=/source/target \
+    CARGO_HOME=/var/cache/cargo \
+    cargo build --locked --release --bin metric-server \
+    && cp /source/target/release/metric-server /tmp/metric-server
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
@@ -38,7 +45,7 @@ RUN apt-get update \
     && mkdir -p /opt/metric/web /var/lib/metric/blobs /etc/metric \
     && chown -R metric:metric /var/lib/metric
 
-COPY --from=rust-builder /source/target/release/metric-server /usr/local/bin/metric-server
+COPY --from=rust-builder /tmp/metric-server /usr/local/bin/metric-server
 COPY --from=web-builder /source/web/dist/ /opt/metric/web/
 COPY deploy/metric.toml /etc/metric/metric.toml
 

@@ -13,9 +13,6 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/metric
-
 jobs:
   validate:
     name: Validate version
@@ -33,53 +30,38 @@ jobs:
             exit 1
           fi
 
+  # Builds AMD64 and ARM64 in parallel on native GitHub runners, then publishes
+  # one multi-platform image. This avoids compiling Rust through QEMU.
   image:
     name: Publish container image
     needs: validate
-    runs-on: ubuntu-latest
+    uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Sign in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
+      id-token: write
+    with:
+      output: image
+      push: true
+      platforms: linux/amd64,linux/arm64
+      meta-images: ghcr.io/${{ github.repository_owner }}/metric
+      meta-tags: |
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        type=sha,prefix=sha-
+      meta-labels: |
+        org.opencontainers.image.title=Metric
+        org.opencontainers.image.description=Sentry-compatible error tracking and observability
+      set-meta-labels: true
+      cache: true
+      cache-mode: max
+      cache-scope: release
+      sbom: true
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prepare image tags and labels
-        id: metadata
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-          labels: |
-            org.opencontainers.image.title=Metric
-            org.opencontainers.image.description=Sentry-compatible error tracking and observability
-
-      - name: Build and publish
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha,scope=release
-          cache-to: type=gha,mode=max,scope=release
-          provenance: mode=max
-          sbom: true
 
   github-release:
     name: Publish GitHub Release
