@@ -1217,6 +1217,17 @@ test('mobile pagination stays outside horizontal data scrolling and dashboard ca
       scroll: document.documentElement.scrollWidth,
     }));
     expect(widths.scroll).toBe(widths.client);
+    if (target.url === '/feedback') {
+      const feedbackPaginationBox = await page
+        .getByRole('navigation', { name: target.label })
+        .boundingBox();
+      const feedbackTableBox = await page.locator('.issue-table-scroll').boundingBox();
+      expect(feedbackPaginationBox).not.toBeNull();
+      expect(feedbackTableBox).not.toBeNull();
+      expect(feedbackPaginationBox!.y + feedbackPaginationBox!.height).toBeLessThanOrEqual(
+        feedbackTableBox!.y,
+      );
+    }
     if (target.url === '/logs' || target.url === '/traces') {
       const toolbarBox = await page.locator('.signal-toolbar').boundingBox();
       const actionsBox = await page.locator('.signal-toolbar__actions').boundingBox();

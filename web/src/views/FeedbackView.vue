@@ -107,6 +107,25 @@ function formatTime(value: string): string {
       <SdkSetupButton />
     </EmptyState>
     <div v-else class="issue-table-wrap">
+      <nav class="pagination" aria-label="Feedback result pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="history.length === 0"
+          @click="previousPage"
+        >
+          Previous
+        </button>
+        <span>Page {{ history.length + 1 }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="!feedback.data.value.next_cursor"
+          @click="nextPage"
+        >
+          Next
+        </button>
+      </nav>
       <div class="issue-table-scroll">
         <table class="issue-table feedback-table">
           <thead>
@@ -141,25 +160,6 @@ function formatTime(value: string): string {
           </tbody>
         </table>
       </div>
-      <nav class="pagination" aria-label="Feedback result pages">
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="history.length === 0"
-          @click="previousPage"
-        >
-          Previous
-        </button>
-        <span>Page {{ history.length + 1 }}</span>
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="!feedback.data.value.next_cursor"
-          @click="nextPage"
-        >
-          Next
-        </button>
-      </nav>
     </div>
   </section>
 </template>
