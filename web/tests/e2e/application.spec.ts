@@ -12,7 +12,17 @@ const project = {
   policy: {
     revision: 1,
     ip_policy: 'hmac',
-    items: { error: true, client_report: true, log: true, transaction: true, span: true },
+    items: {
+      error: true,
+      client_report: true,
+      log: true,
+      transaction: true,
+      span: true,
+      feedback: true,
+      check_in: true,
+      metric: true,
+      replay: true,
+    },
     limits: { max_event_bytes: 1048576, max_events_per_second: null, burst: null },
   },
   grouping_revision: 1,
@@ -155,7 +165,7 @@ const feedbackRecord = {
   associated_event_id: null,
   issue_id: null,
   trace_id: null,
-  replay_id: null,
+  replay_id: replayRecord.id,
   attachments: [
     {
       attachment_id: '72'.repeat(16),
@@ -972,7 +982,9 @@ test('expired requests and logout return immediately to sign in', async ({ page 
   await expect(page.getByText('Sign out failed')).toHaveCount(0);
 });
 
-test('Feedback attachment download carries organization context', async ({ page }) => {
+test('Feedback detail exposes workflow, Replay and authenticated attachment download', async ({
+  page,
+}) => {
   const state: ApiState = {
     role: 'owner',
     csrfSeen: false,
@@ -983,7 +995,19 @@ test('Feedback attachment download carries organization context', async ({ page 
   await login(page);
 
   await page.goto(`/feedback/${feedbackRecord.id}`);
+  await expect(page.getByRole('heading', { name: feedbackRecord.message })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Resolve' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Mark as spam' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Replay', exact: true })).toHaveAttribute(
+    'href',
+    `/replays/${replayRecord.id}`,
+  );
   await expect(page.getByRole('heading', { name: 'Attachments' })).toBeVisible();
+  const workflowBox = await page.locator('.feedback-workflow').boundingBox();
+  const attachmentsBox = await page.getByRole('heading', { name: 'Attachments' }).boundingBox();
+  expect(workflowBox).not.toBeNull();
+  expect(attachmentsBox).not.toBeNull();
+  expect(workflowBox!.y + workflowBox!.height).toBeLessThan(attachmentsBox!.y);
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: /feedback.txt/ }).click();
   await download;

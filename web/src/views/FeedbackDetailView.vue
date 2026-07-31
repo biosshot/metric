@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRoute } from 'vue-router';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
-import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { api } from '../api/client';
@@ -16,32 +15,20 @@ const session = useSessionStore();
 const queryClient = useQueryClient();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const feedbackId = computed(() => String(route.params.feedbackId ?? ''));
-const selectedStatus = ref<FeedbackStatus>('open');
 const attachmentError = ref<unknown>(null);
 const downloadingAttachmentId = ref('');
-const statusOptions: SelectOption[] = [
-  { value: 'open', label: 'Open', icon: 'alert' },
-  { value: 'resolved', label: 'Resolved', icon: 'success' },
-  { value: 'spam', label: 'Spam', icon: 'blocked' },
-];
+const mutationNotice = ref('');
 const feedback = useQuery({
   queryKey: computed(() => ['feedback-item', projectId.value, feedbackId.value]),
   queryFn: () => api.feedbackItem(projectId.value, feedbackId.value),
   enabled: computed(() => Boolean(projectId.value && feedbackId.value)),
 });
 
-watch(
-  () => feedback.data.value?.status,
-  (value) => {
-    if (value) selectedStatus.value = value;
-  },
-  { immediate: true },
-);
-
 const saveStatus = useMutation({
-  mutationFn: () =>
-    api.updateFeedbackStatus(projectId.value, feedbackId.value, selectedStatus.value),
-  onSuccess: async () => {
+  mutationFn: (status: FeedbackStatus) =>
+    api.updateFeedbackStatus(projectId.value, feedbackId.value, status),
+  onSuccess: async (updated) => {
+    mutationNotice.value = `Feedback marked ${updated.status}.`;
     await queryClient.invalidateQueries({
       queryKey: ['feedback-item', projectId.value, feedbackId.value],
     });
@@ -49,8 +36,11 @@ const saveStatus = useMutation({
   },
 });
 
-function setStatus(value: string): void {
-  selectedStatus.value = value as FeedbackStatus;
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
 }
 
 function formatBytes(bytes: number): string {
@@ -88,10 +78,10 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
 </script>
 
 <template>
-  <section>
+  <section class="feedback-detail">
     <RouterLink class="back-link" to="/feedback">
       <AppIcon name="back" :size="16" />
-      User Feedback
+      All Feedback
     </RouterLink>
     <LoadingPanel v-if="feedback.isPending.value" label="Loading feedback detail…" />
     <ApiErrorPanel
@@ -100,43 +90,90 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
       @retry="feedback.refetch()"
     />
     <template v-else-if="feedback.data.value">
-      <header class="page-header feedback-detail-header">
+      <header class="issue-detail-header feedback-detail-header">
         <div>
-          <p class="eyebrow">{{ feedback.data.value.id }}</p>
-          <h1>{{ feedback.data.value.name || 'Anonymous user' }}</h1>
-          <p>{{ feedback.data.value.received_at }}</p>
+          <div class="heading-line">
+            <StatusBadge :status="feedback.data.value.status" />
+            <code>{{ feedback.data.value.id }}</code>
+          </div>
+          <h1>{{ feedback.data.value.message }}</h1>
+          <p>
+            Submitted by {{ feedback.data.value.name || 'an anonymous user' }} ·
+            {{ formatTime(feedback.data.value.received_at) }}
+          </p>
         </div>
-        <StatusBadge :status="feedback.data.value.status" />
+        <div
+          v-if="session.has('issue:write')"
+          class="feedback-workflow"
+          aria-label="Feedback workflow"
+        >
+          <span class="eyebrow">Workflow status</span>
+          <div class="button-group">
+            <button
+              v-if="feedback.data.value.status !== 'resolved'"
+              class="button button--primary"
+              type="button"
+              :disabled="saveStatus.isPending.value"
+              @click="saveStatus.mutate('resolved')"
+            >
+              <AppIcon name="success" :size="16" />
+              Resolve
+            </button>
+            <button
+              v-if="feedback.data.value.status !== 'spam'"
+              class="button button--secondary"
+              type="button"
+              :disabled="saveStatus.isPending.value"
+              @click="saveStatus.mutate('spam')"
+            >
+              <AppIcon name="blocked" :size="16" />
+              Mark as spam
+            </button>
+            <button
+              v-if="feedback.data.value.status !== 'open'"
+              class="button button--secondary"
+              type="button"
+              :disabled="saveStatus.isPending.value"
+              @click="saveStatus.mutate('open')"
+            >
+              <AppIcon name="refresh" :size="16" />
+              Reopen
+            </button>
+          </div>
+        </div>
+        <p v-else class="permission-note">Read-only role: workflow controls are unavailable.</p>
       </header>
 
+      <p v-if="mutationNotice" class="success-notice" role="status">{{ mutationNotice }}</p>
       <ApiErrorPanel
         v-if="saveStatus.error.value"
         :error="saveStatus.error.value"
         title="Feedback status was not saved"
       />
-      <section class="detail-panel feedback-message">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Submitted message</p>
-            <h2>User report</h2>
-          </div>
-        </div>
-        <p>{{ feedback.data.value.message }}</p>
-      </section>
-
-      <div class="metric-grid">
+      <div class="metric-grid feedback-metadata-grid">
         <article>
-          <span>Contact</span
-          ><strong>{{ feedback.data.value.contact_email || 'Not provided' }}</strong>
+          <span>Reporter</span>
+          <strong>{{ feedback.data.value.name || 'Anonymous user' }}</strong>
+          <small>{{ feedback.data.value.contact_email || 'No contact provided' }}</small>
         </article>
         <article>
-          <span>Page URL</span><strong>{{ feedback.data.value.url || 'Not provided' }}</strong>
+          <span>Page URL</span>
+          <a
+            v-if="feedback.data.value.url"
+            class="text-link"
+            :href="feedback.data.value.url"
+            target="_blank"
+            rel="noreferrer"
+          >
+            {{ feedback.data.value.url }}
+          </a>
+          <strong v-else>Not provided</strong>
         </article>
         <article>
-          <span>Attachments</span><strong>{{ feedback.data.value.attachments.length }}</strong>
+          <span>Received</span><strong>{{ formatTime(feedback.data.value.received_at) }}</strong>
         </article>
         <article>
-          <span>Expires</span><strong>{{ feedback.data.value.expires_at }}</strong>
+          <span>Expires</span><strong>{{ formatTime(feedback.data.value.expires_at) }}</strong>
         </article>
       </div>
 
@@ -169,13 +206,24 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
           >
             <AppIcon name="traces" :size="16" /> Trace
           </RouterLink>
-          <span v-if="feedback.data.value.replay_id" class="permission-note">
+          <RouterLink
+            v-if="feedback.data.value.replay_id && session.selectedProject?.policy.items.replay"
+            class="button button--secondary"
+            :to="`/replays/${feedback.data.value.replay_id}`"
+          >
+            <AppIcon name="replay" :size="16" /> Replay
+          </RouterLink>
+          <span
+            v-else-if="feedback.data.value.replay_id"
+            class="permission-note feedback-replay-note"
+          >
             Replay {{ feedback.data.value.replay_id.slice(0, 12) }} is linked but Replay UI is not
-            enabled.
+            enabled for this project.
           </span>
           <span
             v-if="
               !feedback.data.value.associated_event_id &&
+              !feedback.data.value.issue_id &&
               !feedback.data.value.trace_id &&
               !feedback.data.value.replay_id
             "
@@ -225,27 +273,6 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
           </button>
         </div>
       </section>
-
-      <form
-        v-if="session.has('issue:write')"
-        class="panel feedback-status-form"
-        @submit.prevent="saveStatus.mutate()"
-      >
-        <BaseSelect
-          :model-value="selectedStatus"
-          :options="statusOptions"
-          label="Workflow status"
-          @update:model-value="setStatus"
-        />
-        <button
-          class="button button--primary"
-          type="submit"
-          :disabled="saveStatus.isPending.value || selectedStatus === feedback.data.value.status"
-        >
-          <AppIcon name="save" :size="16" />
-          Save status
-        </button>
-      </form>
     </template>
   </section>
 </template>

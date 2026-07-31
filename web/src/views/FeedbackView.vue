@@ -45,7 +45,7 @@ const feedback = useQuery({
   enabled: computed(() => Boolean(projectId.value)),
 });
 
-watch([projectId, status], () => {
+watch([projectId, status, replayId], () => {
   cursor.value = null;
   history.value = [];
 });
@@ -80,8 +80,17 @@ function formatTime(value: string): string {
           Read SDK-submitted reports, follow their investigation links, and triage status.
         </p>
       </div>
-      <BaseSelect v-model="status" class="compact-select" :options="statusOptions" />
     </header>
+
+    <div class="issue-toolbar feedback-toolbar">
+      <BaseSelect
+        v-model="status"
+        class="compact-select"
+        :options="statusOptions"
+        label="Status"
+        aria-label="Feedback status"
+      />
+    </div>
 
     <LoadingPanel v-if="feedback.isPending.value" label="Loading user feedback…" />
     <ApiErrorPanel
@@ -97,7 +106,41 @@ function formatTime(value: string): string {
     >
       <SdkSetupButton />
     </EmptyState>
-    <div v-else class="feedback-list">
+    <div v-else class="issue-table-wrap">
+      <div class="issue-table-scroll">
+        <table class="issue-table feedback-table">
+          <thead>
+            <tr>
+              <th scope="col">Feedback</th>
+              <th scope="col">Status</th>
+              <th scope="col">Reporter</th>
+              <th scope="col">Attachments</th>
+              <th scope="col">Received</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in feedback.data.value.items" :key="item.id">
+              <td>
+                <RouterLink :to="`/feedback/${item.id}`" class="issue-title">
+                  {{ item.message }}
+                </RouterLink>
+                <span>{{ item.url || 'No page URL reported' }}</span>
+              </td>
+              <td><StatusBadge :status="item.status" /></td>
+              <td>
+                <span class="feedback-reporter">
+                  <strong>{{ item.name || 'Anonymous user' }}</strong>
+                  <small v-if="item.contact_email">{{ item.contact_email }}</small>
+                </span>
+              </td>
+              <td>{{ item.attachments.length.toLocaleString() }}</td>
+              <td>
+                <time :datetime="item.received_at">{{ formatTime(item.received_at) }}</time>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <nav class="pagination" aria-label="Feedback result pages">
         <button
           class="button button--secondary"
@@ -117,22 +160,6 @@ function formatTime(value: string): string {
           Next
         </button>
       </nav>
-      <RouterLink
-        v-for="item in feedback.data.value.items"
-        :key="item.id"
-        class="feedback-row"
-        :to="`/feedback/${item.id}`"
-      >
-        <span class="feedback-row__status"><StatusBadge :status="item.status" /></span>
-        <strong>{{ item.message }}</strong>
-        <span>{{ item.name || item.contact_email || 'Anonymous user' }}</span>
-        <span
-          >{{ item.attachments.length }} attachment{{
-            item.attachments.length === 1 ? '' : 's'
-          }}</span
-        >
-        <time :datetime="item.received_at">{{ formatTime(item.received_at) }}</time>
-      </RouterLink>
     </div>
   </section>
 </template>

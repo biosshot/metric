@@ -3944,45 +3944,64 @@ label small,
   width: min(100%, 15rem);
 }
 
-.feedback-list,
+.feedback-toolbar {
+  justify-content: flex-start;
+}
+
+.feedback-toolbar .compact-select {
+  margin: 0;
+}
+
+.feedback-table {
+  min-width: 920px;
+}
+
+.feedback-table th:first-child {
+  width: 46%;
+}
+
+.feedback-table td:first-child {
+  overflow-wrap: anywhere;
+}
+
+.feedback-reporter {
+  display: grid;
+  min-width: 10rem;
+  gap: 0.2rem;
+}
+
+.feedback-reporter strong {
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.feedback-reporter small {
+  color: var(--text-muted);
+}
+
 .feedback-attachments {
   display: grid;
   gap: 0.75rem;
 }
 
-.feedback-row {
-  display: grid;
-  grid-template-columns: auto minmax(14rem, 1fr) minmax(8rem, 0.35fr) auto auto;
-  align-items: center;
-  gap: 1rem;
-  padding: 1rem 1.1rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-medium);
-  background: var(--surface-raised);
-  color: inherit;
-  text-decoration: none;
-  transition:
-    border-color 160ms ease,
-    transform 160ms ease;
-}
-
-.feedback-row:hover {
-  border-color: var(--accent-border);
-  transform: translateY(-1px);
-}
-
-.feedback-row > span:not(.feedback-row__status),
-.feedback-row time {
-  color: var(--text-muted);
-}
-
-.feedback-message > p {
-  max-width: 72ch;
-  margin: 0;
-  white-space: pre-wrap;
+.feedback-detail-header h1 {
   overflow-wrap: anywhere;
-  font-size: 1.05rem;
-  line-height: 1.7;
+}
+
+.feedback-workflow {
+  display: grid;
+  flex: none;
+  justify-items: end;
+  gap: 0.55rem;
+}
+
+.feedback-workflow .eyebrow {
+  margin: 0;
+}
+
+.feedback-metadata-grid strong,
+.feedback-metadata-grid a {
+  overflow-wrap: anywhere;
 }
 
 .feedback-links {
@@ -4029,12 +4048,12 @@ label small,
   color: var(--text-muted);
 }
 
-.feedback-status-form {
-  display: grid;
-  grid-template-columns: minmax(12rem, 20rem) auto;
-  align-items: end;
-  justify-content: start;
-  gap: 0.75rem;
+.feedback-links .permission-note {
+  margin: 0;
+}
+
+.feedback-replay-note {
+  max-width: 42rem;
 }
 
 .metrics-overview {
@@ -4426,8 +4445,6 @@ label small,
     grid-column: 2 / -1;
   }
 
-  .feedback-row,
-  .feedback-status-form,
   .explore-builder,
   .explore-chart article {
     grid-template-columns: 1fr;
