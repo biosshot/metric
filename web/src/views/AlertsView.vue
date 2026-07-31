@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -14,6 +15,7 @@ import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const queryClient = useQueryClient();
+const { t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const canAdminister = computed(() => session.has('project:admin'));
 const kind = ref('telegram');
@@ -55,35 +57,35 @@ const destination = reactive({
   smtp_recipients: '',
 });
 
-const kindOptions: SelectOption[] = [
+const kindOptions = computed<SelectOption[]>(() => [
   {
     value: 'telegram',
-    label: 'Telegram',
-    description: 'Send a concise alert through your bot.',
+    label: t('alerts.telegram'),
+    description: t('alerts.telegramHelp'),
     icon: 'telegram',
   },
   {
     value: 'smtp_email',
-    label: 'Email via SMTP',
-    description: 'Works with any TLS-capable SMTP provider.',
+    label: t('alerts.email'),
+    description: t('alerts.emailHelp'),
     icon: 'email',
   },
-];
-const securityOptions: SelectOption[] = [
-  { value: 'starttls', label: 'STARTTLS', description: 'Usually port 587.' },
-  { value: 'tls', label: 'Implicit TLS', description: 'Usually port 465.' },
-];
-const ruleKindOptions: SelectOption[] = [
-  { value: 'issue', label: 'Issue transition', icon: 'bug' },
-  { value: 'aggregate', label: 'Explore threshold', icon: 'gauge' },
-  { value: 'monitor', label: 'Monitor outcome', icon: 'monitors' },
-];
-const datasetOptions: SelectOption[] = [
-  { value: 'errors', label: 'Errors', icon: 'bug' },
-  { value: 'logs', label: 'Logs', icon: 'logs' },
-  { value: 'spans', label: 'Spans', icon: 'traces' },
-  { value: 'metrics', label: 'Metrics', icon: 'gauge' },
-];
+]);
+const securityOptions = computed<SelectOption[]>(() => [
+  { value: 'starttls', label: 'STARTTLS', description: t('alerts.starttlsHelp') },
+  { value: 'tls', label: t('alerts.implicitTls'), description: t('alerts.tlsHelp') },
+]);
+const ruleKindOptions = computed<SelectOption[]>(() => [
+  { value: 'issue', label: t('alerts.issueTransition'), icon: 'bug' },
+  { value: 'aggregate', label: t('alerts.exploreThreshold'), icon: 'gauge' },
+  { value: 'monitor', label: t('alerts.monitorOutcome'), icon: 'monitors' },
+]);
+const datasetOptions = computed<SelectOption[]>(() => [
+  { value: 'errors', label: t('alerts.errors'), icon: 'bug' },
+  { value: 'logs', label: t('alerts.logs'), icon: 'logs' },
+  { value: 'spans', label: t('alerts.spans'), icon: 'traces' },
+  { value: 'metrics', label: t('alerts.metrics'), icon: 'gauge' },
+]);
 
 const destinations = useQuery({
   queryKey: computed(() => ['notification-destinations', projectId.value]),
@@ -199,8 +201,8 @@ const syncTelegram = useMutation({
       ]),
     ];
     telegramSyncNotice.value = value.subscribers.length
-      ? `${value.subscribers.length} Telegram subscriber${value.subscribers.length === 1 ? '' : 's'} connected and selected for the next rule.`
-      : 'No new subscribers found. Open the Telegram link, press Start, then sync again.';
+      ? t('alerts.subscribersConnected', value.subscribers.length)
+      : t('alerts.noSubscribers');
     await queryClient.invalidateQueries({
       queryKey: ['notification-destinations', projectId.value],
     });
@@ -308,16 +310,41 @@ function renewTelegramLink(): void {
 }
 
 function maskedDestinationEndpoint(endpoint: string): string {
-  return endpoint.length > 4 ? `Subscriber ••••${endpoint.slice(-4)}` : 'Telegram subscriber';
+  return endpoint.length > 4
+    ? t('alerts.subscriberMasked', { suffix: endpoint.slice(-4) })
+    : t('alerts.telegramSubscriber');
+}
+
+function triggerLabel(value: string): string {
+  const keys: Record<string, string> = {
+    new_issue: 'alerts.newIssue',
+    regression: 'alerts.regression',
+    resolved: 'alerts.resolved',
+  };
+  return keys[value] ? t(keys[value]) : value.replaceAll('_', ' ');
+}
+
+function outcomeLabel(value: string): string {
+  const keys: Record<string, string> = {
+    error: 'alerts.error',
+    timeout: 'alerts.timeout',
+    missed: 'alerts.missed',
+  };
+  return keys[value] ? t(keys[value]) : value.replaceAll('_', ' ');
+}
+
+function datasetLabel(value: string): string {
+  const key = `alerts.${value}`;
+  return t(key);
 }
 </script>
 
 <template>
   <section class="page-heading">
     <div>
-      <p class="eyebrow">Reliable delivery</p>
-      <h1>Alerts</h1>
-      <p>Route Issue alerts through Telegram or your own SMTP server.</p>
+      <p class="eyebrow">{{ $t('alerts.eyebrow') }}</p>
+      <h1>{{ $t('alerts.title') }}</h1>
+      <p>{{ $t('alerts.description') }}</p>
     </div>
     <StatusBadge status="durable_outbox" />
   </section>
@@ -325,13 +352,13 @@ function maskedDestinationEndpoint(endpoint: string): string {
   <EmptyState
     v-if="!canAdminister"
     icon="shield"
-    title="Alert administration is restricted"
-    description="Your member role can observe project signals, but destinations, delivery credentials, and alert rules require project administration permission."
+    :title="$t('alerts.restricted')"
+    :description="$t('alerts.restrictedDescription')"
   />
   <ApiErrorPanel
     v-else-if="destinations.error.value || rules.error.value"
     :error="destinations.error.value || rules.error.value"
-    title="Alert configuration was not loaded"
+    :title="$t('alerts.loadFailed')"
     @retry="
       destinations.refetch();
       rules.refetch();
@@ -339,7 +366,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
   />
   <LoadingPanel
     v-else-if="destinations.isLoading.value || rules.isLoading.value"
-    label="Loading alert configuration…"
+    :label="$t('alerts.loading')"
   />
   <template v-else>
     <section class="panel">
@@ -347,9 +374,9 @@ function maskedDestinationEndpoint(endpoint: string): string {
         <div class="section-heading__content">
           <span class="section-icon section-icon--info"><AppIcon name="alerts" /></span>
           <div>
-            <p class="eyebrow">Destination</p>
-            <h2>Add a delivery channel</h2>
-            <p>Credentials are encrypted before MongoDB storage and never returned by the API.</p>
+            <p class="eyebrow">{{ $t('alerts.destination') }}</p>
+            <h2>{{ $t('alerts.addChannel') }}</h2>
+            <p>{{ $t('alerts.credentialsHelp') }}</p>
           </div>
         </div>
       </div>
@@ -363,10 +390,10 @@ function maskedDestinationEndpoint(endpoint: string): string {
         "
         :title="
           kind !== 'telegram'
-            ? 'Email destination was not saved'
+            ? $t('alerts.emailSaveFailed')
             : syncTelegram.error.value
-              ? 'Telegram subscribers were not synced'
-              : 'Telegram bot could not be connected'
+              ? $t('alerts.subscribersSyncFailed')
+              : $t('alerts.botConnectFailed')
         "
       />
       <form
@@ -376,12 +403,12 @@ function maskedDestinationEndpoint(endpoint: string): string {
         <BaseSelect
           :model-value="kind"
           :options="kindOptions"
-          label="Provider"
+          :label="$t('alerts.provider')"
           @update:model-value="kind = $event"
         />
         <template v-if="kind === 'telegram'">
           <label>
-            Bot token
+            {{ $t('alerts.botToken') }}
             <input
               v-model="destination.secret"
               required
@@ -389,10 +416,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
               autocomplete="new-password"
               placeholder="123456:bot-token"
             />
-            <small>
-              Create a bot with @BotFather and paste its token. The token is never returned by the
-              API.
-            </small>
+            <small>{{ $t('alerts.botTokenHelp') }}</small>
           </label>
           <button
             class="button button--primary"
@@ -400,7 +424,9 @@ function maskedDestinationEndpoint(endpoint: string): string {
             :disabled="connectTelegram.isPending.value"
           >
             <AppIcon name="connect" :size="16" />
-            {{ connectTelegram.isPending.value ? 'Checking bot…' : 'Connect bot' }}
+            {{
+              connectTelegram.isPending.value ? $t('alerts.checkingBot') : $t('alerts.connectBot')
+            }}
           </button>
           <section v-if="telegramBot" class="telegram-pairing">
             <div class="telegram-pairing__identity">
@@ -409,18 +435,19 @@ function maskedDestinationEndpoint(endpoint: string): string {
               </span>
               <span>
                 <strong>{{ telegramBot.display_name }}</strong>
-                <small>@{{ telegramBot.username }} is ready to accept subscribers.</small>
+                <small>{{ $t('alerts.botReady', { username: telegramBot.username }) }}</small>
               </span>
             </div>
             <div>
-              <p class="eyebrow">Subscriber link</p>
-              <h3>No chat ID required</h3>
-              <p>
-                Share this link with the people who should receive alerts. Each person opens it and
-                presses Start; Metric discovers only subscribers using this exact link.
-              </p>
+              <p class="eyebrow">{{ $t('alerts.subscriberLink') }}</p>
+              <h3>{{ $t('alerts.noChatId') }}</h3>
+              <p>{{ $t('alerts.subscriberHelp') }}</p>
             </div>
-            <CodeBlock :code="telegramStartUrl" language="text" title="Telegram start link" />
+            <CodeBlock
+              :code="telegramStartUrl"
+              language="text"
+              :title="$t('alerts.telegramLink')"
+            />
             <div class="button-row">
               <a
                 class="button button--primary"
@@ -429,11 +456,11 @@ function maskedDestinationEndpoint(endpoint: string): string {
                 rel="noreferrer"
               >
                 <AppIcon name="telegram" :size="16" />
-                Open in Telegram
+                {{ $t('alerts.openTelegram') }}
               </a>
               <button class="button button--secondary" type="button" @click="renewTelegramLink">
                 <AppIcon name="refresh" :size="16" />
-                New link
+                {{ $t('alerts.newLink') }}
               </button>
               <button
                 class="button button--secondary"
@@ -442,7 +469,9 @@ function maskedDestinationEndpoint(endpoint: string): string {
                 @click="syncTelegram.mutate()"
               >
                 <AppIcon name="users" :size="16" />
-                {{ syncTelegram.isPending.value ? 'Syncing…' : 'Sync subscribers' }}
+                {{
+                  syncTelegram.isPending.value ? $t('alerts.syncing') : $t('alerts.syncSubscribers')
+                }}
               </button>
             </div>
             <p v-if="telegramSyncNotice" class="success-notice" role="status">
@@ -454,23 +483,23 @@ function maskedDestinationEndpoint(endpoint: string): string {
         <template v-else>
           <div class="form-grid">
             <label>
-              SMTP host
+              {{ $t('alerts.smtpHost') }}
               <input v-model="destination.endpoint" required placeholder="smtp.example.com" />
             </label>
             <label>
-              SMTP password
+              {{ $t('alerts.smtpPassword') }}
               <input
                 v-model="destination.secret"
                 required
                 type="password"
                 autocomplete="new-password"
-                placeholder="App password"
+                :placeholder="$t('alerts.appPassword')"
               />
             </label>
           </div>
           <div class="form-grid form-grid--three">
             <label>
-              Port
+              {{ $t('alerts.port') }}
               <input
                 v-model.number="destination.smtp_port"
                 required
@@ -482,17 +511,17 @@ function maskedDestinationEndpoint(endpoint: string): string {
             <BaseSelect
               :model-value="destination.smtp_security"
               :options="securityOptions"
-              label="Transport security"
+              :label="$t('alerts.transportSecurity')"
               @update:model-value="destination.smtp_security = $event"
             />
             <label>
-              Username
+              {{ $t('alerts.username') }}
               <input v-model="destination.smtp_username" required autocomplete="username" />
             </label>
           </div>
           <div class="form-grid">
             <label>
-              From
+              {{ $t('alerts.from') }}
               <input
                 v-model="destination.smtp_from"
                 required
@@ -501,36 +530,38 @@ function maskedDestinationEndpoint(endpoint: string): string {
               />
             </label>
             <label>
-              Additional recipients
+              {{ $t('alerts.recipients') }}
               <input
                 v-model="destination.smtp_recipients"
                 placeholder="external-oncall@example.com"
               />
-              <small>Optional comma-separated addresses outside the organization.</small>
+              <small>{{ $t('alerts.recipientsHelp') }}</small>
             </label>
           </div>
           <div class="notification-audience">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Organization audience</p>
-                <h3>Email participants</h3>
-                <p>Select organization members instead of copying their email addresses.</p>
+                <p class="eyebrow">{{ $t('alerts.audience') }}</p>
+                <h3>{{ $t('alerts.participants') }}</h3>
+                <p>{{ $t('alerts.participantsHelp') }}</p>
               </div>
               <button class="button button--secondary" type="button" @click="toggleAllMembers">
                 <AppIcon name="organization" :size="16" />
                 {{
-                  selectedMemberIds.length === activeMembers.length ? 'Clear members' : 'Select all'
+                  selectedMemberIds.length === activeMembers.length
+                    ? $t('alerts.clearMembers')
+                    : $t('alerts.selectAll')
                 }}
               </button>
             </div>
             <LoadingPanel
               v-if="organizationMembers.isPending.value"
-              label="Loading organization members…"
+              :label="$t('alerts.loadingMembers')"
             />
             <ApiErrorPanel
               v-else-if="organizationMembers.error.value"
               :error="organizationMembers.error.value"
-              title="Organization members were not loaded"
+              :title="$t('alerts.membersFailed')"
               @retry="organizationMembers.refetch()"
             />
             <div v-else class="notification-member-grid">
@@ -543,12 +574,12 @@ function maskedDestinationEndpoint(endpoint: string): string {
                 />
                 <span>
                   <strong>{{ member.display_name }}</strong>
-                  <small>{{ member.email }} · {{ member.role }}</small>
+                  <small>{{ member.email }} · {{ $t(`organization.${member.role}`) }}</small>
                 </span>
               </label>
             </div>
             <p class="field-help">
-              {{ smtpRecipients.length }} of 16 recipient addresses selected.
+              {{ $t('alerts.recipientsSelected', { count: smtpRecipients.length }) }}
             </p>
           </div>
           <button
@@ -557,7 +588,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
             :disabled="saveDestination.isPending.value || smtpRecipients.length === 0"
           >
             <AppIcon name="email" :size="16" />
-            {{ saveDestination.isPending.value ? 'Saving…' : 'Save email destination' }}
+            {{ saveDestination.isPending.value ? $t('alerts.saving') : $t('alerts.saveEmail') }}
           </button>
         </template>
       </form>
@@ -565,7 +596,9 @@ function maskedDestinationEndpoint(endpoint: string): string {
         <article v-for="item in destinations.data.value.items" :key="item.id">
           <AppIcon :name="item.kind === 'telegram' ? 'telegram' : 'email'" />
           <span>
-            <strong>{{ item.kind === 'telegram' ? 'Telegram' : 'SMTP Email' }}</strong>
+            <strong>{{
+              item.kind === 'telegram' ? $t('alerts.telegram') : $t('alerts.smtpEmail')
+            }}</strong>
             <small>
               {{
                 item.kind === 'telegram' ? maskedDestinationEndpoint(item.endpoint) : item.endpoint
@@ -579,60 +612,67 @@ function maskedDestinationEndpoint(endpoint: string): string {
             @click="testDestination.mutate(item.id)"
           >
             <AppIcon name="telegram" :size="15" />
-            Send test
+            {{ $t('alerts.sendTest') }}
           </button>
         </article>
       </div>
       <ApiErrorPanel
         v-if="testDestination.error.value"
         :error="testDestination.error.value"
-        title="Test notification was not queued"
+        :title="$t('alerts.testFailed')"
       />
     </section>
 
     <section class="panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Issue rule</p>
-          <h2>Choose when to notify</h2>
-          <p>One rule can fan out to several provider types without duplicate Issue logic.</p>
+          <p class="eyebrow">{{ $t('alerts.issueRule') }}</p>
+          <h2>{{ $t('alerts.chooseWhen') }}</h2>
+          <p>{{ $t('alerts.ruleHelp') }}</p>
         </div>
       </div>
       <ApiErrorPanel
         v-if="saveRule.error.value"
         :error="saveRule.error.value"
-        title="Alert rule was not saved"
+        :title="$t('alerts.ruleSaveFailed')"
       />
       <EmptyState
         v-if="!destinations.data.value?.items.length"
         icon="alerts"
-        title="Add a destination first"
-        description="Rules remain separate from credentials, so destinations can be reused."
+        :title="$t('alerts.addDestination')"
+        :description="$t('alerts.addDestinationHelp')"
       />
       <form v-else class="settings-form" @submit.prevent="saveRule.mutate()">
         <label>
-          Rule name
-          <input v-model="ruleName" required placeholder="Production Issue alerts" />
+          {{ $t('alerts.ruleName') }}
+          <input v-model="ruleName" required :placeholder="$t('alerts.rulePlaceholder')" />
         </label>
         <BaseSelect
           :model-value="ruleKind"
           :options="ruleKindOptions"
-          label="Rule type"
+          :label="$t('alerts.ruleType')"
           @update:model-value="ruleKind = $event"
         />
         <div v-if="ruleKind === 'issue'" class="alert-trigger-grid">
           <label class="choice-card">
             <input v-model="triggers.new_issue" type="checkbox" />
-            <span><strong>New Issue</strong><small>Notify on the first occurrence.</small></span>
+            <span
+              ><strong>{{ $t('alerts.newIssue') }}</strong
+              ><small>{{ $t('alerts.newIssueHelp') }}</small></span
+            >
           </label>
           <label class="choice-card">
             <input v-model="triggers.resolved" type="checkbox" />
-            <span><strong>Resolved</strong><small>Notify when an Issue is closed.</small></span>
+            <span
+              ><strong>{{ $t('alerts.resolved') }}</strong
+              ><small>{{ $t('alerts.resolvedHelp') }}</small></span
+            >
           </label>
           <label class="choice-card">
             <input v-model="triggers.regression" type="checkbox" />
             <span
-              ><strong>Regression</strong><small>Notify when a resolved Issue returns.</small></span
+              ><strong>{{ $t('alerts.regression') }}</strong
+              ><small>{{ $t('alerts.regressionHelp') }}</small></span
             >
           </label>
         </div>
@@ -641,15 +681,15 @@ function maskedDestinationEndpoint(endpoint: string): string {
             <BaseSelect
               :model-value="aggregateRule.dataset"
               :options="datasetOptions"
-              label="Dataset"
+              :label="$t('alerts.dataset')"
               @update:model-value="aggregateRule.dataset = $event"
             />
             <label>
-              Count threshold
+              {{ $t('alerts.threshold') }}
               <input v-model.number="aggregateRule.threshold" type="number" min="1" required />
             </label>
             <label>
-              Lookback (minutes)
+              {{ $t('alerts.lookback') }}
               <input
                 v-model.number="aggregateRule.lookback_minutes"
                 type="number"
@@ -661,7 +701,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
           </div>
           <div class="form-grid form-grid--three">
             <label>
-              Evaluate every (minutes)
+              {{ $t('alerts.evaluateEvery') }}
               <input
                 v-model.number="aggregateRule.evaluation_interval_minutes"
                 type="number"
@@ -671,7 +711,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
               />
             </label>
             <label>
-              Cooldown (minutes)
+              {{ $t('alerts.cooldown') }}
               <input
                 v-model.number="aggregateRule.cooldown_minutes"
                 type="number"
@@ -681,7 +721,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
               />
             </label>
             <label>
-              Storm limit / hour
+              {{ $t('alerts.stormLimit') }}
               <input
                 v-model.number="aggregateRule.storm_limit_per_hour"
                 type="number"
@@ -693,19 +733,22 @@ function maskedDestinationEndpoint(endpoint: string): string {
           </div>
           <div v-if="aggregateRule.dataset !== 'errors'" class="form-grid">
             <label>
-              Environment predicate
-              <input v-model="aggregateRule.environment" placeholder="production (optional)" />
+              {{ $t('alerts.environmentPredicate') }}
+              <input
+                v-model="aggregateRule.environment"
+                :placeholder="$t('alerts.optionalProduction')"
+              />
             </label>
             <label>
-              Release predicate
-              <input v-model="aggregateRule.release" placeholder="2026.07.27 (optional)" />
+              {{ $t('alerts.releasePredicate') }}
+              <input v-model="aggregateRule.release" :placeholder="$t('alerts.optionalRelease')" />
             </label>
           </div>
           <label class="choice-card">
             <input v-model="aggregateRule.notify_resolved" type="checkbox" />
             <span
-              ><strong>Recovery notification</strong
-              ><small>Notify after the count drops below threshold.</small></span
+              ><strong>{{ $t('alerts.recovery') }}</strong
+              ><small>{{ $t('alerts.recoveryHelp') }}</small></span
             >
           </label>
         </div>
@@ -713,38 +756,44 @@ function maskedDestinationEndpoint(endpoint: string): string {
           <EmptyState
             v-if="!monitorOptions.length"
             icon="monitors"
-            title="Create a cron monitor first"
-            description="Monitor alerts reference a stable monitor definition."
+            :title="$t('alerts.createMonitorFirst')"
+            :description="$t('alerts.createMonitorFirstHelp')"
           />
           <template v-else>
             <BaseSelect
               :model-value="monitorRule.monitor_id"
               :options="monitorOptions"
-              label="Monitor"
+              :label="$t('alerts.monitor')"
               @update:model-value="monitorRule.monitor_id = $event"
             />
             <div class="alert-trigger-grid">
               <label class="choice-card">
                 <input v-model="monitorRule.error" type="checkbox" />
-                <span><strong>Error</strong><small>The job explicitly failed.</small></span>
+                <span
+                  ><strong>{{ $t('alerts.error') }}</strong
+                  ><small>{{ $t('alerts.errorHelp') }}</small></span
+                >
               </label>
               <label class="choice-card">
                 <input v-model="monitorRule.timeout" type="checkbox" />
-                <span><strong>Timeout</strong><small>An active run exceeded runtime.</small></span>
+                <span
+                  ><strong>{{ $t('alerts.timeout') }}</strong
+                  ><small>{{ $t('alerts.timeoutHelp') }}</small></span
+                >
               </label>
               <label class="choice-card">
                 <input v-model="monitorRule.missed" type="checkbox" />
                 <span
-                  ><strong>Missed</strong
-                  ><small>No check-in arrived within the margin.</small></span
+                  ><strong>{{ $t('alerts.missed') }}</strong
+                  ><small>{{ $t('alerts.missedHelp') }}</small></span
                 >
               </label>
             </div>
             <label class="choice-card">
               <input v-model="monitorRule.notify_resolved" type="checkbox" />
               <span
-                ><strong>Recovery notification</strong
-                ><small>Notify when a failing Uptime monitor becomes healthy.</small></span
+                ><strong>{{ $t('alerts.recovery') }}</strong
+                ><small>{{ $t('alerts.monitorRecoveryHelp') }}</small></span
               >
             </label>
           </template>
@@ -760,7 +809,9 @@ function maskedDestinationEndpoint(endpoint: string): string {
           >
             <AppIcon :name="item.kind === 'telegram' ? 'telegram' : 'email'" />
             <span>
-              <strong>{{ item.kind === 'telegram' ? 'Telegram' : 'SMTP Email' }}</strong>
+              <strong>{{
+                item.kind === 'telegram' ? $t('alerts.telegram') : $t('alerts.smtpEmail')
+              }}</strong>
               <small>{{ item.endpoint }}</small>
             </span>
             <AppIcon v-if="selectedDestinations.includes(item.id)" name="check" />
@@ -782,7 +833,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
           "
         >
           <AppIcon name="save" :size="16" />
-          {{ saveRule.isPending.value ? 'Saving…' : 'Create rule' }}
+          {{ saveRule.isPending.value ? $t('alerts.saving') : $t('alerts.createRule') }}
         </button>
       </form>
     </section>
@@ -790,15 +841,15 @@ function maskedDestinationEndpoint(endpoint: string): string {
     <section class="panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Active configuration</p>
-          <h2>Rules</h2>
+          <p class="eyebrow">{{ $t('alerts.activeConfiguration') }}</p>
+          <h2>{{ $t('alerts.rules') }}</h2>
         </div>
       </div>
       <EmptyState
         v-if="!rules.data.value?.items.length"
         icon="alerts"
-        title="No alert rules yet"
-        description="Create a rule above; delivery history will use the existing durable outbox."
+        :title="$t('alerts.noRules')"
+        :description="$t('alerts.noRulesHelp')"
       />
       <div v-else class="alert-rule-list">
         <article v-for="rule in rules.data.value?.items" :key="rule.id" class="alert-rule-card">
@@ -808,10 +859,16 @@ function maskedDestinationEndpoint(endpoint: string): string {
             <p>
               {{
                 rule.monitor
-                  ? `cron outcomes: ${rule.monitor.outcomes.join(' / ')}`
+                  ? $t('alerts.cronOutcomes', {
+                      outcomes: rule.monitor.outcomes.map(outcomeLabel).join(' / '),
+                    })
                   : rule.aggregate
-                    ? `${rule.aggregate.dataset} count ≥ ${rule.aggregate.threshold} / ${rule.aggregate.lookback_minutes}m`
-                    : rule.triggers.join(' · ').replaceAll('_', ' ')
+                    ? $t('alerts.aggregateSummary', {
+                        dataset: datasetLabel(rule.aggregate.dataset),
+                        threshold: rule.aggregate.threshold,
+                        minutes: rule.aggregate.lookback_minutes,
+                      })
+                    : rule.triggers.map(triggerLabel).join(' · ')
               }}
             </p>
           </div>
@@ -823,16 +880,16 @@ function maskedDestinationEndpoint(endpoint: string): string {
     <section class="panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Durable history</p>
-          <h2>Recent deliveries</h2>
-          <p>Attempts and terminal provider errors remain visible across restarts.</p>
+          <p class="eyebrow">{{ $t('alerts.durableHistory') }}</p>
+          <h2>{{ $t('alerts.deliveries') }}</h2>
+          <p>{{ $t('alerts.deliveriesHelp') }}</p>
         </div>
       </div>
       <EmptyState
         v-if="!deliveries.data.value?.items.length"
         icon="history"
-        title="No deliveries yet"
-        description="Send a test or wait for a matching alert."
+        :title="$t('alerts.noDeliveries')"
+        :description="$t('alerts.noDeliveriesHelp')"
       />
       <div v-else class="alert-rule-list">
         <article
@@ -844,7 +901,7 @@ function maskedDestinationEndpoint(endpoint: string): string {
           <div>
             <strong>{{ delivery.id.slice(0, 12) }}</strong>
             <p>
-              {{ delivery.attempts }} attempt{{ delivery.attempts === 1 ? '' : 's' }}
+              {{ $t('alerts.attempts', delivery.attempts) }}
               <template v-if="delivery.last_error"> В· {{ delivery.last_error }}</template>
             </p>
           </div>

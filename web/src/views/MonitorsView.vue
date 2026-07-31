@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import type { CronMonitor, MonitorInput, MonitorRun } from '../api/types';
@@ -15,6 +16,7 @@ import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const selectedMonitorId = ref('');
 const editorOpen = ref(false);
@@ -29,45 +31,45 @@ const slugWasEdited = ref(false);
 const customHistoryFrom = ref(localDateTime(Date.now() - 7 * 24 * 60 * 60 * 1_000));
 const customHistoryUntil = ref(localDateTime(Date.now()));
 const customHistoryError = ref('');
-const kindOptions: SelectOption[] = [
+const kindOptions = computed<SelectOption[]>(() => [
   {
     value: 'cron',
-    label: 'Cron check-in',
-    description: 'SDK reports job state.',
+    label: t('monitors.cronCheckIn'),
+    description: t('monitors.cronCheckInHelp'),
     icon: 'monitors',
   },
   {
     value: 'uptime',
-    label: 'Uptime HTTP',
-    description: 'Faultkeep performs a safe GET or HEAD.',
+    label: t('monitors.uptimeHttp'),
+    description: t('monitors.uptimeHttpHelp'),
     icon: 'activity',
   },
-];
-const methodOptions: SelectOption[] = [
-  { value: 'GET', label: 'GET', description: 'Read a bounded response.', icon: 'activity' },
-  { value: 'HEAD', label: 'HEAD', description: 'Headers only.', icon: 'activity' },
-];
-const scheduleTypeOptions: SelectOption[] = [
+]);
+const methodOptions = computed<SelectOption[]>(() => [
+  { value: 'GET', label: 'GET', description: t('monitors.getHelp'), icon: 'activity' },
+  { value: 'HEAD', label: 'HEAD', description: t('monitors.headHelp'), icon: 'activity' },
+]);
+const scheduleTypeOptions = computed<SelectOption[]>(() => [
   {
     value: 'crontab',
-    label: 'Cron expression (UTC)',
-    description: 'Five numeric fields: minute, hour, day, month, weekday.',
+    label: t('monitors.cronExpression'),
+    description: t('monitors.cronExpressionHelp'),
     icon: 'monitors',
   },
   {
     value: 'interval',
-    label: 'Interval in minutes',
-    description: 'Run every fixed number of minutes.',
+    label: t('monitors.intervalMinutes'),
+    description: t('monitors.intervalMinutesHelp'),
     icon: 'refresh',
   },
-];
-const historyRangeOptions: SelectOption[] = [
-  { value: 'all', label: 'All time', icon: 'history' },
-  { value: '24h', label: 'Last 24 hours', icon: 'history' },
-  { value: '7d', label: 'Last 7 days', icon: 'history' },
-  { value: '30d', label: 'Last 30 days', icon: 'history' },
-  { value: 'custom', label: 'Custom period', icon: 'settings' },
-];
+]);
+const historyRangeOptions = computed<SelectOption[]>(() => [
+  { value: 'all', label: t('timeRange.all'), icon: 'history' },
+  { value: '24h', label: t('timeRange.hours24'), icon: 'history' },
+  { value: '7d', label: t('timeRange.days7'), icon: 'history' },
+  { value: '30d', label: t('timeRange.days30'), icon: 'history' },
+  { value: 'custom', label: t('monitors.customPeriod'), icon: 'settings' },
+]);
 const historyRangeMillis: Record<string, number> = {
   '24h': 24 * 60 * 60 * 1_000,
   '7d': 7 * 24 * 60 * 60 * 1_000,
@@ -103,7 +105,7 @@ const selectedMonitor = computed(
     monitors.data.value?.items.find((monitor) => monitor.id === selectedMonitorId.value) ?? null,
 );
 const monitorDefinitionOptions = computed<SelectOption[]>(() => [
-  { value: '', label: 'New monitor', icon: 'plus' },
+  { value: '', label: t('monitors.newMonitor'), icon: 'plus' },
   ...(monitors.data.value?.items ?? []).map((monitor) => ({
     value: monitor.id,
     label: monitor.name,
@@ -295,8 +297,8 @@ function setKind(kind: MonitorInput['kind']): void {
 }
 
 function timestamp(value: string | null): string {
-  if (!value) return 'Not observed';
-  return new Intl.DateTimeFormat(undefined, {
+  if (!value) return t('monitors.notObserved');
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'medium',
   }).format(new Date(value));
@@ -305,7 +307,23 @@ function timestamp(value: string | null): string {
 function duration(value: number | null): string {
   if (value === null) return '—';
   if (value < 1_000) return `${value} ms`;
-  return `${(value / 1_000).toFixed(2)} s`;
+  return `${new Intl.NumberFormat(locale.value, { maximumFractionDigits: 2 }).format(
+    value / 1_000,
+  )} s`;
+}
+
+function runStatusLabel(status: string): string {
+  return t(`status.${status}`);
+}
+
+function historyRangeLabel(): string {
+  return (
+    historyRangeOptions.value.find((option) => option.value === historyRange.value)?.label ?? ''
+  );
+}
+
+function managerLabel(manager: CronMonitor['managed_by']): string {
+  return t(manager === 'sdk' ? 'monitors.managedSdk' : 'monitors.managedWeb');
 }
 
 function runBarHeight(run: MonitorRun): string {
@@ -342,7 +360,7 @@ function applyCustomHistory(): void {
   const from = new Date(customHistoryFrom.value).getTime();
   const until = new Date(customHistoryUntil.value).getTime();
   if (!Number.isFinite(from) || !Number.isFinite(until) || from >= until) {
-    customHistoryError.value = 'Choose a valid start before the end of the period.';
+    customHistoryError.value = t('monitors.invalidPeriod');
     return;
   }
   customHistoryError.value = '';
@@ -370,9 +388,11 @@ function storedHistoryView(): 'list' | 'chart' {
   <section class="monitors-page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / scheduled jobs</p>
-        <h1>Monitors</h1>
-        <p>Track SDK cron jobs and safe server-originated HTTP uptime checks.</p>
+        <p class="eyebrow">
+          {{ $t('monitors.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('monitors.title') }}</h1>
+        <p>{{ $t('monitors.description') }}</p>
       </div>
       <button
         v-if="session.has('project:admin')"
@@ -382,7 +402,7 @@ function storedHistoryView(): 'list' | 'chart' {
         @click="toggleEditor"
       >
         <AppIcon :name="editorOpen ? 'close' : 'plus'" :size="16" />
-        {{ editorOpen ? 'Close editor' : 'Manage monitors' }}
+        {{ editorOpen ? $t('monitors.closeEditor') : $t('monitors.manage') }}
       </button>
     </header>
 
@@ -390,20 +410,20 @@ function storedHistoryView(): 'list' | 'chart' {
       v-if="monitors.error.value"
       class="monitor-error"
       :error="monitors.error.value"
-      title="Cron monitors could not be loaded"
+      :title="$t('monitors.loadFailed')"
       @retry="monitors.refetch()"
     />
     <ApiErrorPanel
       v-if="saveMonitor.error.value"
       class="monitor-error"
       :error="saveMonitor.error.value"
-      title="Cron monitor was not saved"
+      :title="$t('monitors.saveFailed')"
     />
     <ApiErrorPanel
       v-if="deleteMonitor.error.value"
       class="monitor-error"
       :error="deleteMonitor.error.value"
-      title="Monitor deletion failed"
+      :title="$t('monitors.deleteFailed')"
     />
 
     <form
@@ -415,31 +435,31 @@ function storedHistoryView(): 'list' | 'chart' {
         <div class="section-heading__content">
           <span class="section-icon section-icon--info"><AppIcon name="monitors" /></span>
           <div>
-            <p class="eyebrow">Definition</p>
-            <h2>Create or update a monitor</h2>
-            <p>The same slug and environment update one stable monitor.</p>
+            <p class="eyebrow">{{ $t('monitors.definition') }}</p>
+            <h2>{{ $t('monitors.createOrUpdate') }}</h2>
+            <p>{{ $t('monitors.stableIdentity') }}</p>
           </div>
         </div>
       </div>
       <BaseSelect
         :model-value="selectedMonitorId"
         :options="monitorDefinitionOptions"
-        label="Monitor definition"
+        :label="$t('monitors.monitorDefinition')"
         @update:model-value="manageMonitor"
       />
       <div class="form-grid form-grid--three">
         <BaseSelect
           :model-value="form.kind"
           :options="kindOptions"
-          label="Monitor type"
+          :label="$t('monitors.monitorType')"
           @update:model-value="setKind($event as MonitorInput['kind'])"
         />
         <label>
-          Name
+          {{ $t('monitors.name') }}
           <input v-model.trim="form.name" maxlength="128" required placeholder="Nightly backup" />
         </label>
         <label>
-          Slug
+          {{ $t('monitors.slug') }}
           <input
             v-model.trim="form.slug"
             maxlength="64"
@@ -449,7 +469,7 @@ function storedHistoryView(): 'list' | 'chart' {
           />
         </label>
         <label>
-          Environment
+          {{ $t('monitors.environment') }}
           <input v-model.trim="form.environment" maxlength="64" required placeholder="production" />
         </label>
       </div>
@@ -457,11 +477,15 @@ function storedHistoryView(): 'list' | 'chart' {
         <BaseSelect
           :model-value="form.schedule_type"
           :options="scheduleTypeOptions"
-          label="Schedule type"
+          :label="$t('monitors.scheduleType')"
           @update:model-value="form.schedule_type = $event as MonitorInput['schedule_type']"
         />
         <label>
-          {{ form.schedule_type === 'crontab' ? 'Cron expression (UTC)' : 'Interval minutes' }}
+          {{
+            form.schedule_type === 'crontab'
+              ? $t('monitors.cronExpression')
+              : $t('monitors.intervalLabel')
+          }}
           <input
             v-model.trim="form.schedule"
             required
@@ -471,77 +495,81 @@ function storedHistoryView(): 'list' | 'chart' {
       </div>
       <div v-else class="form-grid">
         <label>
-          Public HTTP(S) endpoint
+          {{ $t('monitors.endpoint') }}
           <input v-model.trim="form.endpoint" type="url" maxlength="2048" required />
-          <small
-            >Private, loopback, link-local and metadata addresses are rejected on every hop.</small
-          >
+          <small>{{ $t('monitors.endpointHelp') }}</small>
         </label>
         <BaseSelect
           :model-value="form.method ?? 'GET'"
           :options="methodOptions"
-          label="Method"
+          :label="$t('monitors.method')"
           @update:model-value="form.method = $event as 'GET' | 'HEAD'"
         />
       </div>
       <div class="form-grid form-grid--three">
         <label v-if="form.kind === 'cron'">
-          Check-in margin, seconds
+          {{ $t('monitors.margin') }}
           <input v-model.number="form.checkin_margin_seconds" type="number" min="0" required />
         </label>
         <label v-if="form.kind === 'cron'">
-          Maximum runtime, seconds
+          {{ $t('monitors.maxRuntime') }}
           <input v-model.number="form.max_runtime_seconds" type="number" min="1" required />
         </label>
         <label class="check-control monitor-form__enabled">
           <input v-model="form.enabled" type="checkbox" />
-          <span><strong>Enabled</strong><small>Pause without deleting history.</small></span>
+          <span
+            ><strong>{{ $t('monitors.enabled') }}</strong
+            ><small>{{ $t('monitors.enabledHelp') }}</small></span
+          >
         </label>
       </div>
       <template v-if="form.kind === 'uptime'">
         <div class="form-grid form-grid--three">
-          <label
-            >Expected from<input
+          <label>
+            {{ $t('monitors.expectedFrom')
+            }}<input
               v-model.number="form.expected_status_min"
               type="number"
               min="100"
               max="599"
               required
-          /></label>
-          <label
-            >Expected through<input
+            />
+          </label>
+          <label>
+            {{ $t('monitors.expectedThrough')
+            }}<input
               v-model.number="form.expected_status_max"
               type="number"
               min="100"
               max="599"
               required
-          /></label>
-          <label
-            >Timeout, seconds<input
+            />
+          </label>
+          <label>
+            {{ $t('monitors.timeoutSeconds')
+            }}<input
               v-model.number="form.timeout_seconds"
               type="number"
               min="1"
               max="120"
               required
-          /></label>
+            />
+          </label>
         </div>
         <div class="form-grid">
-          <label
-            >Interval, minutes<input v-model.trim="form.schedule" required placeholder="5"
-          /></label>
-          <label
-            >Maximum redirects<input
-              v-model.number="form.max_redirects"
-              type="number"
-              min="0"
-              max="3"
-              required
-          /></label>
+          <label>
+            {{ $t('monitors.interval')
+            }}<input v-model.trim="form.schedule" required placeholder="5" />
+          </label>
+          <label>
+            {{ $t('monitors.maxRedirects')
+            }}<input v-model.number="form.max_redirects" type="number" min="0" max="3" required />
+          </label>
         </div>
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Write-only custom headers</p>
-            <p>Values are sealed. A blank value removes that header when you save.</p>
+            <p class="eyebrow">{{ $t('monitors.customHeaders') }}</p>
+            <p>{{ $t('monitors.customHeadersHelp') }}</p>
           </div>
           <button
             class="button button--secondary button--fit"
@@ -549,7 +577,7 @@ function storedHistoryView(): 'list' | 'chart' {
             :disabled="form.headers.length >= 16"
             @click="addHeader"
           >
-            <AppIcon name="plus" :size="16" /> Add header
+            <AppIcon name="plus" :size="16" /> {{ $t('monitors.addHeader') }}
           </button>
         </div>
         <div
@@ -557,26 +585,26 @@ function storedHistoryView(): 'list' | 'chart' {
           :key="index"
           class="form-grid form-grid--three"
         >
-          <label
-            >Header name<input
-              v-model.trim="header.name"
-              maxlength="64"
-              placeholder="authorization"
-          /></label>
-          <label
-            >Secret value<input
+          <label>
+            {{ $t('monitors.headerName')
+            }}<input v-model.trim="header.name" maxlength="64" placeholder="authorization" />
+          </label>
+          <label>
+            {{ $t('monitors.secretValue')
+            }}<input
               v-model="header.value"
               type="password"
               maxlength="2048"
               autocomplete="new-password"
-              placeholder="Write-only"
-          /></label>
+              :placeholder="$t('monitors.writeOnly')"
+            />
+          </label>
           <button
             class="button button--secondary button--fit"
             type="button"
             @click="removeHeader(index)"
           >
-            <AppIcon name="delete" :size="16" /> Remove
+            <AppIcon name="delete" :size="16" /> {{ $t('monitors.remove') }}
           </button>
         </div>
       </template>
@@ -587,7 +615,7 @@ function storedHistoryView(): 'list' | 'chart' {
           :disabled="saveMonitor.isPending.value"
         >
           <AppIcon name="save" :size="16" />
-          {{ saveMonitor.isPending.value ? 'Saving…' : 'Save monitor' }}
+          {{ saveMonitor.isPending.value ? $t('monitors.saving') : $t('monitors.save') }}
         </button>
         <button
           v-if="selectedMonitor"
@@ -597,7 +625,11 @@ function storedHistoryView(): 'list' | 'chart' {
           @click="confirmDelete(selectedMonitor.id)"
         >
           <AppIcon name="delete" :size="15" />
-          {{ deleteConfirmationId === selectedMonitor.id ? 'Confirm delete' : 'Delete monitor' }}
+          {{
+            deleteConfirmationId === selectedMonitor.id
+              ? $t('monitors.confirmDelete')
+              : $t('monitors.delete')
+          }}
         </button>
       </div>
     </form>
@@ -605,14 +637,14 @@ function storedHistoryView(): 'list' | 'chart' {
     <LoadingPanel
       v-if="monitors.isPending.value"
       class="monitor-loading"
-      label="Loading cron monitors…"
+      :label="$t('monitors.loading')"
     />
     <EmptyState
       v-else-if="!monitors.data.value?.items.length"
       class="monitor-empty"
       icon="monitors"
-      title="No monitors yet"
-      description="Create an uptime monitor here or send a check_in item with a Sentry SDK."
+      :title="$t('monitors.empty')"
+      :description="$t('monitors.emptyDescription')"
     >
       <button
         v-if="session.has('project:admin')"
@@ -621,12 +653,12 @@ function storedHistoryView(): 'list' | 'chart' {
         @click="editorOpen = true"
       >
         <AppIcon name="plus" :size="16" />
-        Create monitor
+        {{ $t('monitors.create') }}
       </button>
     </EmptyState>
     <div v-else class="monitor-layout">
       <aside class="monitor-browser">
-        <section class="monitor-list" aria-label="Cron monitors">
+        <section class="monitor-list" :aria-label="$t('monitors.listLabel')">
           <button
             v-for="monitor in monitors.data.value?.items"
             :key="monitor.id"
@@ -639,14 +671,14 @@ function storedHistoryView(): 'list' | 'chart' {
             <span class="monitor-card__copy">
               <strong>{{ monitor.name }}</strong>
               <small
-                >{{ monitor.kind === 'uptime' ? 'Uptime' : 'Cron' }} · {{ monitor.slug }} ·
-                {{ monitor.environment }}</small
+                >{{ monitor.kind === 'uptime' ? $t('monitors.uptime') : $t('monitors.cron') }} ·
+                {{ monitor.slug }} · {{ monitor.environment }}</small
               >
             </span>
             <StatusBadge
               :status="monitor.enabled ? (monitor.last_status ?? 'waiting') : 'disabled'"
             />
-            <small>Next {{ timestamp(monitor.next_expected_at) }}</small>
+            <small>{{ $t('monitors.next', { time: timestamp(monitor.next_expected_at) }) }}</small>
           </button>
         </section>
       </aside>
@@ -654,11 +686,15 @@ function storedHistoryView(): 'list' | 'chart' {
       <section v-if="selectedMonitor" class="panel monitor-history">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Run history · TTL retained</p>
+            <p class="eyebrow">{{ $t('monitors.history') }}</p>
             <h2>{{ selectedMonitor.name }}</h2>
             <p>
-              Managed by {{ selectedMonitor.managed_by }} · last check-in
-              {{ timestamp(selectedMonitor.last_check_in_at) }}
+              {{
+                $t('monitors.managed', {
+                  manager: managerLabel(selectedMonitor.managed_by),
+                  time: timestamp(selectedMonitor.last_check_in_at),
+                })
+              }}
             </p>
           </div>
           <div class="monitor-history__actions">
@@ -666,7 +702,7 @@ function storedHistoryView(): 'list' | 'chart' {
           </div>
         </div>
         <div class="monitor-history-controls">
-          <div class="section-tabs" role="group" aria-label="Run history presentation">
+          <div class="section-tabs" role="group" :aria-label="$t('monitors.presentation')">
             <button
               class="button"
               :class="historyView === 'list' ? 'button--primary' : 'button--secondary'"
@@ -675,7 +711,7 @@ function storedHistoryView(): 'list' | 'chart' {
               @click="historyView = 'list'"
             >
               <AppIcon name="clipboard" :size="15" />
-              List
+              {{ $t('monitors.list') }}
             </button>
             <button
               class="button"
@@ -685,14 +721,14 @@ function storedHistoryView(): 'list' | 'chart' {
               @click="historyView = 'chart'"
             >
               <AppIcon name="activity" :size="15" />
-              Timeline
+              {{ $t('monitors.timeline') }}
             </button>
           </div>
           <BaseSelect
             v-model="historyRange"
             class="monitor-history-range"
             :options="historyRangeOptions"
-            aria-label="Run history period"
+            :aria-label="$t('monitors.historyPeriod')"
           />
         </div>
         <form
@@ -701,52 +737,52 @@ function storedHistoryView(): 'list' | 'chart' {
           @submit.prevent="applyCustomHistory"
         >
           <label>
-            From
+            {{ $t('monitors.from') }}
             <input v-model="customHistoryFrom" type="datetime-local" required />
           </label>
           <label>
-            Until
+            {{ $t('monitors.until') }}
             <input v-model="customHistoryUntil" type="datetime-local" required />
           </label>
           <button class="button button--secondary button--fit" type="submit">
             <AppIcon name="search" :size="15" />
-            Apply period
+            {{ $t('monitors.applyPeriod') }}
           </button>
           <small v-if="customHistoryError" class="field-error" role="alert">
             {{ customHistoryError }}
           </small>
         </form>
-        <LoadingPanel v-if="runs.isPending.value" label="Loading run history…" />
+        <LoadingPanel v-if="runs.isPending.value" :label="$t('monitors.loadingHistory')" />
         <ApiErrorPanel
           v-else-if="runs.error.value"
           :error="runs.error.value"
-          title="Run history could not be loaded"
+          :title="$t('monitors.historyFailed')"
           @retry="runs.refetch()"
         />
         <EmptyState
           v-else-if="!runs.data.value?.items.length"
           icon="history"
-          title="No executions recorded"
-          description="The monitor definition exists, but no SDK check-in or scheduler outcome exists yet."
+          :title="$t('monitors.noExecutions')"
+          :description="$t('monitors.noExecutionsHelp')"
         />
         <div v-else-if="historyView === 'list'" class="monitor-run-list-view">
-          <nav class="pagination" aria-label="Run history pages">
+          <nav class="pagination" :aria-label="$t('monitors.historyPages')">
             <button
               class="button button--secondary"
               type="button"
               :disabled="runPageHistory.length === 0"
               @click="previousRunPage"
             >
-              Previous
+              {{ $t('common.previous') }}
             </button>
-            <span>Page {{ runPageHistory.length + 1 }}</span>
+            <span>{{ $t('common.page', { page: runPageHistory.length + 1 }) }}</span>
             <button
               class="button button--secondary"
               type="button"
               :disabled="!runs.data.value?.next_cursor"
               @click="nextRunPage"
             >
-              Next
+              {{ $t('common.next') }}
             </button>
           </nav>
           <ol class="timeline monitor-run-list">
@@ -759,9 +795,13 @@ function storedHistoryView(): 'list' | 'chart' {
                   <span>{{ duration(run.duration_ms) }}</span>
                 </div>
                 <p>
-                  {{ run.source === 'sdk' ? 'Reported by SDK' : 'Detected by scheduler' }}
+                  {{
+                    run.source === 'sdk'
+                      ? $t('monitors.reportedSdk')
+                      : $t('monitors.detectedScheduler')
+                  }}
                   <template v-if="run.scheduled_for">
-                    · scheduled {{ timestamp(run.scheduled_for) }}
+                    · {{ $t('monitors.scheduled', { time: timestamp(run.scheduled_for) }) }}
                   </template>
                 </p>
                 <p v-if="run.http_status || run.uptime_failure">
@@ -774,14 +814,25 @@ function storedHistoryView(): 'list' | 'chart' {
         </div>
         <div v-else class="monitor-run-chart">
           <div class="monitor-run-chart__legend" aria-hidden="true">
-            <span class="monitor-run-chart__key monitor-run-chart__key--success">Success</span>
-            <span class="monitor-run-chart__key monitor-run-chart__key--failure">Failure</span>
-            <span class="monitor-run-chart__key monitor-run-chart__key--progress">In progress</span>
+            <span class="monitor-run-chart__key monitor-run-chart__key--success">
+              {{ $t('monitors.success') }}
+            </span>
+            <span class="monitor-run-chart__key monitor-run-chart__key--failure">
+              {{ $t('monitors.failure') }}
+            </span>
+            <span class="monitor-run-chart__key monitor-run-chart__key--progress">
+              {{ $t('monitors.inProgress') }}
+            </span>
           </div>
           <div
             class="monitor-run-chart__plot"
             role="list"
-            :aria-label="`${chartRuns.length} monitor runs over ${historyRange}`"
+            :aria-label="
+              $t('monitors.chartLabel', {
+                count: chartRuns.length,
+                range: historyRangeLabel(),
+              })
+            "
           >
             <button
               v-for="run in chartRuns"
@@ -794,9 +845,21 @@ function storedHistoryView(): 'list' | 'chart' {
               :style="{ '--run-height': runBarHeight(run) }"
               role="listitem"
               :data-started-at="run.started_at"
-              :aria-label="`${run.status}, ${timestamp(run.started_at)}, ${duration(run.duration_ms)}`"
+              :aria-label="
+                $t('monitors.runLabel', {
+                  status: runStatusLabel(run.status),
+                  time: timestamp(run.started_at),
+                  duration: duration(run.duration_ms),
+                })
+              "
               :aria-pressed="selectedChartRunId === run.id"
-              :title="`${timestamp(run.started_at)} · ${run.status} · ${duration(run.duration_ms)}`"
+              :title="
+                $t('monitors.runLabel', {
+                  status: runStatusLabel(run.status),
+                  time: timestamp(run.started_at),
+                  duration: duration(run.duration_ms),
+                })
+              "
               type="button"
               @click="selectedChartRunId = run.id"
             ></button>
@@ -812,9 +875,14 @@ function storedHistoryView(): 'list' | 'chart' {
               <span>{{ duration(selectedChartRun.duration_ms) }}</span>
             </div>
             <p>
-              {{ selectedChartRun.source === 'sdk' ? 'Reported by SDK' : 'Detected by scheduler' }}
+              {{
+                selectedChartRun.source === 'sdk'
+                  ? $t('monitors.reportedSdk')
+                  : $t('monitors.detectedScheduler')
+              }}
               <template v-if="selectedChartRun.scheduled_for">
-                · scheduled {{ timestamp(selectedChartRun.scheduled_for) }}
+                ·
+                {{ $t('monitors.scheduled', { time: timestamp(selectedChartRun.scheduled_for) }) }}
               </template>
             </p>
             <p v-if="selectedChartRun.http_status || selectedChartRun.uptime_failure">
