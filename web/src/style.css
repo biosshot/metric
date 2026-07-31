@@ -3892,6 +3892,54 @@ label small,
   margin: 1rem 0 0;
 }
 
+.release-health-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overscroll-behavior-inline: contain;
+}
+
+.release-health-table {
+  width: 100%;
+  min-width: 52rem;
+  border-collapse: collapse;
+}
+
+.release-health-table th,
+.release-health-table td {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.release-health-table th {
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.release-health-table td {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.release-health-table th:nth-child(n + 3),
+.release-health-table td:nth-child(n + 3) {
+  text-align: right;
+}
+
+.release-health-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.release-health-table tbody tr:hover {
+  background: var(--surface-subtle);
+}
+
 .release-issue {
   display: grid;
   gap: 0.25rem;
@@ -3910,6 +3958,7 @@ label small,
   display: grid;
   grid-template-columns: minmax(10rem, 0.8fr) minmax(14rem, 1.2fr) auto;
   align-items: end;
+  margin-bottom: 1rem;
 }
 
 .deploy-timeline {

@@ -216,16 +216,16 @@ function timestamp(value: string | null): string {
           :title="$t('releaseDetail.noSessions')"
           :description="$t('releaseDetail.noSessionsDescription')"
         />
-        <div v-else class="table-scroll">
-          <table class="data-table">
+        <div v-else class="release-health-table-scroll">
+          <table class="release-health-table">
             <thead>
               <tr>
-                <th>{{ $t('releaseDetail.hour') }}</th>
-                <th>{{ $t('releaseDetail.environment') }}</th>
-                <th>{{ $t('releaseDetail.sessions') }}</th>
-                <th>{{ $t('releaseDetail.crashed') }}</th>
-                <th>{{ $t('releaseDetail.crashFree') }}</th>
-                <th>{{ $t('releaseDetail.crashFreeUsers') }}</th>
+                <th scope="col">{{ $t('releaseDetail.hour') }}</th>
+                <th scope="col">{{ $t('releaseDetail.environment') }}</th>
+                <th scope="col">{{ $t('releaseDetail.sessions') }}</th>
+                <th scope="col">{{ $t('releaseDetail.crashed') }}</th>
+                <th scope="col">{{ $t('releaseDetail.crashFree') }}</th>
+                <th scope="col">{{ $t('releaseDetail.crashFreeUsers') }}</th>
               </tr>
             </thead>
             <tbody>
