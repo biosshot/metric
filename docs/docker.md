@@ -21,7 +21,7 @@ The web interface is included in the Metric image.
 
 | Service | Image |
 | --- | --- |
-| Metric | `ghcr.io/biosshot/metric:0.1.1` |
+| Metric | `ghcr.io/biosshot/metric:0.1.2` |
 | MongoDB | `mongo:8.0.12` |
 | Symbolicator | `ghcr.io/getsentry/symbolicator:26.6.0` |
 

@@ -1,7 +1,7 @@
 # Update Metric
 
 Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
-`0.1.1`.
+`0.1.2`.
 
 ## Before updating
 
@@ -58,7 +58,7 @@ High as part of an ordinary version update.
 | Newer or different generation | Refuses to start | Use the matching Metric version |
 | Non-empty database without Metric metadata | Refuses to start | Check the database name; do not erase it |
 
-Metric 0.1.1 cannot automatically migrate an older database to generation 19.
+Metric 0.1.2 cannot automatically migrate an older database to generation 19.
 An empty-database setup is not a migration.
 
 Changing back to an older image is safe only when that image supports the same

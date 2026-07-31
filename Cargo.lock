@@ -1081,7 +1081,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "dependency-check"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "deranged"
@@ -2136,7 +2136,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "metric-application"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "argon2",
  "blake3",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "metric-blob"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "metric-domain"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -2210,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "metric-mongo"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "futures-util",
@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "metric-ports"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "metric-domain",
  "thiserror",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "metric-sentry-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "metric-domain",
  "serde",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "metric-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-compression",
  "axum",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "metric-symbolication"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "metric-testkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "metric-application",
