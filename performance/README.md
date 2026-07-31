@@ -1,5 +1,29 @@
 # Performance regression artifacts
 
+## Direct DSN load scenarios
+
+The focused DSN scenarios send one signal type through the public Sentry Envelope
+endpoint of an already running Faultkeep instance. Every scenario requires
+`FAULTKEEP_DSN`, uses constant-arrival-rate, and reports explicit TCP errors plus
+HTTP `200`, `429`, `503`, and other statuses.
+
+```text
+k6 run -e FAULTKEEP_DSN=http://<key>@127.0.0.1:4001/<project-id> -e FAULTKEEP_EVENT_RPS=100 -e FAULTKEEP_DURATION=10s performance/k6/events-dsn.js
+
+k6 run -e FAULTKEEP_DSN=http://<key>@127.0.0.1:4001/<project-id> -e FAULTKEEP_LOG_RPS=500 -e FAULTKEEP_DURATION=10s performance/k6/structured-logs-dsn.js
+
+k6 run -e FAULTKEEP_DSN=http://<key>@127.0.0.1:4001/<project-id> -e FAULTKEEP_SPAN_RPS=500 -e FAULTKEEP_DURATION=10s performance/k6/spans-dsn.js
+
+k6 run -e FAULTKEEP_DSN=http://<key>@127.0.0.1:4001/<project-id> -e FAULTKEEP_METRIC_RPS=500 -e FAULTKEEP_DURATION=10s performance/k6/metrics-dsn.js
+```
+
+Event and Span RPS mean one stored record per HTTP iteration. Each Metrics
+iteration sends one `trace_metric` container with three measurements: counter,
+gauge, and distribution. `FAULTKEEP_MAX_VUS` controls the common upper VU bound;
+the type-specific `FAULTKEEP_EVENT_VUS`, `FAULTKEEP_LOG_VUS`,
+`FAULTKEEP_SPAN_VUS`, and `FAULTKEEP_METRIC_VUS` values control pre-allocation.
+Run only against a project where load-test data and retention impact are acceptable.
+
 ## Phase 30 Sessions and Release Health
 
 The retained Phase 30 baseline measures deterministic Session lifecycle merging and
