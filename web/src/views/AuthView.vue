@@ -6,7 +6,6 @@ import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import LogoMark from '../components/LogoMark.vue';
-import LocaleSelect from '../components/LocaleSelect.vue';
 import { suggestedSlug } from '../lib/slug';
 import { useSessionStore } from '../stores/session';
 
@@ -125,7 +124,6 @@ async function setupInvitedPassword(): Promise<void> {
       </ul>
     </section>
     <section class="auth-card" aria-labelledby="auth-title">
-      <LocaleSelect class="auth-card__locale" />
       <div class="auth-tabs" role="tablist" :aria-label="$t('auth.mode')">
         <button type="button" role="tab" :aria-selected="mode === 'login'" @click="mode = 'login'">
           {{ $t('auth.signIn') }}

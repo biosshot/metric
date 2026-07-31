@@ -8,9 +8,12 @@ describe('LocaleSelect', () => {
     await setLocale('en');
     render(LocaleSelect);
 
-    await fireEvent.update(screen.getByLabelText('Language'), 'ru');
+    await fireEvent.click(screen.getByRole('combobox', { name: 'Language' }));
+    await fireEvent.click(screen.getByRole('option', { name: 'Russian' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Язык')).toHaveValue('ru'));
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Язык' })).toHaveTextContent('Русский'),
+    );
     expect(document.documentElement.lang).toBe('ru');
   });
 });

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '../components/AppIcon.vue';
+import LocaleSelect from '../components/LocaleSelect.vue';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -8,9 +9,12 @@ const session = useSessionStore();
 <template>
   <section class="settings-shell">
     <header class="settings-shell__header">
-      <p class="eyebrow">{{ $t('settingsShell.eyebrow') }}</p>
-      <h1>{{ $t('settingsShell.title') }}</h1>
-      <p>{{ $t('settingsShell.description') }}</p>
+      <div>
+        <p class="eyebrow">{{ $t('settingsShell.eyebrow') }}</p>
+        <h1>{{ $t('settingsShell.title') }}</h1>
+        <p>{{ $t('settingsShell.description') }}</p>
+      </div>
+      <LocaleSelect class="settings-shell__locale" />
     </header>
 
     <div class="settings-shell__layout">

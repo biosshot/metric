@@ -536,6 +536,10 @@ input[type='checkbox'] {
 }
 
 .settings-shell__header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1.5rem;
   margin-bottom: 1.5rem;
 }
 
@@ -4475,28 +4479,21 @@ label small,
   }
 }
 .locale-select {
-  display: grid;
-  gap: 0.3rem;
-  color: var(--text-muted);
-  font-size: 0.75rem;
+  width: min(14rem, 100%);
 }
 
-.locale-select select {
-  min-width: 7rem;
-  min-height: 34px;
-  padding: 0.4rem 2rem 0.4rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-small);
-  background: var(--canvas);
-  color: var(--text);
-  font: inherit;
+.settings-shell__locale {
+  flex: 0 0 14rem;
 }
 
-.sidebar__locale {
-  margin-top: 0.75rem;
-}
+@media (max-width: 640px) {
+  .settings-shell__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
 
-.auth-card__locale {
-  width: fit-content;
-  margin: 0 0 1rem auto;
+  .settings-shell__locale {
+    width: 100%;
+    flex-basis: auto;
+  }
 }

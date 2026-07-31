@@ -8,7 +8,6 @@ import BaseSelect, { type SelectOption } from './components/BaseSelect.vue';
 import EmptyState from './components/EmptyState.vue';
 import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
 import LoadingPanel from './components/LoadingPanel.vue';
-import LocaleSelect from './components/LocaleSelect.vue';
 import LogoMark from './components/LogoMark.vue';
 import { useSessionStore } from './stores/session';
 import AuthView from './views/AuthView.vue';
@@ -127,7 +126,6 @@ async function logout(): Promise<void> {
           :label="$t('app.project')"
           @update:model-value="changeProject"
         />
-        <LocaleSelect class="sidebar__locale" />
       </div>
 
       <nav :aria-label="$t('app.primaryNavigation')">
