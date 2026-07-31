@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { api } from '../api/client';
 import type { CreatedApiToken } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -15,6 +16,7 @@ withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
 const queryClient = useQueryClient();
 const session = useSessionStore();
+const { locale, t } = useI18n();
 const tokenProfile = ref('');
 const tokenName = ref('');
 const expiresOn = ref(new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10));
@@ -30,36 +32,36 @@ interface TokenProfile {
   scopes: string[];
 }
 
-const tokenProfiles: TokenProfile[] = [
+const tokenProfiles = computed<TokenProfile[]>(() => [
   {
     value: 'releases',
-    label: 'Releases and deploys',
+    label: t('apiTokens.releases'),
     icon: 'release',
-    title: 'Create Release CLI token',
+    title: t('apiTokens.releaseTitle'),
     defaultName: 'sentry-cli releases',
     scopes: ['release:read', 'release:write'],
   },
   {
     value: 'debug-files',
-    label: 'Debug files',
+    label: t('apiTokens.debugFiles'),
     icon: 'fileCode',
-    title: 'Create debug-file token',
+    title: t('apiTokens.debugTitle'),
     defaultName: 'sentry-cli debug files',
     scopes: ['debug_file:read', 'debug_file:write'],
   },
   {
     value: 'issues',
-    label: 'Issue automation',
+    label: t('apiTokens.issues'),
     icon: 'bug',
-    title: 'Create Issue automation token',
+    title: t('apiTokens.issueTitle'),
     defaultName: 'issue automation',
     scopes: ['event:read', 'issue:read', 'issue:write', 'project:read'],
   },
   {
     value: 'read-only',
-    label: 'Read-only API',
+    label: t('apiTokens.readOnly'),
     icon: 'view',
-    title: 'Create read-only API token',
+    title: t('apiTokens.readOnlyTitle'),
     defaultName: 'read-only API',
     scopes: [
       'event:read',
@@ -70,10 +72,10 @@ const tokenProfiles: TokenProfile[] = [
       'release:read',
     ],
   },
-];
+]);
 
 const availableProfiles = computed(() =>
-  tokenProfiles.filter((profile) => profile.scopes.every((scope) => session.has(scope))),
+  tokenProfiles.value.filter((profile) => profile.scopes.every((scope) => session.has(scope))),
 );
 const profileOptions = computed<SelectOption[]>(() =>
   availableProfiles.value.map(({ value, label, icon }) => ({ value, label, icon })),
@@ -82,7 +84,7 @@ const selectedProfile = computed(() =>
   availableProfiles.value.find((profile) => profile.value === tokenProfile.value),
 );
 const tokenScopes = computed(() => selectedProfile.value?.scopes ?? []);
-const profileTitle = computed(() => selectedProfile.value?.title ?? 'Create API token');
+const profileTitle = computed(() => selectedProfile.value?.title ?? t('apiTokens.createTitle'));
 
 watch(
   availableProfiles,
@@ -132,8 +134,8 @@ const revokeToken = useMutation({
 });
 
 function formatTimestamp(value: string | null): string {
-  if (!value) return 'Never';
-  return new Intl.DateTimeFormat(undefined, {
+  if (!value) return t('apiTokens.never');
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -144,32 +146,29 @@ function formatTimestamp(value: string | null): string {
   <section>
     <header v-if="!embedded" class="page-header">
       <div>
-        <p class="eyebrow">Account security</p>
-        <h1>API tokens</h1>
-        <p>
-          Personal credentials for command-line tools. Token values are shown once and are never
-          stored in readable form.
-        </p>
+        <p class="eyebrow">{{ $t('apiTokens.eyebrow') }}</p>
+        <h1>{{ $t('apiTokens.title') }}</h1>
+        <p>{{ $t('apiTokens.description') }}</p>
       </div>
     </header>
 
     <ApiErrorPanel
       v-if="createToken.error.value"
       :error="createToken.error.value"
-      title="API token was not created"
+      :title="$t('apiTokens.createFailed')"
     />
 
     <section v-if="createdToken" class="panel token-secret-panel" aria-live="polite">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Copy now</p>
-          <h2>New token</h2>
-          <p>This value disappears when you leave or refresh this page.</p>
+          <p class="eyebrow">{{ $t('apiTokens.copyNow') }}</p>
+          <h2>{{ $t('apiTokens.newToken') }}</h2>
+          <p>{{ $t('apiTokens.secretHelp') }}</p>
         </div>
         <button
           class="icon-button"
           type="button"
-          aria-label="Hide token"
+          :aria-label="$t('apiTokens.hide')"
           @click="createdToken = null"
         >
           <AppIcon name="close" :size="18" />
@@ -184,23 +183,26 @@ function formatTimestamp(value: string | null): string {
           <p class="eyebrow">sentry-cli</p>
           <h2>{{ profileTitle }}</h2>
           <p class="muted">
-            Grants only <code>{{ tokenScopes.join(', ') }}</code
+            {{ $t('apiTokens.grants') }} <code>{{ tokenScopes.join(', ') }}</code
             >.
           </p>
           <p v-if="!session.has('release:write') || !session.has('debug_file:write')" class="muted">
-            Profiles are limited to your current role. Release and debug-file uploads require their
-            corresponding write permissions.
+            {{ $t('apiTokens.limitedProfiles') }}
           </p>
         </div>
       </div>
       <div class="form-grid">
-        <BaseSelect v-model="tokenProfile" :options="profileOptions" label="CLI capability" />
+        <BaseSelect
+          v-model="tokenProfile"
+          :options="profileOptions"
+          :label="$t('apiTokens.capability')"
+        />
         <label>
-          Token name
+          {{ $t('apiTokens.name') }}
           <input v-model.trim="tokenName" required maxlength="120" autocomplete="off" />
         </label>
         <label>
-          Expires on
+          {{ $t('apiTokens.expiresOn') }}
           <input v-model="expiresOn" required type="date" />
         </label>
       </div>
@@ -210,44 +212,46 @@ function formatTimestamp(value: string | null): string {
         :disabled="createToken.isPending.value || !tokenName || !expiresOn || !tokenScopes.length"
       >
         <AppIcon name="key" :size="16" />
-        {{ createToken.isPending.value ? 'Creating…' : 'Create token' }}
+        {{ createToken.isPending.value ? $t('apiTokens.creating') : $t('apiTokens.create') }}
       </button>
     </form>
 
-    <LoadingPanel v-if="tokens.isPending.value" label="Loading API tokens…" />
+    <LoadingPanel v-if="tokens.isPending.value" :label="$t('apiTokens.loading')" />
     <ApiErrorPanel
       v-else-if="tokens.error.value"
       :error="tokens.error.value"
-      title="API tokens could not be loaded"
+      :title="$t('apiTokens.loadFailed')"
       @retry="tokens.refetch()"
     />
     <EmptyState
       v-else-if="!tokens.data.value?.items.length"
       icon="key"
-      title="No API tokens"
-      description="Create a short-lived token when a CLI or automation needs authenticated access."
+      :title="$t('apiTokens.empty')"
+      :description="$t('apiTokens.emptyDescription')"
     />
     <section v-else class="panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Active credentials</p>
-          <h2>Issued tokens</h2>
+          <p class="eyebrow">{{ $t('apiTokens.active') }}</p>
+          <h2>{{ $t('apiTokens.issued') }}</h2>
         </div>
       </div>
       <ApiErrorPanel
         v-if="revokeToken.error.value"
         :error="revokeToken.error.value"
-        title="API token was not revoked"
+        :title="$t('apiTokens.revokeFailed')"
       />
       <div class="token-list">
         <article v-for="token in tokens.data.value?.items" :key="token.id">
           <div>
             <strong>{{ token.name }}</strong>
             <span class="token-scopes">{{ token.scopes.join(' · ') }}</span>
-            <small>
-              Expires {{ formatTimestamp(token.expires_at) }} · Last used
-              {{ formatTimestamp(token.last_used_at) }}
-            </small>
+            <small>{{
+              $t('apiTokens.usage', {
+                expires: formatTimestamp(token.expires_at),
+                used: formatTimestamp(token.last_used_at),
+              })
+            }}</small>
           </div>
           <button
             class="button button--danger"
@@ -256,7 +260,7 @@ function formatTimestamp(value: string | null): string {
             @click="revokeToken.mutate(token.id)"
           >
             <AppIcon name="delete" :size="16" />
-            {{ revokingTokenId === token.id ? 'Revoking…' : 'Revoke' }}
+            {{ revokingTokenId === token.id ? $t('apiTokens.revoking') : $t('apiTokens.revoke') }}
           </button>
         </article>
       </div>

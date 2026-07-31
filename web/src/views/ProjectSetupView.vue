@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useQuery } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -14,6 +15,7 @@ import { useSessionStore } from '../stores/session';
 type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet';
 
 const session = useSessionStore();
+const { t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const canAdministerProject = computed(() => session.has('project:admin'));
 const copyNotice = ref('');
@@ -119,9 +121,9 @@ async function copy(value: string): Promise<void> {
   copyError.value = '';
   try {
     await navigator.clipboard.writeText(value);
-    copyNotice.value = 'DSN copied to the clipboard.';
+    copyNotice.value = t('projectSetup.copied');
   } catch {
-    copyError.value = 'The browser denied clipboard access. Select and copy the DSN manually.';
+    copyError.value = t('projectSetup.copyDenied');
   }
 }
 </script>
@@ -131,16 +133,16 @@ async function copy(value: string): Promise<void> {
     <header class="page-header">
       <div>
         <p class="eyebrow">{{ session.selectedProject?.display_name }}</p>
-        <h1>Connect an SDK</h1>
-        <p>Use an official Sentry SDK and send Error Events to this Metric project.</p>
+        <h1>{{ $t('projectSetup.title') }}</h1>
+        <p>{{ $t('projectSetup.description') }}</p>
       </div>
     </header>
 
     <EmptyState
       v-if="!canAdministerProject"
       icon="blocked"
-      title="SDK setup is restricted"
-      description="DSN keys are project credentials. Ask a project administrator to configure the SDK or grant an administrative role."
+      :title="$t('projectSetup.restricted')"
+      :description="$t('projectSetup.restrictedDescription')"
     />
 
     <div v-else class="setup-grid">
@@ -149,24 +151,22 @@ async function copy(value: string): Promise<void> {
           <li>
             <span><AppIcon name="key" :size="18" /></span>
             <div>
-              <h2>Choose an active DSN</h2>
-              <p>DSN keys identify this project. They are not personal API tokens.</p>
+              <h2>{{ $t('projectSetup.chooseDsn') }}</h2>
+              <p>{{ $t('projectSetup.chooseDsnHelp') }}</p>
             </div>
           </li>
           <li>
             <span><AppIcon name="code" :size="18" /></span>
             <div>
-              <h2>Configure your SDK</h2>
-              <p>Select your language and copy the ready-to-run initialization.</p>
+              <h2>{{ $t('projectSetup.configure') }}</h2>
+              <p>{{ $t('projectSetup.configureHelp') }}</p>
             </div>
           </li>
           <li>
             <span><AppIcon name="bug" :size="18" /></span>
             <div>
-              <h2>Send a test error</h2>
-              <p>
-                Processing is asynchronous. The Issue will appear after normalization and grouping.
-              </p>
+              <h2>{{ $t('projectSetup.testError') }}</h2>
+              <p>{{ $t('projectSetup.testErrorHelp') }}</p>
             </div>
           </li>
         </ol>
@@ -175,8 +175,8 @@ async function copy(value: string): Promise<void> {
       <section class="panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Project credentials</p>
-            <h2>Available DSNs</h2>
+            <p class="eyebrow">{{ $t('projectSetup.credentials') }}</p>
+            <h2>{{ $t('projectSetup.availableDsns') }}</h2>
           </div>
           <RouterLink
             v-if="session.has('project:admin')"
@@ -184,10 +184,10 @@ async function copy(value: string): Promise<void> {
             to="/settings/project#dsn-keys"
           >
             <AppIcon name="settings" :size="16" />
-            Manage keys
+            {{ $t('projectSetup.manageKeys') }}
           </RouterLink>
         </div>
-        <LoadingPanel v-if="keys.isPending.value" label="Loading project keys…" />
+        <LoadingPanel v-if="keys.isPending.value" :label="$t('projectSetup.loadingKeys')" />
         <ApiErrorPanel
           v-else-if="keys.error.value"
           :error="keys.error.value"
@@ -204,8 +204,8 @@ async function copy(value: string): Promise<void> {
         <EmptyState
           v-else-if="!activeKeys.length"
           icon="key"
-          title="No active DSN"
-          description="A project administrator must create or enable a key before an SDK can send events."
+          :title="$t('projectSetup.noDsn')"
+          :description="$t('projectSetup.noDsnDescription')"
         />
         <div v-else class="dsn-list">
           <article v-for="key in activeKeys" :key="key.dsn_key">
@@ -216,7 +216,7 @@ async function copy(value: string): Promise<void> {
             <code>{{ dsn(key.dsn_key) }}</code>
             <button class="button button--secondary" type="button" @click="copy(dsn(key.dsn_key))">
               <AppIcon name="copy" :size="16" />
-              Copy DSN
+              {{ $t('projectSetup.copyDsn') }}
             </button>
           </article>
         </div>
@@ -226,13 +226,13 @@ async function copy(value: string): Promise<void> {
     <section v-if="canAdministerProject && activeDsn" class="panel code-examples">
       <div class="code-examples__heading">
         <div>
-          <p class="eyebrow">Ready-to-use example</p>
-          <h2>Initialize the SDK</h2>
+          <p class="eyebrow">{{ $t('projectSetup.example') }}</p>
+          <h2>{{ $t('projectSetup.initialize') }}</h2>
         </div>
         <BaseSelect
           :model-value="selectedSdk"
           :options="sdkOptions"
-          label="SDK"
+          :label="$t('projectSetup.sdk')"
           @update:model-value="setSdk"
         />
       </div>
@@ -243,9 +243,7 @@ async function copy(value: string): Promise<void> {
       />
       <p class="info-note">
         <AppIcon name="info" :size="16" />
-        Metric accepts Error Events, Structured Logs, Transactions, Spans, Application Metrics, and
-        browser Session Replays. Replay capture requires @sentry/browser 10.66.0 and client-side
-        masking.
+        {{ $t('projectSetup.capabilities') }}
       </p>
     </section>
   </section>

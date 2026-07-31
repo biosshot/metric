@@ -210,7 +210,9 @@ async function logout(): Promise<void> {
           to="/settings/organization"
           @click="navigationOpen = false"
         >
-          <strong>{{ session.identity?.role }}</strong>
+          <strong>{{
+            session.identity?.role ? $t(`organization.${session.identity.role}`) : '—'
+          }}</strong>
           <span>{{ $t('app.organizationShort', { id: session.organizationId }) }}</span>
         </RouterLink>
         <button type="button" @click="logout">

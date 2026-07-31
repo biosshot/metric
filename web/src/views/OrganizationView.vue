@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { computed, reactive, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { api } from '../api/client';
 import type { CreatedInvitation, OrganizationMember, OrganizationRole } from '../api/types';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -16,6 +17,7 @@ import { organizationInvitationUrl } from './organizationInvitation';
 
 const session = useSessionStore();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const inviteEmail = ref('');
 const inviteName = ref('');
 const inviteRole = ref<OrganizationRole>('member');
@@ -48,12 +50,16 @@ watch(
 
 const roleOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = [
-    { value: 'viewer', label: 'Viewer', description: 'Read-only investigation access.' },
-    { value: 'member', label: 'Member', description: 'Can update ordinary Issues.' },
-    { value: 'admin', label: 'Admin', description: 'Can manage projects and members.' },
+    { value: 'viewer', label: t('organization.viewer'), description: t('organization.viewerHelp') },
+    { value: 'member', label: t('organization.member'), description: t('organization.memberHelp') },
+    { value: 'admin', label: t('organization.admin'), description: t('organization.adminHelp') },
   ];
   if (session.has('organization:owner')) {
-    options.push({ value: 'owner', label: 'Owner', description: 'Full organization control.' });
+    options.push({
+      value: 'owner',
+      label: t('organization.owner'),
+      description: t('organization.ownerHelp'),
+    });
   }
   return options;
 });
@@ -62,7 +68,11 @@ function roleOptionsFor(member: OrganizationMember): SelectOption[] {
   if (member.role === 'owner' && !roleOptions.value.some((option) => option.value === 'owner')) {
     return [
       ...roleOptions.value,
-      { value: 'owner', label: 'Owner', description: 'Only another owner can change this role.' },
+      {
+        value: 'owner',
+        label: t('organization.owner'),
+        description: t('organization.ownerLocked'),
+      },
     ];
   }
   return roleOptions.value;
@@ -123,12 +133,12 @@ function saveRole(member: OrganizationMember): void {
 }
 
 function removeMember(member: OrganizationMember): void {
-  if (!window.confirm(`Remove ${member.display_name} from this organization?`)) return;
+  if (!window.confirm(t('organization.removeConfirm', { name: member.display_name }))) return;
   updateMember.mutate({ userId: member.user_id, action: 'remove' });
 }
 
 function formatTimestamp(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -143,41 +153,45 @@ function actionLabel(action: string): string {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">Organization</p>
-        <h1>{{ organization.data.value?.display_name ?? 'Organization' }}</h1>
-        <p>Identity, access, personal automation credentials, and administrative history.</p>
+        <p class="eyebrow">{{ $t('organization.eyebrow') }}</p>
+        <h1>{{ organization.data.value?.display_name ?? $t('organization.fallbackName') }}</h1>
+        <p>{{ $t('organization.description') }}</p>
       </div>
     </header>
 
-    <LoadingPanel v-if="organization.isPending.value" label="Loading organization…" />
+    <LoadingPanel v-if="organization.isPending.value" :label="$t('organization.loading')" />
     <ApiErrorPanel
       v-else-if="organization.error.value"
       :error="organization.error.value"
-      title="Organization could not be loaded"
+      :title="$t('organization.loadFailed')"
       @retry="organization.refetch()"
     />
     <section v-else-if="organization.data.value" class="organization-summary">
       <article class="summary-card summary-card--info">
         <AppIcon name="organization" :size="20" />
-        <span>Name</span>
+        <span>{{ $t('organization.name') }}</span>
         <strong>{{ organization.data.value.display_name }}</strong>
         <small>{{ organization.data.value.slug }}</small>
       </article>
       <article class="summary-card">
         <AppIcon name="shield" :size="20" />
-        <span>Your access</span>
-        <strong>{{ session.identity?.role }}</strong>
-        <small>{{ session.identity?.permissions.length }} permissions</small>
+        <span>{{ $t('organization.yourAccess') }}</span>
+        <strong>{{
+          session.identity?.role ? $t(`organization.${session.identity.role}`) : '—'
+        }}</strong>
+        <small>{{
+          $t('organization.permissions', session.identity?.permissions.length ?? 0)
+        }}</small>
       </article>
       <article class="summary-card">
         <AppIcon name="bug" :size="20" />
-        <span>Projects</span>
-        <strong>{{ session.projects.length }}</strong>
-        <small>Organization-wide access</small>
+        <span>{{ $t('organization.projects') }}</span>
+        <strong>{{ session.projects.length.toLocaleString(locale) }}</strong>
+        <small>{{ $t('organization.organizationWide') }}</small>
       </article>
       <article class="summary-card">
         <AppIcon name="history" :size="20" />
-        <span>Created</span>
+        <span>{{ $t('organization.created') }}</span>
         <strong>{{ formatTimestamp(organization.data.value.created_at) }}</strong>
         <small>ID {{ organization.data.value.id }}</small>
       </article>
@@ -187,9 +201,9 @@ function actionLabel(action: string): string {
       <section class="panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Access control</p>
-            <h2>Members</h2>
-            <p class="muted">Roles apply to every project in this organization.</p>
+            <p class="eyebrow">{{ $t('organization.accessControl') }}</p>
+            <h2>{{ $t('organization.members') }}</h2>
+            <p class="muted">{{ $t('organization.rolesHelp') }}</p>
           </div>
           <span class="section-icon section-icon--success" aria-hidden="true">
             <AppIcon name="users" :size="20" />
@@ -199,13 +213,13 @@ function actionLabel(action: string): string {
         <ApiErrorPanel
           v-if="updateMember.error.value"
           :error="updateMember.error.value"
-          title="Member was not updated"
+          :title="$t('organization.updateFailed')"
         />
-        <LoadingPanel v-if="members.isPending.value" label="Loading members…" />
+        <LoadingPanel v-if="members.isPending.value" :label="$t('organization.loadingMembers')" />
         <ApiErrorPanel
           v-else-if="members.error.value"
           :error="members.error.value"
-          title="Members could not be loaded"
+          :title="$t('organization.membersFailed')"
           @retry="members.refetch()"
         />
         <div v-else class="member-list">
@@ -221,7 +235,7 @@ function actionLabel(action: string): string {
               <BaseSelect
                 v-model="roleDrafts[member.user_id]"
                 :options="roleOptionsFor(member)"
-                :aria-label="`Role for ${member.display_name}`"
+                :aria-label="$t('organization.roleFor', { name: member.display_name })"
                 :disabled="activeMemberId === member.user_id || !canManage(member)"
               />
               <button
@@ -235,7 +249,7 @@ function actionLabel(action: string): string {
                 @click="saveRole(member)"
               >
                 <AppIcon name="save" :size="15" />
-                Save role
+                {{ $t('organization.saveRole') }}
               </button>
               <button
                 class="button button--secondary"
@@ -249,7 +263,7 @@ function actionLabel(action: string): string {
                 "
               >
                 <AppIcon :name="member.disabled_at ? 'success' : 'blocked'" :size="15" />
-                {{ member.disabled_at ? 'Enable' : 'Disable' }}
+                {{ member.disabled_at ? $t('organization.enable') : $t('organization.disable') }}
               </button>
               <button
                 class="button button--danger"
@@ -258,7 +272,7 @@ function actionLabel(action: string): string {
                 @click="removeMember(member)"
               >
                 <AppIcon name="delete" :size="15" />
-                Remove
+                {{ $t('organization.remove') }}
               </button>
             </div>
           </article>
@@ -268,27 +282,31 @@ function actionLabel(action: string): string {
       <form class="panel settings-form" @submit.prevent="invite.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">One-time setup</p>
-            <h2>Invite member</h2>
-            <p class="muted">Metric shows the password-setup link once. Send it securely.</p>
+            <p class="eyebrow">{{ $t('organization.oneTimeSetup') }}</p>
+            <h2>{{ $t('organization.invite') }}</h2>
+            <p class="muted">{{ $t('organization.inviteHelp') }}</p>
           </div>
           <AppIcon name="userPlus" :size="20" />
         </div>
         <ApiErrorPanel
           v-if="invite.error.value"
           :error="invite.error.value"
-          title="Invitation was not created"
+          :title="$t('organization.invitationFailed')"
         />
         <div class="form-grid form-grid--three">
           <label>
-            Display name
+            {{ $t('organization.displayName') }}
             <input v-model.trim="inviteName" required maxlength="128" autocomplete="off" />
           </label>
           <label>
-            Email
+            {{ $t('organization.email') }}
             <input v-model.trim="inviteEmail" required type="email" autocomplete="off" />
           </label>
-          <BaseSelect v-model="inviteRole" :options="roleOptions" label="Role" />
+          <BaseSelect
+            v-model="inviteRole"
+            :options="roleOptions"
+            :label="$t('organization.role')"
+          />
         </div>
         <button
           class="button button--primary"
@@ -296,43 +314,47 @@ function actionLabel(action: string): string {
           :disabled="invite.isPending.value || !inviteName || !inviteEmail"
         >
           <AppIcon name="userPlus" :size="16" />
-          {{ invite.isPending.value ? 'Creating…' : 'Create invitation' }}
+          {{
+            invite.isPending.value
+              ? $t('organization.creating')
+              : $t('organization.createInvitation')
+          }}
         </button>
       </form>
 
       <section v-if="invitation" class="panel token-secret-panel" aria-live="polite">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Copy now</p>
-            <h2>Password-setup link</h2>
-            <p class="muted">It expires according to the server setup-token policy.</p>
+            <p class="eyebrow">{{ $t('organization.copyNow') }}</p>
+            <h2>{{ $t('organization.setupLink') }}</h2>
+            <p class="muted">{{ $t('organization.setupLinkHelp') }}</p>
           </div>
           <button
             class="icon-button"
             type="button"
-            aria-label="Hide invitation"
+            :aria-label="$t('organization.hideInvitation')"
             @click="invitation = null"
           >
             <AppIcon name="close" :size="18" />
           </button>
         </div>
-        <CodeBlock :code="setupLink" language="text" title="Invitation URL" />
+        <CodeBlock :code="setupLink" language="text" :title="$t('organization.invitationUrl')" />
       </section>
     </template>
 
     <section v-else class="panel">
       <EmptyState
         icon="shield"
-        title="Member administration is restricted"
-        description="Your role can inspect projects, but organization membership and security history require organization:admin."
+        :title="$t('organization.restricted')"
+        :description="$t('organization.restrictedDescription')"
       />
     </section>
 
     <section class="organization-section">
       <div class="section-heading organization-section__heading">
         <div>
-          <p class="eyebrow">Personal access</p>
-          <h2>API tokens</h2>
+          <p class="eyebrow">{{ $t('organization.personalAccess') }}</p>
+          <h2>{{ $t('organization.apiTokens') }}</h2>
         </div>
         <span class="section-icon section-icon--warning" aria-hidden="true">
           <AppIcon name="key" :size="20" />
@@ -344,26 +366,26 @@ function actionLabel(action: string): string {
     <section v-if="session.has('organization:admin')" class="panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Security history</p>
-          <h2>Recent audit log</h2>
-          <p class="muted">The latest 100 bounded administrative and security records.</p>
+          <p class="eyebrow">{{ $t('organization.securityHistory') }}</p>
+          <h2>{{ $t('organization.auditLog') }}</h2>
+          <p class="muted">{{ $t('organization.auditHelp') }}</p>
         </div>
         <span class="section-icon section-icon--info" aria-hidden="true">
           <AppIcon name="history" :size="20" />
         </span>
       </div>
-      <LoadingPanel v-if="audit.isPending.value" label="Loading audit log…" />
+      <LoadingPanel v-if="audit.isPending.value" :label="$t('organization.loadingAudit')" />
       <ApiErrorPanel
         v-else-if="audit.error.value"
         :error="audit.error.value"
-        title="Audit log could not be loaded"
+        :title="$t('organization.auditFailed')"
         @retry="audit.refetch()"
       />
       <EmptyState
         v-else-if="!audit.data.value?.items.length"
         icon="history"
-        title="No audit records"
-        description="Administrative actions will appear here with their request IDs."
+        :title="$t('organization.noAudit')"
+        :description="$t('organization.noAuditDescription')"
       />
       <div v-else class="audit-list">
         <article v-for="record in audit.data.value?.items" :key="record.request_id">
@@ -371,10 +393,13 @@ function actionLabel(action: string): string {
           <div>
             <strong>{{ actionLabel(record.action) }}</strong>
             <span>{{ record.target_kind }} {{ record.target_id }}</span>
-            <small>
-              {{ formatTimestamp(record.timestamp) }} · actor {{ record.actor_user_id }} · request
-              {{ record.request_id }}
-            </small>
+            <small>{{
+              $t('organization.auditRecord', {
+                time: formatTimestamp(record.timestamp),
+                actor: record.actor_user_id,
+                request: record.request_id,
+              })
+            }}</small>
           </div>
         </article>
       </div>

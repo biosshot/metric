@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRoute } from 'vue-router';
 import { api } from '../api/client';
@@ -21,69 +22,67 @@ import { useSessionStore } from '../stores/session';
 const session = useSessionStore();
 const route = useRoute();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const canAdministerProject = computed(() => session.has('project:admin'));
 const newKeyLabel = ref('');
 const notice = ref('');
 const deleteConfirmation = ref('');
-const ipPolicyOptions: SelectOption[] = [
+const ipPolicyOptions = computed<SelectOption[]>(() => [
   {
     value: 'hmac',
-    label: 'HMAC pseudonymization',
-    description: 'Recommended for investigation without retaining the original address.',
+    label: t('onboarding.ipHmac'),
+    description: t('onboarding.ipHmacDescription'),
     icon: 'shield',
   },
-  { value: 'remove', label: 'Remove completely', icon: 'blocked' },
-  { value: 'truncate', label: 'Truncate address', icon: 'shield' },
-  { value: 'keep', label: 'Keep original address', icon: 'view' },
-];
-const filterSignalOptions: SelectOption[] = [
-  { value: 'error', label: 'Error Event', icon: 'bug' },
-  { value: 'log', label: 'Structured Log', icon: 'logs' },
-  { value: 'transaction', label: 'Transaction', icon: 'activity' },
-  { value: 'span', label: 'Span', icon: 'traces' },
-];
-const filterOperationOptions: SelectOption[] = [
-  { value: 'exact', label: 'Equals' },
-  { value: 'prefix', label: 'Starts with' },
-  { value: 'suffix', label: 'Ends with' },
-  { value: 'contains', label: 'Contains' },
-  { value: 'glob', label: 'Glob' },
-];
-const commonFilterFields: SelectOption[] = [
-  { value: 'release', label: 'Release' },
-  { value: 'environment', label: 'Environment' },
-  { value: 'service', label: 'Service' },
-];
-const signalFilterFields: Record<InboundFilterSignal, SelectOption[]> = {
-  error: [
-    ...commonFilterFields,
-    { value: 'message', label: 'Normalized message' },
-    { value: 'exception_type', label: 'Exception type' },
-    { value: 'logger', label: 'Logger' },
-    { value: 'request_host', label: 'Request host' },
-    { value: 'request_path', label: 'Request path' },
-  ],
-  log: [
-    ...commonFilterFields,
-    { value: 'message', label: 'Normalized message' },
-    { value: 'severity', label: 'Severity' },
-  ],
-  transaction: [
-    ...commonFilterFields,
-    { value: 'name', label: 'Name' },
-    { value: 'operation', label: 'Operation' },
-    { value: 'status', label: 'Status' },
-    { value: 'duration', label: 'Duration (ms)' },
-  ],
-  span: [
-    ...commonFilterFields,
-    { value: 'name', label: 'Name' },
-    { value: 'operation', label: 'Operation' },
-    { value: 'status', label: 'Status' },
-    { value: 'duration', label: 'Duration (ms)' },
-  ],
-};
+  { value: 'remove', label: t('onboarding.ipRemove'), icon: 'blocked' },
+  { value: 'truncate', label: t('onboarding.ipTruncate'), icon: 'shield' },
+  { value: 'keep', label: t('onboarding.ipKeep'), icon: 'view' },
+]);
+const filterSignalOptions = computed<SelectOption[]>(() => [
+  { value: 'error', label: t('projectSettings.errorEvent'), icon: 'bug' },
+  { value: 'log', label: t('projectSettings.structuredLog'), icon: 'logs' },
+  { value: 'transaction', label: t('projectSettings.transaction'), icon: 'activity' },
+  { value: 'span', label: t('projectSettings.span'), icon: 'traces' },
+]);
+const filterOperationOptions = computed<SelectOption[]>(() => [
+  { value: 'exact', label: t('projectSettings.equals') },
+  { value: 'prefix', label: t('projectSettings.startsWith') },
+  { value: 'suffix', label: t('projectSettings.endsWith') },
+  { value: 'contains', label: t('projectSettings.contains') },
+  { value: 'glob', label: t('projectSettings.glob') },
+]);
+const signalFilterFields = computed<Record<InboundFilterSignal, SelectOption[]>>(() => {
+  const common: SelectOption[] = [
+    { value: 'release', label: t('projectSettings.release') },
+    { value: 'environment', label: t('projectSettings.environment') },
+    { value: 'service', label: t('projectSettings.service') },
+  ];
+  const spanFields: SelectOption[] = [
+    ...common,
+    { value: 'name', label: t('projectSettings.name') },
+    { value: 'operation', label: t('projectSettings.operation') },
+    { value: 'status', label: t('projectSettings.status') },
+    { value: 'duration', label: t('projectSettings.duration') },
+  ];
+  return {
+    error: [
+      ...common,
+      { value: 'message', label: t('projectSettings.normalizedMessage') },
+      { value: 'exception_type', label: t('projectSettings.exceptionType') },
+      { value: 'logger', label: t('projectSettings.logger') },
+      { value: 'request_host', label: t('projectSettings.requestHost') },
+      { value: 'request_path', label: t('projectSettings.requestPath') },
+    ],
+    log: [
+      ...common,
+      { value: 'message', label: t('projectSettings.normalizedMessage') },
+      { value: 'severity', label: t('projectSettings.severity') },
+    ],
+    transaction: spanFields,
+    span: spanFields,
+  };
+});
 
 const project = useQuery({
   queryKey: computed(() => ['project', projectId.value]),
@@ -158,7 +157,7 @@ function setIpPolicy(value: string): void {
 }
 
 function filterFields(signal: InboundFilterSignal): SelectOption[] {
-  return signalFilterFields[signal];
+  return signalFilterFields.value[signal];
 }
 
 function setFilterSignal(rule: InboundFilterRule, value: string): void {
@@ -179,7 +178,9 @@ function setFilterOperation(rule: InboundFilterRule, value: string): void {
 }
 
 function filterOperations(field: InboundFilterField): SelectOption[] {
-  return field === 'duration' ? filterOperationOptions.slice(0, 1) : filterOperationOptions;
+  return field === 'duration'
+    ? filterOperationOptions.value.slice(0, 1)
+    : filterOperationOptions.value;
 }
 
 function addInboundFilter(): void {
@@ -199,7 +200,7 @@ const savePolicy = useMutation({
   mutationFn: () => api.updatePolicy(projectId.value, policy),
   onSuccess: async (value) => {
     Object.assign(policy, value);
-    notice.value = 'Project policy saved.';
+    notice.value = t('projectSettings.policySaved');
     await queryClient.invalidateQueries({ queryKey: ['project', projectId.value] });
   },
 });
@@ -207,14 +208,14 @@ const createKey = useMutation({
   mutationFn: () => api.createKey(projectId.value, newKeyLabel.value),
   onSuccess: async () => {
     newKeyLabel.value = '';
-    notice.value = 'A new DSN key was created.';
+    notice.value = t('projectSettings.keyCreated');
     await queryClient.invalidateQueries({ queryKey: ['project-keys', projectId.value] });
   },
 });
 const disableKey = useMutation({
   mutationFn: (key: string) => api.disableKey(projectId.value, key),
   onSuccess: async () => {
-    notice.value = 'The DSN key was disabled. SDKs using it can no longer ingest events.';
+    notice.value = t('projectSettings.keyDisabled');
     await queryClient.invalidateQueries({ queryKey: ['project-keys', projectId.value] });
   },
 });
@@ -227,20 +228,20 @@ const requestDeletion = useMutation({
     ),
   onSuccess: async (value) => {
     queryClient.setQueryData(['project-deletion', projectId.value], value);
-    notice.value = 'Deletion is scheduled. Ingestion is fenced immediately.';
+    notice.value = t('projectSettings.deletionScheduled');
     await Promise.all([project.refetch(), keys.refetch(), session.refreshProjects()]);
   },
 });
 const cancelDeletion = useMutation({
   mutationFn: () => {
     const operationId = deletion.data.value?.operation_id;
-    if (!operationId) throw new Error('Deletion operation is not loaded.');
+    if (!operationId) throw new Error(t('projectSettings.deletionNotLoaded'));
     return api.cancelProjectDeletion(projectId.value, operationId);
   },
   onSuccess: async (value) => {
     queryClient.setQueryData(['project-deletion', projectId.value], value);
     deleteConfirmation.value = '';
-    notice.value = 'Deletion was cancelled. Previously active DSN keys are active again.';
+    notice.value = t('projectSettings.deletionCancelled');
     await Promise.all([project.refetch(), keys.refetch(), session.refreshProjects()]);
   },
 });
@@ -251,33 +252,33 @@ const cancelDeletion = useMutation({
     <header class="page-header">
       <div>
         <p class="eyebrow">{{ session.selectedProject?.display_name }}</p>
-        <h1>Project settings</h1>
-        <p>Accepted ingestion, privacy controls, limits, and DSN keys.</p>
+        <h1>{{ $t('projectSettings.title') }}</h1>
+        <p>{{ $t('projectSettings.description') }}</p>
       </div>
     </header>
-    <nav class="settings-anchor-nav" aria-label="Project setting sections">
+    <nav class="settings-anchor-nav" :aria-label="$t('projectSettings.sections')">
       <a href="#data-policy">
         <AppIcon name="shield" :size="15" />
-        Data policy
+        {{ $t('projectSettings.dataPolicy') }}
       </a>
       <a v-if="canAdministerProject" href="#dsn-keys">
         <AppIcon name="key" :size="15" />
-        DSN keys
+        {{ $t('projectSettings.dsnKeys') }}
       </a>
       <a href="#retention">
         <AppIcon name="history" :size="15" />
-        Retention
+        {{ $t('projectSettings.retention') }}
       </a>
       <a v-if="canAdministerProject" href="#delete-project">
         <AppIcon name="delete" :size="15" />
-        Delete project
+        {{ $t('projectSettings.deleteProject') }}
       </a>
     </nav>
     <p v-if="notice" class="success-notice" role="status">{{ notice }}</p>
     <div v-if="!canAdministerProject" class="permission-banner">
-      You can inspect these settings, but only a project administrator can change them.
+      {{ $t('projectSettings.readOnly') }}
     </div>
-    <LoadingPanel v-if="project.isPending.value" label="Loading accepted project policy…" />
+    <LoadingPanel v-if="project.isPending.value" :label="$t('projectSettings.loadingPolicy')" />
     <ApiErrorPanel
       v-else-if="project.error.value"
       :error="project.error.value"
@@ -291,19 +292,19 @@ const cancelDeletion = useMutation({
     >
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Revision {{ policy.revision }}</p>
-          <h2>Privacy and ingestion</h2>
+          <p class="eyebrow">{{ $t('projectSettings.revision', { revision: policy.revision }) }}</p>
+          <h2>{{ $t('projectSettings.privacy') }}</h2>
         </div>
       </div>
       <div>
         <BaseSelect
           :model-value="policy.ip_policy"
           :options="ipPolicyOptions"
-          label="IP address handling"
+          :label="$t('onboarding.ipHandling')"
           :disabled="!session.has('project:admin')"
           @update:model-value="setIpPolicy"
         />
-        <small class="field-help">The policy is applied before durable Event storage.</small>
+        <small class="field-help">{{ $t('projectSettings.ipHelp') }}</small>
       </div>
       <div class="check-grid">
         <label class="check-control">
@@ -312,7 +313,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>Error Events</strong><small>Accept supported error payloads.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.errorEvents') }}</strong
+            ><small>{{ $t('projectSettings.errorEventsHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -320,7 +324,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>Client reports</strong><small>Accept SDK outcome reports.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.clientReports') }}</strong
+            ><small>{{ $t('projectSettings.clientReportsHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -328,7 +335,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>Structured Logs</strong><small>Accept SDK log records.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.structuredLogs') }}</strong
+            ><small>{{ $t('projectSettings.structuredLogsHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -336,7 +346,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>Transactions</strong><small>Accept root performance segments.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.transactions') }}</strong
+            ><small>{{ $t('projectSettings.transactionsHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -344,7 +357,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>Spans</strong><small>Accept child and standalone spans.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.spans') }}</strong
+            ><small>{{ $t('projectSettings.spansHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -352,7 +368,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>User Feedback</strong><small>Accept Feedback SDK reports.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.feedback') }}</strong
+            ><small>{{ $t('projectSettings.feedbackHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -360,7 +379,10 @@ const cancelDeletion = useMutation({
             type="checkbox"
             :disabled="!session.has('project:admin')"
           />
-          <span><strong>Cron check-ins</strong><small>Accept scheduled-job check-ins.</small></span>
+          <span
+            ><strong>{{ $t('projectSettings.checkIns') }}</strong
+            ><small>{{ $t('projectSettings.checkInsHelp') }}</small></span
+          >
         </label>
         <label class="check-control">
           <input
@@ -369,8 +391,8 @@ const cancelDeletion = useMutation({
             :disabled="!session.has('project:admin')"
           />
           <span>
-            <strong>Application Metrics</strong>
-            <small>Accept bounded SDK counters, gauges, and distributions.</small>
+            <strong>{{ $t('projectSettings.metrics') }}</strong>
+            <small>{{ $t('projectSettings.metricsHelp') }}</small>
           </span>
         </label>
         <label class="check-control">
@@ -380,20 +402,17 @@ const cancelDeletion = useMutation({
             :disabled="!session.has('project:admin')"
           />
           <span>
-            <strong>Session Replay</strong>
-            <small>Requires client-side masking; recording bytes remain opaque to Metric.</small>
+            <strong>{{ $t('projectSettings.replay') }}</strong>
+            <small>{{ $t('projectSettings.replayHelp') }}</small>
           </span>
         </label>
       </div>
       <section class="inbound-filter-section">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Before durable storage</p>
-            <h3>Inbound filters</h3>
-            <p>
-              Matching signals are acknowledged and discarded before MongoDB, attachments, or
-              BlobStore writes.
-            </p>
+            <p class="eyebrow">{{ $t('projectSettings.beforeStorage') }}</p>
+            <h3>{{ $t('projectSettings.inboundFilters') }}</h3>
+            <p>{{ $t('projectSettings.inboundFiltersHelp') }}</p>
           </div>
           <button
             v-if="session.has('project:admin')"
@@ -403,12 +422,12 @@ const cancelDeletion = useMutation({
             @click="addInboundFilter"
           >
             <AppIcon name="plus" :size="16" />
-            Add filter
+            {{ $t('projectSettings.addFilter') }}
           </button>
         </div>
         <div v-if="policy.inbound_filters.length === 0" class="empty-inline">
           <AppIcon name="filter" :size="18" />
-          <span>No inbound filters. Every enabled signal follows its normal durable path.</span>
+          <span>{{ $t('projectSettings.noFilters') }}</span>
         </div>
         <div v-else class="inbound-filter-list">
           <article
@@ -419,33 +438,35 @@ const cancelDeletion = useMutation({
             <BaseSelect
               :model-value="rule.signal"
               :options="filterSignalOptions"
-              label="Signal"
+              :label="$t('projectSettings.signal')"
               :disabled="!session.has('project:admin')"
               @update:model-value="setFilterSignal(rule, $event)"
             />
             <BaseSelect
               :model-value="rule.field"
               :options="filterFields(rule.signal)"
-              label="Field"
+              :label="$t('projectSettings.field')"
               :disabled="!session.has('project:admin')"
               @update:model-value="setFilterField(rule, $event)"
             />
             <BaseSelect
               :model-value="rule.operation"
               :options="filterOperations(rule.field)"
-              label="Match"
+              :label="$t('projectSettings.match')"
               :disabled="!session.has('project:admin')"
               @update:model-value="setFilterOperation(rule, $event)"
             />
             <label>
-              Pattern
+              {{ $t('projectSettings.pattern') }}
               <input
                 v-model="rule.pattern"
                 maxlength="256"
                 required
                 autocomplete="off"
                 :placeholder="
-                  rule.field === 'duration' ? 'Milliseconds, for example 5000' : 'Value'
+                  rule.field === 'duration'
+                    ? $t('projectSettings.durationPlaceholder')
+                    : $t('projectSettings.valuePlaceholder')
                 "
                 :disabled="!session.has('project:admin')"
               />
@@ -454,7 +475,7 @@ const cancelDeletion = useMutation({
               v-if="session.has('project:admin')"
               class="icon-button inbound-filter-rule__remove"
               type="button"
-              aria-label="Remove inbound filter"
+              :aria-label="$t('projectSettings.removeFilter')"
               @click="removeInboundFilter(index)"
             >
               <AppIcon name="delete" :size="16" />
@@ -462,13 +483,12 @@ const cancelDeletion = useMutation({
           </article>
         </div>
         <small class="field-help">
-          Up to 32 rules, 256 bytes per pattern. Matching is case-sensitive; glob supports
-          <code>*</code> and <code>?</code>. Duration uses exact integer milliseconds.
+          {{ $t('projectSettings.filterLimits') }}
         </small>
       </section>
       <div class="form-grid form-grid--three">
         <label>
-          Maximum Event bytes
+          {{ $t('projectSettings.maxEventBytes') }}
           <input
             v-model.number="policy.limits.max_event_bytes"
             type="number"
@@ -478,22 +498,22 @@ const cancelDeletion = useMutation({
           />
         </label>
         <label>
-          Events per second
+          {{ $t('projectSettings.eventsPerSecond') }}
           <input
             v-model.number="policy.limits.max_events_per_second"
             type="number"
             min="1"
-            placeholder="Unlimited"
+            :placeholder="$t('projectSettings.unlimited')"
             :disabled="!session.has('project:admin')"
           />
         </label>
         <label>
-          Burst
+          {{ $t('projectSettings.burst') }}
           <input
             v-model.number="policy.limits.burst"
             type="number"
             min="1"
-            placeholder="Automatic"
+            :placeholder="$t('projectSettings.automatic')"
             :disabled="!session.has('project:admin')"
           />
         </label>
@@ -501,7 +521,7 @@ const cancelDeletion = useMutation({
       <ApiErrorPanel
         v-if="savePolicy.error.value"
         :error="savePolicy.error.value"
-        title="Policy was not saved"
+        :title="$t('projectSettings.policyFailed')"
       />
       <button
         v-if="session.has('project:admin')"
@@ -510,25 +530,29 @@ const cancelDeletion = useMutation({
         :disabled="savePolicy.isPending.value"
       >
         <AppIcon :name="savePolicy.isPending.value ? 'loading' : 'save'" :size="16" />
-        {{ savePolicy.isPending.value ? 'Saving…' : 'Save policy' }}
+        {{
+          savePolicy.isPending.value
+            ? $t('projectSettings.saving')
+            : $t('projectSettings.savePolicy')
+        }}
       </button>
     </form>
 
     <section id="dsn-keys" class="panel settings-anchor">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">SDK access</p>
-          <h2>DSN keys</h2>
+          <p class="eyebrow">{{ $t('projectSettings.sdkAccess') }}</p>
+          <h2>{{ $t('projectSettings.dsnKeys') }}</h2>
         </div>
       </div>
       <EmptyState
         v-if="!canAdministerProject"
         icon="blocked"
-        title="DSN key access is restricted"
-        description="Project credentials are visible only to project administrators."
+        :title="$t('projectSettings.dsnRestricted')"
+        :description="$t('projectSettings.dsnRestrictedDescription')"
       />
       <template v-else>
-        <LoadingPanel v-if="keys.isPending.value" label="Loading DSN keys…" />
+        <LoadingPanel v-if="keys.isPending.value" :label="$t('projectSettings.loadingKeys')" />
         <ApiErrorPanel
           v-else-if="keys.error.value"
           :error="keys.error.value"
@@ -549,7 +573,7 @@ const cancelDeletion = useMutation({
               @click="disableKey.mutate(key.dsn_key)"
             >
               <AppIcon name="blocked" :size="16" />
-              Disable
+              {{ $t('projectSettings.disable') }}
             </button>
           </article>
         </div>
@@ -559,7 +583,7 @@ const cancelDeletion = useMutation({
           @submit.prevent="createKey.mutate()"
         >
           <label>
-            New key label
+            {{ $t('projectSettings.newKeyLabel') }}
             <input v-model.trim="newKeyLabel" maxlength="64" required />
           </label>
           <button
@@ -568,44 +592,47 @@ const cancelDeletion = useMutation({
             :disabled="createKey.isPending.value"
           >
             <AppIcon name="plus" :size="16" />
-            Create key
+            {{ $t('projectSettings.createKey') }}
           </button>
         </form>
         <ApiErrorPanel
           v-if="createKey.error.value || disableKey.error.value"
           :error="createKey.error.value || disableKey.error.value"
-          title="Key operation failed"
+          :title="$t('projectSettings.keyFailed')"
         />
       </template>
     </section>
 
     <section id="retention" class="panel unavailable-setting settings-anchor">
       <div>
-        <p class="eyebrow">Retention</p>
-        <h2>Automated retention</h2>
+        <p class="eyebrow">{{ $t('projectSettings.retention') }}</p>
+        <h2>{{ $t('projectSettings.automatedRetention') }}</h2>
         <LoadingPanel
           v-if="capabilities.isPending.value"
-          label="Loading effective retention policy…"
+          :label="$t('projectSettings.loadingRetention')"
         />
         <ApiErrorPanel
           v-else-if="capabilities.error.value"
           :error="capabilities.error.value"
-          title="Retention policy could not be loaded"
+          :title="$t('projectSettings.retentionFailed')"
           @retry="capabilities.refetch()"
         />
         <div v-else-if="capabilities.data.value?.retention">
-          <p>
-            Raw Events are retained for
-            <strong>{{ capabilities.data.value.retention.events_days }} days</strong>. Hourly Issue
-            statistics are retained for
-            <strong>{{ capabilities.data.value.retention.issue_stats_hourly_days }} days</strong>.
-          </p>
-          <p>
-            Event age uses server receipt time. Policy reductions are applied gradually in bounded
-            maintenance batches, and pending Events are protected from retention deletion.
-          </p>
+          <i18n-t keypath="projectSettings.retentionDurations" tag="p" scope="global">
+            <template #events>
+              <strong>{{
+                capabilities.data.value.retention.events_days.toLocaleString(locale)
+              }}</strong>
+            </template>
+            <template #statistics>
+              <strong>{{
+                capabilities.data.value.retention.issue_stats_hourly_days.toLocaleString(locale)
+              }}</strong>
+            </template>
+          </i18n-t>
+          <p>{{ $t('projectSettings.retentionHelp') }}</p>
         </div>
-        <p v-else>Automated retention is disabled in this build.</p>
+        <p v-else>{{ $t('projectSettings.retentionDisabled') }}</p>
       </div>
       <StatusBadge :status="capabilities.data.value?.retention ? 'active' : 'unavailable'" />
     </section>
@@ -617,23 +644,22 @@ const cancelDeletion = useMutation({
     >
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Danger zone</p>
-          <h2>Delete project</h2>
+          <p class="eyebrow">{{ $t('projectSettings.dangerZone') }}</p>
+          <h2>{{ $t('projectSettings.deleteProject') }}</h2>
         </div>
         <StatusBadge :status="project.data.value?.state ?? 'unavailable'" />
       </div>
       <template
         v-if="project.data.value?.state === 'active' || project.data.value?.state === 'disabled'"
       >
-        <p>
-          Deletion immediately blocks every active DSN. Purge starts after the grace period and then
-          cannot be cancelled. Audit records are retained.
-        </p>
+        <p>{{ $t('projectSettings.deletionHelp') }}</p>
         <div class="destructive-confirmation">
           <label>
-            <span
-              >Type <code>{{ project.data.value.slug }}</code> to confirm</span
-            >
+            <i18n-t keypath="projectSettings.typeToConfirm" tag="span" scope="global">
+              <template #slug
+                ><code>{{ project.data.value.slug }}</code></template
+              >
+            </i18n-t>
             <input
               v-model.trim="deleteConfirmation"
               autocomplete="off"
@@ -649,25 +675,38 @@ const cancelDeletion = useMutation({
             @click="requestDeletion.mutate()"
           >
             <AppIcon :name="requestDeletion.isPending.value ? 'loading' : 'delete'" :size="16" />
-            {{ requestDeletion.isPending.value ? 'Scheduling…' : 'Schedule project deletion' }}
+            {{
+              requestDeletion.isPending.value
+                ? $t('projectSettings.scheduling')
+                : $t('projectSettings.scheduleDeletion')
+            }}
           </button>
         </div>
       </template>
       <template v-else-if="project.data.value?.state === 'pending_delete'">
-        <LoadingPanel v-if="deletion.isPending.value" label="Loading deletion status…" />
+        <LoadingPanel
+          v-if="deletion.isPending.value"
+          :label="$t('projectSettings.loadingDeletion')"
+        />
         <ApiErrorPanel
           v-else-if="deletion.error.value"
           :error="deletion.error.value"
-          title="Deletion status could not be loaded"
+          :title="$t('projectSettings.deletionLoadFailed')"
           @retry="deletion.refetch()"
         />
         <div v-else-if="deletion.data.value">
-          <p>
-            Purge is scheduled for
-            <strong>{{ new Date(deletion.data.value.purge_after).toLocaleString() }}</strong
-            >. Operation <code>{{ deletion.data.value.operation_id }}</code
-            >.
-          </p>
+          <i18n-t keypath="projectSettings.purgeScheduled" tag="p" scope="global">
+            <template #time>
+              <strong>{{
+                new Date(deletion.data.value.purge_after).toLocaleString(locale)
+              }}</strong>
+            </template>
+            <template #operation>
+              <code>
+                {{ deletion.data.value.operation_id }}
+              </code>
+            </template>
+          </i18n-t>
           <button
             class="button button--secondary"
             type="button"
@@ -675,17 +714,21 @@ const cancelDeletion = useMutation({
             @click="cancelDeletion.mutate()"
           >
             <AppIcon name="back" :size="16" />
-            {{ cancelDeletion.isPending.value ? 'Cancelling…' : 'Cancel deletion' }}
+            {{
+              cancelDeletion.isPending.value
+                ? $t('projectSettings.cancelling')
+                : $t('projectSettings.cancelDeletion')
+            }}
           </button>
         </div>
       </template>
       <p v-else-if="project.data.value?.state === 'purging'">
-        Purge is running in bounded batches and can no longer be cancelled.
+        {{ $t('projectSettings.purging') }}
       </p>
       <ApiErrorPanel
         v-if="requestDeletion.error.value || cancelDeletion.error.value"
         :error="requestDeletion.error.value || cancelDeletion.error.value"
-        title="Project deletion operation failed"
+        :title="$t('projectSettings.deletionFailed')"
       />
     </section>
   </section>

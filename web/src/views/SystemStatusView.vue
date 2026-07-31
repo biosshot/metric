@@ -21,13 +21,13 @@ const status = useQuery({
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">Operations</p>
-        <h1>System status</h1>
-        <p>Authenticated component health and the exact capabilities of this build.</p>
+        <p class="eyebrow">{{ $t('system.eyebrow') }}</p>
+        <h1>{{ $t('system.title') }}</h1>
+        <p>{{ $t('system.description') }}</p>
       </div>
       <StatusBadge v-if="status.data.value" :status="status.data.value.status" />
     </header>
-    <LoadingPanel v-if="status.isPending.value" label="Checking components…" />
+    <LoadingPanel v-if="status.isPending.value" :label="$t('system.checking')" />
     <ApiErrorPanel
       v-else-if="status.error.value"
       :error="status.error.value"
@@ -38,13 +38,13 @@ const status = useQuery({
         <article v-for="(value, name) in status.data.value?.components" :key="name">
           <div>
             <strong>{{ name }}</strong>
-            <small>Required runtime component</small>
+            <small>{{ $t('system.required') }}</small>
           </div>
           <StatusBadge :status="value" />
         </article>
       </div>
     </section>
-    <LoadingPanel v-if="capabilities.isPending.value" label="Loading capabilities…" />
+    <LoadingPanel v-if="capabilities.isPending.value" :label="$t('system.loadingCapabilities')" />
     <ApiErrorPanel
       v-else-if="capabilities.error.value"
       :error="capabilities.error.value"
@@ -54,7 +54,7 @@ const status = useQuery({
       <div class="section-heading">
         <div>
           <p class="eyebrow">API {{ capabilities.data.value?.api_version }}</p>
-          <h2>Build capabilities</h2>
+          <h2>{{ $t('system.capabilities') }}</h2>
         </div>
       </div>
       <div class="capability-list">
@@ -69,17 +69,14 @@ const status = useQuery({
       <div class="search-capability">
         <div class="search-capability__heading">
           <AppIcon name="search" :size="18" />
-          <strong>Search v1 indexed fields</strong>
+          <strong>{{ $t('system.indexedFields') }}</strong>
         </div>
         <div class="search-capability__fields">
           <code v-for="field in capabilities.data.value?.search.fields" :key="field">{{
             field
           }}</code>
         </div>
-        <p>
-          Full text and arbitrary custom tags are not enabled. Unsupported expressions return an
-          explicit error.
-        </p>
+        <p>{{ $t('system.searchLimit') }}</p>
       </div>
     </section>
   </section>
