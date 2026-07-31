@@ -4,8 +4,10 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import App from './App.vue';
 import { router } from './router';
 import { retryQuery } from './api/client';
-import { i18n } from './i18n';
+import { i18n, initializeLocale } from './i18n';
 import './style.css';
+
+await initializeLocale();
 
 const queryClient = new QueryClient({
   defaultOptions: {

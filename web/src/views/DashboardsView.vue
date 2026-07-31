@@ -545,7 +545,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           type="submit"
         >
           <AppIcon name="save" :size="17" />
-          {{ editingSavedId ? $t('dashboards.saveWidget') : $t('dashboards.addWidget') }}
+          {{ editingSavedId ? $t('dashboards.saveWidget') : $t('dashboards.addWidgetAction') }}
         </button>
       </form>
 

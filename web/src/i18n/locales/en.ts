@@ -177,7 +177,7 @@ export default {
     frames: 'no frames | {count} frame | {count} frames',
     showFirst: 'Show first 40',
     showAll: 'Show all {count}',
-    unknownFunction: '<unknown function>',
+    unknownFunction: "{'<'}unknown function{'>'}",
     unknownSource: 'unknown source',
     sourceContext: 'Source context for {source}',
     frame: 'frame',
@@ -634,7 +634,7 @@ export default {
     initialize: 'Initialize the SDK',
     sdk: 'SDK',
     capabilities:
-      'Metric accepts Error Events, Structured Logs, Transactions, Spans, Application Metrics, and browser Session Replays. Replay capture requires @sentry/browser 10.66.0 and client-side masking.',
+      "Metric accepts Error Events, Structured Logs, Transactions, Spans, Application Metrics, and browser Session Replays. Replay capture requires {'@'}sentry/browser 10.66.0 and client-side masking.",
   },
   apiTokens: {
     releases: 'Releases and deploys',
@@ -894,10 +894,10 @@ export default {
     provider: 'Provider',
     botToken: 'Bot token',
     botTokenHelp:
-      'Create a bot with @BotFather and paste its token. The token is never returned by the API.',
+      "Create a bot with {'@'}BotFather and paste its token. The token is never returned by the API.",
     checkingBot: 'Checking bot…',
     connectBot: 'Connect bot',
-    botReady: '@{username} is ready to accept subscribers.',
+    botReady: "{'@'}{username} is ready to accept subscribers.",
     subscriberLink: 'Subscriber link',
     noChatId: 'No chat ID required',
     subscriberHelp:
@@ -1150,6 +1150,7 @@ export default {
     stepWidget: 'Step 1 · Widget query',
     editWidget: 'Edit widget',
     addWidget: 'Add a widget',
+    addWidgetAction: 'Add widget',
     widgetHelp: 'Choose what to measure, narrow the signals, and save it to the widget library.',
     widgetTitle: 'Widget title',
     widgetTitlePlaceholder: 'Production log volume',

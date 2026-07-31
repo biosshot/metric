@@ -6,9 +6,9 @@ defineOptions({ inheritAttrs: false });
 
 const { locale, t } = useI18n();
 
-function changeLocale(event: Event): void {
+async function changeLocale(event: Event): Promise<void> {
   if (!(event.target instanceof HTMLSelectElement)) return;
-  setLocale(event.target.value as AppLocale);
+  await setLocale(event.target.value as AppLocale);
 }
 </script>
 

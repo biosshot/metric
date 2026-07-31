@@ -1,12 +1,14 @@
 import { createI18n } from 'vue-i18n';
-import en from './locales/en';
-import ru from './locales/ru';
 
 const localeStorageKey = 'metric.locale';
 
-export const localeMessages = { en, ru };
-export type AppLocale = keyof typeof localeMessages;
-export const supportedLocales = Object.keys(localeMessages) as AppLocale[];
+const localeLoaders = {
+  en: () => import('./locales/en'),
+  ru: () => import('./locales/ru'),
+} as const;
+
+export type AppLocale = keyof typeof localeLoaders;
+export const supportedLocales = Object.keys(localeLoaders) as AppLocale[];
 
 function isAppLocale(value: string | null | undefined): value is AppLocale {
   return supportedLocales.includes(value as AppLocale);
@@ -33,9 +35,9 @@ function initialLocale(): AppLocale {
 
 export const i18n = createI18n({
   legacy: false,
-  locale: initialLocale(),
+  locale: 'en',
   fallbackLocale: 'en',
-  messages: localeMessages,
+  messages: {},
 });
 
 function applyDocumentLocale(locale: AppLocale): void {
@@ -44,7 +46,22 @@ function applyDocumentLocale(locale: AppLocale): void {
   if (description) description.content = i18n.global.t('meta.description');
 }
 
-export function setLocale(locale: AppLocale): void {
+async function loadLocale(locale: AppLocale): Promise<void> {
+  if (i18n.global.availableLocales.includes(locale)) return;
+  const { default: messages } = await localeLoaders[locale]();
+  i18n.global.setLocaleMessage(locale, messages);
+}
+
+export async function initializeLocale(): Promise<void> {
+  const locale = initialLocale();
+  await loadLocale('en');
+  if (locale !== 'en') await loadLocale(locale);
+  i18n.global.locale.value = locale;
+  applyDocumentLocale(locale);
+}
+
+export async function setLocale(locale: AppLocale): Promise<void> {
+  await loadLocale(locale);
   i18n.global.locale.value = locale;
   applyDocumentLocale(locale);
   try {
@@ -53,5 +70,3 @@ export function setLocale(locale: AppLocale): void {
     // The selected locale still applies to the current page without persistence.
   }
 }
-
-applyDocumentLocale(i18n.global.locale.value);
