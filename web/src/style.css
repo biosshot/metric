@@ -4474,3 +4474,13 @@ label small,
     padding-inline: 0.75rem;
   }
 }
+.locale-select {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.locale-select select {
+  min-width: 7rem;
+}

@@ -4,6 +4,7 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import App from './App.vue';
 import { router } from './router';
 import { retryQuery } from './api/client';
+import { i18n } from './i18n';
 import './style.css';
 
 const queryClient = new QueryClient({
@@ -17,4 +18,9 @@ const queryClient = new QueryClient({
   },
 });
 
-createApp(App).use(createPinia()).use(router).use(VueQueryPlugin, { queryClient }).mount('#app');
+createApp(App)
+  .use(createPinia())
+  .use(router)
+  .use(i18n)
+  .use(VueQueryPlugin, { queryClient })
+  .mount('#app');
