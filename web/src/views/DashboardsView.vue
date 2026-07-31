@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import type {
@@ -23,6 +24,7 @@ import { useSessionStore } from '../stores/session';
 const session = useSessionStore();
 const route = useRoute();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const canWrite = computed(() => session.has('issue:write'));
 
@@ -46,79 +48,81 @@ const editing = ref(route.query.edit === '1');
 const refreshResults = reactive<Record<string, DashboardRefresh>>({});
 const lastAutoRefresh = reactive<Record<string, number>>({});
 
-const datasetOptions: SelectOption[] = [
-  { value: 'errors', label: 'Errors', icon: 'bug' },
-  { value: 'logs', label: 'Logs', icon: 'logs' },
-  { value: 'spans', label: 'Spans', icon: 'traces' },
-  { value: 'metrics', label: 'Metrics', icon: 'gauge' },
-];
-const shapeOptions: SelectOption[] = [
-  { value: 'number', label: 'Number', icon: 'gauge' },
-  { value: 'table', label: 'Table', icon: 'clipboard' },
-  { value: 'timeseries', label: 'Timeseries', icon: 'activity' },
-];
-const refreshOptions: SelectOption[] = [
-  { value: 'manual', label: 'Manual refresh' },
-  { value: '30s', label: 'Every 30 seconds' },
-  { value: '1m', label: 'Every minute' },
-  { value: '5m', label: 'Every 5 minutes' },
-];
+const datasetOptions = computed<SelectOption[]>(() => [
+  { value: 'errors', label: t('queryBuilder.errors'), icon: 'bug' },
+  { value: 'logs', label: t('queryBuilder.logs'), icon: 'logs' },
+  { value: 'spans', label: t('queryBuilder.spans'), icon: 'traces' },
+  { value: 'metrics', label: t('queryBuilder.metrics'), icon: 'gauge' },
+]);
+const shapeOptions = computed<SelectOption[]>(() => [
+  { value: 'number', label: t('queryBuilder.number'), icon: 'gauge' },
+  { value: 'table', label: t('queryBuilder.table'), icon: 'clipboard' },
+  { value: 'timeseries', label: t('queryBuilder.timeseries'), icon: 'activity' },
+]);
+const refreshOptions = computed<SelectOption[]>(() => [
+  { value: 'manual', label: t('dashboards.manualRefresh') },
+  { value: '30s', label: t('dashboards.every30Seconds') },
+  { value: '1m', label: t('dashboards.everyMinute') },
+  { value: '5m', label: t('dashboards.every5Minutes') },
+]);
 const rangeMillis: Record<string, number> = {
   '24h': 24 * 60 * 60 * 1_000,
   '7d': 7 * 24 * 60 * 60 * 1_000,
   '30d': 30 * 24 * 60 * 60 * 1_000,
 };
-const metricMeasureOptions: SelectOption[] = [
+const metricMeasureOptions = computed<SelectOption[]>(() => [
   {
     value: 'value',
-    label: 'Metric value',
+    label: t('queryBuilder.metricValue'),
     icon: 'gauge',
-    description: 'Sum the values reported by the SDK',
+    description: t('queryBuilder.metricValueHelp'),
   },
   {
     value: 'samples',
-    label: 'Sample count',
+    label: t('queryBuilder.sampleCount'),
     icon: 'activity',
-    description: 'Count observations instead of their values',
+    description: t('queryBuilder.sampleCountHelp'),
   },
-];
-const fieldOptionsByDataset: Record<ExploreDataset, SelectOption[]> = {
+]);
+const fieldOptionsByDataset = computed<Record<ExploreDataset, SelectOption[]>>(() => ({
   errors: [
-    { value: 'level', label: 'Level' },
-    { value: 'platform', label: 'Platform' },
+    { value: 'level', label: t('queryBuilder.level') },
+    { value: 'platform', label: t('queryBuilder.platform') },
   ],
   logs: [
-    { value: 'message', label: 'Message' },
-    { value: 'level', label: 'Level' },
-    { value: 'environment', label: 'Environment' },
-    { value: 'release', label: 'Release' },
-    { value: 'service', label: 'Service' },
+    { value: 'message', label: t('queryBuilder.message') },
+    { value: 'level', label: t('queryBuilder.level') },
+    { value: 'environment', label: t('queryBuilder.environment') },
+    { value: 'release', label: t('queryBuilder.release') },
+    { value: 'service', label: t('queryBuilder.service') },
   ],
   spans: [
-    { value: 'name', label: 'Name' },
-    { value: 'operation', label: 'Operation' },
-    { value: 'status', label: 'Status' },
-    { value: 'environment', label: 'Environment' },
-    { value: 'release', label: 'Release' },
-    { value: 'service', label: 'Service' },
+    { value: 'name', label: t('queryBuilder.name') },
+    { value: 'operation', label: t('queryBuilder.operation') },
+    { value: 'status', label: t('queryBuilder.status') },
+    { value: 'environment', label: t('queryBuilder.environment') },
+    { value: 'release', label: t('queryBuilder.release') },
+    { value: 'service', label: t('queryBuilder.service') },
   ],
   metrics: [
-    { value: 'name', label: 'Metric name' },
-    { value: 'metric_kind', label: 'Metric kind' },
-    { value: 'unit', label: 'Unit' },
+    { value: 'name', label: t('queryBuilder.metricName') },
+    { value: 'metric_kind', label: t('queryBuilder.metricKind') },
+    { value: 'unit', label: t('queryBuilder.unit') },
   ],
-};
+}));
 const widgetFieldOptions = computed<SelectOption[]>(() => [
-  { value: '', label: 'No filter' },
-  ...fieldOptionsByDataset[savedDataset.value],
+  { value: '', label: t('queryBuilder.noFilter') },
+  ...fieldOptionsByDataset.value[savedDataset.value],
 ]);
-const operatorOptions: SelectOption[] = [
-  { value: 'exact', label: 'Equals' },
-  { value: 'contains', label: 'Contains' },
-  { value: 'starts_with', label: 'Starts with' },
-  { value: 'ends_with', label: 'Ends with' },
-];
-const exactOperatorOptions: SelectOption[] = [{ value: 'exact', label: 'Equals' }];
+const operatorOptions = computed<SelectOption[]>(() => [
+  { value: 'exact', label: t('queryBuilder.equals') },
+  { value: 'contains', label: t('queryBuilder.contains') },
+  { value: 'starts_with', label: t('queryBuilder.startsWith') },
+  { value: 'ends_with', label: t('queryBuilder.endsWith') },
+]);
+const exactOperatorOptions = computed<SelectOption[]>(() => [
+  { value: 'exact', label: t('queryBuilder.equals') },
+]);
 const widgetTextFields = new Set([
   'message',
   'environment',
@@ -130,7 +134,7 @@ const widgetTextFields = new Set([
   'unit',
 ]);
 const widgetOperatorOptions = computed(() =>
-  widgetTextFields.has(savedField.value) ? operatorOptions : exactOperatorOptions,
+  widgetTextFields.has(savedField.value) ? operatorOptions.value : exactOperatorOptions.value,
 );
 
 const savedQueries = useQuery({
@@ -144,18 +148,18 @@ const dashboards = useQuery({
   enabled: computed(() => Boolean(projectId.value)),
 });
 const savedOptions = computed<SelectOption[]>(() => [
-  { value: '', label: 'Choose an existing widget' },
+  { value: '', label: t('dashboards.chooseWidget') },
   ...(savedQueries.data.value?.items ?? []).map((query) => ({
     value: query.id,
     label: query.name,
-    description: `${query.query.dataset} · ${shapeFor(query.query)}`,
+    description: `${datasetLabel(query.query.dataset)} · ${shapeLabel(shapeFor(query.query))}`,
   })),
 ]);
 const dashboardOptions = computed<SelectOption[]>(() =>
   (dashboards.data.value?.items ?? []).map((dashboard) => ({
     value: dashboard.id,
     label: dashboard.name,
-    description: `${dashboard.widgets.length} widget${dashboard.widgets.length === 1 ? '' : 's'}`,
+    description: t('dashboards.widgets', dashboard.widgets.length),
     icon: 'dashboard',
   })),
 );
@@ -290,6 +294,54 @@ function shapeFor(query: ExploreRequest): ExploreShape {
   return query.interval ? 'timeseries' : 'table';
 }
 
+function datasetLabel(value: ExploreDataset): string {
+  return t(`queryBuilder.${value}`);
+}
+
+function shapeLabel(value: ExploreShape): string {
+  return t(`queryBuilder.${value}`);
+}
+
+function refreshLabel(value: Dashboard['refresh_interval']): string {
+  const keys: Record<Dashboard['refresh_interval'], string> = {
+    manual: 'dashboards.manualRefresh',
+    '30s': 'dashboards.every30Seconds',
+    '1m': 'dashboards.everyMinute',
+    '5m': 'dashboards.every5Minutes',
+  };
+  return t(keys[value]);
+}
+
+function fieldLabel(value: string): string {
+  const keys: Record<string, string> = {
+    count: 'queryBuilder.count',
+    duration_ms: 'queryBuilder.duration',
+    environment: 'queryBuilder.environment',
+    id: 'queryBuilder.id',
+    issue_id: 'queryBuilder.issueId',
+    level: 'queryBuilder.level',
+    message: 'queryBuilder.message',
+    metric_kind: 'queryBuilder.metricKind',
+    name: 'queryBuilder.name',
+    operation: 'queryBuilder.operation',
+    platform: 'queryBuilder.platform',
+    received_at: 'queryBuilder.receivedAt',
+    release: 'queryBuilder.release',
+    samples: 'queryBuilder.samples',
+    service: 'queryBuilder.service',
+    status: 'queryBuilder.status',
+    timestamp: 'queryBuilder.timestamp',
+    trace_id: 'queryBuilder.traceId',
+    unit: 'queryBuilder.unit',
+    value: 'queryBuilder.value',
+  };
+  return keys[value] ? t(keys[value]) : value.replaceAll('_', ' ');
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat(locale.value).format(value);
+}
+
 function addWidget(): void {
   const saved = savedQueries.data.value?.items.find((item) => item.id === selectedSavedQuery.value);
   if (
@@ -407,9 +459,11 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
   <section class="dashboards-page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / overview</p>
-        <h1>Dashboard</h1>
-        <p>See the shared project view first. Open editing only when the view needs to change.</p>
+        <p class="eyebrow">
+          {{ $t('dashboards.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('dashboards.title') }}</h1>
+        <p>{{ $t('dashboards.description') }}</p>
       </div>
     </header>
 
@@ -422,43 +476,67 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       <form class="panel dashboard-builder" @submit.prevent="createSaved.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 1 · Widget query</p>
-            <h2>{{ editingSavedId ? 'Edit widget' : 'Add a widget' }}</h2>
-            <p>Choose what to measure, narrow the signals, and save it to the widget library.</p>
+            <p class="eyebrow">{{ $t('dashboards.stepWidget') }}</p>
+            <h2>
+              {{ editingSavedId ? $t('dashboards.editWidget') : $t('dashboards.addWidget') }}
+            </h2>
+            <p>{{ $t('dashboards.widgetHelp') }}</p>
           </div>
           <AppIcon name="explore" :size="20" />
         </div>
         <label>
-          <span>Widget title</span>
-          <input v-model="savedName" maxlength="120" required placeholder="Production log volume" />
+          <span>{{ $t('dashboards.widgetTitle') }}</span>
+          <input
+            v-model="savedName"
+            maxlength="120"
+            required
+            :placeholder="$t('dashboards.widgetTitlePlaceholder')"
+          />
         </label>
         <div class="dashboard-builder__row">
-          <BaseSelect v-model="savedDataset" :options="datasetOptions" label="Dataset" />
-          <BaseSelect v-model="savedShape" :options="shapeOptions" label="Result" />
+          <BaseSelect
+            v-model="savedDataset"
+            :options="datasetOptions"
+            :label="$t('queryBuilder.dataset')"
+          />
+          <BaseSelect
+            v-model="savedShape"
+            :options="shapeOptions"
+            :label="$t('queryBuilder.result')"
+          />
         </div>
         <TimeRangeSelect
           v-model="savedRange"
           :window-value="savedWindow"
-          label="Time window"
+          :label="$t('queryBuilder.timeWindow')"
           @update:window-value="savedWindow = $event"
         />
         <BaseSelect
           v-if="savedDataset === 'metrics' && savedShape !== 'table'"
           v-model="savedMetricMeasure"
           :options="metricMeasureOptions"
-          label="Metric measure"
+          :label="$t('queryBuilder.metricMeasure')"
         />
         <div class="dashboard-widget-filter">
-          <BaseSelect v-model="savedField" :options="widgetFieldOptions" label="Filter field" />
+          <BaseSelect
+            v-model="savedField"
+            :options="widgetFieldOptions"
+            :label="$t('queryBuilder.filterField')"
+          />
           <BaseSelect
             v-if="savedField"
             v-model="savedOperator"
             :options="widgetOperatorOptions"
-            label="Match"
+            :label="$t('queryBuilder.match')"
           />
           <label v-if="savedField">
-            <span>Value</span>
-            <input v-model="savedValue" maxlength="256" required placeholder="Filter value" />
+            <span>{{ $t('queryBuilder.value') }}</span>
+            <input
+              v-model="savedValue"
+              maxlength="256"
+              required
+              :placeholder="$t('queryBuilder.filterValue')"
+            />
           </label>
         </div>
         <button
@@ -467,28 +545,37 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           type="submit"
         >
           <AppIcon name="save" :size="17" />
-          {{ editingSavedId ? 'Save widget' : 'Add widget' }}
+          {{ editingSavedId ? $t('dashboards.saveWidget') : $t('dashboards.addWidget') }}
         </button>
       </form>
 
       <form class="panel dashboard-builder" @submit.prevent="createDashboard.mutate()">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 2 · Dashboard</p>
-            <h2>{{ editingDashboardId ? 'Edit dashboard' : 'Arrange the shared view' }}</h2>
-            <p>Pick saved widgets, choose refresh frequency, and create the team view.</p>
+            <p class="eyebrow">{{ $t('dashboards.stepDashboard') }}</p>
+            <h2>
+              {{
+                editingDashboardId ? $t('dashboards.editDashboard') : $t('dashboards.arrangeShared')
+              }}
+            </h2>
+            <p>{{ $t('dashboards.dashboardHelp') }}</p>
           </div>
           <AppIcon name="dashboard" :size="20" />
         </div>
         <label>
-          <span>Name</span>
-          <input v-model="dashboardName" maxlength="120" required placeholder="Service health" />
+          <span>{{ $t('dashboards.name') }}</span>
+          <input
+            v-model="dashboardName"
+            maxlength="120"
+            required
+            :placeholder="$t('dashboards.namePlaceholder')"
+          />
         </label>
         <div class="dashboard-widget-picker">
           <BaseSelect
             v-model="selectedSavedQuery"
             :options="savedOptions"
-            label="Add an existing widget"
+            :label="$t('dashboards.addExisting')"
           />
           <button
             class="button button--secondary"
@@ -497,7 +584,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             @click="addWidget"
           >
             <AppIcon name="plus" :size="16" />
-            Add
+            {{ $t('dashboards.add') }}
           </button>
         </div>
         <div v-if="draftWidgets.length" class="dashboard-draft-widgets">
@@ -513,7 +600,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
         <BaseSelect
           v-model="refreshInterval"
           :options="refreshOptions"
-          label="Refresh preference"
+          :label="$t('dashboards.refreshPreference')"
         />
         <button
           class="button button--primary"
@@ -521,14 +608,16 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           :disabled="createDashboard.isPending.value || !draftWidgets.length"
         >
           <AppIcon name="plus" :size="17" />
-          {{ editingDashboardId ? 'Save dashboard' : 'Create dashboard' }}
+          {{
+            editingDashboardId ? $t('dashboards.saveDashboard') : $t('dashboards.createDashboard')
+          }}
         </button>
       </form>
     </div>
 
     <LoadingPanel
       v-if="savedQueries.isPending.value || dashboards.isPending.value"
-      label="Loading dashboard…"
+      :label="$t('dashboards.loading')"
     />
     <ApiErrorPanel
       v-else-if="savedQueries.error.value || dashboards.error.value"
@@ -542,16 +631,18 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       <section v-if="canWrite && editing" class="dashboard-section dashboard-section--definitions">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Widget library</p>
-            <h2>Saved widget queries</h2>
+            <p class="eyebrow">{{ $t('dashboards.library') }}</p>
+            <h2>{{ $t('dashboards.savedQueries') }}</h2>
           </div>
-          <span>{{ savedQueries.data.value?.items.length ?? 0 }} shared</span>
+          <span>
+            {{ $t('dashboards.shared', { count: savedQueries.data.value?.items.length ?? 0 }) }}
+          </span>
         </div>
         <EmptyState
           v-if="!savedQueries.data.value?.items.length"
           icon="explore"
-          title="No saved queries"
-          description="Add a widget in the editor above. Its reusable definition will appear here."
+          :title="$t('dashboards.noSavedQueries')"
+          :description="$t('dashboards.noSavedQueriesHelp')"
         />
         <div v-else class="saved-query-list">
           <article v-for="saved in savedQueries.data.value.items" :key="saved.id">
@@ -560,20 +651,20 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 v-if="canWrite"
                 v-model="saved.name"
                 maxlength="120"
-                aria-label="Saved query name"
+                :aria-label="$t('dashboards.savedQueryName')"
               />
               <strong v-else>{{ saved.name }}</strong>
               <span
-                >{{ saved.query.dataset }} · {{ shapeFor(saved.query) }} · revision
-                {{ saved.revision }}</span
+                >{{ datasetLabel(saved.query.dataset) }} · {{ shapeLabel(shapeFor(saved.query)) }} ·
+                {{ $t('dashboards.revision', { revision: saved.revision }) }}</span
               >
             </div>
             <div v-if="canWrite" class="compact-actions">
               <button class="button button--secondary" type="button" @click="editSaved(saved)">
-                <AppIcon name="settings" :size="15" /> Edit
+                <AppIcon name="settings" :size="15" /> {{ $t('dashboards.edit') }}
               </button>
               <button class="button button--danger" type="button" @click="removeSaved(saved)">
-                <AppIcon name="delete" :size="15" /> Delete
+                <AppIcon name="delete" :size="15" /> {{ $t('dashboards.delete') }}
               </button>
             </div>
           </article>
@@ -583,8 +674,8 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
       <section class="dashboard-section dashboard-section--views">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Shared project view</p>
-            <h2>{{ visibleDashboards[0]?.name || 'Project dashboard' }}</h2>
+            <p class="eyebrow">{{ $t('dashboards.sharedView') }}</p>
+            <h2>{{ visibleDashboards[0]?.name || $t('dashboards.projectDashboard') }}</h2>
           </div>
           <div class="compact-actions dashboard-view-actions">
             <BaseSelect
@@ -592,15 +683,15 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               v-model="selectedDashboardId"
               class="dashboard-picker"
               :options="dashboardOptions"
-              label="Dashboard"
+              :label="$t('dashboards.dashboard')"
             />
           </div>
         </div>
         <EmptyState
           v-if="!dashboards.data.value?.items.length"
           icon="dashboard"
-          title="No dashboard yet"
-          description="Create a shared view with the signals your team checks most often."
+          :title="$t('dashboards.noDashboard')"
+          :description="$t('dashboards.noDashboardHelp')"
         >
           <button
             v-if="canWrite"
@@ -609,7 +700,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             @click="editing = true"
           >
             <AppIcon name="plus" :size="16" />
-            Create dashboard
+            {{ $t('dashboards.createDashboard') }}
           </button>
         </EmptyState>
         <article
@@ -621,12 +712,10 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           <header>
             <div>
               <h3>{{ dashboard.name }}</h3>
-              <span
-                >{{ dashboard.widgets.length }} widget{{
-                  dashboard.widgets.length === 1 ? '' : 's'
-                }}
-                · {{ dashboard.refresh_interval }}</span
-              >
+              <span>
+                {{ $t('dashboards.widgets', dashboard.widgets.length) }} ·
+                {{ refreshLabel(dashboard.refresh_interval) }}
+              </span>
             </div>
             <div v-if="canWrite" class="compact-actions dashboard-card__actions">
               <button
@@ -636,7 +725,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 @click="editing = !editing"
               >
                 <AppIcon :name="editing ? 'close' : 'settings'" :size="15" />
-                {{ editing ? 'Close editor' : 'Edit dashboard' }}
+                {{ editing ? $t('dashboards.closeEditor') : $t('dashboards.editDashboard') }}
               </button>
               <button
                 v-if="editing"
@@ -644,7 +733,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 type="button"
                 @click="editDashboard(dashboard)"
               >
-                <AppIcon name="settings" :size="15" /> Edit widgets
+                <AppIcon name="settings" :size="15" /> {{ $t('dashboards.editWidgets') }}
               </button>
               <button
                 v-if="editing"
@@ -652,7 +741,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 type="button"
                 @click="removeDashboard(dashboard)"
               >
-                <AppIcon name="delete" :size="15" /> Delete
+                <AppIcon name="delete" :size="15" /> {{ $t('dashboards.delete') }}
               </button>
             </div>
           </header>
@@ -661,8 +750,8 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
             <span>
               {{
                 refreshResults[dashboard.id]
-                  ? 'Live data loaded for each widget window.'
-                  : 'Loading current widget data…'
+                  ? $t('dashboards.liveData')
+                  : $t('dashboards.loadingData')
               }}
             </span>
             <button
@@ -672,22 +761,30 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               @click="refresh(dashboard)"
             >
               <AppIcon name="refresh" :size="16" />
-              Refresh
+              {{ $t('dashboards.refresh') }}
             </button>
           </div>
 
           <p v-if="refreshResults[dashboard.id]" class="dashboard-cost">
-            Updated now · estimated cost {{ refreshResults[dashboard.id].total_cost }} / 25,000
+            {{
+              $t('dashboards.updatedCost', {
+                cost: formatNumber(refreshResults[dashboard.id].total_cost),
+              })
+            }}
           </p>
           <div class="dashboard-widgets">
             <article v-for="widget in dashboard.widgets" :key="widget.id" class="dashboard-widget">
               <header>
                 <div>
-                  <p class="eyebrow">{{ widget.shape }}</p>
+                  <p class="eyebrow">{{ shapeLabel(widget.shape) }}</p>
                   <h4>{{ widget.title }}</h4>
                 </div>
                 <span v-if="widgetResult(dashboard.id, widget.id)?.cost">
-                  cost {{ widgetResult(dashboard.id, widget.id)?.cost }}
+                  {{
+                    $t('dashboards.cost', {
+                      cost: formatNumber(widgetResult(dashboard.id, widget.id)?.cost ?? 0),
+                    })
+                  }}
                 </span>
               </header>
               <div
@@ -696,7 +793,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
               >
                 <AppIcon name="alert" :size="18" />
                 <div>
-                  <strong>Widget could not be refreshed</strong>
+                  <strong>{{ $t('dashboards.widgetFailed') }}</strong>
                   <code>{{ widgetResult(dashboard.id, widget.id)?.error_code }}</code>
                 </div>
               </div>
@@ -704,13 +801,13 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                 v-else-if="!widgetResult(dashboard.id, widget.id)"
                 class="dashboard-widget__waiting"
               >
-                Loading current data…
+                {{ $t('dashboards.loadingData') }}
               </p>
               <strong v-else-if="widget.shape === 'number'" class="dashboard-widget__number">
                 {{
                   Number(
                     Object.values(widgetResult(dashboard.id, widget.id)?.items?.[0] ?? {})[0] ?? 0,
-                  ).toLocaleString()
+                  ).toLocaleString(locale)
                 }}
               </strong>
               <div v-else class="issue-table-wrap">
@@ -721,7 +818,7 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
                         v-for="column in columns(widgetResult(dashboard.id, widget.id)?.items)"
                         :key="column"
                       >
-                        {{ column.replaceAll('_', ' ') }}
+                        {{ fieldLabel(column) }}
                       </th>
                     </tr>
                   </thead>
