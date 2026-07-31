@@ -4,8 +4,10 @@ const status = document.querySelector("#sdk-status");
 const statusDetail = document.querySelector("#sdk-status-detail");
 const replayIdOutput = document.querySelector("#replay-id");
 const eventIdOutput = document.querySelector("#event-id");
+const feedbackIdOutput = document.querySelector("#feedback-id");
 const flushButton = document.querySelector("#flush-replay");
 const captureErrorButton = document.querySelector("#capture-error");
+const sendFeedbackButton = document.querySelector("#send-feedback");
 const dsn = new URLSearchParams(window.location.search).get("dsn");
 
 function setStatus(title, detail, tone = "ready") {
@@ -28,6 +30,7 @@ if (!dsn) {
   );
   flushButton.disabled = true;
   captureErrorButton.disabled = true;
+  sendFeedbackButton.disabled = true;
 } else {
   Sentry.init({
     dsn,
@@ -99,6 +102,45 @@ if (!dsn) {
     eventIdOutput.textContent = eventId;
     appendActivity("Test Error captured");
     await Sentry.flush(8_000);
+  });
+
+  sendFeedbackButton.addEventListener("click", async () => {
+    sendFeedbackButton.disabled = true;
+    sendFeedbackButton.textContent = "Sending Feedback…";
+    feedbackIdOutput.textContent = "sending";
+    try {
+      const feedbackId = Sentry.captureFeedback(
+        {
+          message: "The checkout button did not respond",
+          name: "Ada",
+          email: "ada@example.com",
+          url: "https://example.test/checkout",
+          source: "metric-sdk-compatibility",
+        },
+        {
+          attachments: [
+            {
+              filename: "feedback-context.txt",
+              data: "safe browser feedback context",
+              contentType: "text/plain",
+            },
+          ],
+        },
+      );
+      const flushed = await Sentry.flush(8_000);
+      if (!flushed) {
+        throw new Error("Sentry SDK flush deadline exceeded");
+      }
+      feedbackIdOutput.textContent = feedbackId;
+      appendActivity(`Feedback sent: ${feedbackId}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      feedbackIdOutput.textContent = `failed: ${message}`;
+      appendActivity(`Feedback send failed: ${message}`);
+    } finally {
+      sendFeedbackButton.disabled = false;
+      sendFeedbackButton.textContent = "Send test Feedback";
+    }
   });
 }
 

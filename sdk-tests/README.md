@@ -110,10 +110,13 @@ python -m http.server 4173
 ```
 
 Open `replay-demo.html?dsn=<URL-encoded DSN>`, interact with the counter, tabs, form,
-theme, modal and scroll area, then click **Flush & stop Replay**. The page uses the
-same pinned official `@sentry/browser` package and stops recording after a successful
-flush, so the demo tab does not keep appending segments. Ordinary interface text
-remains visible, while input values are masked before transport.
+theme, modal and scroll area, then click **Flush & stop Replay**. Use
+**Send test Feedback** to submit the fixed browser Feedback fixture with a safe text
+attachment; the page shows the returned Feedback ID. This action requires attachments
+to be enabled, as they are in the supplied Low, Medium and High profiles. The page
+uses the same pinned official `@sentry/browser` package and stops recording after a
+successful flush, so the demo tab does not keep appending segments. Ordinary
+interface text remains visible, while input values are masked before transport.
 
 ## Python SDK
 
