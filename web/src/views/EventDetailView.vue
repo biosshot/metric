@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useQuery } from '@tanstack/vue-query';
 import { useRoute } from 'vue-router';
 import { api } from '../api/client';
@@ -12,6 +13,7 @@ import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
 const session = useSessionStore();
+const { locale } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const eventId = computed(() => String(route.params.eventId));
 const event = useQuery({
@@ -36,9 +38,9 @@ const exceptionTitle = computed(() => {
       :to="`/issues/${event.data.value.issue_id}`"
     >
       <AppIcon name="back" :size="16" />
-      Issue details
+      {{ $t('eventDetail.issueDetails') }}
     </RouterLink>
-    <LoadingPanel v-if="event.isPending.value" label="Loading exact Event…" />
+    <LoadingPanel v-if="event.isPending.value" :label="$t('eventDetail.loading')" />
     <ApiErrorPanel
       v-else-if="event.error.value"
       :error="event.error.value"
@@ -51,23 +53,25 @@ const exceptionTitle = computed(() => {
             <StatusBadge :status="event.data.value.level" />
             <span>{{ event.data.value.platform }}</span>
           </div>
-          <h1>{{ exceptionTitle || String(event.data.value.body.message || 'Event details') }}</h1>
+          <h1>
+            {{ exceptionTitle || String(event.data.value.body.message || $t('eventDetail.title')) }}
+          </h1>
           <p>
-            Occurred
+            {{ $t('eventDetail.occurred') }}
             <time :datetime="event.data.value.occurred_at">
-              {{ new Date(event.data.value.occurred_at).toLocaleString() }}
+              {{ new Date(event.data.value.occurred_at).toLocaleString(locale) }}
             </time>
           </p>
         </div>
         <dl class="event-identifiers">
           <div>
-            <dt>Event ID</dt>
+            <dt>{{ $t('eventDetail.eventId') }}</dt>
             <dd>
               <code>{{ event.data.value.event_id }}</code>
             </dd>
           </div>
           <div>
-            <dt>Issue ID</dt>
+            <dt>{{ $t('eventDetail.issueId') }}</dt>
             <dd>
               <code>{{ event.data.value.issue_id }}</code>
             </dd>
@@ -76,12 +80,9 @@ const exceptionTitle = computed(() => {
       </header>
       <StackTrace :body="event.data.value.body" />
       <details class="raw-event">
-        <summary>Raw normalized Event</summary>
-        <p>
-          This is the complete stable API representation. Secrets and disallowed PII have already
-          been processed by the server policy.
-        </p>
-        <pre tabindex="0" aria-label="Scrollable normalized Event JSON"><code>{{
+        <summary>{{ $t('eventDetail.raw') }}</summary>
+        <p>{{ $t('eventDetail.rawDescription') }}</p>
+        <pre tabindex="0" :aria-label="$t('eventDetail.rawJson')"><code>{{
           JSON.stringify(event.data.value.body, null, 2)
         }}</code></pre>
       </details>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
@@ -13,6 +14,7 @@ import { useSessionStore } from '../stores/session';
 const route = useRoute();
 const session = useSessionStore();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const releaseId = computed(() => String(route.params.releaseId ?? ''));
 const environment = ref('production');
@@ -95,8 +97,8 @@ const cli = computed(() => {
 });
 
 function timestamp(value: string | null): string {
-  if (!value) return 'Not reported';
-  return new Intl.DateTimeFormat(undefined, {
+  if (!value) return t('common.notReported');
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -106,25 +108,29 @@ function timestamp(value: string | null): string {
 <template>
   <section>
     <RouterLink class="back-link" to="/releases">
-      <AppIcon name="back" :size="16" /> Releases
+      <AppIcon name="back" :size="16" /> {{ $t('releaseDetail.all') }}
     </RouterLink>
-    <LoadingPanel v-if="release.isPending.value" label="Loading release…" />
+    <LoadingPanel v-if="release.isPending.value" :label="$t('releaseDetail.loading')" />
     <ApiErrorPanel
       v-else-if="release.error.value"
       :error="release.error.value"
-      title="Release could not be loaded"
+      :title="$t('releaseDetail.loadFailed')"
       @retry="release.refetch()"
     />
     <template v-else-if="release.data.value">
       <header class="page-header release-heading">
         <div>
-          <p class="eyebrow">{{ session.selectedProject?.slug }} / release</p>
+          <p class="eyebrow">
+            {{ $t('releaseDetail.eyebrow', { project: session.selectedProject?.slug }) }}
+          </p>
           <h1>{{ release.data.value.version }}</h1>
           <p>
             {{
               release.data.value.released_at
-                ? `Finalized ${timestamp(release.data.value.released_at)}`
-                : 'Open and accepting observations'
+                ? $t('releaseDetail.finalized', {
+                    time: timestamp(release.data.value.released_at),
+                  })
+                : $t('releaseDetail.open')
             }}
           </p>
         </div>
@@ -136,81 +142,90 @@ function timestamp(value: string | null): string {
           @click="finalize.mutate()"
         >
           <AppIcon name="check" :size="16" />
-          {{ finalize.isPending.value ? 'Finalizing…' : 'Finalize' }}
+          {{
+            finalize.isPending.value ? $t('releaseDetail.finalizing') : $t('releaseDetail.finalize')
+          }}
         </button>
       </header>
 
       <ApiErrorPanel
         v-if="finalize.error.value"
         :error="finalize.error.value"
-        title="Release was not finalized"
+        :title="$t('releaseDetail.finalizeFailed')"
       />
 
       <div class="summary-grid">
         <article class="panel summary-card">
-          <span>First Error</span><strong>{{ timestamp(release.data.value.first_seen) }}</strong>
+          <span>{{ $t('releaseDetail.firstError') }}</span
+          ><strong>{{ timestamp(release.data.value.first_seen) }}</strong>
         </article>
         <article class="panel summary-card">
-          <span>Last Error</span><strong>{{ timestamp(release.data.value.last_seen) }}</strong>
+          <span>{{ $t('releaseDetail.lastError') }}</span
+          ><strong>{{ timestamp(release.data.value.last_seen) }}</strong>
         </article>
         <article class="panel summary-card">
-          <span>Deployments</span><strong>{{ deploys.data.value?.items.length ?? 0 }}</strong>
+          <span>{{ $t('releaseDetail.deployments') }}</span
+          ><strong>{{ (deploys.data.value?.items.length ?? 0).toLocaleString(locale) }}</strong>
         </article>
         <article class="panel summary-card summary-card--success">
-          <span>Crash-free sessions</span>
+          <span>{{ $t('releaseDetail.crashFreeSessions') }}</span>
           <strong>{{ healthSummary.crashFreeSessions.toFixed(2) }}%</strong>
         </article>
         <article class="panel summary-card summary-card--info">
-          <span>Crash-free users</span>
+          <span>{{ $t('releaseDetail.crashFreeUsers') }}</span>
           <strong>{{ healthSummary.crashFreeUsers.toFixed(2) }}%</strong>
         </article>
       </div>
 
-      <nav class="release-signal-links" aria-label="Related signals">
+      <nav class="release-signal-links" :aria-label="$t('releaseDetail.relatedSignals')">
         <RouterLink
           :to="{ path: '/issues', query: { q: `release:${release.data.value.version}` } }"
         >
-          <AppIcon name="bug" :size="16" /> Errors
+          <AppIcon name="bug" :size="16" /> {{ $t('releaseDetail.errors') }}
         </RouterLink>
         <RouterLink :to="{ path: '/logs', query: { release: release.data.value.version } }">
-          <AppIcon name="logs" :size="16" /> Logs
+          <AppIcon name="logs" :size="16" /> {{ $t('releaseDetail.logs') }}
         </RouterLink>
         <RouterLink :to="{ path: '/traces', query: { release: release.data.value.version } }">
-          <AppIcon name="traces" :size="16" /> Spans
+          <AppIcon name="traces" :size="16" /> {{ $t('releaseDetail.spans') }}
         </RouterLink>
       </nav>
 
       <section class="panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Release Health</p>
-            <h2>Application sessions</h2>
+            <p class="eyebrow">{{ $t('releaseDetail.health') }}</p>
+            <h2>{{ $t('releaseDetail.sessionsTitle') }}</h2>
           </div>
-          <span class="muted">{{ healthSummary.sessions }} sessions · users approximate</span>
+          <span class="muted">{{
+            $t('releaseDetail.sessionsSummary', {
+              count: healthSummary.sessions.toLocaleString(locale),
+            })
+          }}</span>
         </div>
-        <LoadingPanel v-if="health.isPending.value" label="Loading Release Health…" />
+        <LoadingPanel v-if="health.isPending.value" :label="$t('releaseDetail.healthLoading')" />
         <ApiErrorPanel
           v-else-if="health.error.value"
           :error="health.error.value"
-          title="Release Health could not be loaded"
+          :title="$t('releaseDetail.healthFailed')"
           @retry="health.refetch()"
         />
         <EmptyState
           v-else-if="!health.data.value?.items.length"
           icon="release"
-          title="No application sessions"
-          description="Send a Session lifecycle from an SDK configured with this Release."
+          :title="$t('releaseDetail.noSessions')"
+          :description="$t('releaseDetail.noSessionsDescription')"
         />
         <div v-else class="table-scroll">
           <table class="data-table">
             <thead>
               <tr>
-                <th>Hour</th>
-                <th>Environment</th>
-                <th>Sessions</th>
-                <th>Crashed</th>
-                <th>Crash-free</th>
-                <th>Crash-free users</th>
+                <th>{{ $t('releaseDetail.hour') }}</th>
+                <th>{{ $t('releaseDetail.environment') }}</th>
+                <th>{{ $t('releaseDetail.sessions') }}</th>
+                <th>{{ $t('releaseDetail.crashed') }}</th>
+                <th>{{ $t('releaseDetail.crashFree') }}</th>
+                <th>{{ $t('releaseDetail.crashFreeUsers') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -222,8 +237,8 @@ function timestamp(value: string | null): string {
                 <td>
                   <strong>{{ bucket.environment }}</strong>
                 </td>
-                <td>{{ bucket.sessions }}</td>
-                <td>{{ bucket.crashed }}</td>
+                <td>{{ bucket.sessions.toLocaleString(locale) }}</td>
+                <td>{{ bucket.crashed.toLocaleString(locale) }}</td>
                 <td>{{ bucket.crash_free_sessions.toFixed(2) }}%</td>
                 <td>≈ {{ bucket.crash_free_users.toFixed(2) }}%</td>
               </tr>
@@ -231,9 +246,13 @@ function timestamp(value: string | null): string {
           </table>
         </div>
         <p v-if="health.data.value" class="muted health-footnote">
-          User counts use a {{ health.data.value.user_sketch_bytes }} byte mergeable sketch (about
-          {{ health.data.value.user_sketch_standard_error_percent }}% standard error, saturation
-          near {{ health.data.value.user_sketch_saturation_estimate }} users per hour).
+          {{
+            $t('releaseDetail.healthFootnote', {
+              bytes: health.data.value.user_sketch_bytes.toLocaleString(locale),
+              error: health.data.value.user_sketch_standard_error_percent,
+              saturation: health.data.value.user_sketch_saturation_estimate.toLocaleString(locale),
+            })
+          }}
         </p>
       </section>
 
@@ -241,21 +260,24 @@ function timestamp(value: string | null): string {
         <section class="panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Issues</p>
-              <h2>New in this release</h2>
+              <p class="eyebrow">{{ $t('releaseDetail.issues') }}</p>
+              <h2>{{ $t('releaseDetail.newIssues') }}</h2>
             </div>
           </div>
-          <LoadingPanel v-if="newIssues.isPending.value" label="Loading new Issues…" />
+          <LoadingPanel
+            v-if="newIssues.isPending.value"
+            :label="$t('releaseDetail.loadingNewIssues')"
+          />
           <ApiErrorPanel
             v-else-if="newIssues.error.value"
             :error="newIssues.error.value"
-            title="New Issues could not be loaded"
+            :title="$t('releaseDetail.newIssuesFailed')"
           />
           <EmptyState
             v-else-if="!newIssues.data.value?.items.length"
             icon="success"
-            title="No new Issues"
-            description="No Issue currently has this as its first Release."
+            :title="$t('releaseDetail.noNewIssues')"
+            :description="$t('releaseDetail.noNewIssuesDescription')"
           />
           <RouterLink
             v-for="issue in newIssues.data.value?.items"
@@ -272,21 +294,24 @@ function timestamp(value: string | null): string {
         <section class="panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Regressions</p>
-              <h2>Regressed in this release</h2>
+              <p class="eyebrow">{{ $t('releaseDetail.regressions') }}</p>
+              <h2>{{ $t('releaseDetail.regressed') }}</h2>
             </div>
           </div>
-          <LoadingPanel v-if="regressedIssues.isPending.value" label="Loading regressions…" />
+          <LoadingPanel
+            v-if="regressedIssues.isPending.value"
+            :label="$t('releaseDetail.loadingRegressions')"
+          />
           <ApiErrorPanel
             v-else-if="regressedIssues.error.value"
             :error="regressedIssues.error.value"
-            title="Regressions could not be loaded"
+            :title="$t('releaseDetail.regressionsFailed')"
           />
           <EmptyState
             v-else-if="!regressedIssues.data.value?.items.length"
             icon="success"
-            title="No latest regressions"
-            description="No Issue's latest regression points at this Release."
+            :title="$t('releaseDetail.noRegressions')"
+            :description="$t('releaseDetail.noRegressionsDescription')"
           />
           <RouterLink
             v-for="issue in regressedIssues.data.value?.items"
@@ -304,14 +329,14 @@ function timestamp(value: string | null): string {
       <section class="panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Deploy timeline</p>
-            <h2>Environments</h2>
+            <p class="eyebrow">{{ $t('releaseDetail.deployTimeline') }}</p>
+            <h2>{{ $t('releaseDetail.environments') }}</h2>
           </div>
         </div>
         <ApiErrorPanel
           v-if="createDeploy.error.value"
           :error="createDeploy.error.value"
-          title="Deploy was not recorded"
+          :title="$t('releaseDetail.deployFailed')"
         />
         <form
           v-if="session.has('release:write')"
@@ -319,12 +344,17 @@ function timestamp(value: string | null): string {
           @submit.prevent="createDeploy.mutate()"
         >
           <label>
-            Environment
+            {{ $t('releaseDetail.environment') }}
             <input v-model.trim="environment" required maxlength="64" />
           </label>
           <label>
-            Name <span class="muted">(optional)</span>
-            <input v-model.trim="deployName" maxlength="200" placeholder="Production rollout" />
+            {{ $t('releaseDetail.name') }}
+            <span class="muted">{{ $t('releases.optional') }}</span>
+            <input
+              v-model.trim="deployName"
+              maxlength="200"
+              :placeholder="$t('releaseDetail.rolloutPlaceholder')"
+            />
           </label>
           <button
             class="button button--primary"
@@ -332,22 +362,29 @@ function timestamp(value: string | null): string {
             :disabled="!environment || createDeploy.isPending.value"
           >
             <AppIcon name="deploy" :size="16" />
-            {{ createDeploy.isPending.value ? 'Recording…' : 'Record deploy' }}
+            {{
+              createDeploy.isPending.value
+                ? $t('releaseDetail.recording')
+                : $t('releaseDetail.recordDeploy')
+            }}
           </button>
         </form>
-        <LoadingPanel v-if="deploys.isPending.value" label="Loading deploys…" />
+        <LoadingPanel v-if="deploys.isPending.value" :label="$t('releaseDetail.loadingDeploys')" />
         <EmptyState
           v-else-if="!deploys.data.value?.items.length"
           icon="deploy"
-          title="No deploys recorded"
-          description="Record when this Release reaches an environment."
+          :title="$t('releaseDetail.noDeploys')"
+          :description="$t('releaseDetail.noDeploysDescription')"
         />
         <div v-else class="deploy-timeline">
           <article v-for="deploy in deploys.data.value?.items" :key="deploy.id">
             <span class="deploy-timeline__dot"><AppIcon name="deploy" :size="15" /></span>
             <div>
               <strong>{{ deploy.environment }}</strong>
-              <span>{{ deploy.name || 'Deployment' }} · {{ timestamp(deploy.started_at) }}</span>
+              <span
+                >{{ deploy.name || $t('releaseDetail.deployment') }} ·
+                {{ timestamp(deploy.started_at) }}</span
+              >
             </div>
           </article>
         </div>
@@ -356,11 +393,11 @@ function timestamp(value: string | null): string {
       <section class="panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Automation</p>
+            <p class="eyebrow">{{ $t('releaseDetail.automation') }}</p>
             <h2>sentry-cli</h2>
           </div>
         </div>
-        <CodeBlock :code="cli" language="powershell" title="Release workflow" />
+        <CodeBlock :code="cli" language="powershell" :title="$t('releaseDetail.workflow')" />
       </section>
     </template>
   </section>

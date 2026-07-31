@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -16,6 +17,7 @@ import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const route = useRoute();
+const { locale, t } = useI18n();
 const level = ref('');
 const appliedLevel = ref('');
 const message = ref('');
@@ -43,15 +45,15 @@ const hasFilters = computed(
         release.value.trim(),
     ) || range.value !== 'all',
 );
-const levelOptions: SelectOption[] = [
-  { value: '', label: 'All levels', icon: 'filter' },
-  { value: 'trace', label: 'Trace', icon: 'status' },
-  { value: 'debug', label: 'Debug', icon: 'code' },
-  { value: 'info', label: 'Info', icon: 'info' },
-  { value: 'warn', label: 'Warning', icon: 'alert' },
-  { value: 'error', label: 'Error', icon: 'failure' },
-  { value: 'fatal', label: 'Fatal', icon: 'blocked' },
-];
+const levelOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('logs.allLevels'), icon: 'filter' },
+  { value: 'trace', label: t('status.trace'), icon: 'status' },
+  { value: 'debug', label: t('status.debug'), icon: 'code' },
+  { value: 'info', label: t('status.info'), icon: 'info' },
+  { value: 'warn', label: t('status.warn'), icon: 'alert' },
+  { value: 'error', label: t('status.error'), icon: 'failure' },
+  { value: 'fatal', label: t('status.fatal'), icon: 'blocked' },
+]);
 
 const logs = useQuery({
   queryKey: computed(() => [
@@ -87,7 +89,7 @@ const levelCounts = computed(() => {
   for (const log of logs.data.value?.items ?? []) {
     counts.set(log.level, (counts.get(log.level) ?? 0) + 1);
   }
-  return levelOptions
+  return levelOptions.value
     .filter((option) => option.value)
     .map((option) => ({
       level: option.value,
@@ -138,7 +140,7 @@ function previousPage(): void {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'medium',
   }).format(new Date(value));
@@ -153,40 +155,47 @@ function traceLink(log: StructuredLog): string | null {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / signals</p>
-        <h1>Structured Logs</h1>
-        <p>Search exact service context and follow logs into the Trace that produced them.</p>
+        <p class="eyebrow">
+          {{ $t('logs.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('logs.title') }}</h1>
+        <p>{{ $t('logs.description') }}</p>
       </div>
     </header>
 
     <form class="signal-toolbar" role="search" @submit.prevent="search">
       <label class="search-field">
-        <span class="sr-only">Message contains</span>
-        <input v-model="message" type="search" maxlength="512" placeholder="Message contains…" />
+        <span class="sr-only">{{ $t('logs.messageContains') }}</span>
+        <input
+          v-model="message"
+          type="search"
+          maxlength="512"
+          :placeholder="$t('logs.messagePlaceholder')"
+        />
       </label>
       <label>
-        <span class="sr-only">Service</span>
-        <input v-model="service" maxlength="256" placeholder="Service" />
+        <span class="sr-only">{{ $t('logs.service') }}</span>
+        <input v-model="service" maxlength="256" :placeholder="$t('logs.service')" />
       </label>
       <label>
-        <span class="sr-only">Environment</span>
-        <input v-model="environment" maxlength="128" placeholder="Environment" />
+        <span class="sr-only">{{ $t('logs.environment') }}</span>
+        <input v-model="environment" maxlength="128" :placeholder="$t('logs.environment')" />
       </label>
       <label>
-        <span class="sr-only">Release</span>
-        <input v-model="release" maxlength="256" placeholder="Release" />
+        <span class="sr-only">{{ $t('logs.release') }}</span>
+        <input v-model="release" maxlength="256" :placeholder="$t('logs.release')" />
       </label>
-      <BaseSelect v-model="level" :options="levelOptions" aria-label="Log level" />
+      <BaseSelect v-model="level" :options="levelOptions" :aria-label="$t('logs.level')" />
       <div class="signal-toolbar__actions">
         <TimeRangeSelect
           v-model="range"
           :window-value="selectedWindow"
-          aria-label="Log time range"
+          :aria-label="$t('logs.timeRange')"
           @update:window-value="selectedWindow = $event"
         />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
-          Search
+          {{ $t('common.search') }}
         </button>
         <button
           v-if="hasFilters"
@@ -195,42 +204,42 @@ function traceLink(log: StructuredLog): string | null {
           @click="resetFilters"
         >
           <AppIcon name="close" :size="16" />
-          Reset
+          {{ $t('common.reset') }}
         </button>
       </div>
     </form>
 
-    <LoadingPanel v-if="logs.isPending.value" label="Loading structured logs…" />
+    <LoadingPanel v-if="logs.isPending.value" :label="$t('logs.loading')" />
     <ApiErrorPanel v-else-if="logs.error.value" :error="logs.error.value" @retry="logs.refetch()" />
     <EmptyState
       v-else-if="!logs.data.value?.items.length"
       icon="logs"
-      title="No logs in this view"
-      description="Enable Sentry SDK Logs and send a log entry. Filters are exact except for message text."
+      :title="$t('logs.empty')"
+      :description="$t('logs.emptyDescription')"
     >
       <SdkSetupButton />
     </EmptyState>
     <div v-else class="signal-list">
-      <nav class="pagination" aria-label="Log result pages">
+      <nav class="pagination" :aria-label="$t('logs.resultPages')">
         <button
           class="button button--secondary"
           type="button"
           :disabled="history.length === 0"
           @click="previousPage"
         >
-          Previous
+          {{ $t('common.previous') }}
         </button>
-        <span>Page {{ history.length + 1 }}</span>
+        <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
         <button
           class="button button--secondary"
           type="button"
           :disabled="!logs.data.value.next_cursor"
           @click="nextPage"
         >
-          Next
+          {{ $t('common.next') }}
         </button>
       </nav>
-      <div class="signal-histogram" aria-label="Log levels on this page">
+      <div class="signal-histogram" :aria-label="$t('logs.levelsOnPage')">
         <span
           v-for="entry in levelCounts"
           :key="entry.level"
@@ -246,11 +255,11 @@ function traceLink(log: StructuredLog): string | null {
         class="log-row"
         :class="`signal-accent--${log.level}`"
       >
-        <span class="signal-level">{{ log.level }}</span>
+        <span class="signal-level">{{ $t(`status.${log.level}`) }}</span>
         <RouterLink class="signal-title" :to="`/logs/${log.id}`">{{ log.message }}</RouterLink>
-        <span>{{ log.service || 'unknown service' }}</span>
+        <span>{{ log.service || $t('logs.unknownService') }}</span>
         <RouterLink v-if="traceLink(log)" class="text-link" :to="traceLink(log)!">
-          Trace {{ log.trace_id?.slice(0, 8) }}
+          {{ $t('logs.trace', { id: log.trace_id?.slice(0, 8) }) }}
         </RouterLink>
         <time :datetime="log.timestamp">{{ formatTime(log.timestamp) }}</time>
       </article>

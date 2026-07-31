@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import { api } from '../api/client';
@@ -19,6 +20,7 @@ type InvestigationResult = Page<Issue> | (Page<Event> & { candidates_examined: n
 
 const session = useSessionStore();
 const route = useRoute();
+const { locale, t } = useI18n();
 const status = ref('');
 const submittedStatus = ref('');
 const initialSearch = typeof route.query.q === 'string' ? route.query.q : '';
@@ -30,12 +32,12 @@ const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
-const statusOptions: SelectOption[] = [
-  { value: '', label: 'All statuses', icon: 'filter' },
-  { value: 'open', label: 'Open', icon: 'status' },
-  { value: 'resolved', label: 'Resolved', icon: 'success' },
-  { value: 'ignored', label: 'Ignored', icon: 'blocked' },
-];
+const statusOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('issues.allStatuses'), icon: 'filter' },
+  { value: 'open', label: t('issues.open'), icon: 'status' },
+  { value: 'resolved', label: t('issues.resolved'), icon: 'success' },
+  { value: 'ignored', label: t('issues.ignored'), icon: 'blocked' },
+]);
 
 const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
@@ -122,7 +124,7 @@ function resetPage(clear = true): void {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -133,9 +135,11 @@ function formatTime(value: string): string {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / issues</p>
-        <h1>Issues</h1>
-        <p>Errors grouped by their stable failure signature.</p>
+        <p class="eyebrow">
+          {{ $t('issues.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('issues.title') }}</h1>
+        <p>{{ $t('issues.description') }}</p>
       </div>
     </header>
 
@@ -145,11 +149,11 @@ function formatTime(value: string): string {
       @submit.prevent="submitSearch"
     >
       <label class="search-field">
-        <span class="sr-only">Search events</span>
+        <span class="sr-only">{{ $t('issues.searchLabel') }}</span>
         <input
           v-model="search"
           type="search"
-          placeholder="Search events, for example: environment:production level:error"
+          :placeholder="$t('issues.searchPlaceholder')"
           maxlength="4096"
         />
       </label>
@@ -158,19 +162,19 @@ function formatTime(value: string): string {
         v-model="status"
         class="status-filter"
         :options="statusOptions"
-        aria-label="Issue status"
+        :aria-label="$t('issues.status')"
       />
       <div class="signal-toolbar__actions">
         <TimeRangeSelect
           v-if="!submittedSearch"
           v-model="range"
           :window-value="selectedWindow"
-          aria-label="Issue time range"
+          :aria-label="$t('issues.timeRange')"
           @update:window-value="selectedWindow = $event"
         />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
-          Search
+          {{ $t('common.search') }}
         </button>
         <button
           v-if="hasFilters"
@@ -179,19 +183,19 @@ function formatTime(value: string): string {
           @click="resetFilters"
         >
           <AppIcon name="close" :size="16" />
-          Reset
+          {{ $t('common.reset') }}
         </button>
       </div>
     </form>
 
     <div v-if="submittedSearch" class="search-context">
-      Showing matching Events for <code>{{ submittedSearch }}</code>
+      {{ $t('issues.matching') }} <code>{{ submittedSearch }}</code>
       <span v-if="candidatesExamined !== null">
-        · {{ candidatesExamined }} candidates examined
+        · {{ $t('issues.candidates', candidatesExamined) }}
       </span>
     </div>
 
-    <LoadingPanel v-if="result.isPending.value" label="Loading investigation data…" />
+    <LoadingPanel v-if="result.isPending.value" :label="$t('issues.loading')" />
     <ApiErrorPanel
       v-else-if="result.error.value"
       :error="result.error.value"
@@ -199,44 +203,42 @@ function formatTime(value: string): string {
     />
     <EmptyState
       v-else-if="!result.data.value?.items.length"
-      :title="submittedSearch ? 'No matching events' : 'No Issues in this view'"
+      :title="submittedSearch ? $t('issues.noMatches') : $t('issues.empty')"
       :description="
-        submittedSearch
-          ? 'Check the indexed field names and make the expression more specific.'
-          : 'Events sent by your SDK will appear here after processing.'
+        submittedSearch ? $t('issues.noMatchesDescription') : $t('issues.emptyDescription')
       "
     >
       <SdkSetupButton v-if="!submittedSearch" />
     </EmptyState>
 
     <div v-else class="issue-table-wrap">
-      <nav class="pagination" aria-label="Results pages">
+      <nav class="pagination" :aria-label="$t('issues.resultPages')">
         <button
           class="button button--secondary"
           type="button"
           :disabled="history.length === 0"
           @click="previousPage"
         >
-          Previous
+          {{ $t('common.previous') }}
         </button>
-        <span>Page {{ history.length + 1 }}</span>
+        <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
         <button
           class="button button--secondary"
           type="button"
           :disabled="!result.data.value.next_cursor"
           @click="nextPage"
         >
-          Next
+          {{ $t('common.next') }}
         </button>
       </nav>
       <div class="issue-table-scroll">
         <table v-if="!submittedSearch" class="issue-table">
           <thead>
             <tr>
-              <th scope="col">Issue</th>
-              <th scope="col">Status</th>
-              <th scope="col">Events</th>
-              <th scope="col">Last seen</th>
+              <th scope="col">{{ $t('issues.issue') }}</th>
+              <th scope="col">{{ $t('issues.status') }}</th>
+              <th scope="col">{{ $t('issues.events') }}</th>
+              <th scope="col">{{ $t('issues.lastSeen') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -249,8 +251,12 @@ function formatTime(value: string): string {
               </td>
               <td><StatusBadge :status="issue.status" /></td>
               <td>
-                {{ issue.occurrence_count.toLocaleString() }}
-                <abbr v-if="issue.occurrence_count_approximate" title="Approximate count">~</abbr>
+                {{ issue.occurrence_count.toLocaleString(locale) }}
+                <abbr
+                  v-if="issue.occurrence_count_approximate"
+                  :title="$t('common.approximateCount')"
+                  >~</abbr
+                >
               </td>
               <td>{{ formatTime(issue.last_seen) }}</td>
             </tr>
@@ -264,7 +270,7 @@ function formatTime(value: string): string {
             class="event-row"
           >
             <span class="level-dot" :class="`level-dot--${event.level}`"></span>
-            <strong>{{ event.level }}</strong>
+            <strong>{{ $t(`status.${event.level}`) }}</strong>
             <span>{{ event.platform }}</span>
             <code>{{ event.event_id }}</code>
             <time :datetime="event.occurred_at">{{ formatTime(event.occurred_at) }}</time>

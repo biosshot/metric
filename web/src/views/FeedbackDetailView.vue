@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRoute } from 'vue-router';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -13,6 +14,7 @@ import { useSessionStore } from '../stores/session';
 const route = useRoute();
 const session = useSessionStore();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const feedbackId = computed(() => String(route.params.feedbackId ?? ''));
 const attachmentError = ref<unknown>(null);
@@ -28,7 +30,7 @@ const saveStatus = useMutation({
   mutationFn: (status: FeedbackStatus) =>
     api.updateFeedbackStatus(projectId.value, feedbackId.value, status),
   onSuccess: async (updated) => {
-    mutationNotice.value = `Feedback marked ${updated.status}.`;
+    mutationNotice.value = t('feedbackDetail.marked', { status: t(`status.${updated.status}`) });
     await queryClient.invalidateQueries({
       queryKey: ['feedback-item', projectId.value, feedbackId.value],
     });
@@ -37,15 +39,16 @@ const saveStatus = useMutation({
 });
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KiB`;
+  const number = new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 });
+  if (bytes < 1024) return `${number.format(bytes)} B`;
+  return `${number.format(bytes / 1024)} KiB`;
 }
 
 async function downloadAttachment(attachment: FeedbackAttachment): Promise<void> {
@@ -81,9 +84,9 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
   <section class="feedback-detail">
     <RouterLink class="back-link" to="/feedback">
       <AppIcon name="back" :size="16" />
-      All Feedback
+      {{ $t('feedbackDetail.all') }}
     </RouterLink>
-    <LoadingPanel v-if="feedback.isPending.value" label="Loading feedback detail…" />
+    <LoadingPanel v-if="feedback.isPending.value" :label="$t('feedbackDetail.loading')" />
     <ApiErrorPanel
       v-else-if="feedback.error.value"
       :error="feedback.error.value"
@@ -98,16 +101,20 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
           </div>
           <h1>{{ feedback.data.value.message }}</h1>
           <p>
-            Submitted by {{ feedback.data.value.name || 'an anonymous user' }} ·
-            {{ formatTime(feedback.data.value.received_at) }}
+            {{
+              $t('feedbackDetail.submitted', {
+                name: feedback.data.value.name || $t('feedbackDetail.anonymous'),
+                time: formatTime(feedback.data.value.received_at),
+              })
+            }}
           </p>
         </div>
         <div
           v-if="session.has('issue:write')"
           class="feedback-workflow"
-          aria-label="Feedback workflow"
+          :aria-label="$t('feedbackDetail.workflow')"
         >
-          <span class="eyebrow">Workflow status</span>
+          <span class="eyebrow">{{ $t('feedbackDetail.workflowStatus') }}</span>
           <div class="button-group">
             <button
               v-if="feedback.data.value.status !== 'resolved'"
@@ -117,7 +124,7 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
               @click="saveStatus.mutate('resolved')"
             >
               <AppIcon name="success" :size="16" />
-              Resolve
+              {{ $t('feedbackDetail.resolve') }}
             </button>
             <button
               v-if="feedback.data.value.status !== 'spam'"
@@ -127,7 +134,7 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
               @click="saveStatus.mutate('spam')"
             >
               <AppIcon name="blocked" :size="16" />
-              Mark as spam
+              {{ $t('feedbackDetail.markSpam') }}
             </button>
             <button
               v-if="feedback.data.value.status !== 'open'"
@@ -137,27 +144,27 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
               @click="saveStatus.mutate('open')"
             >
               <AppIcon name="refresh" :size="16" />
-              Reopen
+              {{ $t('feedbackDetail.reopen') }}
             </button>
           </div>
         </div>
-        <p v-else class="permission-note">Read-only role: workflow controls are unavailable.</p>
+        <p v-else class="permission-note">{{ $t('feedbackDetail.readOnly') }}</p>
       </header>
 
       <p v-if="mutationNotice" class="success-notice" role="status">{{ mutationNotice }}</p>
       <ApiErrorPanel
         v-if="saveStatus.error.value"
         :error="saveStatus.error.value"
-        title="Feedback status was not saved"
+        :title="$t('feedbackDetail.saveFailed')"
       />
       <div class="metric-grid feedback-metadata-grid">
         <article>
-          <span>Reporter</span>
-          <strong>{{ feedback.data.value.name || 'Anonymous user' }}</strong>
-          <small>{{ feedback.data.value.contact_email || 'No contact provided' }}</small>
+          <span>{{ $t('feedbackDetail.reporter') }}</span>
+          <strong>{{ feedback.data.value.name || $t('feedback.anonymous') }}</strong>
+          <small>{{ feedback.data.value.contact_email || $t('feedbackDetail.noContact') }}</small>
         </article>
         <article>
-          <span>Page URL</span>
+          <span>{{ $t('feedbackDetail.pageUrl') }}</span>
           <a
             v-if="feedback.data.value.url"
             class="text-link"
@@ -167,21 +174,23 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
           >
             {{ feedback.data.value.url }}
           </a>
-          <strong v-else>Not provided</strong>
+          <strong v-else>{{ $t('feedbackDetail.notProvided') }}</strong>
         </article>
         <article>
-          <span>Received</span><strong>{{ formatTime(feedback.data.value.received_at) }}</strong>
+          <span>{{ $t('feedbackDetail.received') }}</span
+          ><strong>{{ formatTime(feedback.data.value.received_at) }}</strong>
         </article>
         <article>
-          <span>Expires</span><strong>{{ formatTime(feedback.data.value.expires_at) }}</strong>
+          <span>{{ $t('feedbackDetail.expires') }}</span
+          ><strong>{{ formatTime(feedback.data.value.expires_at) }}</strong>
         </article>
       </div>
 
       <section class="detail-panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Investigation</p>
-            <h2>Related telemetry</h2>
+            <p class="eyebrow">{{ $t('feedbackDetail.investigation') }}</p>
+            <h2>{{ $t('feedbackDetail.telemetry') }}</h2>
           </div>
         </div>
         <div class="feedback-links">
@@ -190,35 +199,38 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
             class="button button--secondary"
             :to="`/events/${feedback.data.value.associated_event_id}`"
           >
-            <AppIcon name="bug" :size="16" /> Event
+            <AppIcon name="bug" :size="16" /> {{ $t('feedbackDetail.event') }}
           </RouterLink>
           <RouterLink
             v-if="feedback.data.value.issue_id"
             class="button button--secondary"
             :to="`/issues/${feedback.data.value.issue_id}`"
           >
-            <AppIcon name="clipboard" :size="16" /> Issue
+            <AppIcon name="clipboard" :size="16" /> {{ $t('feedbackDetail.issue') }}
           </RouterLink>
           <RouterLink
             v-if="feedback.data.value.trace_id"
             class="button button--secondary"
             :to="`/traces/${feedback.data.value.trace_id}`"
           >
-            <AppIcon name="traces" :size="16" /> Trace
+            <AppIcon name="traces" :size="16" /> {{ $t('feedbackDetail.trace') }}
           </RouterLink>
           <RouterLink
             v-if="feedback.data.value.replay_id && session.selectedProject?.policy.items.replay"
             class="button button--secondary"
             :to="`/replays/${feedback.data.value.replay_id}`"
           >
-            <AppIcon name="replay" :size="16" /> Replay
+            <AppIcon name="replay" :size="16" /> {{ $t('feedbackDetail.replay') }}
           </RouterLink>
           <span
             v-else-if="feedback.data.value.replay_id"
             class="permission-note feedback-replay-note"
           >
-            Replay {{ feedback.data.value.replay_id.slice(0, 12) }} is linked but Replay UI is not
-            enabled for this project.
+            {{
+              $t('feedbackDetail.replayDisabled', {
+                id: feedback.data.value.replay_id.slice(0, 12),
+              })
+            }}
           </span>
           <span
             v-if="
@@ -229,7 +241,7 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
             "
             class="permission-note"
           >
-            This report has no telemetry link.
+            {{ $t('feedbackDetail.noTelemetry') }}
           </span>
         </div>
       </section>
@@ -238,13 +250,13 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
         <div class="section-heading">
           <div>
             <p class="eyebrow">BlobStore</p>
-            <h2>Attachments</h2>
+            <h2>{{ $t('feedbackDetail.attachments') }}</h2>
           </div>
         </div>
         <ApiErrorPanel
           v-if="attachmentError"
           :error="attachmentError"
-          title="Feedback attachment was not downloaded"
+          :title="$t('feedbackDetail.attachmentFailed')"
         />
         <div class="feedback-attachments">
           <button
@@ -266,7 +278,7 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
             <span>
               {{
                 downloadingAttachmentId === attachment.attachment_id
-                  ? 'Downloading…'
+                  ? $t('feedbackDetail.downloading')
                   : formatBytes(attachment.size)
               }}
             </span>

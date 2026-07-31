@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import Player from 'rrweb-player';
@@ -17,6 +18,7 @@ const MAX_PLAYER_BYTES = 50 * 1024 * 1024;
 
 const session = useSessionStore();
 const route = useRoute();
+const { t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const replayId = computed(() => String(route.params.replayId ?? ''));
 const target = ref<HTMLElement | null>(null);
@@ -33,11 +35,11 @@ const replay = useQuery({
 async function inflate(payload: Uint8Array): Promise<string> {
   if (payload[0] === 0x5b) return new TextDecoder().decode(payload);
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('This browser cannot safely decompress Replay segments.');
+    throw new Error(t('replayDetail.decompressUnsupported'));
   }
   const stream = new Blob([payload]).stream().pipeThrough(new DecompressionStream('deflate'));
   const bytes = await new Response(stream).arrayBuffer();
-  if (bytes.byteLength > MAX_PLAYER_BYTES) throw new Error('Replay exceeds the player byte limit.');
+  if (bytes.byteLength > MAX_PLAYER_BYTES) throw new Error(t('replayDetail.byteLimit'));
   return new TextDecoder().decode(bytes);
 }
 
@@ -47,7 +49,10 @@ async function loadPlayer(): Promise<void> {
   playerError.value = null;
   if (record.segments.length > MAX_PLAYER_SEGMENTS) {
     playerError.value = new Error(
-      `This Replay has ${record.segments.length} segments; the bounded player allows ${MAX_PLAYER_SEGMENTS}.`,
+      t('replayDetail.tooManySegments', {
+        count: record.segments.length,
+        limit: MAX_PLAYER_SEGMENTS,
+      }),
     );
     return;
   }
@@ -57,7 +62,7 @@ async function loadPlayer(): Promise<void> {
     0,
   );
   if (expectedEvents > MAX_PLAYER_EVENTS || expectedBytes > MAX_PLAYER_BYTES) {
-    playerError.value = new Error('This Replay exceeds the bounded player limits.');
+    playerError.value = new Error(t('replayDetail.playerLimits'));
     return;
   }
   loadingPlayer.value = true;
@@ -68,13 +73,13 @@ async function loadPlayer(): Promise<void> {
         await api.replaySegment(projectId.value, record.id, segment.segment_id),
       );
       const separator = raw.indexOf(0x0a);
-      if (separator <= 0) throw new Error('Replay segment header is malformed.');
+      if (separator <= 0) throw new Error(t('replayDetail.malformedHeader'));
       const decoded = JSON.parse(await inflate(raw.subarray(separator + 1))) as unknown;
-      if (!Array.isArray(decoded)) throw new Error('Replay segment is not an event array.');
+      if (!Array.isArray(decoded)) throw new Error(t('replayDetail.invalidEvents'));
       events.push(...decoded);
-      if (events.length > MAX_PLAYER_EVENTS) throw new Error('Replay exceeds the event limit.');
+      if (events.length > MAX_PLAYER_EVENTS) throw new Error(t('replayDetail.eventLimit'));
     }
-    if (events.length < 2) throw new Error('Replay does not contain enough events to play.');
+    if (events.length < 2) throw new Error(t('replayDetail.insufficientEvents'));
     const playerEvents = prepareReplayEvents(events);
     await nextTick();
     if (!target.value) return;
@@ -101,7 +106,7 @@ async function loadPlayer(): Promise<void> {
             null,
             error instanceof Error
               ? error.message
-              : `Replay could not be decoded: ${String(error)}`,
+              : t('replayDetail.decodeFailed', { error: String(error) }),
           );
   } finally {
     loadingPlayer.value = false;
@@ -115,13 +120,17 @@ onBeforeUnmount(() => player?.$destroy());
   <section>
     <header class="page-header">
       <div>
-        <RouterLink class="back-link" to="/replays">← Session Replays</RouterLink>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / replay</p>
-        <h1>Session Replay</h1>
+        <RouterLink class="back-link" to="/replays">
+          <AppIcon name="back" :size="16" /> {{ $t('replayDetail.all') }}
+        </RouterLink>
+        <p class="eyebrow">
+          {{ $t('replayDetail.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('replayDetail.title') }}</h1>
         <p class="mono">{{ replayId }}</p>
       </div>
     </header>
-    <LoadingPanel v-if="replay.isPending.value" label="Loading Replay metadata…" />
+    <LoadingPanel v-if="replay.isPending.value" :label="$t('replayDetail.loading')" />
     <ApiErrorPanel
       v-else-if="replay.error.value"
       :error="replay.error.value"
@@ -130,33 +139,38 @@ onBeforeUnmount(() => player?.$destroy());
     <template v-else-if="replay.data.value">
       <div class="privacy-notice privacy-notice--warning">
         <AppIcon name="shield" :size="18" />
-        Playback renders untrusted historical DOM inside rrweb’s sandbox. Client-side masking must
-        be configured before capture; the server cannot retroactively scrub opaque recordings.
+        {{ $t('replayDetail.privacy') }}
       </div>
       <div class="metric-grid replay-metadata-grid">
         <article>
-          <span>Status</span>
-          <strong>{{ replay.data.value.partial ? 'Partial' : 'Complete' }}</strong>
+          <span>{{ $t('replayDetail.status') }}</span>
+          <strong>{{
+            replay.data.value.partial ? $t('replayDetail.partial') : $t('replayDetail.complete')
+          }}</strong>
         </article>
         <article>
-          <span>Segments</span>
+          <span>{{ $t('replayDetail.segments') }}</span>
           <strong>{{ replay.data.value.segments.length }}</strong>
         </article>
         <article>
-          <span>Environment</span>
+          <span>{{ $t('replayDetail.environment') }}</span>
           <strong>{{ replay.data.value.environment || '—' }}</strong>
         </article>
         <article>
-          <span>Release</span>
+          <span>{{ $t('replayDetail.release') }}</span>
           <strong>{{ replay.data.value.release || '—' }}</strong>
         </article>
       </div>
-      <ApiErrorPanel v-if="playerError" :error="playerError" title="Replay playback failed" />
+      <ApiErrorPanel
+        v-if="playerError"
+        :error="playerError"
+        :title="$t('replayDetail.playbackFailed')"
+      />
       <div class="replay-player-shell">
         <div v-if="!loadingPlayer && !player" class="replay-player-placeholder">
           <AppIcon name="replay" :size="28" />
-          <strong>Recording is not downloaded automatically</strong>
-          <span>Use “Load recording” to fetch the bounded segment set.</span>
+          <strong>{{ $t('replayDetail.notDownloaded') }}</strong>
+          <span>{{ $t('replayDetail.loadHelp') }}</span>
           <button
             class="button button--primary"
             type="button"
@@ -164,34 +178,34 @@ onBeforeUnmount(() => player?.$destroy());
             @click="loadPlayer"
           >
             <AppIcon name="replay" :size="17" />
-            Load recording
+            {{ $t('replayDetail.load') }}
           </button>
         </div>
-        <LoadingPanel v-if="loadingPlayer" label="Downloading and validating Replay…" />
+        <LoadingPanel v-if="loadingPlayer" :label="$t('replayDetail.downloading')" />
         <div ref="target" class="replay-player"></div>
       </div>
       <section class="detail-panel">
-        <h2>Correlations</h2>
+        <h2>{{ $t('replayDetail.correlations') }}</h2>
         <p v-if="!replay.data.value.error_ids.length && !replay.data.value.trace_ids.length">
-          This Replay is not linked to an Error or Trace.
+          {{ $t('replayDetail.noCorrelations') }}
         </p>
         <div class="correlation-links">
           <RouterLink :to="`/feedback?replay_id=${replay.data.value.id}`">
-            Feedback linked to this Replay
+            {{ $t('replayDetail.linkedFeedback') }}
           </RouterLink>
           <RouterLink
             v-for="eventId in replay.data.value.error_ids"
             :key="eventId"
             :to="`/events/${eventId}`"
           >
-            Error {{ eventId }}
+            {{ $t('replayDetail.error', { id: eventId }) }}
           </RouterLink>
           <RouterLink
             v-for="traceId in replay.data.value.trace_ids"
             :key="traceId"
             :to="`/traces/${traceId}`"
           >
-            Trace and linked Logs {{ traceId }}
+            {{ $t('replayDetail.trace', { id: traceId }) }}
           </RouterLink>
         </div>
       </section>

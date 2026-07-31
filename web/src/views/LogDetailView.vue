@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -11,6 +12,7 @@ import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
 const session = useSessionStore();
+const { locale } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const logId = computed(() => String(route.params.logId ?? ''));
 const log = useQuery({
@@ -18,24 +20,32 @@ const log = useQuery({
   queryFn: () => api.log(projectId.value, logId.value),
   enabled: computed(() => Boolean(projectId.value && logId.value)),
 });
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(locale.value, {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(new Date(value));
+}
 </script>
 
 <template>
   <section>
     <RouterLink class="back-link" to="/logs">
       <AppIcon name="back" :size="16" />
-      Structured Logs
+      {{ $t('logDetail.all') }}
     </RouterLink>
-    <LoadingPanel v-if="log.isPending.value" label="Loading log detail…" />
+    <LoadingPanel v-if="log.isPending.value" :label="$t('logDetail.loading')" />
     <ApiErrorPanel v-else-if="log.error.value" :error="log.error.value" @retry="log.refetch()" />
     <template v-else-if="log.data.value">
       <header class="page-header signal-detail-header">
         <div>
           <p class="eyebrow">
-            {{ log.data.value.level }} / {{ log.data.value.service || 'service' }}
+            {{ $t(`status.${log.data.value.level}`) }} /
+            {{ log.data.value.service || $t('logDetail.service') }}
           </p>
           <h1>{{ log.data.value.message }}</h1>
-          <p>{{ log.data.value.timestamp }}</p>
+          <p>{{ formatTime(log.data.value.timestamp) }}</p>
         </div>
         <RouterLink
           v-if="log.data.value.trace_id"
@@ -43,28 +53,32 @@ const log = useQuery({
           :to="`/traces/${log.data.value.trace_id}`"
         >
           <AppIcon name="traces" :size="16" />
-          Open Trace
+          {{ $t('logDetail.openTrace') }}
         </RouterLink>
       </header>
       <div class="metric-grid">
         <article>
-          <span>Environment</span><strong>{{ log.data.value.environment || '—' }}</strong>
+          <span>{{ $t('logDetail.environment') }}</span
+          ><strong>{{ log.data.value.environment || '—' }}</strong>
         </article>
         <article>
-          <span>Release</span><strong>{{ log.data.value.release || '—' }}</strong>
+          <span>{{ $t('logDetail.release') }}</span
+          ><strong>{{ log.data.value.release || '—' }}</strong>
         </article>
         <article>
-          <span>Trace</span><strong>{{ log.data.value.trace_id?.slice(0, 12) || '—' }}</strong>
+          <span>{{ $t('logDetail.trace') }}</span
+          ><strong>{{ log.data.value.trace_id?.slice(0, 12) || '—' }}</strong>
         </article>
         <article>
-          <span>Span</span><strong>{{ log.data.value.span_id || '—' }}</strong>
+          <span>{{ $t('logDetail.span') }}</span
+          ><strong>{{ log.data.value.span_id || '—' }}</strong>
         </article>
       </div>
       <section class="detail-panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Accepted payload</p>
-            <h2>Attributes and context</h2>
+            <p class="eyebrow">{{ $t('logDetail.payload') }}</p>
+            <h2>{{ $t('logDetail.attributes') }}</h2>
           </div>
         </div>
         <CodeBlock language="json" :code="JSON.stringify(log.data.value.body, null, 2)" />

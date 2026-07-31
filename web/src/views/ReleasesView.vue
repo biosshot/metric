@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -10,6 +11,7 @@ import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const version = ref('');
 const url = ref('');
@@ -30,8 +32,8 @@ const createRelease = useMutation({
 });
 
 function timestamp(value: string | null): string {
-  if (!value) return 'No Error observed';
-  return new Intl.DateTimeFormat(undefined, {
+  if (!value) return t('releases.noError');
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -42,16 +44,18 @@ function timestamp(value: string | null): string {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / delivery</p>
-        <h1>Releases</h1>
-        <p>Create a deployment identity once, then investigate every signal carrying it.</p>
+        <p class="eyebrow">
+          {{ $t('releases.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('releases.title') }}</h1>
+        <p>{{ $t('releases.description') }}</p>
       </div>
     </header>
 
     <ApiErrorPanel
       v-if="createRelease.error.value"
       :error="createRelease.error.value"
-      title="Release was not created"
+      :title="$t('releases.createFailed')"
     />
 
     <form
@@ -61,12 +65,12 @@ function timestamp(value: string | null): string {
     >
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Explicit release</p>
-          <h2>Create before deployment</h2>
+          <p class="eyebrow">{{ $t('releases.explicit') }}</p>
+          <h2>{{ $t('releases.createBeforeDeploy') }}</h2>
         </div>
       </div>
       <label>
-        Exact version
+        {{ $t('releases.exactVersion') }}
         <input
           v-model.trim="version"
           required
@@ -76,7 +80,8 @@ function timestamp(value: string | null): string {
         />
       </label>
       <label>
-        Release URL <span class="muted">(optional)</span>
+        {{ $t('releases.releaseUrl') }}
+        <span class="muted">{{ $t('releases.optional') }}</span>
         <input v-model.trim="url" maxlength="2048" placeholder="https://ci.example/build/1042" />
       </label>
       <button
@@ -85,22 +90,22 @@ function timestamp(value: string | null): string {
         :disabled="!version || createRelease.isPending.value"
       >
         <AppIcon name="plus" :size="16" />
-        {{ createRelease.isPending.value ? 'Creating…' : 'Create release' }}
+        {{ createRelease.isPending.value ? $t('releases.creating') : $t('releases.create') }}
       </button>
     </form>
 
-    <LoadingPanel v-if="releases.isPending.value" label="Loading releases…" />
+    <LoadingPanel v-if="releases.isPending.value" :label="$t('releases.loading')" />
     <ApiErrorPanel
       v-else-if="releases.error.value"
       :error="releases.error.value"
-      title="Releases could not be loaded"
+      :title="$t('releases.loadFailed')"
       @retry="releases.refetch()"
     />
     <EmptyState
       v-else-if="!releases.data.value?.items.length"
       icon="release"
-      title="No releases yet"
-      description="Create one here or send an Error with an exact release value."
+      :title="$t('releases.empty')"
+      :description="$t('releases.emptyDescription')"
     />
     <div v-else class="release-list">
       <RouterLink
@@ -114,12 +119,14 @@ function timestamp(value: string | null): string {
           <strong>{{ release.version }}</strong>
           <small>
             {{
-              release.released_at ? `Finalized ${timestamp(release.released_at)}` : 'Open release'
+              release.released_at
+                ? $t('releases.finalized', { time: timestamp(release.released_at) })
+                : $t('releases.open')
             }}
           </small>
         </span>
         <span class="release-card__seen">
-          Last Error
+          {{ $t('releases.lastError') }}
           <strong>{{ timestamp(release.last_seen) }}</strong>
         </span>
         <AppIcon name="view" :size="18" />

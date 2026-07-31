@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
@@ -13,6 +14,7 @@ import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
 const route = useRoute();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const replayId = computed(() =>
   typeof route.query.replay_id === 'string' ? route.query.replay_id : '',
@@ -20,12 +22,12 @@ const replayId = computed(() =>
 const status = ref('');
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
-const statusOptions: SelectOption[] = [
-  { value: '', label: 'All feedback', icon: 'message' },
-  { value: 'open', label: 'Open', icon: 'alert' },
-  { value: 'resolved', label: 'Resolved', icon: 'success' },
-  { value: 'spam', label: 'Spam', icon: 'blocked' },
-];
+const statusOptions = computed<SelectOption[]>(() => [
+  { value: '', label: t('feedback.all'), icon: 'message' },
+  { value: 'open', label: t('feedback.open'), icon: 'alert' },
+  { value: 'resolved', label: t('feedback.resolved'), icon: 'success' },
+  { value: 'spam', label: t('feedback.spam'), icon: 'blocked' },
+]);
 
 const feedback = useQuery({
   queryKey: computed(() => [
@@ -62,7 +64,7 @@ function previousPage(): void {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -73,12 +75,12 @@ function formatTime(value: string): string {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / users</p>
-        <h1>User Feedback</h1>
-        <p v-if="replayId">Feedback linked to Replay {{ replayId }}.</p>
-        <p v-else>
-          Read SDK-submitted reports, follow their investigation links, and triage status.
+        <p class="eyebrow">
+          {{ $t('feedback.eyebrow', { project: session.selectedProject?.slug }) }}
         </p>
+        <h1>{{ $t('feedback.title') }}</h1>
+        <p v-if="replayId">{{ $t('feedback.replayDescription', { id: replayId }) }}</p>
+        <p v-else>{{ $t('feedback.description') }}</p>
       </div>
     </header>
 
@@ -87,12 +89,12 @@ function formatTime(value: string): string {
         v-model="status"
         class="compact-select"
         :options="statusOptions"
-        label="Status"
-        aria-label="Feedback status"
+        :label="$t('feedback.status')"
+        :aria-label="$t('feedback.statusLabel')"
       />
     </div>
 
-    <LoadingPanel v-if="feedback.isPending.value" label="Loading user feedback…" />
+    <LoadingPanel v-if="feedback.isPending.value" :label="$t('feedback.loading')" />
     <ApiErrorPanel
       v-else-if="feedback.error.value"
       :error="feedback.error.value"
@@ -101,40 +103,40 @@ function formatTime(value: string): string {
     <EmptyState
       v-else-if="!feedback.data.value?.items.length"
       icon="message"
-      title="No feedback in this view"
-      description="Enable User Feedback for the project and connect the Sentry Browser Feedback API."
+      :title="$t('feedback.empty')"
+      :description="$t('feedback.emptyDescription')"
     >
       <SdkSetupButton />
     </EmptyState>
     <div v-else class="issue-table-wrap">
-      <nav class="pagination" aria-label="Feedback result pages">
+      <nav class="pagination" :aria-label="$t('feedback.pages')">
         <button
           class="button button--secondary"
           type="button"
           :disabled="history.length === 0"
           @click="previousPage"
         >
-          Previous
+          {{ $t('common.previous') }}
         </button>
-        <span>Page {{ history.length + 1 }}</span>
+        <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
         <button
           class="button button--secondary"
           type="button"
           :disabled="!feedback.data.value.next_cursor"
           @click="nextPage"
         >
-          Next
+          {{ $t('common.next') }}
         </button>
       </nav>
       <div class="issue-table-scroll">
         <table class="issue-table feedback-table">
           <thead>
             <tr>
-              <th scope="col">Feedback</th>
-              <th scope="col">Status</th>
-              <th scope="col">Reporter</th>
-              <th scope="col">Attachments</th>
-              <th scope="col">Received</th>
+              <th scope="col">{{ $t('feedback.feedback') }}</th>
+              <th scope="col">{{ $t('feedback.status') }}</th>
+              <th scope="col">{{ $t('feedback.reporter') }}</th>
+              <th scope="col">{{ $t('feedback.attachments') }}</th>
+              <th scope="col">{{ $t('feedback.received') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -143,16 +145,16 @@ function formatTime(value: string): string {
                 <RouterLink :to="`/feedback/${item.id}`" class="issue-title">
                   {{ item.message }}
                 </RouterLink>
-                <span>{{ item.url || 'No page URL reported' }}</span>
+                <span>{{ item.url || $t('feedback.noUrl') }}</span>
               </td>
               <td><StatusBadge :status="item.status" /></td>
               <td>
                 <span class="feedback-reporter">
-                  <strong>{{ item.name || 'Anonymous user' }}</strong>
+                  <strong>{{ item.name || $t('feedback.anonymous') }}</strong>
                   <small v-if="item.contact_email">{{ item.contact_email }}</small>
                 </span>
               </td>
-              <td>{{ item.attachments.length.toLocaleString() }}</td>
+              <td>{{ item.attachments.length.toLocaleString(locale) }}</td>
               <td>
                 <time :datetime="item.received_at">{{ formatTime(item.received_at) }}</time>
               </td>

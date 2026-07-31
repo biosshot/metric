@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -13,6 +14,7 @@ import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
+const { locale } = useI18n();
 const service = ref('');
 const environment = ref('');
 const release = ref('');
@@ -78,9 +80,11 @@ function resetFilters(): void {
   <section>
     <header class="page-header">
       <div>
-        <p class="eyebrow">{{ session.selectedProject?.slug }} / performance</p>
-        <h1>Performance Insights</h1>
-        <p>Bounded hourly summaries built from durable root spans.</p>
+        <p class="eyebrow">
+          {{ $t('performance.eyebrow', { project: session.selectedProject?.slug }) }}
+        </p>
+        <h1>{{ $t('performance.title') }}</h1>
+        <p>{{ $t('performance.description') }}</p>
       </div>
     </header>
     <TraceSectionNav />
@@ -90,27 +94,31 @@ function resetFilters(): void {
       @submit.prevent="applyFilters"
     >
       <label>
-        <span class="sr-only">Service</span>
-        <input v-model="service" maxlength="256" placeholder="Service" />
+        <span class="sr-only">{{ $t('transactions.service') }}</span>
+        <input v-model="service" maxlength="256" :placeholder="$t('transactions.service')" />
       </label>
       <label>
-        <span class="sr-only">Environment</span>
-        <input v-model="environment" maxlength="128" placeholder="Environment" />
+        <span class="sr-only">{{ $t('transactions.environment') }}</span>
+        <input
+          v-model="environment"
+          maxlength="128"
+          :placeholder="$t('transactions.environment')"
+        />
       </label>
       <label>
-        <span class="sr-only">Release</span>
-        <input v-model="release" maxlength="256" placeholder="Release" />
+        <span class="sr-only">{{ $t('transactions.release') }}</span>
+        <input v-model="release" maxlength="256" :placeholder="$t('transactions.release')" />
       </label>
       <div class="signal-toolbar__actions">
         <TimeRangeSelect
           v-model="range"
           :window-value="selectedWindow"
-          aria-label="Performance time range"
+          :aria-label="$t('performance.timeRange')"
           @update:window-value="selectedWindow = $event"
         />
         <button class="button button--primary" type="submit">
           <AppIcon name="search" :size="16" />
-          Search
+          {{ $t('common.search') }}
         </button>
         <button
           v-if="hasFilters"
@@ -119,11 +127,11 @@ function resetFilters(): void {
           @click="resetFilters"
         >
           <AppIcon name="close" :size="16" />
-          Reset
+          {{ $t('common.reset') }}
         </button>
       </div>
     </form>
-    <LoadingPanel v-if="performance.isPending.value" label="Loading performance summaries…" />
+    <LoadingPanel v-if="performance.isPending.value" :label="$t('performance.loading')" />
     <ApiErrorPanel
       v-else-if="performance.error.value"
       :error="performance.error.value"
@@ -132,33 +140,38 @@ function resetFilters(): void {
     <EmptyState
       v-else-if="!performance.data.value?.items.length"
       icon="gauge"
-      title="No performance data"
-      description="Performance buckets are created after a root transaction or segment is accepted."
+      :title="$t('performance.empty')"
+      :description="$t('performance.emptyDescription')"
     >
       <SdkSetupButton />
     </EmptyState>
     <template v-else>
       <div class="metric-grid">
         <article>
-          <span>Transactions</span><strong>{{ total.toLocaleString() }}</strong>
+          <span>{{ $t('performance.transactions') }}</span
+          ><strong>{{ total.toLocaleString(locale) }}</strong>
         </article>
         <article>
-          <span>Failures</span><strong>{{ failed.toLocaleString() }}</strong>
+          <span>{{ $t('performance.failures') }}</span
+          ><strong>{{ failed.toLocaleString(locale) }}</strong>
         </article>
         <article>
-          <span>Failure rate</span>
+          <span>{{ $t('performance.failureRate') }}</span>
           <strong>{{ total ? ((failed / total) * 100).toFixed(2) : '0.00' }}%</strong>
         </article>
-        <article><span>Model</span><strong>Bounded sample</strong></article>
+        <article>
+          <span>{{ $t('performance.model') }}</span
+          ><strong>{{ $t('performance.boundedSample') }}</strong>
+        </article>
       </div>
       <div class="issue-table-wrap performance-table">
         <table class="issue-table">
           <thead>
             <tr>
-              <th>Transaction</th>
-              <th>Throughput</th>
-              <th>Failure</th>
-              <th>Average</th>
+              <th>{{ $t('performance.transaction') }}</th>
+              <th>{{ $t('performance.throughput') }}</th>
+              <th>{{ $t('performance.failure') }}</th>
+              <th>{{ $t('performance.average') }}</th>
               <th>p95</th>
               <th>p99</th>
             </tr>
@@ -173,12 +186,12 @@ function resetFilters(): void {
                   <strong>{{ item.name }}</strong>
                 </RouterLink>
                 <span>
-                  {{ item.service || 'service' }} · {{ item.operation }}
+                  {{ item.service || $t('performance.service') }} · {{ item.operation }}
                   <template v-if="item.environment"> · {{ item.environment }}</template>
                   <template v-if="item.release"> · {{ item.release }}</template>
                 </span>
               </td>
-              <td>{{ item.count.toLocaleString() }}</td>
+              <td>{{ item.count.toLocaleString(locale) }}</td>
               <td>{{ (item.failure_rate * 100).toFixed(1) }}%</td>
               <td>{{ item.average_duration_ms.toFixed(1) }} ms</td>
               <td>{{ item.p95_ms.toFixed(1) }} ms</td>
@@ -188,8 +201,7 @@ function resetFilters(): void {
         </table>
       </div>
       <p class="approximation-note">
-        Percentiles are approximate: each hourly dimension keeps at most 2,048 recent duration
-        samples. Durable spans remain the source of truth and aggregates can be rebuilt.
+        {{ $t('performance.approximation') }}
       </p>
     </template>
   </section>
