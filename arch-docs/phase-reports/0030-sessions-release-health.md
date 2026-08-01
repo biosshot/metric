@@ -91,4 +91,5 @@ Exactly one performance run was captured and it started no server.
 - Cold objects support verified export/recovery of canonical rows, not transparent
   Web search or a general database rehydration command.
 - MCP, NATS, split roles, sharding, disk spool and online migrations remain deferred.
-- Phase 31 User Feedback is next. Phase 27 remains explicitly deferred and incomplete.
+- At this report cutoff Phase 31 User Feedback was next and Phase 27 was deferred.
+  ADR-0047 later closed Phase 27 as obsolete without claiming its gates.

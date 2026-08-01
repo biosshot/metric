@@ -562,8 +562,9 @@ Phase 25 publishes:
 - bounded small/large/partial Trace functional behavior;
 - saved real-SDK smoke flow.
 
-ADR-0044 Phase 27 owns sustained/burst mixed ingest, production-shaped Trace-read,
-dependency-failure and soak evidence that was exempted from the Phase 25 closure.
+ADR-0044 originally assigned sustained/burst mixed ingest, production-shaped
+Trace-read, dependency-failure and soak evidence to Phase 27. ADR-0047 later closed
+that separate program as obsolete; it is no longer an active Phase 25 dependency.
 
 Phase 26 fixtures/gates cover:
 

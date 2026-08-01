@@ -2,9 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-07-21
-- Completion: Phases 0-22 are complete; ADR-0040 owns completed Phases 23-26,
-  ADR-0044 owns accepted-but-deferred Phase 27, and ADR-0045 owns completed Phases
-  28-30 and the planned Phase 31-36 wave
+- Completion: Phases 0-22 are complete; ADR-0040 owns completed Phases 23-26;
+  ADR-0047 closes the former Phase 27 as obsolete; ADR-0045/0046 own completed
+  Phases 28-38; ADR-0047 owns completed Phase 41 and selected Phases 40/42
 
 ## Objective
 

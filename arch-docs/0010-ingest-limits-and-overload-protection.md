@@ -118,8 +118,8 @@ an `accepted` outcome.
 This section records the original design. The current schema generation 19 does not
 create `ingest_outcomes_hourly`: the production server currently wires a no-op
 `OutcomeSink`, while bounded internal counters are emitted through the metrics
-facade. Durable outcome aggregation remains deferred to the Phase 27 observability
-gate and must not be presented as an existing MongoDB collection.
+facade. Phase 27 is closed by ADR-0047; durable outcome aggregation remains
+unselected and must not be presented as an existing MongoDB collection.
 
 If durable approximate outcome aggregation is later selected, the proposed shape is:
 

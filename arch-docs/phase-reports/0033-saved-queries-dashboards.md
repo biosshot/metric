@@ -76,5 +76,6 @@ No performance test was created or run for Phase 33, as explicitly requested.
   worker.
 - Environment/release variables are exact predicates and fail visibly for datasets
   that do not expose those typed fields.
-- Phase 34 Alerts and notification destinations is next. Phase 27 remains deferred.
-  MCP, NATS, migrations, sharding and disk spool remain deferred.
+- At this report cutoff Phase 34 Alerts and notification destinations was next and
+  Phase 27 was deferred. ADR-0047 later closed Phase 27 as obsolete without claiming
+  its gates. MCP, NATS, migrations, sharding and disk spool remain unselected.

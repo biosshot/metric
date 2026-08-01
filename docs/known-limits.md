@@ -30,7 +30,7 @@ empty database, but it cannot migrate data from an older generation. Read
 
 ## Backup and archive
 
-- Metric does not yet provide its own backup and restore command.
+- Metric does not provide its own backup and restore command; use external tooling.
 - MongoDB and file storage must be retained together.
 - Cold archives cannot be searched or restored through Metric.
 

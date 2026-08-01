@@ -11,15 +11,19 @@ the accepted production-readiness program, but the owner explicitly deferred its
 execution on 2026-07-26 in order to add a bounded group of relatively inexpensive
 product capabilities first.
 
-This decision does not mark Phase 27 complete and does not grant a production-ready
-claim. Phase 27 keeps its number and may resume later. Phase 28 is the next product
-implementation phase.
+At acceptance, this decision did not mark Phase 27 complete or grant a
+production-ready claim. Phase 27 retained its number and could resume later; Phase 28
+was the next product implementation phase.
+
+Current amendment (2026-08-01): ADR-0047 later closed Phase 27 as obsolete without
+claiming its gates. The paragraph above remains the historical state when this ADR
+was accepted; Phase 27 no longer resumes or blocks current work.
 
 The selected wave is:
 
 | Phase | Capability | Status |
 | ---: | --- | --- |
-| 27 | Production readiness | Accepted, execution deferred |
+| 27 | Production readiness | Closed as obsolete by ADR-0047 |
 | 28 | Signal Inbound Filters | Complete |
 | 29 | Releases and Deploys | Complete |
 | 30 | Sessions and Release Health | Complete |

@@ -3,6 +3,10 @@
 - Status: Accepted
 - Date: 2026-07-20
 
+Current amendment (2026-08-01): ADR-0047 selects bounded read-only cold-archive
+search as Phase 42. Transparent hot/cold federation and automatic restore remain
+excluded.
+
 ## Context
 
 Raw Events, Logs, and Spans can grow much faster than issue metadata and aggregate statistics. The
@@ -174,9 +178,10 @@ The archive implementation is cold storage. Normal Web and MCP searches query
 MongoDB and aggregate collections, not Parquet objects. Issue metadata and hourly
 statistics remain available after raw events leave MongoDB.
 
-Archive export and explicit range restoration may be added without promising
-transparent online queries. Federated MongoDB-and-Parquet search, pagination, and
-query execution are deferred.
+ADR-0047 now selects bounded manifest discovery and explicit project/dataset/time
+range queries over archive objects. Results reuse the Phase 40 JSON/CSV export DTOs
+and do not become transparent online queries. Federated MongoDB-and-Parquet search,
+shared pagination and automatic restoration remain unselected.
 
 ### Hourly statistics
 

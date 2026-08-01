@@ -1,18 +1,30 @@
 # ADR-0044: Production readiness program before new product features
 
-- Status: Accepted
+- Status: Closed as obsolete (historical gates not executed or claimed)
 - Date: 2026-07-25
 - Supersedes: ADR-0040 product-phase ordering after Phase 26 until this program passes
 
-Execution amendment: on 2026-07-26 the owner deferred, but did not complete or
-cancel, this program. ADR-0045 selects Phases 28-36 for the next product wave.
-ADR-0046 subsequently selects and completes Phases 37-38. Production readiness
-cannot be claimed until this ADR later resumes and passes.
+Closure amendment (2026-08-01): ADR-0047 closes Phase 27 as obsolete by explicit
+owner decision. The program below is retained as historical design material only. It
+does not block releases, does not resume later and does not require a built-in
+backup/restore command, `--check-upgrade`, Prometheus endpoint, soak, restore drill or
+canary declaration. Closing it is not a claim that Gates 27.0-27.7 passed.
 
-Current-state amendment (2026-07-30): Phase 27 must resume against schema generation
-19 and the complete Phase 28-38 product surface. References below to generation 8 or
-to then-unimplemented product scopes are retained only where explicitly labelled as
-the 2026-07-25 program-start baseline; they are not current operator instructions.
+Current schema compatibility and external backup facts remain documented operator
+limits. Any later native migration or version-aware old-schema support requires a
+new focused decision and executable evidence.
+
+Historical execution amendment: on 2026-07-26 the owner deferred, but did not
+complete or cancel, this program. ADR-0045 selected Phases 28-36 for the next product
+wave and ADR-0046 subsequently selected and completed Phases 37-38. At that time this
+document made its production-readiness claim depend on a later resume and pass; the
+2026-08-01 closure supersedes that condition.
+
+Superseded 2026-07-30 amendment: Phase 27 was expected to resume against schema
+generation 19 and the complete Phase 28-38 product surface. References below to
+generation 8 or to then-unimplemented product scopes are retained only where
+explicitly labelled as the 2026-07-25 program-start baseline; they are not current
+operator instructions.
 
 ## Context
 

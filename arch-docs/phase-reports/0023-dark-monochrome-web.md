@@ -86,8 +86,9 @@ runtime highlighter was added.
 | Existing Web behavior unchanged | Final Chromium/Firefox E2E suite passes | Pass |
 
 At Phase 23 closure, the next sequential phase was Phase 24, Structured Logs.
-Phases 24-26 subsequently completed; ADR-0044 now defines Phase 27 as the
-production-readiness program.
+Phases 24-26 subsequently completed; ADR-0044 then defined Phase 27 as the
+production-readiness program. ADR-0047 later closed that program as obsolete without
+claiming its gates.
 
 ## Post-gate presentation exception
 

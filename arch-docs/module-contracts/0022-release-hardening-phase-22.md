@@ -7,7 +7,8 @@ Sequential gate: ADR-0039 Phase 22
 
 Historical scope note: this contract records the Phase 22 release boundary. Logs,
 Transactions, Spans and Performance Insights were enabled later by Phases 24-26.
-ADR-0044, not this historical contract, owns the current production-readiness claim.
+ADR-0044 later proposed a broader production-readiness claim; ADR-0047 closed that
+program as obsolete without claiming its gates.
 
 ## Boundary
 

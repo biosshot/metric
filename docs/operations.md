@@ -46,8 +46,9 @@ curl http://localhost:4001/ready
 `/live` confirms that the process is running. `/ready` confirms that Metric and
 its required workers are ready.
 
-Metric does not yet provide a Prometheus endpoint. The `/metrics` browser path is
-a page in the web interface, not a monitoring endpoint.
+Metric intentionally does not expose a Prometheus endpoint in the current product
+scope. The `/metrics` browser path is a page in the web interface, not a monitoring
+endpoint.
 
 For a long-running installation, monitor `/ready`, `docker stats`, repeated
 container restarts and free disk space in the data and active cache volumes.
@@ -71,7 +72,7 @@ docker compose up -d --wait --wait-timeout 120
 
 ## Backups
 
-Metric does not yet include its own backup command. MongoDB and file storage
+Metric does not include its own backup command. MongoDB and file storage
 contain different parts of the same data, so back them up together and test the
 restore on a separate installation.
 

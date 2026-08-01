@@ -73,5 +73,7 @@ would not measure the durable local path.
 
 ## Next phase
 
-Phase 35 Cron Monitoring is next. Phase 27 remains deferred. Web Push, new webhook
-configuration, MCP, NATS, migrations, sharding and disk spool remain deferred.
+At this report cutoff Phase 35 Cron Monitoring was next and Phase 27 was deferred.
+ADR-0047 later closed Phase 27 as obsolete without claiming its gates. Web Push, new
+webhook configuration, MCP, NATS, migrations, sharding and disk spool remain
+unselected.

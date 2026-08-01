@@ -101,5 +101,5 @@ performance test was run.
 - Schema generation 13 intentionally requires a fresh database under the owner's
   breaking-change rule.
 - MCP, NATS, sharding, disk spool and online migrations remain deferred.
-- Phase 32 Unified Explore is next. Phase 27 remains explicitly deferred and
-  incomplete.
+- At this report cutoff Phase 32 Unified Explore was next and Phase 27 was deferred.
+  ADR-0047 later closed Phase 27 as obsolete without claiming its gates.

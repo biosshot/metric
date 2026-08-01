@@ -3,6 +3,11 @@
 - Status: Accepted
 - Date: 2026-07-21
 
+Current amendment (2026-08-01): ADR-0047 closes the broad Phase 27 operability
+program and removes a Prometheus endpoint and built-in backup/restore commands from
+the selected roadmap. The instrumentation facade and low-cardinality rules below
+remain valid, but no Prometheus exporter is claimed by the current runtime.
+
 ## Context
 
 The first release needs predictable startup, safe secrets, and ordinary health and
@@ -134,10 +139,11 @@ public probes expensive.
 
 ### Metrics and tracing
 
-The application exposes a Prometheus-compatible metrics endpoint on an independently
-configurable internal listener or protected route. Metric instruments are registered
-through one application facade; exporters are adapters. Optional OTLP-compatible
-trace/metric export can be added without changing module code.
+Metric instruments are registered through one application facade so modules do not
+depend on an exporter. The current runtime does not expose a Prometheus endpoint and
+ADR-0047 leaves exporter work outside the selected roadmap. A future exporter remains
+a removable adapter and requires a new focused decision rather than changing module
+code.
 
 Stable low-cardinality dimensions include module, operation, outcome, item category,
 and bounded error code. Project, organization, Event, Issue, release, URL, filename,
@@ -195,8 +201,8 @@ own invariants rather than a premature universal repair subsystem.
 
 - Configuration is deterministic, typed, brand-neutral, and redacted.
 - Startup fails safely on an incompatible database instead of mutating it implicitly.
-- Standard probes, Prometheus metrics, and structured traces are available without a
-  custom observability stack.
+- Standard liveness/readiness probes and structured diagnostics are available
+  without claiming a Prometheus exporter.
 - New modules extend one low-cardinality operability contract.
 - Online migrations and guaranteed backup/restore are explicitly postponed rather
   than accidentally half-implemented.

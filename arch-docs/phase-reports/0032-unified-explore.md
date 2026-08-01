@@ -86,5 +86,6 @@ performance test was run.
   result cache or raw-data collection exists.
 - Phase 33 Saved Queries and Dashboards is next and may persist these normalized
   queries under its own bounded widget and authorization contract.
-- Phase 27 remains explicitly deferred and incomplete. MCP, NATS, sharding, disk
-  spool and online migrations remain deferred.
+- At this report cutoff Phase 27 was deferred; ADR-0047 later closed it as obsolete
+  without claiming its gates. MCP, NATS, sharding, disk spool and online migrations
+  remain unselected.

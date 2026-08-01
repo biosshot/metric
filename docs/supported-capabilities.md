@@ -14,6 +14,7 @@
 - monitor cron jobs and HTTP endpoints;
 - collect application counters, gauges and distributions;
 - manage users, projects, roles, sessions and API tokens;
+- use the Web interface in English or Russian;
 - set retention periods and project ingest limits;
 - export an Incident Capsule for an issue;
 - deliver signed webhooks;
@@ -38,14 +39,18 @@ privacy decision.
 Min disables attachments. Min and Low omit Symbolicator. See
 [Capacity and profiles](capacity.md) before selecting a server size.
 
-## Not available yet
+## Selected next work
+
+- bounded JSON/CSV export for current filtered datasets;
+- bounded search over cold archive objects without automatic hot restore.
+
+## Outside the current roadmap
 
 - profiling;
 - single sign-on, SCIM, MFA and passkeys;
 - multiple Metric processing nodes;
 - built-in high-availability deployment;
 - automatic migration between different database schema generations;
-- search or restore directly from cold archives;
 - a Prometheus metrics endpoint.
 
 Metric also provides a machine-readable feature list at

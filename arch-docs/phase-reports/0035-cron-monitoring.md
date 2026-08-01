@@ -96,6 +96,7 @@ and Node process; no Phase 35 process remained running.
 
 ## Next phase
 
-Phase 36 Uptime Monitoring is next. Phase 27 remains deferred. Uptime HTTP execution,
-non-UTC Cron timezone databases, archive-to-Blob, MCP, NATS, migrations, sharding
-and disk spool remain deferred.
+At this report cutoff Phase 36 Uptime Monitoring was next and Phase 27 was deferred.
+ADR-0047 later closed Phase 27 as obsolete without claiming its gates. Non-UTC Cron
+timezone databases, MCP, NATS, migrations, sharding and disk spool remain unselected;
+Uptime HTTP execution was subsequently delivered by Phase 36.

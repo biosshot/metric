@@ -8,8 +8,8 @@
 - Status: Accepted
 - Date: 2026-07-21
 - Current scope: the Error compatibility rules remain active; ADR-0040/0042/0043
-  subsequently enabled Logs, Transactions and Spans, and ADR-0044 owns the current
-  production-readiness gate
+  subsequently enabled Logs, Transactions and Spans; ADR-0047 closes the former
+  Phase 27 gate and owns current post-release focus
 
 ## Context
 
@@ -219,6 +219,6 @@ No current endpoint or permission grants MCP a database-level shortcut.
 - Enabling and adding conformance rows for each currently disabled Envelope category.
 - Broader Sentry REST compatibility driven by real tooling rather than endpoint-count
   parity.
-- Localization; the visual system and its accessibility gate are resolved by
-  ADR-0041.
+- English/Russian Web localization was completed by Phase 41/ADR-0047; API codes,
+  SDK fields and operational diagnostics remain stable technical values.
 - MCP transport and tool schemas.

@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-07-30:
+Status as of 2026-08-01:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ Status as of 2026-07-30:
 | Phase 24 Structured Logs | Complete | ADR-0042 and Phase 24 report |
 | Phase 25 Transactions/Spans/Traces | Complete | ADR-0043 and Phase 25 report |
 | Phase 26 Performance Insights | Complete | ADR-0043 and Phase 26 report |
-| Phase 27 Production readiness | Accepted, execution deferred | ADR-0044/0045 |
+| Phase 27 Production readiness | Closed as obsolete; historical gates not claimed | ADR-0047 closes ADR-0044 |
 | Phase 28 Signal Inbound Filters | Complete | ADR-0045 and Phase 28 report |
 | Phase 29 Releases and Deploys | Complete | ADR-0045 and Phase 29 report |
 | Phase 30 Sessions and Release Health | Complete | ADR-0045 and Phase 30 report |
@@ -27,14 +27,19 @@ Status as of 2026-07-30:
 | Phase 36 Uptime Monitoring | Complete | ADR-0045 and Phase 36 report |
 | Phase 37 Application Metrics | Complete | ADR-0046 and Phase 37 report |
 | Phase 38 Session Replay | Complete | ADR-0046 and Phase 38 report |
+| Phase 39 Investigation UX | Cancelled as a phase; ideas returned to backlog | ADR-0047 |
+| Phase 40 JSON/CSV export | Accepted, next focus | ADR-0047 |
+| Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
+| Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
-| Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046 |
+| Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
-Phase 27 is not complete and no production-ready claim follows from deferring it.
-By explicit owner decision, deferred Phase 27 remains incomplete. Phases 28-38 are
-complete.
+Phase 27 did not pass its historical gates. By the 2026-08-01 owner decision it is
+closed as obsolete and is no longer a release or roadmap gate. Phases 28-38 and 41
+are complete. Phase 40 and Phase 42 are the only selected upcoming product work.
 ADR-0045 owns the completed lightweight wave; ADR-0046 owns the post-Phase-36
-Metrics/Replay sequence and the deferred Profiling boundary.
+Metrics/Replay sequence and the deferred Profiling boundary. ADR-0047 owns current
+post-release focus and closes Phase 27.
 
 ## Document precedence
 
@@ -118,8 +123,9 @@ Phase 37 and Session Replay Phase 38, and keeps Profiling deferred.
 
 The supported application shape remains one active `--role=all` process. NATS,
 split roles, multiple active application replicas, sharding, disk spool, MCP and a
-second storage backend are deferred. ADR-0044 defines the evidence required before
-the current release may claim production readiness.
+second storage backend are deferred. ADR-0044 is a closed historical program, not a
+current production declaration gate. Current limits are stated directly in
+`docs/known-limits.md`.
 
 ## Key documents
 
@@ -136,11 +142,14 @@ the current release may claim production readiness.
   writer.
 - `0043-compact-spans-traces-and-performance-insights.md`: current Span/Trace and
   performance model.
-- `0044-production-readiness-program.md`: accepted but deferred Phase 27 and
-  production launch gate.
+- `0044-production-readiness-program.md`: closed historical Phase 27 program; its
+  gates were not executed or claimed.
 - `0045-lightweight-product-wave-phases-28-36.md`: completed Phases 28-36.
 - `0046-application-metrics-session-replay-and-deferred-profiling.md`: completed
   Phase 37 bucket model, completed Phase 38 Replay and the deferred Profiling boundary.
+- `0047-post-release-focus-and-phase-27-closure.md`: current roadmap, Phase 27
+  closure, completed localization and accepted Export/Cold Search scope.
+- `phase-reports/0041-web-localization.md`: Phase 41 implementation evidence.
 - `module-contracts/0037-application-metrics-phase-37.md`: Phase 37 implementation
   boundary and exit gate.
 - `phase-reports/0037-application-metrics.md`: Phase 37 implementation and

@@ -39,7 +39,7 @@ Status as of 2026-07-27:
 | 24 | Structured Logs | Complete |
 | 25 | Transactions, Spans and Traces | Complete |
 | 26 | Performance Insights | Complete |
-| 27 | Production readiness program (ADR-0044) | Accepted, execution deferred |
+| 27 | Production readiness program (ADR-0044) | Closed as obsolete by ADR-0047 |
 | 28 | Signal Inbound Filters | Complete |
 | 29 | Releases and Deploys | Complete |
 | 30 | Sessions and Release Health | Complete |
@@ -50,6 +50,10 @@ Status as of 2026-07-27:
 | 36 | Uptime Monitoring | Complete |
 | 37 | Application Metrics | Complete |
 | 38 | Session Replay | Complete |
+| 39 | Investigation UX expansion | Cancelled as a phase; ideas returned to backlog |
+| 40 | Bounded JSON/CSV export | Accepted, next focus |
+| 41 | English/Russian Web localization | Complete |
+| 42 | Bounded cold-archive search | Accepted after/reusing Phase 40 |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
@@ -57,8 +61,10 @@ evidence is published in the corresponding reports under `arch-docs/phase-report
 Phase 28-38 evidence is published in their corresponding reports.
 
 ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
-decision deferred execution of Phase 27 without completing it. ADR-0045 now owns the
-selected Phase 28-36 ordering; all unselected items below remain unnumbered backlog.
+decision deferred execution of Phase 27 without completing it. ADR-0047 closes that
+program as obsolete without claiming its gates, records completed Phase 41 and owns
+the selected Phase 40/42 focus. All other unselected items below remain unnumbered
+backlog.
 
 ## Accepted direction
 
@@ -861,7 +867,7 @@ The completed chain, deferred gate and selected product wave are:
 -> 24 Logs
 -> 25 Spans/Traces
 -> 26 Performance
--> 27 Production readiness (accepted, execution deferred)
+-> 27 Production readiness (closed as obsolete; gates not claimed)
 -> 28 Inbound Filters
 -> 29 Releases/Deploys
 -> 30 Sessions/Release Health
@@ -873,6 +879,9 @@ The completed chain, deferred gate and selected product wave are:
 -> 36 Uptime
 -> 37 Application Metrics (complete)
 -> 38 Session Replay (complete)
+-> 40 JSON/CSV export (accepted)
+-> 41 English/Russian localization (complete)
+-> 42 bounded cold-archive search (accepted)
 ```
 
 ADR-0045 owns the completed Phase 28-36 scope, exclusions and gates. ADR-0046 owns
