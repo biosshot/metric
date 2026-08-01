@@ -869,6 +869,10 @@ label small,
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.form-grid--aligned-controls > label {
+  align-content: end;
+}
+
 .settings-form {
   display: grid;
   gap: 1.25rem;

@@ -260,7 +260,7 @@ const createProject = useMutation({
           </label>
         </div>
 
-        <div class="form-grid form-grid--three">
+        <div class="form-grid form-grid--three form-grid--aligned-controls">
           <label>
             {{ $t('onboarding.maxEventBytes') }}
             <input
