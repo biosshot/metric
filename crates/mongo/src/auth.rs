@@ -201,6 +201,40 @@ impl MongoAuthStore {
         Ok(())
     }
 
+    async fn create_owned_organization_inner(
+        &self,
+        organization: OrganizationIdentity,
+        membership: OrganizationMembership,
+    ) -> Result<(), AuthStoreError> {
+        if membership.organization_id != organization.id
+            || membership.role != OrganizationRole::Owner
+        {
+            return Err(AuthStoreError::InvalidData);
+        }
+        let organizations = self.database.collection::<Document>("organizations");
+        organizations
+            .insert_one(doc! {
+                "_id": organization_i64(organization.id)?,
+                "slug": organization.slug.as_str(),
+                "display_name": organization.display_name.as_str(),
+                "created_at": date(organization.created_at),
+            })
+            .await
+            .map_err(classify_organization_duplicate)?;
+        if let Err(error) = self
+            .database
+            .collection::<Document>("organization_memberships")
+            .insert_one(encode_membership(&membership)?)
+            .await
+        {
+            let _ = organizations
+                .delete_one(doc! { "_id": organization_i64(organization.id)? })
+                .await;
+            return Err(classify_membership_duplicate(error));
+        }
+        Ok(())
+    }
+
     async fn create_invited_user_inner(
         &self,
         user: UserAccount,
@@ -846,6 +880,14 @@ impl AuthStore for MongoAuthStore {
         identity: BootstrapIdentity,
     ) -> PortFuture<'_, Result<(), AuthStoreError>> {
         Box::pin(self.consume_bootstrap_inner(identity))
+    }
+
+    fn create_owned_organization(
+        &self,
+        organization: OrganizationIdentity,
+        membership: OrganizationMembership,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>> {
+        Box::pin(self.create_owned_organization_inner(organization, membership))
     }
 
     fn create_invited_user(
@@ -1885,6 +1927,15 @@ fn classify_duplicate(error: MongoError) -> AuthStoreError {
 fn classify_user_duplicate(error: MongoError) -> AuthStoreError {
     if duplicate_message(&error)
         .is_some_and(|message| message.contains("user_canonical_email_unique"))
+    {
+        AuthStoreError::AlreadyExists
+    } else {
+        classify_duplicate(error)
+    }
+}
+
+fn classify_organization_duplicate(error: MongoError) -> AuthStoreError {
+    if duplicate_message(&error).is_some_and(|message| message.contains("organization_slug_unique"))
     {
         AuthStoreError::AlreadyExists
     } else {

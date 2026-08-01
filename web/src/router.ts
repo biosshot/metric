@@ -23,6 +23,7 @@ import MonitorsView from './views/MonitorsView.vue';
 import SettingsView from './views/SettingsView.vue';
 import NotFoundView from './views/NotFoundView.vue';
 import FirstProjectOnboarding from './components/FirstProjectOnboarding.vue';
+import OrganizationCreateView from './views/OrganizationCreateView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -71,6 +72,7 @@ export const router = createRouter({
     { path: '/organization', redirect: '/settings/organization' },
     { path: '/account/tokens', redirect: '/settings/organization' },
     { path: '/projects/new', name: 'project-new', component: FirstProjectOnboarding },
+    { path: '/organizations/new', name: 'organization-new', component: OrganizationCreateView },
     { path: '/project/setup', name: 'setup', component: ProjectSetupView },
     { path: '/project/settings', redirect: '/settings/project' },
     {

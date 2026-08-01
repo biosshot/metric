@@ -298,6 +298,11 @@ export const api = {
     ),
   me: () => request<Identity>('/api/v1/auth/me'),
   organizations: () => request<{ items: UserOrganization[] }>('/api/v1/auth/organizations'),
+  createOrganization: (displayName: string, slug: string) =>
+    request<Organization>('/api/v1/organizations', {
+      method: 'POST',
+      body: JSON.stringify({ display_name: displayName, slug }),
+    }),
   logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
   tokens: () => request<{ items: ApiToken[] }>('/api/v1/auth/tokens'),
   createToken: (name: string, scopes: string[], expiresAt: string) =>

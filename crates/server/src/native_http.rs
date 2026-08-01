@@ -22,8 +22,8 @@ use axum::{
 };
 use metric_application::{
     auth::{
-        BootstrapRequest, CreateApiTokenRequest, IdentityService, InviteUserRequest, LoginRequest,
-        PasswordInput,
+        BootstrapRequest, CreateApiTokenRequest, CreateOrganizationRequest, IdentityService,
+        InviteUserRequest, LoginRequest, PasswordInput,
     },
     dashboards::{DashboardInput, DashboardWidgetInput, SavedQueryInput},
     incident_capsule::{
@@ -451,6 +451,7 @@ pub fn router_with_limits(
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(current_identity))
         .route("/api/v1/auth/organizations", get(list_user_organizations))
+        .route("/api/v1/organizations", post(create_organization))
         .route("/api/v1/auth/tokens", get(list_tokens).post(create_token))
         .route("/api/v1/auth/tokens/{token_id}", delete(revoke_token))
         .route("/api/v1/organization", get(get_organization))
@@ -2654,6 +2655,44 @@ async fn list_user_organizations(
         })
         .collect::<Result<Vec<_>, HttpApiError>>()?;
     Ok(Json(json!({ "items": items })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrganizationBody {
+    slug: String,
+    display_name: String,
+}
+
+async fn create_organization(
+    State(state): State<NativeHttpState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Result<Json<OrganizationBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    let body = json_body(body)?;
+    let organization = identity(&state)?
+        .create_organization(
+            &context,
+            CreateOrganizationRequest {
+                slug: Slug::new(body.slug).map_err(|_| HttpApiError::InvalidRequest)?,
+                display_name: DisplayName::new(body.display_name)
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                request_id: correlation_id(request_id)?,
+            },
+        )
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": organization.id.get().to_string(),
+            "slug": organization.slug.as_str(),
+            "display_name": organization.display_name.as_str(),
+            "created_at": timestamp_string(organization.created_at)?,
+        })),
+    ))
 }
 
 async fn list_organization_members(
@@ -5163,6 +5202,10 @@ mod tests {
             ("POST /auth/logout", RouteAccess::Authenticated),
             ("GET /auth/me", RouteAccess::Authenticated),
             ("GET /auth/organizations", RouteAccess::Authenticated),
+            (
+                "POST /organizations",
+                RouteAccess::Permission(Permission::OrganizationAdmin),
+            ),
             ("GET /auth/tokens", RouteAccess::Authenticated),
             ("POST /auth/tokens", RouteAccess::Authenticated),
             ("DELETE /auth/tokens/:id", RouteAccess::Authenticated),
@@ -5394,7 +5437,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 68);
+        assert_eq!(matrix.len(), 69);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

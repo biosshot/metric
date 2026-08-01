@@ -1157,6 +1157,12 @@ pub trait AuthStore: Send + Sync + 'static {
         identity: BootstrapIdentity,
     ) -> PortFuture<'_, Result<(), AuthStoreError>>;
 
+    fn create_owned_organization(
+        &self,
+        organization: OrganizationIdentity,
+        membership: OrganizationMembership,
+    ) -> PortFuture<'_, Result<(), AuthStoreError>>;
+
     fn create_invited_user(
         &self,
         user: UserAccount,

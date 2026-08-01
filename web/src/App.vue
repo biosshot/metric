@@ -19,9 +19,15 @@ const navigationOpen = ref(false);
 const logoutError = ref<unknown>(null);
 const workspaceError = ref<unknown>(null);
 const createProjectAction = '__create_project__:';
-const routesWithoutProject = new Set(['settings-system', 'settings-organization', 'not-found']);
-const projectOptions = computed<SelectOption[]>(() =>
-  session.workspaces.flatMap(({ organization, projects }) => {
+const createOrganizationAction = '__create_organization__';
+const routesWithoutProject = new Set([
+  'settings-system',
+  'settings-organization',
+  'organization-new',
+  'not-found',
+]);
+const projectOptions = computed<SelectOption[]>(() => {
+  const options = session.workspaces.flatMap(({ organization, projects }) => {
     const group = t('app.organizationGroup', { name: organization.display_name });
     const options: SelectOption[] = projects.map((project) => ({
       value: project.id,
@@ -41,19 +47,33 @@ const projectOptions = computed<SelectOption[]>(() =>
       });
     }
     return options;
-  }),
-);
-const selectedWorkspaceLabel = computed(() => {
-  if (!session.activeOrganization) return undefined;
-  if (!session.selectedProject) return session.activeOrganization.display_name;
-  return `${session.activeOrganization.display_name} / ${session.selectedProject.display_name}`;
+  });
+  if (session.has('organization:admin')) {
+    options.push({
+      value: createOrganizationAction,
+      label: t('app.newOrganization'),
+      description: t('app.newOrganizationDescription'),
+      icon: 'organization',
+      action: true,
+      group: t('app.workspaceActions'),
+    });
+  }
+  return options;
 });
+const selectedWorkspaceLabel = computed(
+  () => session.selectedProject?.display_name ?? t('app.selectProject'),
+);
 
 onMounted(() => session.restore());
 
 async function changeProject(projectId: string): Promise<void> {
   workspaceError.value = null;
   try {
+    if (projectId === createOrganizationAction) {
+      navigationOpen.value = false;
+      await router.push('/organizations/new');
+      return;
+    }
     if (projectId.startsWith(createProjectAction)) {
       const organizationId = projectId.slice(createProjectAction.length);
       await session.selectOrganization(organizationId);

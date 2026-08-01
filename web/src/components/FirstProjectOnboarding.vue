@@ -104,6 +104,15 @@ const createProject = useMutation({
           {{ firstProject ? $t('onboarding.firstProjectTitle') : $t('onboarding.newProjectTitle') }}
         </h1>
         <p>{{ $t('onboarding.projectDescription') }}</p>
+        <p class="info-note">
+          <AppIcon name="organization" :size="16" />
+          <span>
+            {{ $t('onboarding.targetOrganization') }}
+            <strong>{{
+              session.activeOrganization?.display_name ?? $t('organization.fallbackName')
+            }}</strong>
+          </span>
+        </p>
       </div>
     </header>
 

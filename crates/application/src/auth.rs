@@ -237,6 +237,13 @@ pub struct UserOrganization {
     pub role: OrganizationRole,
 }
 
+#[derive(Debug, Clone)]
+pub struct CreateOrganizationRequest {
+    pub slug: Slug,
+    pub display_name: DisplayName,
+    pub request_id: RequestCorrelationId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuedApiToken {
     pub id: CredentialId,
@@ -946,6 +953,63 @@ impl IdentityService {
     ) -> Result<OrganizationIdentity, AuthError> {
         self.call(self.store.load_organization(context.organization_id))
             .await
+    }
+
+    pub async fn create_organization(
+        &self,
+        context: &AuthContext,
+        request: CreateOrganizationRequest,
+    ) -> Result<OrganizationIdentity, AuthError> {
+        require(context, Permission::OrganizationAdmin)?;
+        for _ in 0..self.config.identity_collision_retries {
+            let organization_id = OrganizationId::new(self.random_u63()?)
+                .map_err(|_| AuthError::RandomUnavailable)?;
+            let now = self.clock.now();
+            let organization = OrganizationIdentity {
+                id: organization_id,
+                slug: request.slug.clone(),
+                display_name: request.display_name.clone(),
+                created_at: now,
+            };
+            let membership = OrganizationMembership {
+                organization_id,
+                user_id: context.user_id,
+                role: OrganizationRole::Owner,
+                created_at: now,
+                created_by: context.user_id,
+            };
+            match self
+                .call(
+                    self.store
+                        .create_owned_organization(organization.clone(), membership),
+                )
+                .await
+            {
+                Ok(()) => {
+                    let owner_context = AuthContext {
+                        actor: context.actor,
+                        user_id: context.user_id,
+                        organization_id,
+                        role: OrganizationRole::Owner,
+                        permissions: PermissionSet::from_role(OrganizationRole::Owner),
+                        credential_id: context.credential_id,
+                    };
+                    self.audit(
+                        &owner_context,
+                        request.request_id,
+                        AuditAction::MembershipCreated,
+                        "user",
+                        context.user_id.get().to_string(),
+                        role_metadata(OrganizationRole::Owner),
+                    )
+                    .await?;
+                    return Ok(organization);
+                }
+                Err(AuthError::IdentityCollision) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(AuthError::CollisionExhausted)
     }
 
     pub async fn list_user_organizations(
@@ -1803,6 +1867,7 @@ mod tests {
     #[derive(Default)]
     struct MemoryState {
         bootstrap: Option<SetupToken>,
+        organizations: HashMap<OrganizationId, OrganizationIdentity>,
         users: HashMap<UserId, UserAccount>,
         emails: HashMap<String, UserId>,
         memberships: HashMap<(UserId, OrganizationId), OrganizationMembership>,
@@ -1847,6 +1912,15 @@ mod tests {
                     return Err(AuthStoreError::InvalidCredential);
                 }
                 token.consumed_at = Some(identity.timestamp);
+                state.organizations.insert(
+                    identity.organization_id,
+                    OrganizationIdentity {
+                        id: identity.organization_id,
+                        slug: identity.organization_slug,
+                        display_name: identity.organization_name,
+                        created_at: identity.timestamp,
+                    },
+                );
                 state
                     .emails
                     .insert(identity.user.email.canonical().to_owned(), identity.user.id);
@@ -1858,6 +1932,36 @@ mod tests {
                     ),
                     identity.membership,
                 );
+                Ok(())
+            })
+        }
+
+        fn create_owned_organization(
+            &self,
+            organization: OrganizationIdentity,
+            membership: OrganizationMembership,
+        ) -> PortFuture<'_, Result<(), AuthStoreError>> {
+            Box::pin(async move {
+                if membership.organization_id != organization.id
+                    || membership.role != OrganizationRole::Owner
+                {
+                    return Err(AuthStoreError::InvalidData);
+                }
+                let mut state = self.state.lock().unwrap();
+                if state
+                    .organizations
+                    .values()
+                    .any(|existing| existing.slug == organization.slug)
+                {
+                    return Err(AuthStoreError::AlreadyExists);
+                }
+                if state.organizations.contains_key(&organization.id) {
+                    return Err(AuthStoreError::IdentityCollision);
+                }
+                state.organizations.insert(organization.id, organization);
+                state
+                    .memberships
+                    .insert((membership.user_id, membership.organization_id), membership);
                 Ok(())
             })
         }
@@ -2289,6 +2393,21 @@ mod tests {
                 Ok(())
             })
         }
+
+        fn load_organization(
+            &self,
+            organization_id: OrganizationId,
+        ) -> PortFuture<'_, Result<OrganizationIdentity, AuthStoreError>> {
+            Box::pin(async move {
+                self.state
+                    .lock()
+                    .unwrap()
+                    .organizations
+                    .get(&organization_id)
+                    .cloned()
+                    .ok_or(AuthStoreError::NotFound)
+            })
+        }
     }
 
     fn service() -> (IdentityService, Arc<MemoryStore>, Arc<TestClock>) {
@@ -2415,6 +2534,79 @@ mod tests {
                 .authenticate_session(&rotated.session, None, false, context.organization_id,)
                 .await,
             Err(AuthError::InvalidCredential)
+        );
+    }
+
+    #[tokio::test]
+    async fn organization_admin_can_create_an_owned_organization() {
+        let (service, store, _clock, bootstrap_owner, session) = bootstrapped().await;
+        let owner = service
+            .authenticate_session(
+                &session.session,
+                None,
+                false,
+                bootstrap_owner.organization_id,
+            )
+            .await
+            .unwrap();
+        let mut administrator = owner.clone();
+        administrator.role = OrganizationRole::Admin;
+        administrator.permissions = PermissionSet::from_role(OrganizationRole::Admin);
+        let created = service
+            .create_organization(
+                &administrator,
+                CreateOrganizationRequest {
+                    slug: Slug::new("second-org").unwrap(),
+                    display_name: DisplayName::new("Second organization").unwrap(),
+                    request_id: BoundedId::new("organization-create-1").unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let membership = store
+            .load_membership(owner.user_id, created.id)
+            .await
+            .unwrap();
+        assert_eq!(membership.role, OrganizationRole::Owner);
+        assert_eq!(membership.created_by, owner.user_id);
+        let organizations = service.list_user_organizations(&owner, 100).await.unwrap();
+        assert_eq!(organizations.len(), 2);
+        assert!(
+            organizations
+                .iter()
+                .any(|access| access.organization == created
+                    && access.role == OrganizationRole::Owner)
+        );
+
+        let mut member = owner.clone();
+        member.role = OrganizationRole::Member;
+        member.permissions = PermissionSet::from_role(OrganizationRole::Member);
+        assert_eq!(
+            service
+                .create_organization(
+                    &member,
+                    CreateOrganizationRequest {
+                        slug: Slug::new("forbidden-org").unwrap(),
+                        display_name: DisplayName::new("Forbidden organization").unwrap(),
+                        request_id: BoundedId::new("organization-create-forbidden").unwrap(),
+                    },
+                )
+                .await,
+            Err(AuthError::Forbidden)
+        );
+        assert_eq!(
+            service
+                .create_organization(
+                    &owner,
+                    CreateOrganizationRequest {
+                        slug: Slug::new("second-org").unwrap(),
+                        display_name: DisplayName::new("Duplicate organization").unwrap(),
+                        request_id: BoundedId::new("organization-create-duplicate").unwrap(),
+                    },
+                )
+                .await,
+            Err(AuthError::AlreadyExists)
         );
     }
 
