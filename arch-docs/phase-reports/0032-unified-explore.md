@@ -1,5 +1,9 @@
 # Phase 32 report: Unified Explore
 
+> Historical completion report. ADR-0048 later accepts Unified Query v2, which
+> reuses this planner/estimator and replaces fragmented public list/search transports
+> without changing MongoDB schema generation 19.
+
 - Date: 2026-07-27
 - Result: complete
 - Governing decision: ADR-0045

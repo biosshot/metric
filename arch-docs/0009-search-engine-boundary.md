@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-20
+- Extended by: ADR-0048 Unified Query v2
 
 ## Context
 

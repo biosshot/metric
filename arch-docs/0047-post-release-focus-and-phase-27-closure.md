@@ -105,3 +105,11 @@ being restored to the hot database.
 - Export becomes the reusable presentation boundary for cold search.
 - Any future schema compatibility work receives a new focused decision instead of
   reopening Phase 27.
+
+## Later amendment: Unified Query v2
+
+ADR-0048 accepts an unnumbered cross-cutting replacement of the fragmented hot-data
+list/search transports. It extends the existing Search/Explore implementation and
+does not reopen Phase 27 or change the accepted Phase 40/42 storage scope. It keeps
+schema generation 19, all collections, validators, indexes and retained data
+unchanged and requires no migration or backfill.

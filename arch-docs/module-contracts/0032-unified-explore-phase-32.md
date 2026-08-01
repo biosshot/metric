@@ -1,5 +1,10 @@
 # Phase 32 module contract: Unified Explore
 
+> Historical implementation boundary. ADR-0048 subsequently accepts Unified Query
+> v2 as a no-migration extension/replacement of the public Search/Explore transports.
+> This contract remains evidence for the Phase 32 planner, estimator and isolation
+> delivered at that time.
+
 ## Ownership
 
 - `metric-domain::explore` owns the closed dataset/field/predicate/aggregate AST,

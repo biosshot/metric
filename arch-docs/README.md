@@ -31,12 +31,15 @@ Status as of 2026-08-01:
 | Phase 40 JSON/CSV export | Accepted, next focus | ADR-0047 |
 | Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
+| Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
 Phase 27 did not pass its historical gates. By the 2026-08-01 owner decision it is
 closed as obsolete and is no longer a release or roadmap gate. Phases 28-38 and 41
-are complete. Phase 40 and Phase 42 are the only selected upcoming product work.
+are complete. Phase 40 and Phase 42 remain selected numbered product work. The
+unnumbered Unified Query v2 replacement is also accepted by ADR-0048 and precedes
+any new independent hot-data search surface.
 ADR-0045 owns the completed lightweight wave; ADR-0046 owns the post-Phase-36
 Metrics/Replay sequence and the deferred Profiling boundary. ADR-0047 owns current
 post-release focus and closes Phase 27.
@@ -149,6 +152,8 @@ current production declaration gate. Current limits are stated directly in
   Phase 37 bucket model, completed Phase 38 Replay and the deferred Profiling boundary.
 - `0047-post-release-focus-and-phase-27-closure.md`: current roadmap, Phase 27
   closure, completed localization and accepted Export/Cold Search scope.
+- `0048-unified-query-v2.md`: accepted one-endpoint Search/Explore consolidation,
+  shared Web query language and explicit generation-19 no-migration invariant.
 - `phase-reports/0041-web-localization.md`: Phase 41 implementation evidence.
 - `module-contracts/0037-application-metrics-phase-37.md`: Phase 37 implementation
   boundary and exit gate.

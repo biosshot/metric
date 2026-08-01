@@ -54,6 +54,7 @@ Status as of 2026-07-27:
 | 40 | Bounded JSON/CSV export | Accepted, next focus |
 | 41 | English/Russian Web localization | Complete |
 | 42 | Bounded cold-archive search | Accepted after/reusing Phase 40 |
+| unnumbered | Unified Query v2 over current hot data | Accepted by ADR-0048 |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
@@ -65,6 +66,11 @@ decision deferred execution of Phase 27 without completing it. ADR-0047 closes t
 program as obsolete without claiming its gates, records completed Phase 41 and owns
 the selected Phase 40/42 focus. All other unselected items below remain unnumbered
 backlog.
+
+ADR-0048 additionally accepts Unified Query v2 as an unnumbered cross-cutting
+replacement. It extends the existing Search/Explore code, uses one public query
+endpoint across product pages and explicitly makes no MongoDB schema, collection,
+validator, index, retained-data or migration change.
 
 ## Accepted direction
 
@@ -240,6 +246,21 @@ Shared value types are added only when a real vertical capability needs them:
 
 Correlation IDs use bounded binary representations. Their absence is represented by
 an omitted BSON field, never BSON `null`.
+
+### Web-only correlation navigation
+
+The first post-release correlation polish is a Web projection, not a new storage or
+ingest feature. Event detail may expose links only from exact identifiers already
+present in the authorized API response, including Trace/Span context, Replay context,
+release, environment and user identity. Existing Log -> Trace, Trace -> Log/Error,
+Replay -> Error/Trace and Feedback -> Replay/Trace navigation remains authoritative.
+
+This polish adds no relation collection, duplicated correlation document, background
+join, proximity/time-window inference or best-effort cross-signal match. If an exact
+identifier is absent, Web omits the link. Reverse lookup that cannot be proven from
+the current response remains unavailable until a separately accepted bounded API
+query is justified. The decision therefore requires no ingestion change, MongoDB
+schema generation change or retained-data backfill.
 
 ### Extension checklist
 

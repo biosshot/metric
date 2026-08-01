@@ -4,7 +4,8 @@
 - Date: 2026-07-21
 - Completion: Phases 0-22 are complete; ADR-0040 owns completed Phases 23-26;
   ADR-0047 closes the former Phase 27 as obsolete; ADR-0045/0046 own completed
-  Phases 28-38; ADR-0047 owns completed Phase 41 and selected Phases 40/42
+  Phases 28-38; ADR-0047 owns completed Phase 41 and selected Phases 40/42;
+  ADR-0048 owns the accepted unnumbered Unified Query v2 replacement
 
 ## Objective
 
