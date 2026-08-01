@@ -1425,6 +1425,32 @@ label small,
   gap: 0.55rem;
 }
 
+.base-select__group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0.25rem 0.15rem;
+  padding: 0.45rem 0.35rem 0.3rem;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+}
+
+.base-select__group:first-child {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.base-select__group .app-icon {
+  color: var(--semantic-info);
+}
+
+.base-select__option--grouped {
+  margin-left: 0.4rem;
+}
+
 .base-select__option--action {
   margin-top: 0.45rem;
 }

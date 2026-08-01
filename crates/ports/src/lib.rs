@@ -1196,6 +1196,14 @@ pub trait AuthStore: Send + Sync + 'static {
         organization_id: metric_domain::OrganizationId,
     ) -> PortFuture<'_, Result<OrganizationMembership, AuthStoreError>>;
 
+    fn list_user_memberships(
+        &self,
+        _user_id: UserId,
+        _limit: usize,
+    ) -> PortFuture<'_, Result<Vec<OrganizationMembership>, AuthStoreError>> {
+        Box::pin(async { Err(AuthStoreError::Unavailable) })
+    }
+
     fn mutate_membership(
         &self,
         mutation: MembershipMutation,

@@ -246,9 +246,17 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
   if (path === '/api/v1/auth/login') {
     const body = request.postDataJSON() as { email: string };
     state.role = body.email.startsWith('viewer') ? 'viewer' : 'owner';
-    return json({ csrf_token: 'c'.repeat(64), expires_at: '2026-08-23T09:00:00Z' }, 200, {
-      'set-cookie': `metric_session=${'d'.repeat(64)}; Path=/api/v1; HttpOnly; SameSite=Lax`,
-    });
+    return json(
+      {
+        csrf_token: 'c'.repeat(64),
+        expires_at: '2026-08-23T09:00:00Z',
+        organization_id: '7',
+      },
+      200,
+      {
+        'set-cookie': `metric_session=${'d'.repeat(64)}; Path=/api/v1; HttpOnly; SameSite=Lax`,
+      },
+    );
   }
   if (path === '/api/v1/auth/me') {
     state.sessionCookieSeen = request.headers().cookie?.includes('metric_session=') ?? false;
@@ -269,6 +277,19 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
               'organization:admin',
             ],
       credential_id: '12',
+    });
+  }
+  if (path === '/api/v1/auth/organizations') {
+    return json({
+      items: [
+        {
+          id: '7',
+          slug: 'acme',
+          display_name: 'Acme',
+          created_at: '2026-01-01T00:00:00Z',
+          role: state.role,
+        },
+      ],
     });
   }
   if (path === '/api/v1/auth/logout' && request.method() === 'POST') {
@@ -720,7 +741,6 @@ async function login(page: Page, email = 'owner@example.com'): Promise<void> {
   await page.goto('/');
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill('correct horse battery staple');
-  await page.getByLabel('Organization ID').fill('7');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 }
@@ -1591,7 +1611,6 @@ test('capture Phase 23 desktop and narrow route reference renders', async ({
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByLabel('Email').fill('owner@example.com');
   await page.getByLabel('Password').fill('correct horse battery staple');
-  await page.getByLabel('Organization ID').fill('7');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 
   const routes = [

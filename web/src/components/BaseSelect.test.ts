@@ -46,4 +46,24 @@ describe('BaseSelect', () => {
     expect(view.emitted()['update:modelValue']).toEqual([['__create__']]);
     expect(trigger).toHaveTextContent('Open');
   });
+
+  it('renders organization groups above their project options', async () => {
+    render(BaseSelect, {
+      props: {
+        modelValue: 'payments',
+        options: [
+          { value: 'payments', label: 'Payments', group: 'Org: TestOrg' },
+          { value: 'website', label: 'Website', group: 'Org: EchoSys' },
+        ],
+        ariaLabel: 'Workspace',
+      },
+    });
+
+    await fireEvent.click(screen.getByRole('combobox', { name: 'Workspace' }));
+
+    expect(screen.getByText('Org: TestOrg')).toBeVisible();
+    expect(screen.getByText('Org: EchoSys')).toBeVisible();
+    expect(screen.getByRole('option', { name: 'Payments' })).toBeVisible();
+    expect(screen.getByRole('option', { name: 'Website' })).toBeVisible();
+  });
 });

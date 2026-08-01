@@ -109,6 +109,28 @@ describe('native API client', () => {
     });
   });
 
+  it('allows sign-in without exposing an organization identifier', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          csrf_token: 'b'.repeat(64),
+          expires_at: '2030-01-01T00:00:00Z',
+          organization_id: '7',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.login('owner@example.com', 'correct horse battery staple');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      email: 'owner@example.com',
+      password: 'correct horse battery staple',
+    });
+  });
+
   it('creates a project through the authenticated CSRF contract', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -150,6 +172,21 @@ describe('native API client', () => {
       slug: 'payments-api',
       max_event_bytes: 1_048_576,
     });
+  });
+
+  it('can list projects for another authorized organization without changing global state', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.projects('99');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Headers).get('x-metric-organization-id')).toBe('99');
   });
 
   it('updates bounded inbound filters with the project policy revision', async () => {

@@ -218,7 +218,7 @@ pub struct BootstrapRequest {
 pub struct LoginRequest {
     pub email: Box<str>,
     pub password: Box<str>,
-    pub organization_id: OrganizationId,
+    pub organization_id: Option<OrganizationId>,
     pub client_network_digest: SecretDigest,
     pub request_id: RequestCorrelationId,
 }
@@ -228,6 +228,13 @@ pub struct IssuedWebSession {
     pub session: PlainSecret,
     pub csrf: PlainSecret,
     pub absolute_expires_at: Timestamp,
+    pub organization_id: OrganizationId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserOrganization {
+    pub organization: OrganizationIdentity,
+    pub role: OrganizationRole,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,13 +413,17 @@ impl IdentityService {
             .increment(1);
             return Err(AuthError::InvalidCredentials);
         };
-        let membership = match self
-            .call(self.store.load_membership(user.id, request.organization_id))
-            .await
-        {
-            Ok(membership) => membership,
-            Err(AuthError::NotFound) => return Err(AuthError::InvalidCredentials),
-            Err(error) => return Err(error),
+        let membership = if let Some(organization_id) = request.organization_id {
+            match self
+                .call(self.store.load_membership(user.id, organization_id))
+                .await
+            {
+                Ok(membership) => membership,
+                Err(AuthError::NotFound) => return Err(AuthError::InvalidCredentials),
+                Err(error) => return Err(error),
+            }
+        } else {
+            self.default_membership(user.id).await?
         };
         if needs_upgrade && let Ok(upgraded) = self.passwords.hash(upgrade_password).await {
             let _ = self
@@ -422,7 +433,9 @@ impl IdentityService {
 
         self.call(self.store.revoke_user_sessions(user.id, now))
             .await?;
-        let issued = self.create_session(user.id, now).await?;
+        let issued = self
+            .create_session(user.id, membership.organization_id, now)
+            .await?;
         let context = context_for_membership(
             Actor::WebSession,
             issued.0.id,
@@ -511,7 +524,7 @@ impl IdentityService {
         &self,
         context: &AuthContext,
         request: InviteUserRequest,
-    ) -> Result<PlainSecret, AuthError> {
+    ) -> Result<Option<PlainSecret>, AuthError> {
         require(context, Permission::OrganizationAdmin)?;
         if request.role == OrganizationRole::Owner {
             require(context, Permission::OrganizationOwner)?;
@@ -520,7 +533,44 @@ impl IdentityService {
             .call(self.store.load_user_by_email(&request.email))
             .await
         {
+            Ok(user) if user.password_hash.is_some() && user.disabled_at.is_none() => {
+                match self
+                    .call(self.store.load_membership(user.id, context.organization_id))
+                    .await
+                {
+                    Ok(_) => return Err(AuthError::AlreadyExists),
+                    Err(AuthError::NotFound) => {}
+                    Err(error) => return Err(error),
+                }
+                self.mutate_membership(
+                    context,
+                    user.id,
+                    MembershipMutationKind::Create(request.role),
+                    request.request_id,
+                )
+                .await?;
+                return Ok(None);
+            }
             Ok(user) => {
+                if user.disabled_at.is_some() {
+                    return Err(AuthError::AlreadyExists);
+                }
+                match self
+                    .call(self.store.load_membership(user.id, context.organization_id))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(AuthError::NotFound) => {
+                        self.mutate_membership(
+                            context,
+                            user.id,
+                            MembershipMutationKind::Create(request.role),
+                            request.request_id.clone(),
+                        )
+                        .await?;
+                    }
+                    Err(error) => return Err(error),
+                }
                 return self
                     .reissue_pending_invitation(context, &request, user)
                     .await;
@@ -572,7 +622,7 @@ impl IdentityService {
                         role_metadata(request.role),
                     )
                     .await?;
-                    return Ok(secret);
+                    return Ok(Some(secret));
                 }
                 Err(AuthError::IdentityCollision) => {}
                 Err(AuthError::AlreadyExists) => return Err(AuthError::AlreadyExists),
@@ -587,7 +637,7 @@ impl IdentityService {
         context: &AuthContext,
         request: &InviteUserRequest,
         user: UserAccount,
-    ) -> Result<PlainSecret, AuthError> {
+    ) -> Result<Option<PlainSecret>, AuthError> {
         if user.password_hash.is_some() || user.disabled_at.is_some() {
             return Err(AuthError::AlreadyExists);
         }
@@ -623,7 +673,7 @@ impl IdentityService {
                         role_metadata(membership.role),
                     )
                     .await?;
-                    return Ok(secret);
+                    return Ok(Some(secret));
                 }
                 Err(AuthError::IdentityCollision) => {}
                 Err(error) => return Err(error),
@@ -636,7 +686,7 @@ impl IdentityService {
         &self,
         secret: &PlainSecret,
         password: PasswordInput,
-        organization_id: OrganizationId,
+        organization_id: Option<OrganizationId>,
         request_id: RequestCorrelationId,
     ) -> Result<(), AuthError> {
         let hash = self.passwords.hash(password).await?;
@@ -650,9 +700,12 @@ impl IdentityService {
             .map_err(credential_error)?;
         self.call(self.store.revoke_user_sessions(user_id, now))
             .await?;
-        let membership = self
-            .call(self.store.load_membership(user_id, organization_id))
-            .await?;
+        let membership = if let Some(organization_id) = organization_id {
+            self.call(self.store.load_membership(user_id, organization_id))
+                .await?
+        } else {
+            self.default_membership(user_id).await?
+        };
         let context = context_for_membership(
             Actor::Bootstrap,
             CredentialId::new(user_id.get()).map_err(|_| AuthError::Unavailable)?,
@@ -893,6 +946,33 @@ impl IdentityService {
     ) -> Result<OrganizationIdentity, AuthError> {
         self.call(self.store.load_organization(context.organization_id))
             .await
+    }
+
+    pub async fn list_user_organizations(
+        &self,
+        context: &AuthContext,
+        limit: usize,
+    ) -> Result<Vec<UserOrganization>, AuthError> {
+        if context.actor != Actor::WebSession {
+            return Err(AuthError::Forbidden);
+        }
+        if !(1..=100).contains(&limit) {
+            return Err(AuthError::InvalidTokenPolicy);
+        }
+        let memberships = self
+            .call(self.store.list_user_memberships(context.user_id, limit))
+            .await?;
+        let mut organizations = Vec::with_capacity(memberships.len());
+        for membership in memberships {
+            let organization = self
+                .call(self.store.load_organization(membership.organization_id))
+                .await?;
+            organizations.push(UserOrganization {
+                organization,
+                role: membership.role,
+            });
+        }
+        Ok(organizations)
     }
 
     pub async fn list_organization_members(
@@ -1231,6 +1311,7 @@ impl IdentityService {
     async fn create_session(
         &self,
         user_id: UserId,
+        organization_id: OrganizationId,
         now: Timestamp,
     ) -> Result<(WebSession, IssuedWebSession), AuthError> {
         for _ in 0..self.config.identity_collision_retries {
@@ -1258,6 +1339,7 @@ impl IdentityService {
                             session: secret,
                             csrf,
                             absolute_expires_at,
+                            organization_id,
                         },
                     ));
                 }
@@ -1266,6 +1348,21 @@ impl IdentityService {
             }
         }
         Err(AuthError::CollisionExhausted)
+    }
+
+    async fn default_membership(
+        &self,
+        user_id: UserId,
+    ) -> Result<OrganizationMembership, AuthError> {
+        let mut memberships = self
+            .call(self.store.list_user_memberships(user_id, 100))
+            .await?;
+        memberships
+            .sort_unstable_by_key(|membership| (membership.created_at, membership.organization_id));
+        memberships
+            .into_iter()
+            .next()
+            .ok_or(AuthError::InvalidCredentials)
     }
 
     async fn authoritative_identity(
@@ -1891,6 +1988,27 @@ mod tests {
             })
         }
 
+        fn list_user_memberships(
+            &self,
+            user_id: UserId,
+            limit: usize,
+        ) -> PortFuture<'_, Result<Vec<OrganizationMembership>, AuthStoreError>> {
+            Box::pin(async move {
+                let state = self.state.lock().unwrap();
+                let mut memberships = state
+                    .memberships
+                    .values()
+                    .filter(|membership| membership.user_id == user_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                memberships.sort_unstable_by_key(|membership| {
+                    (membership.created_at, membership.organization_id)
+                });
+                memberships.truncate(limit);
+                Ok(memberships)
+            })
+        }
+
         fn mutate_membership(
             &self,
             mutation: MembershipMutation,
@@ -2219,12 +2337,13 @@ mod tests {
             .login(LoginRequest {
                 email: "owner@example.com".into(),
                 password: "correct horse battery staple".into(),
-                organization_id: context.organization_id,
+                organization_id: None,
                 client_network_digest: SecretDigest::new([9; 32]),
                 request_id: BoundedId::new("login-1").unwrap(),
             })
             .await
             .unwrap();
+        assert_eq!(login.organization_id, context.organization_id);
         (service, store, clock, context, login)
     }
 
@@ -2236,7 +2355,7 @@ mod tests {
                 .login(LoginRequest {
                     email: "missing@example.com".into(),
                     password: "not the password".into(),
-                    organization_id: context.organization_id,
+                    organization_id: Some(context.organization_id),
                     client_network_digest: SecretDigest::new([8; 32]),
                     request_id: BoundedId::new("login-bad").unwrap(),
                 })
@@ -2268,7 +2387,7 @@ mod tests {
             .login(LoginRequest {
                 email: "owner@example.com".into(),
                 password: "correct horse battery staple".into(),
-                organization_id: context.organization_id,
+                organization_id: Some(context.organization_id),
                 client_network_digest: SecretDigest::new([7; 32]),
                 request_id: BoundedId::new("login-rotated").unwrap(),
             })
@@ -2345,7 +2464,7 @@ mod tests {
 
     #[tokio::test]
     async fn pending_invitation_can_be_reissued_and_replaces_the_previous_secret() {
-        let (service, _store, _clock, owner, _session) = bootstrapped().await;
+        let (service, store, _clock, owner, _session) = bootstrapped().await;
         let invitation = |request_id: &str| InviteUserRequest {
             email: EmailAddress::parse("pending@example.com").unwrap(),
             display_name: UserDisplayName::new("Pending User").unwrap(),
@@ -2360,13 +2479,15 @@ mod tests {
             .invite_user(&owner, invitation("invite-pending-2"))
             .await
             .unwrap();
+        let previous = previous.expect("new invited user receives a setup token");
+        let replacement = replacement.expect("pending invited user receives a replacement token");
         assert_ne!(previous.expose(), replacement.expose());
         assert_eq!(
             service
                 .setup_password(
                     &previous,
                     PasswordInput::new("pending correct horse password").unwrap(),
-                    owner.organization_id,
+                    Some(owner.organization_id),
                     BoundedId::new("setup-old-invitation").unwrap(),
                 )
                 .await,
@@ -2376,7 +2497,7 @@ mod tests {
             .setup_password(
                 &replacement,
                 PasswordInput::new("pending correct horse password").unwrap(),
-                owner.organization_id,
+                None,
                 BoundedId::new("setup-new-invitation").unwrap(),
             )
             .await
@@ -2386,6 +2507,31 @@ mod tests {
                 .invite_user(&owner, invitation("invite-active-user"))
                 .await,
             Err(AuthError::AlreadyExists)
+        );
+        let mut second_organization_owner = owner.clone();
+        second_organization_owner.organization_id = OrganizationId::new(99).unwrap();
+        assert_eq!(
+            service
+                .invite_user(
+                    &second_organization_owner,
+                    invitation("invite-active-user-to-second-organization"),
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        let pending_user_id = *store
+            .state
+            .lock()
+            .unwrap()
+            .emails
+            .get("pending@example.com")
+            .unwrap();
+        assert!(
+            store
+                .load_membership(pending_user_id, second_organization_owner.organization_id)
+                .await
+                .is_ok()
         );
     }
 

@@ -122,7 +122,7 @@ const updateMember = useMutation({
 });
 
 const setupLink = computed(() => {
-  if (!invitation.value) return '';
+  if (!invitation.value?.setup_token) return '';
   return organizationInvitationUrl(window.location.origin, invitation.value);
 });
 
@@ -325,9 +325,27 @@ function actionLabel(action: string): string {
       <section v-if="invitation" class="panel token-secret-panel" aria-live="polite">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">{{ $t('organization.copyNow') }}</p>
-            <h2>{{ $t('organization.setupLink') }}</h2>
-            <p class="muted">{{ $t('organization.setupLinkHelp') }}</p>
+            <p class="eyebrow">
+              {{
+                invitation.existing_account
+                  ? $t('organization.memberAdded')
+                  : $t('organization.copyNow')
+              }}
+            </p>
+            <h2>
+              {{
+                invitation.existing_account
+                  ? $t('organization.existingAccountAdded')
+                  : $t('organization.setupLink')
+              }}
+            </h2>
+            <p class="muted">
+              {{
+                invitation.existing_account
+                  ? $t('organization.existingAccountAddedHelp')
+                  : $t('organization.setupLinkHelp')
+              }}
+            </p>
           </div>
           <button
             class="icon-button"
@@ -338,7 +356,12 @@ function actionLabel(action: string): string {
             <AppIcon name="close" :size="18" />
           </button>
         </div>
-        <CodeBlock :code="setupLink" language="text" :title="$t('organization.invitationUrl')" />
+        <CodeBlock
+          v-if="setupLink"
+          :code="setupLink"
+          language="text"
+          :title="$t('organization.invitationUrl')"
+        />
       </section>
     </template>
 

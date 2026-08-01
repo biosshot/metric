@@ -2,8 +2,8 @@ import { chromium } from 'playwright';
 import { error as logError } from 'node:console';
 import { argv } from 'node:process';
 
-const [baseUrl, email, password, organizationId] = argv.slice(2);
-if (!baseUrl || !email || !password || !organizationId) {
+const [baseUrl, email, password] = argv.slice(2);
+if (!baseUrl || !email || !password) {
   throw new Error('base URL and credentials are required');
 }
 
@@ -23,7 +23,6 @@ try {
   await page.goto(baseUrl);
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
-  await page.getByLabel('Organization ID').fill(organizationId);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByRole('heading', { name: 'Create your first project' }).waitFor();
 

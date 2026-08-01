@@ -37,12 +37,12 @@ describe('AuthView invitation route', () => {
     render(AuthView, { global: { plugins: [createPinia(), router] } });
 
     const token = 'b'.repeat(64);
-    await router.push(`/auth/setup?setup_token=${token}&organization_id=7315819048328739377`);
+    await router.push(`/auth/setup?setup_token=${token}`);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Set your password' })).toBeVisible();
       expect(screen.getByLabelText('Setup token')).toHaveValue(token);
-      expect(screen.getByLabelText('Organization ID')).toHaveValue('7315819048328739377');
+      expect(screen.queryByLabelText('Organization ID')).not.toBeInTheDocument();
     });
   });
 

@@ -550,7 +550,7 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         .login(LoginRequest {
             email: "owner@example.com".into(),
             password: "correct horse battery staple".into(),
-            organization_id: owner.organization_id,
+            organization_id: Some(owner.organization_id),
             client_network_digest: SecretDigest::new([19; 32]),
             request_id: RequestCorrelationId::new("phase19-login")?,
         })

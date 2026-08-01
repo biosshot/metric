@@ -61,7 +61,7 @@ async function login(): Promise<void> {
   busy.value = true;
   error.value = null;
   try {
-    await session.login(email.value, password.value, organizationId.value);
+    await session.login(email.value, password.value);
     await router.replace('/dashboard');
   } catch (cause) {
     error.value = cause;
@@ -83,7 +83,7 @@ async function bootstrap(): Promise<void> {
       organization_name: organizationName.value,
     });
     organizationId.value = identity.organization_id;
-    successNotice.value = t('auth.organizationCreated', { id: identity.organization_id });
+    successNotice.value = t('auth.organizationCreated');
     mode.value = 'login';
   } catch (cause) {
     error.value = cause;
@@ -96,7 +96,7 @@ async function setupInvitedPassword(): Promise<void> {
   busy.value = true;
   error.value = null;
   try {
-    await api.setupPassword(setupToken.value, password.value, organizationId.value);
+    await api.setupPassword(setupToken.value, password.value, organizationId.value || undefined);
     password.value = '';
     successNotice.value = t('auth.passwordSet');
     mode.value = 'login';
@@ -157,11 +157,6 @@ async function setupInvitedPassword(): Promise<void> {
             minlength="12"
             required
           />
-        </label>
-        <label>
-          {{ $t('auth.organizationId') }}
-          <input v-model.trim="organizationId" inputmode="numeric" pattern="[1-9][0-9]*" required />
-          <small>{{ $t('auth.organizationIdHelp') }}</small>
         </label>
         <ApiErrorPanel v-if="error" :error="error" :title="$t('auth.signInFailed')" />
         <button class="button button--primary button--wide" type="submit" :disabled="busy">
@@ -240,10 +235,6 @@ async function setupInvitedPassword(): Promise<void> {
             maxlength="64"
             required
           />
-        </label>
-        <label>
-          {{ $t('auth.organizationId') }}
-          <input v-model.trim="organizationId" inputmode="numeric" pattern="[1-9][0-9]*" required />
         </label>
         <label>
           {{ $t('auth.newPassword') }}

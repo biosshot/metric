@@ -363,6 +363,29 @@ impl MongoAuthStore {
         decode_membership(&document)
     }
 
+    async fn list_user_memberships_inner(
+        &self,
+        user_id: UserId,
+        limit: usize,
+    ) -> Result<Vec<OrganizationMembership>, AuthStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(AuthStoreError::InvalidData);
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("organization_memberships")
+            .find(doc! { "user_id": user_i64(user_id)? })
+            .sort(doc! { "created_at": 1, "organization_id": 1 })
+            .limit(i64::try_from(limit).unwrap_or(100))
+            .await
+            .map_err(unavailable)?;
+        let mut memberships = Vec::with_capacity(limit);
+        while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+            memberships.push(decode_membership(&document)?);
+        }
+        Ok(memberships)
+    }
+
     async fn mutate_membership_inner(
         &self,
         mutation: MembershipMutation,
@@ -924,6 +947,14 @@ impl AuthStore for MongoAuthStore {
         organization_id: OrganizationId,
     ) -> PortFuture<'_, Result<OrganizationMembership, AuthStoreError>> {
         Box::pin(self.load_membership_inner(user_id, organization_id))
+    }
+
+    fn list_user_memberships(
+        &self,
+        user_id: UserId,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<OrganizationMembership>, AuthStoreError>> {
+        Box::pin(self.list_user_memberships_inner(user_id, limit))
     }
 
     fn mutate_membership(

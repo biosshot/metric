@@ -23,6 +23,7 @@ export interface Identity {
 export interface LoginResponse {
   csrf_token: string;
   expires_at: string;
+  organization_id: string;
 }
 
 export interface ApiToken {
@@ -45,6 +46,10 @@ export interface Organization {
   slug: string;
   display_name: string;
   created_at: string;
+}
+
+export interface UserOrganization extends Organization {
+  role: OrganizationRole;
 }
 
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -70,8 +75,9 @@ export interface OrganizationAuditRecord {
 }
 
 export interface CreatedInvitation {
-  setup_token: string;
+  setup_token: string | null;
   organization_id: string;
+  existing_account: boolean;
 }
 
 export interface ProjectPolicy {

@@ -47,6 +47,7 @@ import type {
   Span,
   StructuredLog,
   Trace,
+  UserOrganization,
 } from './types';
 
 type SessionProvider = () => { organizationId: string | null; csrfToken: string | null };
@@ -110,15 +111,16 @@ function isMutation(method: string): boolean {
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  options: { public?: boolean } = {},
+  options: { public?: boolean; organizationId?: string } = {},
 ): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   const session = sessionProvider();
   const headers = new Headers(init.headers);
   headers.set('accept', 'application/json');
   if (init.body) headers.set('content-type', 'application/json');
-  if (!options.public && session.organizationId) {
-    headers.set('x-metric-organization-id', session.organizationId);
+  const organizationId = options.organizationId ?? session.organizationId;
+  if (!options.public && organizationId) {
+    headers.set('x-metric-organization-id', organizationId);
   }
   if (!options.public && isMutation(method)) {
     if (!session.csrfToken) {
@@ -267,17 +269,21 @@ export const api = {
       { public: true },
     );
   },
-  login(email: string, password: string, organizationId: string) {
+  login(email: string, password: string, organizationId?: string) {
     return request<LoginResponse>(
       '/api/v1/auth/login',
       {
         method: 'POST',
-        body: JSON.stringify({ email, password, organization_id: organizationId }),
+        body: JSON.stringify({
+          email,
+          password,
+          ...(organizationId ? { organization_id: organizationId } : {}),
+        }),
       },
       { public: true },
     );
   },
-  setupPassword: (setupToken: string, password: string, organizationId: string) =>
+  setupPassword: (setupToken: string, password: string, organizationId?: string) =>
     request<void>(
       '/api/v1/auth/setup-password',
       {
@@ -285,12 +291,13 @@ export const api = {
         body: JSON.stringify({
           setup_token: setupToken,
           password,
-          organization_id: organizationId,
+          ...(organizationId ? { organization_id: organizationId } : {}),
         }),
       },
       { public: true },
     ),
   me: () => request<Identity>('/api/v1/auth/me'),
+  organizations: () => request<{ items: UserOrganization[] }>('/api/v1/auth/organizations'),
   logout: () => request<void>('/api/v1/auth/logout', { method: 'POST' }),
   tokens: () => request<{ items: ApiToken[] }>('/api/v1/auth/tokens'),
   createToken: (name: string, scopes: string[], expiresAt: string) =>
@@ -319,7 +326,8 @@ export const api = {
     }),
   organizationAudit: () =>
     request<{ items: OrganizationAuditRecord[] }>('/api/v1/organization/audit'),
-  projects: () => request<{ items: Project[] }>('/api/v1/projects'),
+  projects: (organizationId?: string) =>
+    request<{ items: Project[] }>('/api/v1/projects', {}, { organizationId }),
   createProject: (project: CreateProjectInput) =>
     request<CreateProjectResponse>('/api/v1/projects', {
       method: 'POST',

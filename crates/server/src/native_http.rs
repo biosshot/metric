@@ -450,6 +450,7 @@ pub fn router_with_limits(
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(current_identity))
+        .route("/api/v1/auth/organizations", get(list_user_organizations))
         .route("/api/v1/auth/tokens", get(list_tokens).post(create_token))
         .route("/api/v1/auth/tokens/{token_id}", delete(revoke_token))
         .route("/api/v1/organization", get(get_organization))
@@ -2408,7 +2409,7 @@ async fn bootstrap(
 struct SetupPasswordBody {
     setup_token: String,
     password: String,
-    organization_id: LoginOrganizationId,
+    organization_id: Option<LoginOrganizationId>,
 }
 
 async fn setup_password(
@@ -2421,7 +2422,9 @@ async fn setup_password(
         .setup_password(
             &secret(&body.setup_token)?,
             PasswordInput::new(body.password).map_err(|_| HttpApiError::InvalidRequest)?,
-            body.organization_id.parse()?,
+            body.organization_id
+                .map(LoginOrganizationId::parse)
+                .transpose()?,
             correlation_id(request_id)?,
         )
         .await
@@ -2434,7 +2437,7 @@ async fn setup_password(
 struct LoginBody {
     email: String,
     password: String,
-    organization_id: LoginOrganizationId,
+    organization_id: Option<LoginOrganizationId>,
 }
 
 #[derive(Deserialize)]
@@ -2464,7 +2467,10 @@ async fn login(
     body: Result<Json<LoginBody>, JsonRejection>,
 ) -> Result<Response, HttpApiError> {
     let body = json_body(body)?;
-    let organization_id = body.organization_id.parse()?;
+    let organization_id = body
+        .organization_id
+        .map(LoginOrganizationId::parse)
+        .transpose()?;
     let issued = identity(&state)?
         .login(LoginRequest {
             email: body.email.into(),
@@ -2482,6 +2488,7 @@ async fn login(
     let mut response = Json(json!({
         "csrf_token": issued.csrf.encode_hex(),
         "expires_at": timestamp_string(issued.absolute_expires_at)?,
+        "organization_id": issued.organization_id.get().to_string(),
     }))
     .into_response();
     response.headers_mut().insert(
@@ -2625,6 +2632,30 @@ async fn get_organization(
     })))
 }
 
+async fn list_user_organizations(
+    State(state): State<NativeHttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let organizations = identity(&state)?
+        .list_user_organizations(&context, 100)
+        .await
+        .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    let items = organizations
+        .into_iter()
+        .map(|access| {
+            Ok(json!({
+                "id": access.organization.id.get().to_string(),
+                "slug": access.organization.slug.as_str(),
+                "display_name": access.organization.display_name.as_str(),
+                "created_at": timestamp_string(access.organization.created_at)?,
+                "role": role_name(access.role),
+            }))
+        })
+        .collect::<Result<Vec<_>, HttpApiError>>()?;
+    Ok(Json(json!({ "items": items })))
+}
+
 async fn list_organization_members(
     State(state): State<NativeHttpState>,
     headers: HeaderMap,
@@ -2679,11 +2710,13 @@ async fn invite_organization_member(
         )
         .await
         .map_err(|error| HttpApiError::Api(map_auth(error)))?;
+    let existing_account = setup_token.is_none();
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "setup_token": setup_token.encode_hex(),
+            "setup_token": setup_token.map(|token| token.encode_hex()),
             "organization_id": context.organization_id.get().to_string(),
+            "existing_account": existing_account,
         })),
     ))
 }
@@ -5069,7 +5102,7 @@ mod tests {
             "organization_id": large.to_string(),
         }))
         .unwrap();
-        assert_eq!(body.organization_id.parse().unwrap().get(), large);
+        assert_eq!(body.organization_id.unwrap().parse().unwrap().get(), large);
 
         let legacy: LoginBody = serde_json::from_value(json!({
             "email": "owner@example.com",
@@ -5077,7 +5110,14 @@ mod tests {
             "organization_id": 7,
         }))
         .unwrap();
-        assert_eq!(legacy.organization_id.parse().unwrap().get(), 7);
+        assert_eq!(legacy.organization_id.unwrap().parse().unwrap().get(), 7);
+
+        let organization_free: LoginBody = serde_json::from_value(json!({
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+        }))
+        .unwrap();
+        assert!(organization_free.organization_id.is_none());
     }
 
     #[test]
@@ -5122,6 +5162,7 @@ mod tests {
             ("POST /auth/login", RouteAccess::Public),
             ("POST /auth/logout", RouteAccess::Authenticated),
             ("GET /auth/me", RouteAccess::Authenticated),
+            ("GET /auth/organizations", RouteAccess::Authenticated),
             ("GET /auth/tokens", RouteAccess::Authenticated),
             ("POST /auth/tokens", RouteAccess::Authenticated),
             ("DELETE /auth/tokens/:id", RouteAccess::Authenticated),
@@ -5353,7 +5394,7 @@ mod tests {
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 67);
+        assert_eq!(matrix.len(), 68);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

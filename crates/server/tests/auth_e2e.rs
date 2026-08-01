@@ -77,7 +77,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             .login(LoginRequest {
                 email: "owner@example.com".into(),
                 password: "incorrect password".into(),
-                organization_id: bootstrap.organization_id,
+                organization_id: Some(bootstrap.organization_id),
                 client_network_digest: SecretDigest::new([90; 32]),
                 request_id: BoundedId::new("bad-login-e2e")?,
             })
@@ -88,7 +88,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .login(LoginRequest {
             email: "OWNER@example.com".into(),
             password: "correct horse battery staple".into(),
-            organization_id: bootstrap.organization_id,
+            organization_id: Some(bootstrap.organization_id),
             client_network_digest: SecretDigest::new([91; 32]),
             request_id: BoundedId::new("login-e2e")?,
         })
@@ -170,12 +170,13 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                 request_id: BoundedId::new("invite-e2e")?,
             },
         )
-        .await?;
+        .await?
+        .expect("new invited user receives a setup token");
     service
         .setup_password(
             &second_setup,
             PasswordInput::new("another correct horse password")?,
-            bootstrap.organization_id,
+            Some(bootstrap.organization_id),
             BoundedId::new("setup-e2e")?,
         )
         .await?;

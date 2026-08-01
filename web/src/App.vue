@@ -17,38 +17,60 @@ const router = useRouter();
 const { t } = useI18n();
 const navigationOpen = ref(false);
 const logoutError = ref<unknown>(null);
-const createProjectAction = '__create_project__';
+const workspaceError = ref<unknown>(null);
+const createProjectAction = '__create_project__:';
 const routesWithoutProject = new Set(['settings-system', 'settings-organization', 'not-found']);
-const projectOptions = computed<SelectOption[]>(() => [
-  ...session.projects.map((project) => ({
-    value: project.id,
-    label: project.display_name,
-    icon: 'bug' as const,
-  })),
-  ...(session.has('organization:admin')
-    ? [
-        {
-          value: createProjectAction,
-          label: t('app.newProject'),
-          description: t('app.newProjectDescription'),
-          icon: 'plus' as const,
-          action: true,
-        },
-      ]
-    : []),
-]);
+const projectOptions = computed<SelectOption[]>(() =>
+  session.workspaces.flatMap(({ organization, projects }) => {
+    const group = t('app.organizationGroup', { name: organization.display_name });
+    const options: SelectOption[] = projects.map((project) => ({
+      value: project.id,
+      label: project.display_name,
+      description: project.slug,
+      icon: 'bug' as const,
+      group,
+    }));
+    if (organization.role === 'owner' || organization.role === 'admin') {
+      options.push({
+        value: `${createProjectAction}${organization.id}`,
+        label: t('app.newProject'),
+        description: t('app.newProjectDescription'),
+        icon: 'plus' as const,
+        action: true,
+        group,
+      });
+    }
+    return options;
+  }),
+);
+const selectedWorkspaceLabel = computed(() => {
+  if (!session.activeOrganization) return undefined;
+  if (!session.selectedProject) return session.activeOrganization.display_name;
+  return `${session.activeOrganization.display_name} / ${session.selectedProject.display_name}`;
+});
 
 onMounted(() => session.restore());
 
-function changeProject(projectId: string): void {
-  if (projectId === createProjectAction) {
+async function changeProject(projectId: string): Promise<void> {
+  workspaceError.value = null;
+  try {
+    if (projectId.startsWith(createProjectAction)) {
+      const organizationId = projectId.slice(createProjectAction.length);
+      await session.selectOrganization(organizationId);
+      navigationOpen.value = false;
+      await router.push('/projects/new');
+      return;
+    }
+    const workspace = session.workspaces.find(({ projects }) =>
+      projects.some((project) => project.id === projectId),
+    );
+    if (!workspace) return;
+    await session.selectWorkspaceProject(projectId, workspace.organization.id);
     navigationOpen.value = false;
-    void router.push('/projects/new');
-    return;
+    await router.push('/dashboard');
+  } catch (error) {
+    workspaceError.value = error;
   }
-  session.selectProject(projectId);
-  navigationOpen.value = false;
-  void router.push('/dashboard');
 }
 
 async function logout(): Promise<void> {
@@ -124,6 +146,7 @@ async function logout(): Promise<void> {
           :model-value="session.selectedProjectId ?? ''"
           :options="projectOptions"
           :label="$t('app.project')"
+          :selected-label="selectedWorkspaceLabel"
           @update:model-value="changeProject"
         />
       </div>
@@ -211,7 +234,7 @@ async function logout(): Promise<void> {
           <strong>{{
             session.identity?.role ? $t(`organization.${session.identity.role}`) : '—'
           }}</strong>
-          <span>{{ $t('app.organizationShort', { id: session.organizationId }) }}</span>
+          <span>{{ session.activeOrganization?.display_name ?? '—' }}</span>
         </RouterLink>
         <button type="button" @click="logout">
           <AppIcon name="signOut" :size="16" />
@@ -222,6 +245,11 @@ async function logout(): Promise<void> {
 
     <main id="main-content" class="main-content">
       <ApiErrorPanel v-if="logoutError" :error="logoutError" :title="$t('app.signOutFailed')" />
+      <ApiErrorPanel
+        v-if="workspaceError"
+        :error="workspaceError"
+        :title="$t('app.workspaceSwitchFailed')"
+      />
       <FirstProjectOnboarding
         v-if="
           !session.selectedProject &&

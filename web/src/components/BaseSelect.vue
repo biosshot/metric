@@ -8,6 +8,7 @@ export interface SelectOption {
   description?: string;
   icon?: AppIconName;
   action?: boolean;
+  group?: string;
 }
 
 const props = withDefaults(
@@ -145,32 +146,41 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
         role="listbox"
         :aria-labelledby="label ? `${id}-label` : undefined"
       >
-        <li
-          v-for="(option, index) in options"
-          :id="`${id}-option-${index}`"
-          :key="option.value"
-          class="base-select__option"
-          :class="{
-            'base-select__option--active': index === highlightedIndex,
-            'base-select__option--action': option.action,
-          }"
-          role="option"
-          :aria-selected="!option.action && option.value === modelValue"
-          @mouseenter="highlightedIndex = index"
-          @click="choose(option)"
-        >
-          <AppIcon v-if="option.icon" :name="option.icon" :size="16" />
-          <span>
-            <strong>{{ option.label }}</strong>
-            <small v-if="option.description">{{ option.description }}</small>
-          </span>
-          <AppIcon
-            v-if="!option.action && option.value === modelValue"
-            class="base-select__check"
-            name="check"
-            :size="16"
-          />
-        </li>
+        <template v-for="(option, index) in options" :key="option.value">
+          <li
+            v-if="option.group && (index === 0 || options[index - 1]?.group !== option.group)"
+            class="base-select__group"
+            role="presentation"
+          >
+            <AppIcon name="organization" :size="14" />
+            <span>{{ option.group }}</span>
+          </li>
+          <li
+            :id="`${id}-option-${index}`"
+            class="base-select__option"
+            :class="{
+              'base-select__option--active': index === highlightedIndex,
+              'base-select__option--action': option.action,
+              'base-select__option--grouped': option.group,
+            }"
+            role="option"
+            :aria-selected="!option.action && option.value === modelValue"
+            @mouseenter="highlightedIndex = index"
+            @click="choose(option)"
+          >
+            <AppIcon v-if="option.icon" :name="option.icon" :size="16" />
+            <span>
+              <strong>{{ option.label }}</strong>
+              <small v-if="option.description">{{ option.description }}</small>
+            </span>
+            <AppIcon
+              v-if="!option.action && option.value === modelValue"
+              class="base-select__check"
+              name="check"
+              :size="16"
+            />
+          </li>
+        </template>
       </ul>
     </Transition>
   </div>
