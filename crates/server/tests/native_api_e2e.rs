@@ -28,6 +28,7 @@ use metric_application::{
         ProcessorConfig,
     },
     projects::{CreateProject, ProjectCacheConfig, ProjectService},
+    query::{ParsedQuery, QuerySource},
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
     symbolication::BaselineSymbolicationService,
@@ -180,8 +181,16 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
         Arc::new(FixedClock(Timestamp::from_unix_millis(6_000)?)),
         SearchConfig::default(),
     )?;
+    let staging_query = ParsedQuery::parse(QuerySource::Errors, "environment:staging")?;
     let staging = search
-        .search(ProjectId::new(42)?, "environment:staging", None, Some(10))
+        .search(
+            ProjectId::new(42)?,
+            &staging_query,
+            None,
+            None,
+            None,
+            Some(10),
+        )
         .await?;
     assert_eq!(staging.items.len(), 5);
 
@@ -193,10 +202,13 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
             doc! { "$set": { "k": [SearchToken::environment("production").stored()] } },
         )
         .await?;
+    let production_query = ParsedQuery::parse(QuerySource::Errors, "environment:production")?;
     let production = search
         .search(
             ProjectId::new(42)?,
-            "environment:production",
+            &production_query,
+            None,
+            None,
             None,
             Some(10),
         )

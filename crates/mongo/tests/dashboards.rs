@@ -39,6 +39,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             from: Timestamp::from_unix_millis(now.unix_millis() - 3_600_000)?,
             until: now,
             predicates: Vec::new(),
+            expression: None,
             aggregates: Vec::new(),
             group_by: Vec::new(),
             interval: None,

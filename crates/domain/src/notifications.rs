@@ -319,8 +319,10 @@ impl AggregateAlert {
         if !(1..=30 * 24 * 60).contains(&self.lookback_minutes)
             || !(1..=24 * 60).contains(&self.evaluation_interval_minutes)
             || self.threshold == 0
-            || (self.dataset == ExploreDataset::Errors
-                && (self.environment.is_some() || self.release.is_some()))
+            || (matches!(
+                self.dataset,
+                ExploreDataset::Errors | ExploreDataset::Metrics
+            ) && (self.environment.is_some() || self.release.is_some()))
         {
             return Err(NotificationValueError::TooLarge);
         }
@@ -490,6 +492,15 @@ mod tests {
         assert!(
             AggregateAlert {
                 dataset: ExploreDataset::Errors,
+                environment: valid.environment.clone(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            AggregateAlert {
+                dataset: ExploreDataset::Metrics,
                 environment: valid.environment.clone(),
                 ..valid.clone()
             }

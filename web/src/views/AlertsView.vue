@@ -244,11 +244,11 @@ const saveRule = useMutation({
         ruleKind.value === 'aggregate' ? aggregateRule.evaluation_interval_minutes : null,
       threshold: ruleKind.value === 'aggregate' ? aggregateRule.threshold : null,
       environment:
-        ruleKind.value === 'aggregate' && aggregateRule.dataset !== 'errors'
+        ruleKind.value === 'aggregate' && !['errors', 'metrics'].includes(aggregateRule.dataset)
           ? aggregateRule.environment
           : null,
       release:
-        ruleKind.value === 'aggregate' && aggregateRule.dataset !== 'errors'
+        ruleKind.value === 'aggregate' && !['errors', 'metrics'].includes(aggregateRule.dataset)
           ? aggregateRule.release
           : null,
       notify_resolved:
@@ -731,7 +731,7 @@ function datasetLabel(value: string): string {
               />
             </label>
           </div>
-          <div v-if="aggregateRule.dataset !== 'errors'" class="form-grid">
+          <div v-if="!['errors', 'metrics'].includes(aggregateRule.dataset)" class="form-grid">
             <label>
               {{ $t('alerts.environmentPredicate') }}
               <input

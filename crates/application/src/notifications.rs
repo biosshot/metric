@@ -5,15 +5,13 @@ use std::{collections::BTreeSet, future::Future, pin::Pin, sync::Arc, time::Dura
 use crate::{
     auth::{AuthError, IdentityService},
     explore::ExploreService,
+    query::{ParsedQuery, QuerySource},
     shutdown::ShutdownSignal,
 };
 use metric_domain::{
     Timestamp,
     auth::{AuditAction, AuthContext, Permission, RequestCorrelationId},
-    explore::{
-        ExploreAggregate, ExploreAggregateKind, ExploreField, ExplorePredicate, ExplorePredicateOp,
-        ExploreQuery, ExploreValue,
-    },
+    explore::{ExploreAggregate, ExploreAggregateKind, ExploreQuery, ExploreValue},
     grouping::IssueId,
     issue::IssueTransitionId,
     monitors::MonitorRun,
@@ -833,20 +831,29 @@ impl AggregateAlertEvaluator {
             .as_ref()
             .ok_or(NotificationError::InvalidData)?;
         let from = add_duration_signed(now, -i64::from(aggregate.lookback_minutes) * 60_000)?;
-        let mut predicates = Vec::new();
-        for (field, value) in [
-            (ExploreField::Environment, aggregate.environment.as_ref()),
-            (ExploreField::Release, aggregate.release.as_ref()),
-        ] {
-            if let Some(value) = value {
-                predicates.push(ExplorePredicate {
-                    field,
-                    op: ExplorePredicateOp::Exact,
-                    value: Some(ExploreValue::String(value.as_str().into())),
-                    upper: None,
-                });
-            }
-        }
+        let source = match aggregate.dataset {
+            metric_domain::explore::ExploreDataset::Errors => QuerySource::Errors,
+            metric_domain::explore::ExploreDataset::Logs => QuerySource::Logs,
+            metric_domain::explore::ExploreDataset::Spans => QuerySource::Traces,
+            metric_domain::explore::ExploreDataset::Metrics => QuerySource::Metrics,
+        };
+        let query_text = [
+            aggregate
+                .environment
+                .as_ref()
+                .map(|value| format!("env:{}", quote_query_value(value.as_str()))),
+            aggregate
+                .release
+                .as_ref()
+                .map(|value| format!("rel:{}", quote_query_value(value.as_str()))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+        let expression = ParsedQuery::parse(source, &query_text)
+            .and_then(|query| query.explore_expression())
+            .map_err(|_| NotificationError::InvalidData)?;
         let plan = self
             .explore
             .plan(
@@ -855,7 +862,8 @@ impl AggregateAlertEvaluator {
                     dataset: aggregate.dataset,
                     from,
                     until: now,
-                    predicates,
+                    predicates: Vec::new(),
+                    expression,
                     aggregates: vec![ExploreAggregate {
                         kind: ExploreAggregateKind::Count,
                         field: None,
@@ -967,6 +975,10 @@ impl AggregateAlertEvaluator {
             }
         })
     }
+}
+
+fn quote_query_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('\"', "\\\""))
 }
 
 fn aggregate_transition_id(

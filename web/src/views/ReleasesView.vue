@@ -1,24 +1,46 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { useSessionStore } from '../stores/session';
+import type { ReleaseSummary } from '../api/types';
 
 const session = useSessionStore();
+const route = useRoute();
 const queryClient = useQueryClient();
 const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
+const initialQuery = typeof route.query.q === 'string' ? route.query.q : '';
+const query = ref(initialQuery);
+const appliedQuery = ref(initialQuery);
+const cursor = ref<string | null>(null);
+const history = ref<(string | null)[]>([]);
 const version = ref('');
 const url = ref('');
 
 const releases = useQuery({
-  queryKey: computed(() => ['releases', projectId.value]),
-  queryFn: () => api.releases(projectId.value),
+  queryKey: computed(() => [
+    'unified-query',
+    'releases',
+    projectId.value,
+    appliedQuery.value,
+    cursor.value,
+  ]),
+  queryFn: () =>
+    api.query<ReleaseSummary>(projectId.value, {
+      source: 'releases',
+      query: appliedQuery.value,
+      result: { kind: 'records' },
+      cursor: cursor.value,
+      limit: 50,
+    }),
   enabled: computed(() => Boolean(projectId.value)),
 });
 
@@ -27,9 +49,40 @@ const createRelease = useMutation({
   onSuccess: async () => {
     version.value = '';
     url.value = '';
-    await queryClient.invalidateQueries({ queryKey: ['releases', projectId.value] });
+    await queryClient.invalidateQueries({
+      queryKey: ['unified-query', 'releases', projectId.value],
+    });
   },
 });
+
+watch(projectId, resetPage);
+
+function submitQuery(): void {
+  appliedQuery.value = query.value.trim();
+  resetPage();
+}
+
+function resetQuery(): void {
+  query.value = '';
+  appliedQuery.value = '';
+  resetPage();
+}
+
+function resetPage(): void {
+  cursor.value = null;
+  history.value = [];
+}
+
+function nextPage(): void {
+  const next = releases.data.value?.next_cursor;
+  if (!next) return;
+  history.value.push(cursor.value);
+  cursor.value = next;
+}
+
+function previousPage(): void {
+  cursor.value = history.value.pop() ?? null;
+}
 
 function timestamp(value: string | null): string {
   if (!value) return t('releases.noError');
@@ -52,11 +105,78 @@ function timestamp(value: string | null): string {
       </div>
     </header>
 
+    <UnifiedQueryBar
+      v-model="query"
+      source="releases"
+      placeholder="rel:backend@2.4.0"
+      :show-reset="Boolean(query || appliedQuery)"
+      @submit="submitQuery"
+      @reset="resetQuery"
+    />
+
     <ApiErrorPanel
       v-if="createRelease.error.value"
       :error="createRelease.error.value"
       :title="$t('releases.createFailed')"
     />
+
+    <LoadingPanel v-if="releases.isPending.value" :label="$t('releases.loading')" />
+    <ApiErrorPanel
+      v-else-if="releases.error.value"
+      :error="releases.error.value"
+      :title="$t('releases.loadFailed')"
+      @retry="releases.refetch()"
+    />
+    <EmptyState
+      v-else-if="!releases.data.value?.items.length"
+      icon="release"
+      :title="$t('releases.empty')"
+      :description="$t('releases.emptyDescription')"
+    />
+    <div v-else class="release-list">
+      <nav class="pagination" aria-label="Release pages">
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="!history.length"
+          @click="previousPage"
+        >
+          {{ $t('common.previous') }}
+        </button>
+        <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="!releases.data.value.next_cursor"
+          @click="nextPage"
+        >
+          {{ $t('common.next') }}
+        </button>
+      </nav>
+      <RouterLink
+        v-for="release in releases.data.value.items"
+        :key="release.id"
+        class="panel release-card"
+        :to="`/releases/${release.id}`"
+      >
+        <span class="release-card__icon"><AppIcon name="release" :size="20" /></span>
+        <span>
+          <strong>{{ release.version }}</strong>
+          <small>
+            {{
+              release.released_at
+                ? $t('releases.finalized', { time: timestamp(release.released_at) })
+                : $t('releases.open')
+            }}
+          </small>
+        </span>
+        <span class="release-card__seen">
+          {{ $t('releases.lastError') }}
+          <strong>{{ timestamp(release.last_seen) }}</strong>
+        </span>
+        <AppIcon name="view" :size="18" />
+      </RouterLink>
+    </div>
 
     <form
       v-if="session.has('release:write')"
@@ -93,44 +213,5 @@ function timestamp(value: string | null): string {
         {{ createRelease.isPending.value ? $t('releases.creating') : $t('releases.create') }}
       </button>
     </form>
-
-    <LoadingPanel v-if="releases.isPending.value" :label="$t('releases.loading')" />
-    <ApiErrorPanel
-      v-else-if="releases.error.value"
-      :error="releases.error.value"
-      :title="$t('releases.loadFailed')"
-      @retry="releases.refetch()"
-    />
-    <EmptyState
-      v-else-if="!releases.data.value?.items.length"
-      icon="release"
-      :title="$t('releases.empty')"
-      :description="$t('releases.emptyDescription')"
-    />
-    <div v-else class="release-list">
-      <RouterLink
-        v-for="release in releases.data.value?.items"
-        :key="release.id"
-        class="panel release-card"
-        :to="`/releases/${release.id}`"
-      >
-        <span class="release-card__icon"><AppIcon name="release" :size="20" /></span>
-        <span>
-          <strong>{{ release.version }}</strong>
-          <small>
-            {{
-              release.released_at
-                ? $t('releases.finalized', { time: timestamp(release.released_at) })
-                : $t('releases.open')
-            }}
-          </small>
-        </span>
-        <span class="release-card__seen">
-          {{ $t('releases.lastError') }}
-          <strong>{{ timestamp(release.last_seen) }}</strong>
-        </span>
-        <AppIcon name="view" :size="18" />
-      </RouterLink>
-    </div>
   </section>
 </template>

@@ -218,6 +218,10 @@ async function logout(): Promise<void> {
             <AppIcon name="message" :size="18" />
             {{ $t('app.feedback') }}
           </RouterLink>
+          <RouterLink to="/explore" @click="navigationOpen = false">
+            <AppIcon name="explore" :size="18" />
+            {{ $t('app.explore') }}
+          </RouterLink>
         </div>
 
         <div class="sidebar__nav-group">

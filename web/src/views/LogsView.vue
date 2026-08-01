@@ -4,30 +4,38 @@ import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
-import AppIcon from '../components/AppIcon.vue';
-import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { api } from '../api/client';
 import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
-import type { StructuredLog } from '../api/types';
 import { useSessionStore } from '../stores/session';
+
+interface LogQueryRow {
+  id: string;
+  timestamp: number;
+  received_at: number;
+  level: string;
+  message: string;
+  environment: string | null;
+  release: string | null;
+  service: string | null;
+  trace_id: string | null;
+  span_id: string | null;
+}
 
 const session = useSessionStore();
 const route = useRoute();
-const { locale, t } = useI18n();
-const level = ref('');
-const appliedLevel = ref('');
-const message = ref('');
-const submittedMessage = ref('');
-const service = ref('');
-const appliedService = ref('');
-const environment = ref('');
-const appliedEnvironment = ref('');
-const release = ref(typeof route.query.release === 'string' ? route.query.release : '');
-const appliedRelease = ref(release.value);
+const { locale } = useI18n();
+const routeQuery = typeof route.query.q === 'string' ? route.query.q : '';
+const releaseQuery =
+  typeof route.query.release === 'string'
+    ? `rel:"${route.query.release.replaceAll('"', '\\"')}"`
+    : '';
+const query = ref(routeQuery || releaseQuery);
+const appliedQuery = ref(query.value);
 const range = ref('all');
 const appliedRange = ref('all');
 const selectedWindow = ref(timeWindow('all'));
@@ -36,48 +44,28 @@ const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
-  () =>
-    Boolean(
-      level.value ||
-        message.value.trim() ||
-        service.value.trim() ||
-        environment.value.trim() ||
-        release.value.trim(),
-    ) || range.value !== 'all',
+  () => Boolean(query.value.trim() || appliedQuery.value) || range.value !== 'all',
 );
-const levelOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('logs.allLevels'), icon: 'filter' },
-  { value: 'trace', label: t('status.trace'), icon: 'status' },
-  { value: 'debug', label: t('status.debug'), icon: 'code' },
-  { value: 'info', label: t('status.info'), icon: 'info' },
-  { value: 'warn', label: t('status.warn'), icon: 'alert' },
-  { value: 'error', label: t('status.error'), icon: 'failure' },
-  { value: 'fatal', label: t('status.fatal'), icon: 'blocked' },
-]);
 
 const logs = useQuery({
   queryKey: computed(() => [
+    'unified-query',
     'logs',
     projectId.value,
-    appliedLevel.value,
-    submittedMessage.value,
-    appliedService.value,
-    appliedEnvironment.value,
-    appliedRelease.value,
+    appliedQuery.value,
     appliedRange.value,
     appliedWindow.value.from,
     appliedWindow.value.until,
     cursor.value,
   ]),
   queryFn: () =>
-    api.logs(projectId.value, {
+    api.query<LogQueryRow>(projectId.value, {
+      source: 'logs',
+      query: appliedQuery.value,
       ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
-      level: appliedLevel.value || undefined,
-      message: submittedMessage.value || undefined,
-      service: appliedService.value || undefined,
-      environment: appliedEnvironment.value || undefined,
-      release: appliedRelease.value || undefined,
+      result: { kind: 'records' },
       cursor: cursor.value,
+      limit: 50,
     }),
   enabled: computed(() => Boolean(projectId.value)),
 });
@@ -89,38 +77,30 @@ const levelCounts = computed(() => {
   for (const log of logs.data.value?.items ?? []) {
     counts.set(log.level, (counts.get(log.level) ?? 0) + 1);
   }
-  return levelOptions.value
-    .filter((option) => option.value)
-    .map((option) => ({
-      level: option.value,
-      label: option.label,
-      count: counts.get(option.value) ?? 0,
-    }));
+  return ['trace', 'debug', 'info', 'warning', 'error', 'fatal'].map((level) => ({
+    level,
+    count: counts.get(level) ?? 0,
+  }));
 });
 const maximumLevelCount = computed(() =>
   Math.max(1, ...levelCounts.value.map((entry) => entry.count)),
 );
 
-function search(): void {
-  submittedMessage.value = message.value.trim();
-  appliedLevel.value = level.value;
-  appliedService.value = service.value.trim();
-  appliedEnvironment.value = environment.value.trim();
-  appliedRelease.value = release.value.trim();
+function submitQuery(): void {
+  appliedQuery.value = query.value.trim();
   appliedRange.value = range.value;
   appliedWindow.value = { ...selectedWindow.value };
   resetPage();
 }
 
 function resetFilters(): void {
-  level.value = '';
-  message.value = '';
-  service.value = '';
-  environment.value = '';
-  release.value = '';
+  query.value = '';
+  appliedQuery.value = '';
   range.value = 'all';
+  appliedRange.value = 'all';
   selectedWindow.value = timeWindow('all');
-  search();
+  appliedWindow.value = { ...selectedWindow.value };
+  resetPage();
 }
 
 function resetPage(): void {
@@ -139,15 +119,11 @@ function previousPage(): void {
   cursor.value = history.value.pop() ?? null;
 }
 
-function formatTime(value: string): string {
+function formatTime(value: number): string {
   return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'medium',
     timeStyle: 'medium',
   }).format(new Date(value));
-}
-
-function traceLink(log: StructuredLog): string | null {
-  return log.trace_id ? `/traces/${log.trace_id}` : null;
 }
 </script>
 
@@ -163,51 +139,23 @@ function traceLink(log: StructuredLog): string | null {
       </div>
     </header>
 
-    <form class="signal-toolbar" role="search" @submit.prevent="search">
-      <label class="search-field">
-        <span class="sr-only">{{ $t('logs.messageContains') }}</span>
-        <input
-          v-model="message"
-          type="search"
-          maxlength="512"
-          :placeholder="$t('logs.messagePlaceholder')"
-        />
-      </label>
-      <label>
-        <span class="sr-only">{{ $t('logs.service') }}</span>
-        <input v-model="service" maxlength="256" :placeholder="$t('logs.service')" />
-      </label>
-      <label>
-        <span class="sr-only">{{ $t('logs.environment') }}</span>
-        <input v-model="environment" maxlength="128" :placeholder="$t('logs.environment')" />
-      </label>
-      <label>
-        <span class="sr-only">{{ $t('logs.release') }}</span>
-        <input v-model="release" maxlength="256" :placeholder="$t('logs.release')" />
-      </label>
-      <BaseSelect v-model="level" :options="levelOptions" :aria-label="$t('logs.level')" />
-      <div class="signal-toolbar__actions">
+    <UnifiedQueryBar
+      v-model="query"
+      source="logs"
+      :placeholder="$t('logs.messagePlaceholder')"
+      :show-reset="hasFilters"
+      @submit="submitQuery"
+      @reset="resetFilters"
+    >
+      <template #actions>
         <TimeRangeSelect
           v-model="range"
           :window-value="selectedWindow"
           :aria-label="$t('logs.timeRange')"
           @update:window-value="selectedWindow = $event"
         />
-        <button class="button button--primary" type="submit">
-          <AppIcon name="search" :size="16" />
-          {{ $t('common.search') }}
-        </button>
-        <button
-          v-if="hasFilters"
-          class="button button--secondary"
-          type="button"
-          @click="resetFilters"
-        >
-          <AppIcon name="close" :size="16" />
-          {{ $t('common.reset') }}
-        </button>
-      </div>
-    </form>
+      </template>
+    </UnifiedQueryBar>
 
     <LoadingPanel v-if="logs.isPending.value" :label="$t('logs.loading')" />
     <ApiErrorPanel v-else-if="logs.error.value" :error="logs.error.value" @retry="logs.refetch()" />
@@ -217,14 +165,14 @@ function traceLink(log: StructuredLog): string | null {
       :title="$t('logs.empty')"
       :description="$t('logs.emptyDescription')"
     >
-      <SdkSetupButton />
+      <SdkSetupButton v-if="!appliedQuery" />
     </EmptyState>
     <div v-else class="signal-list">
       <nav class="pagination" :aria-label="$t('logs.resultPages')">
         <button
           class="button button--secondary"
           type="button"
-          :disabled="history.length === 0"
+          :disabled="!history.length"
           @click="previousPage"
         >
           {{ $t('common.previous') }}
@@ -246,7 +194,7 @@ function traceLink(log: StructuredLog): string | null {
           :class="`signal-accent--${entry.level}`"
         >
           <i :style="{ '--level-height': `${(entry.count / maximumLevelCount) * 100}%` }"></i>
-          <small>{{ entry.label }} {{ entry.count }}</small>
+          <small>{{ $t(`status.${entry.level}`) }} {{ entry.count }}</small>
         </span>
       </div>
       <article
@@ -258,10 +206,12 @@ function traceLink(log: StructuredLog): string | null {
         <span class="signal-level">{{ $t(`status.${log.level}`) }}</span>
         <RouterLink class="signal-title" :to="`/logs/${log.id}`">{{ log.message }}</RouterLink>
         <span>{{ log.service || $t('logs.unknownService') }}</span>
-        <RouterLink v-if="traceLink(log)" class="text-link" :to="traceLink(log)!">
-          {{ $t('logs.trace', { id: log.trace_id?.slice(0, 8) }) }}
+        <RouterLink v-if="log.trace_id" class="text-link" :to="`/traces/${log.trace_id}`">
+          {{ $t('logs.trace', { id: log.trace_id.slice(0, 8) }) }}
         </RouterLink>
-        <time :datetime="log.timestamp">{{ formatTime(log.timestamp) }}</time>
+        <time :datetime="new Date(log.timestamp).toISOString()">{{
+          formatTime(log.timestamp)
+        }}</time>
       </article>
     </div>
   </section>

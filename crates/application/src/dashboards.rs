@@ -10,7 +10,10 @@ use metric_domain::{
         DashboardWidget, DashboardWidgetId, DashboardWidgetResult, MAX_DASHBOARD_WIDGETS,
         SavedQuery, SavedQueryId, WidgetShape,
     },
-    explore::{ExploreField, ExplorePredicate, ExplorePredicateOp, ExploreQuery, ExploreValue},
+    explore::{
+        ExploreExpression, ExploreField, ExplorePredicate, ExplorePredicateOp, ExploreQuery,
+        ExploreValue,
+    },
 };
 use metric_ports::{Clock, DashboardStore, DashboardStoreError, RandomSource};
 use thiserror::Error;
@@ -150,6 +153,7 @@ impl DashboardService {
         mut input: SavedQueryInput,
     ) -> Result<SavedQuery, DashboardError> {
         input.query.cursor = None;
+        promote_query_v2(&mut input.query);
         self.explore
             .plan(project_id, input.query.clone())
             .map_err(map_explore_validation)?;
@@ -184,6 +188,7 @@ impl DashboardService {
         mut input: SavedQueryInput,
     ) -> Result<SavedQuery, DashboardError> {
         input.query.cursor = None;
+        promote_query_v2(&mut input.query);
         self.explore
             .plan(project_id, input.query.clone())
             .map_err(map_explore_validation)?;
@@ -379,7 +384,7 @@ impl DashboardService {
                 continue;
             }
             total_cost = total_cost.saturating_add(plan.cost);
-            prepared.push(PreparedWidget::Plan(widget.id, plan));
+            prepared.push(PreparedWidget::Plan(widget.id, Box::new(plan)));
         }
 
         if total_cost > self.config.maximum_total_cost {
@@ -399,7 +404,7 @@ impl DashboardService {
                 }
                 PreparedWidget::Plan(widget_id, plan) => {
                     let cost = plan.cost;
-                    match self.explore.execute(plan).await {
+                    match self.explore.execute(*plan).await {
                         Ok(result) => widgets.push(DashboardWidgetResult {
                             widget_id,
                             cost: Some(cost),
@@ -467,9 +472,20 @@ impl DashboardService {
     }
 }
 
+fn promote_query_v2(query: &mut ExploreQuery) {
+    if query.expression.is_none() {
+        query.expression = Some(ExploreExpression::And(
+            std::mem::take(&mut query.predicates)
+                .into_iter()
+                .map(ExploreExpression::Predicate)
+                .collect(),
+        ));
+    }
+}
+
 enum PreparedWidget {
     Failure(DashboardWidgetId, Box<str>),
-    Plan(DashboardWidgetId, metric_domain::explore::ExplorePlan),
+    Plan(DashboardWidgetId, Box<metric_domain::explore::ExplorePlan>),
 }
 
 fn refresh_query(
@@ -796,6 +812,7 @@ mod tests {
             from: Timestamp::from_unix_millis(1_000_000).unwrap(),
             until: Timestamp::from_unix_millis(2_000_000).unwrap(),
             predicates: Vec::new(),
+            expression: None,
             aggregates: vec![ExploreAggregate {
                 kind: ExploreAggregateKind::Count,
                 field: None,

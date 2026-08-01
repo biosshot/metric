@@ -231,6 +231,7 @@ mod tests {
             from: Timestamp::from_unix_millis(1).unwrap(),
             until: Timestamp::from_unix_millis(2).unwrap(),
             predicates: Vec::new(),
+            expression: None,
             aggregates: Vec::new(),
             group_by: Vec::new(),
             interval: None,

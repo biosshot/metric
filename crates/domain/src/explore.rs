@@ -4,10 +4,12 @@ use std::{collections::BTreeMap, fmt::Write, time::Duration};
 
 use crate::{ProjectId, Timestamp};
 
-pub const MAX_EXPLORE_PREDICATES: usize = 8;
+pub const MAX_EXPLORE_PREDICATES: usize = 128;
 pub const MAX_EXPLORE_AGGREGATES: usize = 4;
 pub const MAX_EXPLORE_GROUPS: usize = 2;
-pub const MAX_EXPLORE_ROWS: usize = 100;
+pub const MAX_EXPLORE_ROWS: usize = 500;
+pub const MAX_EXPLORE_EXPRESSION_NODES: usize = 256;
+pub const MAX_EXPLORE_OR_ALTERNATIVES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ExploreDataset {
@@ -226,6 +228,10 @@ pub enum ExplorePredicateOp {
     EndsWith,
     Present,
     Range,
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -234,6 +240,46 @@ pub struct ExplorePredicate {
     pub op: ExplorePredicateOp,
     pub value: Option<ExploreValue>,
     pub upper: Option<ExploreValue>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExploreExpression {
+    Predicate(ExplorePredicate),
+    Not(Box<Self>),
+    And(Vec<Self>),
+    Or(Vec<Self>),
+}
+
+impl ExploreExpression {
+    #[must_use]
+    pub fn predicate_count(&self) -> usize {
+        match self {
+            Self::Predicate(_) => 1,
+            Self::Not(value) => value.predicate_count(),
+            Self::And(values) | Self::Or(values) => values.iter().map(Self::predicate_count).sum(),
+        }
+    }
+
+    #[must_use]
+    pub fn node_count(&self) -> usize {
+        1 + match self {
+            Self::Predicate(_) => 0,
+            Self::Not(value) => value.node_count(),
+            Self::And(values) | Self::Or(values) => values.iter().map(Self::node_count).sum(),
+        }
+    }
+
+    #[must_use]
+    pub fn or_alternatives(&self) -> usize {
+        match self {
+            Self::Predicate(_) => 0,
+            Self::Not(value) => value.or_alternatives(),
+            Self::And(values) => values.iter().map(Self::or_alternatives).sum(),
+            Self::Or(values) => values
+                .len()
+                .saturating_add(values.iter().map(Self::or_alternatives).sum()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +376,8 @@ pub struct ExploreQuery {
     pub from: Timestamp,
     pub until: Timestamp,
     pub predicates: Vec<ExplorePredicate>,
+    /// Query v2 expression. `None` decodes the retained v1 predicate array as AND.
+    pub expression: Option<ExploreExpression>,
     pub aggregates: Vec<ExploreAggregate>,
     pub group_by: Vec<ExploreField>,
     pub interval: Option<ExploreInterval>,
@@ -360,7 +408,12 @@ pub struct ExploreResult {
 #[must_use]
 pub fn normalize_query(query: &ExploreQuery) -> Box<str> {
     let mut output = format!(
-        "v1|{}|{}|{}|limit:{}",
+        "{}|{}|{}|{}|limit:{}",
+        if query.expression.is_some() {
+            "v2"
+        } else {
+            "v1"
+        },
         query.dataset.as_str(),
         query.from.unix_millis(),
         query.until.unix_millis(),
@@ -372,28 +425,13 @@ pub fn normalize_query(query: &ExploreQuery) -> Box<str> {
         query.interval.map_or("-", ExploreInterval::as_str)
     );
     output.push_str("|where:");
-    for predicate in &query.predicates {
-        let _ = write!(
-            output,
-            "{}:{}:",
-            predicate.field.as_str(),
-            match predicate.op {
-                ExplorePredicateOp::Exact => "eq",
-                ExplorePredicateOp::Contains => "contains",
-                ExplorePredicateOp::StartsWith => "starts_with",
-                ExplorePredicateOp::EndsWith => "ends_with",
-                ExplorePredicateOp::Present => "present",
-                ExplorePredicateOp::Range => "range",
-            }
-        );
-        if let Some(value) = &predicate.value {
-            value.normalize_into(&mut output);
+    if let Some(expression) = &query.expression {
+        normalize_expression(expression, &mut output);
+    } else {
+        for predicate in &query.predicates {
+            normalize_predicate(predicate, &mut output);
+            output.push(',');
         }
-        output.push(':');
-        if let Some(value) = &predicate.upper {
-            value.normalize_into(&mut output);
-        }
-        output.push(',');
     }
     output.push_str("|aggregate:");
     for aggregate in &query.aggregates {
@@ -412,6 +450,56 @@ pub fn normalize_query(query: &ExploreQuery) -> Box<str> {
     output.into()
 }
 
+fn normalize_expression(expression: &ExploreExpression, output: &mut String) {
+    match expression {
+        ExploreExpression::Predicate(predicate) => normalize_predicate(predicate, output),
+        ExploreExpression::Not(value) => {
+            output.push_str("not(");
+            normalize_expression(value, output);
+            output.push(')');
+        }
+        ExploreExpression::And(values) | ExploreExpression::Or(values) => {
+            output.push_str(if matches!(expression, ExploreExpression::And(_)) {
+                "and("
+            } else {
+                "or("
+            });
+            for value in values {
+                normalize_expression(value, output);
+                output.push(',');
+            }
+            output.push(')');
+        }
+    }
+}
+
+fn normalize_predicate(predicate: &ExplorePredicate, output: &mut String) {
+    let _ = write!(
+        output,
+        "{}:{}:",
+        predicate.field.as_str(),
+        match predicate.op {
+            ExplorePredicateOp::Exact => "eq",
+            ExplorePredicateOp::Contains => "contains",
+            ExplorePredicateOp::StartsWith => "starts_with",
+            ExplorePredicateOp::EndsWith => "ends_with",
+            ExplorePredicateOp::Present => "present",
+            ExplorePredicateOp::Range => "range",
+            ExplorePredicateOp::Greater => "gt",
+            ExplorePredicateOp::GreaterOrEqual => "gte",
+            ExplorePredicateOp::Less => "lt",
+            ExplorePredicateOp::LessOrEqual => "lte",
+        }
+    );
+    if let Some(value) = &predicate.value {
+        value.normalize_into(output);
+    }
+    output.push(':');
+    if let Some(value) = &predicate.upper {
+        value.normalize_into(output);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +516,7 @@ mod tests {
                 value: Some(ExploreValue::String("api".into())),
                 upper: None,
             }],
+            expression: None,
             aggregates: vec![ExploreAggregate {
                 kind: ExploreAggregateKind::Count,
                 field: None,

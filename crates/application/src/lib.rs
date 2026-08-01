@@ -22,6 +22,7 @@ pub mod notifications;
 pub mod observability;
 pub mod processor;
 pub mod projects;
+pub mod query;
 pub mod releases;
 pub mod replay_writer;
 pub mod scheduler;

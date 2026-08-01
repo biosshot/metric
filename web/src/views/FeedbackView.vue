@@ -4,53 +4,82 @@ import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
-import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import StatusBadge from '../components/StatusBadge.vue';
+import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { api } from '../api/client';
+import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
+import type { Feedback } from '../api/types';
 
 const session = useSessionStore();
 const route = useRoute();
-const { locale, t } = useI18n();
-const projectId = computed(() => session.selectedProjectId ?? '');
-const replayId = computed(() =>
-  typeof route.query.replay_id === 'string' ? route.query.replay_id : '',
-);
-const status = ref('');
+const { locale } = useI18n();
+const routeQuery = typeof route.query.q === 'string' ? route.query.q : '';
+const replayQuery =
+  typeof route.query.replay_id === 'string' ? `replay:${route.query.replay_id}` : '';
+const query = ref(routeQuery || replayQuery);
+const appliedQuery = ref(query.value);
+const range = ref('all');
+const appliedRange = ref('all');
+const selectedWindow = ref(timeWindow('all'));
+const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
-const statusOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('feedback.all'), icon: 'message' },
-  { value: 'open', label: t('feedback.open'), icon: 'alert' },
-  { value: 'resolved', label: t('feedback.resolved'), icon: 'success' },
-  { value: 'spam', label: t('feedback.spam'), icon: 'blocked' },
-]);
+const projectId = computed(() => session.selectedProjectId ?? '');
+const hasFilters = computed(
+  () => Boolean(query.value.trim() || appliedQuery.value) || range.value !== 'all',
+);
 
 const feedback = useQuery({
   queryKey: computed(() => [
+    'unified-query',
     'feedback',
     projectId.value,
-    status.value,
+    appliedQuery.value,
+    appliedRange.value,
+    appliedWindow.value.from,
+    appliedWindow.value.until,
     cursor.value,
-    replayId.value,
   ]),
   queryFn: () =>
-    api.feedback(
-      projectId.value,
-      status.value || undefined,
-      cursor.value,
-      replayId.value || undefined,
-    ),
+    api.query<Feedback>(projectId.value, {
+      source: 'feedback',
+      query: appliedQuery.value,
+      ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
+      result: { kind: 'records' },
+      cursor: cursor.value,
+      limit: 50,
+    }),
   enabled: computed(() => Boolean(projectId.value)),
 });
 
-watch([projectId, status, replayId], () => {
+watch(projectId, resetPage);
+
+function submitQuery(): void {
+  appliedQuery.value = query.value.trim();
+  appliedRange.value = range.value;
+  appliedWindow.value = { ...selectedWindow.value };
+  resetPage();
+}
+
+function resetFilters(): void {
+  query.value = '';
+  appliedQuery.value = '';
+  range.value = 'all';
+  appliedRange.value = 'all';
+  selectedWindow.value = timeWindow('all');
+  appliedWindow.value = { ...selectedWindow.value };
+  resetPage();
+}
+
+function resetPage(): void {
   cursor.value = null;
   history.value = [];
-});
+}
 
 function nextPage(): void {
   const next = feedback.data.value?.next_cursor;
@@ -79,20 +108,27 @@ function formatTime(value: string): string {
           {{ $t('feedback.eyebrow', { project: session.selectedProject?.slug }) }}
         </p>
         <h1>{{ $t('feedback.title') }}</h1>
-        <p v-if="replayId">{{ $t('feedback.replayDescription', { id: replayId }) }}</p>
-        <p v-else>{{ $t('feedback.description') }}</p>
+        <p>{{ $t('feedback.description') }}</p>
       </div>
     </header>
 
-    <div class="issue-toolbar feedback-toolbar">
-      <BaseSelect
-        v-model="status"
-        class="compact-select"
-        :options="statusOptions"
-        :label="$t('feedback.status')"
-        :aria-label="$t('feedback.statusLabel')"
-      />
-    </div>
+    <UnifiedQueryBar
+      v-model="query"
+      source="feedback"
+      :placeholder="$t('feedback.description')"
+      :show-reset="hasFilters"
+      @submit="submitQuery"
+      @reset="resetFilters"
+    >
+      <template #actions>
+        <TimeRangeSelect
+          v-model="range"
+          :window-value="selectedWindow"
+          aria-label="Feedback time range"
+          @update:window-value="selectedWindow = $event"
+        />
+      </template>
+    </UnifiedQueryBar>
 
     <LoadingPanel v-if="feedback.isPending.value" :label="$t('feedback.loading')" />
     <ApiErrorPanel
@@ -106,14 +142,14 @@ function formatTime(value: string): string {
       :title="$t('feedback.empty')"
       :description="$t('feedback.emptyDescription')"
     >
-      <SdkSetupButton />
+      <SdkSetupButton v-if="!appliedQuery" />
     </EmptyState>
     <div v-else class="issue-table-wrap">
       <nav class="pagination" :aria-label="$t('feedback.pages')">
         <button
           class="button button--secondary"
           type="button"
-          :disabled="history.length === 0"
+          :disabled="!history.length"
           @click="previousPage"
         >
           {{ $t('common.previous') }}

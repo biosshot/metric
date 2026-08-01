@@ -300,6 +300,7 @@ export interface ExploreRequest {
   dataset: ExploreDataset;
   from: number;
   until: number;
+  query?: string;
   predicates: Array<{
     field: string;
     op: 'exact' | 'contains' | 'starts_with' | 'ends_with' | 'present' | 'range';
@@ -317,13 +318,48 @@ export interface ExploreRequest {
   limit: number;
 }
 
-export interface ExploreResult {
-  shape: ExploreShape;
-  dataset: ExploreDataset;
-  normalized: string;
-  cost: number;
-  items: Array<Record<string, ExploreScalar>>;
+export type QuerySource =
+  | 'issues'
+  | 'errors'
+  | 'logs'
+  | 'traces'
+  | 'metrics'
+  | 'replays'
+  | 'feedback'
+  | 'releases';
+
+export type QueryAggregate = ExploreRequest['aggregates'][number];
+
+export type UnifiedQueryResultSpec =
+  | { kind: 'records' }
+  | { kind: 'number'; aggregates: QueryAggregate[]; group_by?: string[] }
+  | {
+      kind: 'timeseries';
+      aggregates: QueryAggregate[];
+      group_by?: string[];
+      interval: '1m' | '5m' | '1h' | '1d';
+    }
+  | { kind: 'values'; field: string };
+
+export interface UnifiedQueryRequest {
+  source: QuerySource;
+  query: string;
+  from?: number;
+  until?: number;
+  result: UnifiedQueryResultSpec;
+  cursor?: string | null;
+  limit?: number;
+}
+
+export interface UnifiedQueryResult<T = Record<string, ExploreScalar>> {
+  source: QuerySource;
+  kind: 'records' | 'number' | 'timeseries' | 'values';
+  items: T[];
   next_cursor: string | null;
+  normalized_query: string;
+  cost: number;
+  field?: string;
+  candidates_examined?: number;
 }
 
 export interface SavedQuery {

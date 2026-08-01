@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRoute } from 'vue-router';
 import { useMutation, useQuery } from '@tanstack/vue-query';
-import type { ExploreDataset, ExploreRequest, ExploreScalar } from '../api/types';
+import type {
+  ExploreDataset,
+  ExploreScalar,
+  QueryAggregate,
+  QuerySource,
+  UnifiedQueryRequest,
+} from '../api/types';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -11,7 +18,8 @@ import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import MetricsSectionNav from '../components/MetricsSectionNav.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
-import { timeWindow, type TimeWindow } from '../lib/timeRange';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
+import { optionalTimeWindow, timeWindow, type TimeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
 type ExploreMode = 'table' | 'number' | 'timeseries';
@@ -24,27 +32,24 @@ const props = withDefaults(
     datasetLocked?: boolean;
     metricsView?: MetricsView;
   }>(),
-  {
-    initialDataset: 'errors',
-    datasetLocked: false,
-    metricsView: 'query',
-  },
+  { initialDataset: 'errors', datasetLocked: false, metricsView: 'query' },
 );
 const session = useSessionStore();
+const route = useRoute();
 const { locale, t } = useI18n();
 const dataset = ref<ExploreDataset>(props.initialDataset);
 const mode = ref<ExploreMode>('table');
 const metricMeasure = ref<MetricMeasure>('value');
-const filterField = ref('');
-const filterOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
-const filterValue = ref('');
+const queryText = ref(typeof route.query.q === 'string' ? route.query.q : '');
 const groupField = ref('');
 const interval = ref<'5m' | '1h' | '1d'>('1h');
 const range = ref('all');
+const appliedRange = ref('all');
 const selectedWindow = ref<TimeWindow>(timeWindow('all'));
 const appliedWindow = ref<TimeWindow>({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const projectId = computed(() => session.selectedProjectId ?? '');
+const source = computed<QuerySource>(() => (dataset.value === 'spans' ? 'traces' : dataset.value));
 
 const datasetOptions = computed<SelectOption[]>(() => [
   {
@@ -111,35 +116,6 @@ const metricMeasureOptions = computed<SelectOption[]>(() => [
     description: t('queryBuilder.sampleCountHelp'),
   },
 ]);
-
-const fieldsByDataset = computed<Record<ExploreDataset, SelectOption[]>>(() => ({
-  errors: [
-    { value: 'level', label: t('queryBuilder.level') },
-    { value: 'platform', label: t('queryBuilder.platform') },
-    { value: 'issue_id', label: t('queryBuilder.issueId') },
-  ],
-  logs: [
-    { value: 'level', label: t('queryBuilder.level') },
-    { value: 'environment', label: t('queryBuilder.environment') },
-    { value: 'release', label: t('queryBuilder.release') },
-    { value: 'service', label: t('queryBuilder.service') },
-    { value: 'trace_id', label: t('queryBuilder.traceId') },
-  ],
-  spans: [
-    { value: 'environment', label: t('queryBuilder.environment') },
-    { value: 'release', label: t('queryBuilder.release') },
-    { value: 'service', label: t('queryBuilder.service') },
-    { value: 'operation', label: t('queryBuilder.operation') },
-    { value: 'status', label: t('queryBuilder.status') },
-    { value: 'is_segment', label: t('queryBuilder.rootSegment') },
-  ],
-  metrics: [
-    { value: 'name', label: t('queryBuilder.metricName') },
-    { value: 'metric_kind', label: t('queryBuilder.metricKind') },
-    { value: 'unit', label: t('queryBuilder.unit') },
-    { value: 'trace_id', label: t('queryBuilder.traceId') },
-  ],
-}));
 const groupFieldsByDataset = computed<Record<ExploreDataset, SelectOption[]>>(() => ({
   errors: [
     { value: 'level', label: t('queryBuilder.level') },
@@ -155,58 +131,31 @@ const groupFieldsByDataset = computed<Record<ExploreDataset, SelectOption[]>>(()
     { value: 'unit', label: t('queryBuilder.unit') },
   ],
 }));
-const optionalFields = computed<SelectOption[]>(() => [
-  { value: '', label: t('queryBuilder.noExactFilter') },
-  ...fieldsByDataset.value[dataset.value],
-]);
 const optionalGroups = computed<SelectOption[]>(() => [
   { value: '', label: t('queryBuilder.noGrouping') },
   ...groupFieldsByDataset.value[dataset.value],
 ]);
-const textOperators = computed<SelectOption[]>(() => [
-  { value: 'exact', label: t('queryBuilder.equals') },
-  { value: 'contains', label: t('queryBuilder.contains') },
-  { value: 'starts_with', label: t('queryBuilder.startsWith') },
-  { value: 'ends_with', label: t('queryBuilder.endsWith') },
-]);
-const exactOperator = computed<SelectOption[]>(() => [
-  { value: 'exact', label: t('queryBuilder.equals') },
-]);
-const textFields = new Set([
-  'message',
-  'environment',
-  'release',
-  'service',
-  'operation',
-  'status',
-  'name',
-  'unit',
-]);
-const operatorOptions = computed(() =>
-  textFields.has(filterField.value) ? textOperators.value : exactOperator.value,
-);
 
-const query = useMutation({
-  mutationFn: (request: ExploreRequest) => api.explore(projectId.value, request),
+const result = useMutation({
+  mutationFn: (request: UnifiedQueryRequest) =>
+    api.query<Record<string, ExploreScalar>>(projectId.value, request),
 });
 const metricsOverview = useQuery({
-  queryKey: computed(() => ['metrics-overview', projectId.value]),
-  queryFn: () => {
-    const until = Date.now();
-    return api.explore(projectId.value, {
-      dataset: 'metrics',
-      from: 0,
-      until,
-      predicates: [],
-      aggregates: [
-        { function: 'sum', field: 'metric_sum', alias: 'value' },
-        { function: 'sum', field: 'metric_count', alias: 'samples' },
-      ],
-      group_by: ['name'],
-      cursor: null,
+  queryKey: computed(() => ['metrics-overview-v2', projectId.value]),
+  queryFn: () =>
+    api.query<Record<string, ExploreScalar>>(projectId.value, {
+      source: 'metrics',
+      query: '',
+      result: {
+        kind: 'number',
+        aggregates: [
+          { function: 'sum', field: 'metric_sum', alias: 'value' },
+          { function: 'sum', field: 'metric_count', alias: 'samples' },
+        ],
+        group_by: ['name'],
+      },
       limit: 100,
-    });
-  },
+    }),
   enabled: computed(
     () => props.datasetLocked && props.metricsView === 'overview' && Boolean(projectId.value),
   ),
@@ -218,62 +167,57 @@ const metricOverviewItems = computed(() =>
   ),
 );
 const columns = computed(() => {
-  const first = query.data.value?.items[0];
+  const first = result.data.value?.items[0];
   return first ? Object.keys(first) : [];
 });
-const chartMaximum = computed(() =>
-  Math.max(
-    1,
-    ...(query.data.value?.items ?? []).map((item) => Number(item[resultValueColumn.value] ?? 0)),
-  ),
-);
 const resultValueColumn = computed(() =>
   dataset.value === 'metrics' ? (metricMeasure.value === 'value' ? 'value' : 'samples') : 'count',
 );
+const chartMaximum = computed(() =>
+  Math.max(
+    1,
+    ...(result.data.value?.items ?? []).map((item) => Number(item[resultValueColumn.value] ?? 0)),
+  ),
+);
 
-function validSelection(options: SelectOption[], value: string): string {
-  return options.some((option) => option.value === value) ? value : '';
+function aggregates(): QueryAggregate[] {
+  if (dataset.value !== 'metrics') return [{ function: 'count', alias: 'count' }];
+  return metricMeasure.value === 'value'
+    ? [{ function: 'sum', field: 'metric_sum', alias: 'value' }]
+    : [{ function: 'sum', field: 'metric_count', alias: 'samples' }];
 }
 
 async function run(nextCursor: string | null = null): Promise<void> {
-  filterField.value = validSelection(fieldsByDataset.value[dataset.value], filterField.value);
-  filterOperator.value = validSelection(
-    operatorOptions.value,
-    filterOperator.value,
-  ) as typeof filterOperator.value;
-  groupField.value = validSelection(groupFieldsByDataset.value[dataset.value], groupField.value);
   cursor.value = nextCursor;
-  if (!nextCursor) appliedWindow.value = { ...selectedWindow.value };
-  const predicates: ExploreRequest['predicates'] = [];
-  if (filterField.value && filterValue.value.trim()) {
-    const raw = filterValue.value.trim();
-    predicates.push({
-      field: filterField.value,
-      op: filterOperator.value,
-      value: filterField.value === 'is_segment' ? raw === 'true' : raw,
-    });
+  if (!nextCursor) {
+    appliedRange.value = range.value;
+    appliedWindow.value = { ...selectedWindow.value };
   }
-  const aggregate =
+  const requestResult: UnifiedQueryRequest['result'] =
     mode.value === 'table'
-      ? []
-      : dataset.value === 'metrics'
-        ? [
-            metricMeasure.value === 'value'
-              ? { function: 'sum' as const, field: 'metric_sum', alias: 'value' }
-              : { function: 'sum' as const, field: 'metric_count', alias: 'samples' },
-          ]
-        : [{ function: 'count' as const, alias: 'count' }];
-  await query.mutateAsync({
-    dataset: dataset.value,
-    from: appliedWindow.value.from,
-    until: appliedWindow.value.until,
-    predicates,
-    aggregates: aggregate,
-    group_by: mode.value === 'number' || !groupField.value ? [] : [groupField.value],
-    interval: mode.value === 'timeseries' ? interval.value : undefined,
+      ? { kind: 'records' }
+      : mode.value === 'number'
+        ? { kind: 'number', aggregates: aggregates() }
+        : {
+            kind: 'timeseries',
+            aggregates: aggregates(),
+            group_by: groupField.value ? [groupField.value] : [],
+            interval: interval.value,
+          };
+  await result.mutateAsync({
+    source: source.value,
+    query: queryText.value,
+    ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
+    result: requestResult,
     cursor: nextCursor,
     limit: 50,
   });
+}
+
+function reset(): void {
+  queryText.value = '';
+  cursor.value = null;
+  void run(null);
 }
 
 function display(value: ExploreScalar, key: string): string {
@@ -287,16 +231,17 @@ function display(value: ExploreScalar, key: string): string {
 
 function metricValue(value: ExploreScalar | undefined): string {
   const number = Number(value ?? 0);
-  if (!Number.isFinite(number)) return '—';
-  return new Intl.NumberFormat(locale.value, { maximumFractionDigits: 3 }).format(number);
+  return Number.isFinite(number)
+    ? new Intl.NumberFormat(locale.value, { maximumFractionDigits: 3 }).format(number)
+    : '—';
 }
 
-function datasetLabel(value: ExploreDataset): string {
-  return t(`queryBuilder.${value}`);
+function datasetLabel(value: QuerySource): string {
+  return value === 'traces' ? t('queryBuilder.spans') : t(`queryBuilder.${value}`);
 }
 
-function shapeLabel(value: ExploreMode): string {
-  return t(`queryBuilder.${value}`);
+function shapeLabel(value: string): string {
+  return t(`queryBuilder.${value === 'records' ? 'table' : value}`);
 }
 
 function fieldLabel(value: string): string {
@@ -344,9 +289,7 @@ function formatNumber(value: ExploreScalar | undefined): string {
           }}
         </p>
         <h1>{{ datasetLocked ? $t('explore.metricsTitle') : $t('explore.title') }}</h1>
-        <p>
-          {{ datasetLocked ? $t('explore.metricsDescription') : $t('explore.description') }}
-        </p>
+        <p>{{ datasetLocked ? $t('explore.metricsDescription') : $t('explore.description') }}</p>
       </div>
     </header>
 
@@ -404,83 +347,64 @@ function formatNumber(value: ExploreScalar | undefined): string {
       </div>
     </section>
 
-    <form
-      v-if="!datasetLocked || metricsView === 'query'"
-      class="panel explore-builder"
-      @submit.prevent="run(null)"
-    >
-      <BaseSelect
-        v-if="!datasetLocked"
-        v-model="dataset"
-        :options="datasetOptions"
-        :label="$t('queryBuilder.dataset')"
-      />
-      <BaseSelect v-model="mode" :options="modeOptions" :label="$t('queryBuilder.result')" />
-      <TimeRangeSelect
-        v-model="range"
-        :window-value="selectedWindow"
-        :label="$t('queryBuilder.timeRange')"
-        @update:window-value="selectedWindow = $event"
-      />
-      <BaseSelect
-        v-if="dataset === 'metrics' && mode !== 'table'"
-        v-model="metricMeasure"
-        :options="metricMeasureOptions"
-        :label="$t('queryBuilder.measure')"
-      />
-      <BaseSelect
-        v-model="filterField"
-        :options="optionalFields"
-        :label="$t('queryBuilder.exactFilter')"
-      />
-      <BaseSelect
-        v-if="filterField"
-        v-model="filterOperator"
-        :options="operatorOptions"
-        :label="$t('queryBuilder.match')"
-      />
-      <label>
-        <span>{{ $t('queryBuilder.value') }}</span>
-        <input
-          v-model="filterValue"
-          maxlength="256"
-          :disabled="!filterField"
-          :placeholder="$t('queryBuilder.exactValue')"
+    <section v-if="!datasetLocked || metricsView === 'query'" class="panel explore-builder">
+      <div class="explore-builder__shape">
+        <BaseSelect
+          v-if="!datasetLocked"
+          v-model="dataset"
+          :options="datasetOptions"
+          :label="$t('queryBuilder.dataset')"
         />
-      </label>
-      <BaseSelect
-        v-if="mode === 'timeseries'"
-        v-model="interval"
-        :options="intervalOptions"
-        :label="$t('queryBuilder.interval')"
-      />
-      <BaseSelect
-        v-if="mode === 'timeseries'"
-        v-model="groupField"
-        :options="optionalGroups"
-        :label="$t('queryBuilder.groupBy')"
-      />
-      <button
-        class="button button--primary explore-run"
-        type="submit"
-        :disabled="query.isPending.value"
+        <BaseSelect v-model="mode" :options="modeOptions" :label="$t('queryBuilder.result')" />
+        <BaseSelect
+          v-if="dataset === 'metrics' && mode !== 'table'"
+          v-model="metricMeasure"
+          :options="metricMeasureOptions"
+          :label="$t('queryBuilder.measure')"
+        />
+        <BaseSelect
+          v-if="mode === 'timeseries'"
+          v-model="interval"
+          :options="intervalOptions"
+          :label="$t('queryBuilder.interval')"
+        />
+        <BaseSelect
+          v-if="mode === 'timeseries'"
+          v-model="groupField"
+          :options="optionalGroups"
+          :label="$t('queryBuilder.groupBy')"
+        />
+      </div>
+      <UnifiedQueryBar
+        v-model="queryText"
+        :source="source"
+        :show-reset="Boolean(queryText)"
+        :disabled="result.isPending.value"
+        @submit="run(null)"
+        @reset="reset"
       >
-        <AppIcon name="search" :size="17" />
-        {{ $t('explore.runQuery') }}
-      </button>
-    </form>
+        <template #actions>
+          <TimeRangeSelect
+            v-model="range"
+            :window-value="selectedWindow"
+            :label="$t('queryBuilder.timeRange')"
+            @update:window-value="selectedWindow = $event"
+          />
+        </template>
+      </UnifiedQueryBar>
+    </section>
 
     <LoadingPanel
-      v-if="(!datasetLocked || metricsView === 'query') && query.isPending.value"
+      v-if="(!datasetLocked || metricsView === 'query') && result.isPending.value"
       :label="$t('explore.running')"
     />
     <ApiErrorPanel
-      v-else-if="(!datasetLocked || metricsView === 'query') && query.error.value"
-      :error="query.error.value"
+      v-else-if="(!datasetLocked || metricsView === 'query') && result.error.value"
+      :error="result.error.value"
       @retry="run(cursor)"
     />
     <EmptyState
-      v-else-if="(!datasetLocked || metricsView === 'query') && !query.data.value"
+      v-else-if="(!datasetLocked || metricsView === 'query') && !result.data.value"
       icon="explore"
       :title="$t('explore.buildFirst')"
       :description="datasetLocked ? $t('explore.buildMetricsHelp') : $t('explore.buildHelp')"
@@ -488,45 +412,35 @@ function formatNumber(value: ExploreScalar | undefined): string {
     <EmptyState
       v-else-if="
         (!datasetLocked || metricsView === 'query') &&
-        query.data.value &&
-        !query.data.value.items.length
+        result.data.value &&
+        !result.data.value.items.length
       "
       icon="search"
       :title="$t('explore.noMatches')"
       :description="$t('explore.noMatchesHelp')"
     />
-    <template v-else-if="(!datasetLocked || metricsView === 'query') && query.data.value">
+    <template v-else-if="(!datasetLocked || metricsView === 'query') && result.data.value">
       <div class="explore-result-meta">
-        <span>
-          {{
-            $t('explore.datasetMeta', {
-              dataset: datasetLabel(query.data.value.dataset),
-            })
-          }}
-        </span>
-        <span>
-          {{
-            $t('explore.estimatedCost', {
-              cost: formatNumber(query.data.value.cost),
-            })
-          }}
-        </span>
-        <span>{{ $t('explore.resultMeta', { shape: shapeLabel(query.data.value.shape) }) }}</span>
+        <span>{{
+          $t('explore.datasetMeta', { dataset: datasetLabel(result.data.value.source) })
+        }}</span>
+        <span>{{
+          $t('explore.estimatedCost', { cost: formatNumber(result.data.value.cost) })
+        }}</span>
+        <span>{{ $t('explore.resultMeta', { shape: shapeLabel(result.data.value.kind) }) }}</span>
       </div>
-
-      <article v-if="query.data.value.shape === 'number'" class="explore-number">
-        <span>{{ fieldLabel(columns[0]) }}</span>
-        <strong>{{ formatNumber(query.data.value.items[0]?.[columns[0]]) }}</strong>
+      <article v-if="result.data.value.kind === 'number'" class="explore-number">
+        <span>{{ fieldLabel(columns[0]) }}</span
+        ><strong>{{ formatNumber(result.data.value.items[0]?.[columns[0]]) }}</strong>
       </article>
-
-      <div v-else-if="query.data.value.shape === 'timeseries'" class="explore-chart">
+      <div v-else-if="result.data.value.kind === 'timeseries'" class="explore-chart">
         <article
-          v-for="(item, index) in query.data.value.items"
+          v-for="(item, index) in result.data.value.items"
           :key="`${item.timestamp}:${index}`"
         >
           <div>
-            <strong>{{ formatNumber(item[resultValueColumn]) }}</strong>
-            <span>{{ display(item.timestamp ?? null, 'timestamp') }}</span>
+            <strong>{{ formatNumber(item[resultValueColumn]) }}</strong
+            ><span>{{ display(item.timestamp ?? null, 'timestamp') }}</span>
           </div>
           <span
             class="explore-chart__bar"
@@ -537,14 +451,13 @@ function formatNumber(value: ExploreScalar | undefined): string {
           <small v-if="groupField">{{ display(item[groupField] ?? null, groupField) }}</small>
         </article>
       </div>
-
       <div v-else class="issue-table-wrap">
-        <div v-if="query.data.value.shape === 'table'" class="pagination">
+        <div class="pagination">
           <button
             class="button button--secondary"
             type="button"
-            :disabled="!query.data.value.next_cursor"
-            @click="run(query.data.value.next_cursor)"
+            :disabled="!result.data.value.next_cursor"
+            @click="run(result.data.value.next_cursor)"
           >
             {{ $t('explore.nextPage') }}
           </button>
@@ -556,7 +469,7 @@ function formatNumber(value: ExploreScalar | undefined): string {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(item, index) in query.data.value.items" :key="String(item.id ?? index)">
+            <tr v-for="(item, index) in result.data.value.items" :key="String(item.id ?? index)">
               <td v-for="column in columns" :key="column">{{ display(item[column], column) }}</td>
             </tr>
           </tbody>

@@ -61,6 +61,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         from: Timestamp::from_unix_millis(1_699_999_000_000)?,
         until: Timestamp::from_unix_millis(1_700_001_000_000)?,
         predicates: Vec::new(),
+        expression: None,
         aggregates: vec![ExploreAggregate {
             kind: ExploreAggregateKind::Sum,
             field: Some(ExploreField::MetricCount),

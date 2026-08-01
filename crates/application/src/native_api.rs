@@ -14,13 +14,16 @@ use metric_domain::{
         Dashboard, DashboardId, DashboardRefresh, DashboardVariables, SavedQuery, SavedQueryId,
     },
     deletion::{ProjectDeletionOperationId, ProjectDeletionStatus},
-    explore::{ExploreCursor, ExploreQuery, ExploreResult},
+    explore::{
+        ExploreAggregate, ExploreAggregateKind, ExploreCursor, ExploreDataset, ExploreField,
+        ExploreInterval, ExploreQuery, ExploreResult, ExploreValue,
+    },
     feedback::{FeedbackAnchor, FeedbackRecord, FeedbackStatus},
     finalization::derive_environment_id,
     grouping::IssueId,
     issue::{
-        ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult, IssueSnapshot,
-        IssueStatus,
+        ActorKind, ActorRef, IssueCommand, IssueCommandAction, IssueCommandResult,
+        IssueSearchQuery, IssueSnapshot, IssueStatus,
     },
     monitors::{
         MonitorConfig, MonitorDefinition, MonitorId, MonitorPage, MonitorRun, MonitorRunAnchor,
@@ -39,6 +42,7 @@ use metric_ports::{
     PerformanceQuery, ReplayQuery, ReplayStore, SegmentQuery, SignalStore, SignalStoreError,
 };
 use thiserror::Error;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     auth::{AuthError, IdentityService},
@@ -47,6 +51,11 @@ use crate::{
     explore::{ExploreError, ExploreService},
     issues::{IssueService, IssueServiceError},
     projects::{CreateProject, CreatedProject, ProjectService, ProjectServiceError},
+    query::{
+        DEFAULT_QUERY_ROWS, MAX_QUERY_ROWS, MAX_QUERY_VALUES, ParsedQuery, QueryError,
+        QueryExpression, QueryField, QueryOperator, QueryPredicate, QuerySource,
+        matches_expression,
+    },
     releases::{CreateDeployRequest, ReleaseError, ReleaseService},
     search::{
         CursorKind, SearchError, SearchResultPage, SearchService, cursor_digest, decode_cursor,
@@ -89,6 +98,8 @@ pub enum NativeApiError {
     #[error(transparent)]
     Explore(#[from] ExploreError),
     #[error(transparent)]
+    Query(#[from] QueryError),
+    #[error(transparent)]
     Dashboard(#[from] DashboardError),
     #[error("service is temporarily unavailable")]
     Unavailable,
@@ -111,6 +122,7 @@ impl NativeApiError {
             Self::RateLimited => "rate_limited",
             Self::Search(error) => error.code(),
             Self::Explore(error) => error.code(),
+            Self::Query(error) => error.code(),
             Self::Dashboard(error) => error.code(),
             Self::Unavailable => "temporarily_unavailable",
         }
@@ -190,6 +202,85 @@ pub struct FeedbackListRequest<'a> {
     pub replay_id: Option<EventId>,
     pub cursor: Option<&'a str>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnifiedQueryResultSpec {
+    Records,
+    Number {
+        aggregates: Vec<ExploreAggregate>,
+        group_by: Vec<ExploreField>,
+    },
+    Timeseries {
+        aggregates: Vec<ExploreAggregate>,
+        group_by: Vec<ExploreField>,
+        interval: ExploreInterval,
+    },
+    Values {
+        field: QueryField,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnifiedQueryShape {
+    Records,
+    Number,
+    Timeseries,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnifiedQueryRequest<'a> {
+    pub source: QuerySource,
+    pub text: &'a str,
+    pub from: Option<Timestamp>,
+    pub until: Option<Timestamp>,
+    pub result: UnifiedQueryResultSpec,
+    pub cursor: Option<&'a str>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnifiedQueryResult {
+    Issues {
+        page: NativePage<IssueSnapshot>,
+        normalized: Box<str>,
+        cost: u32,
+    },
+    Errors {
+        page: SearchResultPage,
+        normalized: Box<str>,
+        cost: u32,
+    },
+    Rows {
+        source: QuerySource,
+        shape: UnifiedQueryShape,
+        result: ExploreResult,
+        normalized: Box<str>,
+        cost: u32,
+    },
+    Replays {
+        page: ReplayPage,
+        next_cursor: Option<String>,
+        normalized: Box<str>,
+        cost: u32,
+    },
+    Feedback {
+        page: NativePage<FeedbackRecord>,
+        normalized: Box<str>,
+        cost: u32,
+    },
+    Releases {
+        page: NativePage<metric_domain::api::ReleaseView>,
+        normalized: Box<str>,
+        cost: u32,
+    },
+    Values {
+        source: QuerySource,
+        field: QueryField,
+        items: Vec<Box<str>>,
+        normalized: Box<str>,
+        cost: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +393,627 @@ impl NativeApiService {
     pub fn with_replay_store(mut self, replay_store: Arc<dyn ReplayStore>) -> Self {
         self.replay_store = Some(replay_store);
         self
+    }
+
+    pub async fn unified_query(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        request: UnifiedQueryRequest<'_>,
+    ) -> Result<UnifiedQueryResult, NativeApiError> {
+        let parsed = ParsedQuery::parse(request.source, request.text)?;
+        let limit = request.limit.unwrap_or(
+            if matches!(&request.result, UnifiedQueryResultSpec::Values { .. }) {
+                MAX_QUERY_VALUES
+            } else {
+                DEFAULT_QUERY_ROWS
+            },
+        );
+        if !(1..=MAX_QUERY_ROWS).contains(&limit) {
+            return Err(QueryError::LimitExceeded.into());
+        }
+        match &request.result {
+            UnifiedQueryResultSpec::Values { .. }
+                if limit > MAX_QUERY_VALUES
+                    || !request.text.trim().is_empty()
+                    || request.from.is_some()
+                    || request.until.is_some()
+                    || request.cursor.is_some() =>
+            {
+                return Err(QueryError::LimitExceeded.into());
+            }
+            UnifiedQueryResultSpec::Number { .. } | UnifiedQueryResultSpec::Timeseries { .. }
+                if request.cursor.is_some() =>
+            {
+                return Err(QueryError::InvalidCursor.into());
+            }
+            _ => {}
+        }
+        let cost = query_cost(&parsed, limit)?;
+        match request.result.clone() {
+            UnifiedQueryResultSpec::Records => match request.source {
+                QuerySource::Issues => {
+                    self.authorize(context, project_id, Permission::IssueRead)
+                        .await?;
+                    let page = self
+                        .query_issues(
+                            project_id,
+                            &parsed,
+                            request.from,
+                            request.until,
+                            request.cursor,
+                            limit,
+                        )
+                        .await?;
+                    Ok(UnifiedQueryResult::Issues {
+                        page,
+                        normalized: parsed.normalized,
+                        cost,
+                    })
+                }
+                QuerySource::Errors => {
+                    self.authorize(context, project_id, Permission::EventRead)
+                        .await?;
+                    let page = self
+                        .search
+                        .search(
+                            project_id,
+                            &parsed,
+                            request.from,
+                            request.until,
+                            request.cursor,
+                            Some(limit),
+                        )
+                        .await?;
+                    Ok(UnifiedQueryResult::Errors {
+                        page,
+                        normalized: parsed.normalized,
+                        cost,
+                    })
+                }
+                QuerySource::Logs | QuerySource::Traces | QuerySource::Metrics => {
+                    self.query_explore_records(context, project_id, parsed, request, limit)
+                        .await
+                }
+                QuerySource::Replays => {
+                    self.authorize(context, project_id, Permission::ProjectRead)
+                        .await?;
+                    let (page, next_cursor) = self
+                        .query_replays(
+                            project_id,
+                            &parsed,
+                            request.from,
+                            request.until,
+                            request.cursor,
+                            limit,
+                        )
+                        .await?;
+                    Ok(UnifiedQueryResult::Replays {
+                        page,
+                        next_cursor,
+                        normalized: parsed.normalized,
+                        cost,
+                    })
+                }
+                QuerySource::Feedback => {
+                    self.authorize(context, project_id, Permission::ProjectRead)
+                        .await?;
+                    let page = self
+                        .query_feedback(
+                            project_id,
+                            &parsed,
+                            request.from,
+                            request.until,
+                            request.cursor,
+                            limit,
+                        )
+                        .await?;
+                    Ok(UnifiedQueryResult::Feedback {
+                        page,
+                        normalized: parsed.normalized,
+                        cost,
+                    })
+                }
+                QuerySource::Releases => {
+                    self.authorize(context, project_id, Permission::ReleaseRead)
+                        .await?;
+                    let page = self
+                        .query_releases(
+                            context.organization_id,
+                            project_id,
+                            &parsed,
+                            request.from,
+                            request.until,
+                            request.cursor,
+                            limit,
+                        )
+                        .await?;
+                    Ok(UnifiedQueryResult::Releases {
+                        page,
+                        normalized: parsed.normalized,
+                        cost,
+                    })
+                }
+            },
+            UnifiedQueryResultSpec::Number {
+                aggregates,
+                group_by,
+            } => {
+                self.query_explore_shape(
+                    context, project_id, parsed, request, aggregates, group_by, None, limit,
+                )
+                .await
+            }
+            UnifiedQueryResultSpec::Timeseries {
+                aggregates,
+                group_by,
+                interval,
+            } => {
+                self.query_explore_shape(
+                    context,
+                    project_id,
+                    parsed,
+                    request,
+                    aggregates,
+                    group_by,
+                    Some(interval),
+                    limit,
+                )
+                .await
+            }
+            UnifiedQueryResultSpec::Values { field } => {
+                self.query_values(context, project_id, parsed, field, limit)
+                    .await
+            }
+        }
+    }
+
+    async fn query_explore_records(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        mut parsed: ParsedQuery,
+        request: UnifiedQueryRequest<'_>,
+        limit: usize,
+    ) -> Result<UnifiedQueryResult, NativeApiError> {
+        if parsed.source == QuerySource::Traces {
+            let segment = QueryExpression::Predicate(QueryPredicate {
+                field: QueryField::IsSegment,
+                operator: QueryOperator::Equal,
+                value: "true".into(),
+            });
+            parsed.expression = Some(match parsed.expression.take() {
+                Some(value) => QueryExpression::And(vec![value, segment]),
+                None => segment,
+            });
+        }
+        self.query_explore_shape(
+            context,
+            project_id,
+            parsed,
+            request,
+            Vec::new(),
+            Vec::new(),
+            None,
+            limit,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn query_explore_shape(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        parsed: ParsedQuery,
+        request: UnifiedQueryRequest<'_>,
+        aggregates: Vec<ExploreAggregate>,
+        group_by: Vec<ExploreField>,
+        interval: Option<ExploreInterval>,
+        limit: usize,
+    ) -> Result<UnifiedQueryResult, NativeApiError> {
+        let dataset = query_dataset(parsed.source)?;
+        let (from, until) =
+            unified_time_range(self.clock.now(), request.from, request.until, parsed.source)?;
+        let expression = parsed.explore_expression()?;
+        let query = ExploreQuery {
+            dataset,
+            from,
+            until,
+            predicates: Vec::new(),
+            expression,
+            aggregates,
+            group_by,
+            interval,
+            cursor: None,
+            limit,
+        };
+        let shape = if query.aggregates.is_empty() {
+            UnifiedQueryShape::Records
+        } else if query.interval.is_some() {
+            UnifiedQueryShape::Timeseries
+        } else {
+            UnifiedQueryShape::Number
+        };
+        let (result, normalized, cost) = self
+            .explore(context, project_id, query, request.cursor)
+            .await
+            .map_err(map_unified_explore_error)?;
+        Ok(UnifiedQueryResult::Rows {
+            source: parsed.source,
+            shape,
+            result,
+            normalized,
+            cost,
+        })
+    }
+
+    async fn query_issues(
+        &self,
+        project_id: ProjectId,
+        parsed: &ParsedQuery,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NativePage<IssueSnapshot>, NativeApiError> {
+        validate_optional_time_range(from, until)?;
+        if let Some(predicate) = positive_predicate(parsed.expression.as_ref(), QueryField::IssueId)
+        {
+            let issue_id = IssueId::from_bytes(hex_16_text(&predicate.value)?);
+            let issue = self
+                .issues
+                .load(project_id, issue_id)
+                .await
+                .map_err(map_issue_error)?;
+            let items = (in_time_range(issue.last_seen, from, until)
+                && issue_matches(parsed.expression.as_ref(), &issue))
+            .then_some(issue)
+            .into_iter()
+            .collect();
+            return Ok(NativePage {
+                items,
+                next_cursor: None,
+            });
+        }
+        if let Some(predicate) = positive_predicate(parsed.expression.as_ref(), QueryField::Title) {
+            if cursor.is_some() {
+                return Err(QueryError::InvalidCursor.into());
+            }
+            let candidates = self
+                .issues
+                .search_titles(
+                    project_id,
+                    IssueSearchQuery::new(predicate.value.clone(), limit.min(100))
+                        .map_err(|_| QueryError::LimitExceeded)?,
+                )
+                .await
+                .map_err(map_issue_error)?;
+            let mut items = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let issue = self
+                    .issues
+                    .load(project_id, candidate.issue_id)
+                    .await
+                    .map_err(map_issue_error)?;
+                if in_time_range(issue.last_seen, from, until)
+                    && issue_matches(parsed.expression.as_ref(), &issue)
+                {
+                    items.push(issue);
+                }
+            }
+            return Ok(NativePage {
+                items,
+                next_cursor: None,
+            });
+        }
+        let normalized = format!(
+            "{}|from:{}|until:{}",
+            parsed.normalized,
+            from.map_or(i64::MIN, Timestamp::unix_millis),
+            until.map_or(i64::MAX, Timestamp::unix_millis)
+        );
+        let digest = cursor_digest(project_id, &normalized, CursorKind::Issue);
+        let before = cursor
+            .map(|value| decode_issue_anchor(value, digest))
+            .transpose()?;
+        let status = positive_predicate(parsed.expression.as_ref(), QueryField::Status)
+            .map(|value| parse_issue_status(&value.value))
+            .transpose()?;
+        let page = self
+            .investigation
+            .list_issues(
+                project_id,
+                IssueListQuery {
+                    status,
+                    from,
+                    until,
+                    before,
+                    limit: limit.min(100),
+                },
+            )
+            .await
+            .map_err(map_store_error)?;
+        let next_cursor = page.next.map(|anchor| {
+            encode_cursor(
+                CursorKind::Issue,
+                anchor.last_seen,
+                &anchor.issue_id.as_bytes(),
+                digest,
+            )
+        });
+        Ok(NativePage {
+            items: page
+                .items
+                .into_iter()
+                .filter(|issue| issue_matches(parsed.expression.as_ref(), issue))
+                .collect(),
+            next_cursor,
+        })
+    }
+
+    async fn query_replays(
+        &self,
+        project_id: ProjectId,
+        parsed: &ParsedQuery,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<(ReplayPage, Option<String>), NativeApiError> {
+        validate_optional_time_range(from, until)?;
+        let normalized = format!(
+            "{}|from:{}|until:{}",
+            parsed.normalized,
+            from.map_or(i64::MIN, Timestamp::unix_millis),
+            until.map_or(i64::MAX, Timestamp::unix_millis)
+        );
+        let digest = cursor_digest(project_id, &normalized, CursorKind::Replay);
+        let before = cursor
+            .map(|value| decode_replay_anchor(value, digest))
+            .transpose()?;
+        let mut page = self
+            .replay_store()?
+            .list_replays(
+                project_id,
+                ReplayQuery {
+                    from,
+                    until,
+                    before,
+                    limit: limit.min(100),
+                },
+            )
+            .await
+            .map_err(map_signal_error)?;
+        let next_cursor = page.next.map(|anchor| {
+            encode_cursor(
+                CursorKind::Replay,
+                anchor.received_at,
+                &anchor.replay_id.as_bytes(),
+                digest,
+            )
+        });
+        page.items
+            .retain(|replay| replay_matches(parsed.expression.as_ref(), replay));
+        Ok((page, next_cursor))
+    }
+
+    async fn query_feedback(
+        &self,
+        project_id: ProjectId,
+        parsed: &ParsedQuery,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NativePage<FeedbackRecord>, NativeApiError> {
+        validate_optional_time_range(from, until)?;
+        let normalized = format!(
+            "{}|from:{}|until:{}",
+            parsed.normalized,
+            from.map_or(i64::MIN, Timestamp::unix_millis),
+            until.map_or(i64::MAX, Timestamp::unix_millis)
+        );
+        let digest = cursor_digest(project_id, &normalized, CursorKind::Feedback);
+        let before = cursor
+            .map(|value| decode_feedback_anchor(value, digest))
+            .transpose()?;
+        let status = positive_predicate(parsed.expression.as_ref(), QueryField::Status)
+            .map(|value| FeedbackStatus::parse(&value.value).map_err(|_| QueryError::Syntax))
+            .transpose()?;
+        let replay_id = positive_predicate(parsed.expression.as_ref(), QueryField::ReplayId)
+            .map(|value| EventId::parse(&value.value).map_err(|_| QueryError::Syntax))
+            .transpose()?;
+        let page = self
+            .feedback_store()?
+            .list_feedback(
+                project_id,
+                FeedbackQuery {
+                    status,
+                    replay_id,
+                    before,
+                    limit: limit.min(100),
+                },
+            )
+            .await
+            .map_err(map_feedback_error)?;
+        let next_cursor = page.next.map(|anchor| {
+            encode_cursor(
+                CursorKind::Feedback,
+                anchor.received_at,
+                &anchor.feedback_id.as_bytes(),
+                digest,
+            )
+        });
+        let mut items = page
+            .items
+            .into_iter()
+            .filter(|feedback| {
+                in_time_range(feedback.received_at, from, until)
+                    && feedback_matches(parsed.expression.as_ref(), feedback)
+            })
+            .collect::<Vec<_>>();
+        for feedback in &mut items {
+            self.enrich_feedback(feedback).await?;
+        }
+        Ok(NativePage { items, next_cursor })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn query_releases(
+        &self,
+        organization_id: metric_domain::OrganizationId,
+        project_id: ProjectId,
+        parsed: &ParsedQuery,
+        from: Option<Timestamp>,
+        until: Option<Timestamp>,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NativePage<metric_domain::api::ReleaseView>, NativeApiError> {
+        validate_optional_time_range(from, until)?;
+        let normalized = format!(
+            "{}|from:{}|until:{}",
+            parsed.normalized,
+            from.map_or(i64::MIN, Timestamp::unix_millis),
+            until.map_or(i64::MAX, Timestamp::unix_millis)
+        );
+        let digest = cursor_digest(project_id, &normalized, CursorKind::Release);
+        let before = cursor
+            .map(|value| decode_release_anchor(value, digest))
+            .transpose()?;
+        let page = self
+            .investigation
+            .list_releases(organization_id, project_id, before, limit.min(100))
+            .await
+            .map_err(map_store_error)?;
+        let next_cursor = page.next.map(|anchor| {
+            encode_cursor(
+                CursorKind::Release,
+                anchor.activity_at,
+                &anchor.id.as_bytes(),
+                digest,
+            )
+        });
+        Ok(NativePage {
+            items: page
+                .items
+                .into_iter()
+                .filter(|release| {
+                    in_time_range(release.activity_at, from, until)
+                        && release_matches(parsed.expression.as_ref(), release)
+                })
+                .collect(),
+            next_cursor,
+        })
+    }
+
+    async fn query_values(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        parsed: ParsedQuery,
+        field: QueryField,
+        limit: usize,
+    ) -> Result<UnifiedQueryResult, NativeApiError> {
+        self.authorize(context, project_id, query_permission(parsed.source))
+            .await?;
+        let limit = limit.min(MAX_QUERY_VALUES);
+        let items: Vec<Box<str>> = match field {
+            QueryField::Level if parsed.source == QuerySource::Errors => {
+                ["debug", "info", "warning", "error", "fatal"]
+                    .into_iter()
+                    .take(limit)
+                    .map(Into::into)
+                    .collect()
+            }
+            QueryField::Level if parsed.source == QuerySource::Logs => {
+                ["trace", "debug", "info", "warning", "error", "fatal"]
+                    .into_iter()
+                    .take(limit)
+                    .map(Into::into)
+                    .collect()
+            }
+            QueryField::Status if parsed.source == QuerySource::Issues => {
+                ["open", "resolved", "ignored"]
+                    .into_iter()
+                    .take(limit)
+                    .map(Into::into)
+                    .collect()
+            }
+            QueryField::Status if parsed.source == QuerySource::Feedback => {
+                ["open", "resolved", "spam"]
+                    .into_iter()
+                    .take(limit)
+                    .map(Into::into)
+                    .collect()
+            }
+            QueryField::MetricKind if parsed.source == QuerySource::Metrics => {
+                ["counter", "gauge", "distribution"]
+                    .into_iter()
+                    .take(limit)
+                    .map(Into::into)
+                    .collect()
+            }
+            QueryField::Environment => self
+                .investigation
+                .list_environments(project_id, None, limit)
+                .await
+                .map_err(map_store_error)?
+                .items
+                .into_iter()
+                .map(|value| value.name)
+                .collect(),
+            QueryField::Release => self
+                .investigation
+                .list_releases(context.organization_id, project_id, None, limit)
+                .await
+                .map_err(map_store_error)?
+                .items
+                .into_iter()
+                .map(|value| value.version)
+                .collect(),
+            QueryField::MetricName if parsed.source == QuerySource::Metrics => {
+                let now = self.clock.now();
+                let from =
+                    Timestamp::from_unix_millis(now.unix_millis().saturating_sub(7 * DAY_MILLIS))
+                        .map_err(|_| QueryError::Unavailable)?;
+                let query = ExploreQuery {
+                    dataset: ExploreDataset::Metrics,
+                    from,
+                    until: now,
+                    predicates: Vec::new(),
+                    expression: None,
+                    aggregates: vec![ExploreAggregate {
+                        kind: ExploreAggregateKind::Count,
+                        field: None,
+                        alias: "count".into(),
+                    }],
+                    group_by: vec![ExploreField::Name],
+                    interval: None,
+                    cursor: None,
+                    limit,
+                };
+                self.explore(context, project_id, query, None)
+                    .await
+                    .map_err(map_unified_explore_error)?
+                    .0
+                    .rows
+                    .into_iter()
+                    .filter_map(|mut row| match row.values.remove("name") {
+                        Some(ExploreValue::String(value)) => Some(value),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            _ => return Err(QueryError::CapabilityUnavailable.into()),
+        };
+        Ok(UnifiedQueryResult::Values {
+            source: parsed.source,
+            field,
+            items,
+            normalized: parsed.normalized,
+            cost: 25,
+        })
     }
 
     pub async fn replays(
@@ -1503,22 +2215,6 @@ impl NativeApiService {
         Ok((attachment, reader))
     }
 
-    pub async fn search(
-        &self,
-        context: &AuthContext,
-        project_id: ProjectId,
-        query: &str,
-        cursor: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<SearchResultPage, NativeApiError> {
-        self.authorize(context, project_id, Permission::EventRead)
-            .await?;
-        self.search
-            .search(project_id, query, cursor, limit)
-            .await
-            .map_err(NativeApiError::Search)
-    }
-
     pub async fn releases(
         &self,
         context: &AuthContext,
@@ -1932,6 +2628,217 @@ fn actor_ref(context: &AuthContext) -> ActorRef {
     ActorRef::new(kind, id)
 }
 
+fn query_cost(parsed: &ParsedQuery, limit: usize) -> Result<u32, QueryError> {
+    let predicates = parsed
+        .expression
+        .as_ref()
+        .map_or(0, |value| value.predicates().len());
+    let cost = 100_u32
+        .saturating_add(
+            u32::try_from(predicates)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(40),
+        )
+        .saturating_add(u32::try_from(limit).unwrap_or(u32::MAX));
+    if cost > 10_000 {
+        Err(QueryError::CostExceeded)
+    } else {
+        Ok(cost)
+    }
+}
+
+fn query_dataset(source: QuerySource) -> Result<ExploreDataset, QueryError> {
+    match source {
+        QuerySource::Errors => Ok(ExploreDataset::Errors),
+        QuerySource::Logs => Ok(ExploreDataset::Logs),
+        QuerySource::Traces => Ok(ExploreDataset::Spans),
+        QuerySource::Metrics => Ok(ExploreDataset::Metrics),
+        _ => Err(QueryError::CapabilityUnavailable),
+    }
+}
+
+fn map_unified_explore_error(error: NativeApiError) -> NativeApiError {
+    match error {
+        NativeApiError::Explore(ExploreError::InvalidQuery) => {
+            QueryError::CapabilityUnavailable.into()
+        }
+        NativeApiError::Explore(ExploreError::CostExceeded) => QueryError::CostExceeded.into(),
+        NativeApiError::Explore(ExploreError::Capacity) => QueryError::Capacity.into(),
+        NativeApiError::Explore(ExploreError::Unavailable) => QueryError::Unavailable.into(),
+        NativeApiError::InvalidCursor => QueryError::InvalidCursor.into(),
+        error => error,
+    }
+}
+
+const fn query_permission(source: QuerySource) -> Permission {
+    match source {
+        QuerySource::Issues => Permission::IssueRead,
+        QuerySource::Errors | QuerySource::Logs | QuerySource::Traces | QuerySource::Metrics => {
+            Permission::EventRead
+        }
+        QuerySource::Replays | QuerySource::Feedback => Permission::ProjectRead,
+        QuerySource::Releases => Permission::ReleaseRead,
+    }
+}
+
+fn unified_time_range(
+    now: Timestamp,
+    from: Option<Timestamp>,
+    until: Option<Timestamp>,
+    source: QuerySource,
+) -> Result<(Timestamp, Timestamp), NativeApiError> {
+    let default = if source == QuerySource::Metrics {
+        7 * DAY_MILLIS
+    } else {
+        DAY_MILLIS
+    };
+    signal_time_range(now, from, until, default)
+}
+
+fn positive_predicate(
+    expression: Option<&QueryExpression>,
+    field: QueryField,
+) -> Option<&QueryPredicate> {
+    match expression? {
+        QueryExpression::Predicate(value)
+            if value.field == field && value.operator == QueryOperator::Equal =>
+        {
+            Some(value)
+        }
+        QueryExpression::Predicate(value)
+            if value.field == field
+                && field == QueryField::Title
+                && value.operator == QueryOperator::Contains =>
+        {
+            Some(value)
+        }
+        QueryExpression::And(values) => values
+            .iter()
+            .find_map(|value| positive_predicate(Some(value), field)),
+        QueryExpression::Predicate(_) | QueryExpression::Not(_) | QueryExpression::Or(_) => None,
+    }
+}
+
+fn issue_matches(expression: Option<&QueryExpression>, issue: &IssueSnapshot) -> bool {
+    matches_expression(expression, &mut |predicate| match predicate.field {
+        QueryField::IssueId => string_matches(&issue.issue_id.to_string(), predicate),
+        QueryField::Title => string_matches(issue.title.as_str(), predicate),
+        QueryField::Status => string_matches(status_name(Some(issue.status)), predicate),
+        QueryField::Timestamp => numeric_matches(
+            issue.last_seen.unix_millis(),
+            predicate_value_i64(predicate),
+            predicate.operator,
+        ),
+        _ => false,
+    })
+}
+
+fn replay_matches(expression: Option<&QueryExpression>, replay: &ReplayRecord) -> bool {
+    matches_expression(expression, &mut |predicate| match predicate.field {
+        QueryField::ReplayId => string_matches(&replay.replay_id.to_string(), predicate),
+        QueryField::Url => string_matches(replay.url.as_deref().unwrap_or_default(), predicate),
+        QueryField::Environment => {
+            string_matches(replay.environment.as_deref().unwrap_or_default(), predicate)
+        }
+        QueryField::Release => {
+            string_matches(replay.release.as_deref().unwrap_or_default(), predicate)
+        }
+        QueryField::Timestamp => numeric_matches(
+            replay.received_at.unix_millis(),
+            predicate_value_i64(predicate),
+            predicate.operator,
+        ),
+        _ => false,
+    })
+}
+
+fn feedback_matches(expression: Option<&QueryExpression>, feedback: &FeedbackRecord) -> bool {
+    matches_expression(expression, &mut |predicate| match predicate.field {
+        QueryField::FeedbackId => string_matches(&feedback.feedback_id.to_string(), predicate),
+        QueryField::ReplayId => feedback
+            .replay_id
+            .is_some_and(|value| string_matches(&value.to_string(), predicate)),
+        QueryField::Status => string_matches(feedback.status.as_str(), predicate),
+        QueryField::Message => string_matches(&feedback.message, predicate),
+        QueryField::Timestamp => numeric_matches(
+            feedback.received_at.unix_millis(),
+            predicate_value_i64(predicate),
+            predicate.operator,
+        ),
+        _ => false,
+    })
+}
+
+fn release_matches(
+    expression: Option<&QueryExpression>,
+    release: &metric_domain::api::ReleaseView,
+) -> bool {
+    matches_expression(expression, &mut |predicate| match predicate.field {
+        QueryField::Release => string_matches(&release.version, predicate),
+        QueryField::Timestamp => numeric_matches(
+            release.activity_at.unix_millis(),
+            predicate_value_i64(predicate),
+            predicate.operator,
+        ),
+        _ => false,
+    })
+}
+
+fn string_matches(value: &str, predicate: &QueryPredicate) -> bool {
+    match predicate.operator {
+        QueryOperator::Equal => value == predicate.value.as_ref(),
+        QueryOperator::Contains => value
+            .to_lowercase()
+            .contains(&predicate.value.to_lowercase()),
+        QueryOperator::Greater
+        | QueryOperator::GreaterOrEqual
+        | QueryOperator::Less
+        | QueryOperator::LessOrEqual => false,
+    }
+}
+
+fn predicate_value_i64(predicate: &QueryPredicate) -> Option<i64> {
+    predicate.value.parse::<i64>().ok().or_else(|| {
+        OffsetDateTime::parse(&predicate.value, &Rfc3339)
+            .ok()
+            .and_then(|value| {
+                i64::try_from(value.unix_timestamp_nanos().div_euclid(1_000_000)).ok()
+            })
+    })
+}
+
+fn numeric_matches(left: i64, right: Option<i64>, operator: QueryOperator) -> bool {
+    let Some(right) = right else {
+        return false;
+    };
+    match operator {
+        QueryOperator::Equal => left == right,
+        QueryOperator::Greater => left > right,
+        QueryOperator::GreaterOrEqual => left >= right,
+        QueryOperator::Less => left < right,
+        QueryOperator::LessOrEqual => left <= right,
+        QueryOperator::Contains => false,
+    }
+}
+
+fn parse_issue_status(value: &str) -> Result<IssueStatus, NativeApiError> {
+    match value {
+        "open" => Ok(IssueStatus::Open),
+        "resolved" => Ok(IssueStatus::Resolved),
+        "ignored" => Ok(IssueStatus::Ignored),
+        _ => Err(QueryError::Syntax.into()),
+    }
+}
+
+fn hex_16_text(value: &str) -> Result<[u8; 16], NativeApiError> {
+    if value.len() != 32 || !value.bytes().all(|value| value.is_ascii_hexdigit()) {
+        return Err(QueryError::Syntax.into());
+    }
+    let mut bytes = [0_u8; 16];
+    hex::decode_to_slice(value, &mut bytes).map_err(|_| QueryError::Syntax)?;
+    Ok(bytes)
+}
+
 fn page_size(value: Option<usize>) -> Result<usize, NativeApiError> {
     let value = value.unwrap_or(DEFAULT_PAGE);
     if (1..=MAX_PAGE).contains(&value) {
@@ -1985,6 +2892,21 @@ fn validate_time_range(from: Timestamp, until: Timestamp) -> Result<(), NativeAp
     } else {
         Ok(())
     }
+}
+
+fn validate_optional_time_range(
+    from: Option<Timestamp>,
+    until: Option<Timestamp>,
+) -> Result<(), NativeApiError> {
+    if from.zip(until).is_some_and(|(from, until)| from >= until) {
+        Err(NativeApiError::InvalidRequest)
+    } else {
+        Ok(())
+    }
+}
+
+fn in_time_range(value: Timestamp, from: Option<Timestamp>, until: Option<Timestamp>) -> bool {
+    from.is_none_or(|from| value >= from) && until.is_none_or(|until| value <= until)
 }
 
 fn signal_time_range(
@@ -2155,6 +3077,18 @@ fn decode_feedback_anchor(value: &str, digest: [u8; 16]) -> Result<FeedbackAncho
     Ok(FeedbackAnchor {
         received_at,
         feedback_id: EventId::from_bytes(id.try_into().map_err(|_| NativeApiError::InvalidCursor)?),
+    })
+}
+
+fn decode_replay_anchor(
+    value: &str,
+    digest: [u8; 16],
+) -> Result<metric_domain::replays::ReplayCursor, NativeApiError> {
+    let (received_at, id) =
+        decode_cursor(value, CursorKind::Replay, 16, digest).map_err(map_cursor_error)?;
+    Ok(metric_domain::replays::ReplayCursor {
+        received_at,
+        replay_id: EventId::from_bytes(id.try_into().map_err(|_| NativeApiError::InvalidCursor)?),
     })
 }
 

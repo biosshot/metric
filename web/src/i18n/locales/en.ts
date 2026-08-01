@@ -54,6 +54,7 @@ export default {
     replays: 'Replays',
     monitors: 'Monitors',
     feedback: 'Feedback',
+    explore: 'Explore',
     delivery: 'Delivery',
     releases: 'Releases',
     configure: 'Configure',

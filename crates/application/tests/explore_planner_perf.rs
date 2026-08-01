@@ -40,6 +40,7 @@ fn explore_typed_planner_rps() {
             value: Some(ExploreValue::String("checkout".into())),
             upper: None,
         }],
+        expression: None,
         aggregates: vec![
             ExploreAggregate {
                 kind: ExploreAggregateKind::Count,

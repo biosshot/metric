@@ -4576,3 +4576,110 @@ label small,
     flex-basis: auto;
   }
 }
+.unified-query-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.explore-builder {
+  display: block;
+}
+
+.explore-builder__shape {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  align-items: end;
+  gap: 0.85rem;
+  margin-bottom: 0.9rem;
+}
+
+.explore-builder > .unified-query-bar {
+  margin-bottom: 0;
+}
+
+.unified-query-bar__input-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1 1 24rem;
+  align-items: center;
+}
+
+.unified-query-bar__input-wrap > svg {
+  position: absolute;
+  left: 0.85rem;
+  z-index: 1;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.unified-query-bar__input-wrap input {
+  width: 100%;
+  padding-left: 2.45rem;
+  font-family: var(--font-mono);
+}
+
+.unified-query-bar__suggestions {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  left: 0;
+  max-height: 18rem;
+  margin: 0;
+  padding: 0.35rem;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 35%);
+}
+
+.unified-query-bar__suggestions li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+}
+
+.unified-query-bar__suggestions li.is-active {
+  background: var(--surface-strong);
+}
+
+.unified-query-bar__suggestions span {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.unified-query-bar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: -0.35rem 0 1rem;
+}
+
+.unified-query-bar__chips code {
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--semantic-info);
+  background: var(--surface-subtle);
+  font-size: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .unified-query-bar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .unified-query-bar__input-wrap {
+    flex-basis: 100%;
+  }
+}

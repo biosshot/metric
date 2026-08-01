@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use futures_util::TryStreamExt;
 use metric_domain::explore::{
-    ExploreAggregateKind, ExploreCursor, ExploreDataset, ExploreField, ExplorePlan,
-    ExplorePredicateOp, ExploreResult, ExploreRow, ExploreValue,
+    ExploreAggregateKind, ExploreCursor, ExploreDataset, ExploreExpression, ExploreField,
+    ExplorePlan, ExplorePredicate, ExplorePredicateOp, ExploreResult, ExploreRow, ExploreValue,
 };
 use metric_ports::{ExploreStore, ExploreStoreError, PortFuture};
 use mongodb::{
@@ -32,7 +32,7 @@ impl MongoExploreStore {
         if plan.query.aggregates.is_empty() {
             let mut cursor = collection
                 .find(filter)
-                .sort(doc! { "o": -1, "_id": -1 })
+                .sort(doc! { time_field(plan.query.dataset): -1, "_id": -1 })
                 .limit(i64::try_from(plan.query.limit.saturating_add(1)).unwrap_or(101))
                 .max_time(plan.maximum_time)
                 .await
@@ -125,82 +125,12 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
     if dataset == ExploreDataset::Errors {
         clauses.push(doc! { "q": { "$exists": false } });
     }
-    for predicate in &plan.query.predicates {
-        let field = physical_field(dataset, predicate.field)?;
-        let clause = match predicate.op {
-            ExplorePredicateOp::Present => {
-                let present = matches!(predicate.value, Some(ExploreValue::Bool(true)));
-                if matches!(
-                    (dataset, predicate.field),
-                    (ExploreDataset::Errors, ExploreField::Level)
-                        | (ExploreDataset::Spans, ExploreField::IsSegment)
-                ) {
-                    if present {
-                        Document::new()
-                    } else {
-                        doc! { "_id": { "$exists": false } }
-                    }
-                } else {
-                    doc! { field: { "$exists": present } }
-                }
-            }
-            ExplorePredicateOp::Exact => {
-                let value = predicate
-                    .value
-                    .as_ref()
-                    .ok_or(ExploreStoreError::InvalidData)?;
-                if dataset == ExploreDataset::Errors
-                    && predicate.field == ExploreField::Level
-                    && matches!(value, ExploreValue::String(value) if value.as_ref() == "error")
-                {
-                    doc! { field: { "$exists": false } }
-                } else if dataset == ExploreDataset::Spans
-                    && predicate.field == ExploreField::IsSegment
-                    && matches!(value, ExploreValue::Bool(false))
-                {
-                    doc! { field: { "$ne": true } }
-                } else {
-                    doc! { field: physical_value(dataset, predicate.field, value)? }
-                }
-            }
-            ExplorePredicateOp::Contains
-            | ExplorePredicateOp::StartsWith
-            | ExplorePredicateOp::EndsWith => {
-                let ExploreValue::String(value) = predicate
-                    .value
-                    .as_ref()
-                    .ok_or(ExploreStoreError::InvalidData)?
-                else {
-                    return Err(ExploreStoreError::InvalidData);
-                };
-                let escaped = escape_regex(value);
-                let pattern = match predicate.op {
-                    ExplorePredicateOp::StartsWith => format!("^{escaped}"),
-                    ExplorePredicateOp::EndsWith => format!("{escaped}$"),
-                    ExplorePredicateOp::Contains => escaped,
-                    _ => unreachable!(),
-                };
-                doc! { field: Bson::RegularExpression(Regex {
-                    pattern,
-                    options: String::new(),
-                }) }
-            }
-            ExplorePredicateOp::Range => {
-                let lower = predicate
-                    .value
-                    .as_ref()
-                    .ok_or(ExploreStoreError::InvalidData)?;
-                let upper = predicate
-                    .upper
-                    .as_ref()
-                    .ok_or(ExploreStoreError::InvalidData)?;
-                doc! { field: {
-                    "$gte": physical_value(dataset, predicate.field, lower)?,
-                    "$lt": physical_value(dataset, predicate.field, upper)?,
-                }}
-            }
-        };
-        clauses.push(clause);
+    if let Some(expression) = &plan.query.expression {
+        clauses.push(expression_clause(dataset, expression)?);
+    } else {
+        for predicate in &plan.query.predicates {
+            clauses.push(predicate_clause(dataset, predicate)?);
+        }
     }
     if let Some(cursor) = plan.query.cursor {
         let id = Binary {
@@ -220,6 +150,125 @@ fn build_filter(plan: &ExplorePlan) -> Result<Document, ExploreStoreError> {
         });
     }
     Ok(doc! { "$and": clauses })
+}
+
+fn expression_clause(
+    dataset: ExploreDataset,
+    expression: &ExploreExpression,
+) -> Result<Document, ExploreStoreError> {
+    match expression {
+        ExploreExpression::Predicate(predicate) => predicate_clause(dataset, predicate),
+        ExploreExpression::Not(value) => Ok(doc! { "$nor": [expression_clause(dataset, value)?] }),
+        ExploreExpression::And(values) if values.is_empty() => Ok(Document::new()),
+        ExploreExpression::And(values) | ExploreExpression::Or(values) => {
+            let clauses = values
+                .iter()
+                .map(|value| expression_clause(dataset, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(if matches!(expression, ExploreExpression::And(_)) {
+                doc! { "$and": clauses }
+            } else {
+                doc! { "$or": clauses }
+            })
+        }
+    }
+}
+
+fn predicate_clause(
+    dataset: ExploreDataset,
+    predicate: &ExplorePredicate,
+) -> Result<Document, ExploreStoreError> {
+    let field = physical_field(dataset, predicate.field)?;
+    Ok(match predicate.op {
+        ExplorePredicateOp::Present => {
+            let present = matches!(predicate.value, Some(ExploreValue::Bool(true)));
+            if matches!(
+                (dataset, predicate.field),
+                (ExploreDataset::Errors, ExploreField::Level)
+                    | (ExploreDataset::Spans, ExploreField::IsSegment)
+            ) {
+                if present {
+                    Document::new()
+                } else {
+                    doc! { "_id": { "$exists": false } }
+                }
+            } else {
+                doc! { field: { "$exists": present } }
+            }
+        }
+        ExplorePredicateOp::Exact => {
+            let value = predicate
+                .value
+                .as_ref()
+                .ok_or(ExploreStoreError::InvalidData)?;
+            if dataset == ExploreDataset::Errors
+                && predicate.field == ExploreField::Level
+                && matches!(value, ExploreValue::String(value) if value.as_ref() == "error")
+            {
+                doc! { field: { "$exists": false } }
+            } else if dataset == ExploreDataset::Spans
+                && predicate.field == ExploreField::IsSegment
+                && matches!(value, ExploreValue::Bool(false))
+            {
+                doc! { field: { "$ne": true } }
+            } else {
+                doc! { field: physical_value(dataset, predicate.field, value)? }
+            }
+        }
+        ExplorePredicateOp::Contains
+        | ExplorePredicateOp::StartsWith
+        | ExplorePredicateOp::EndsWith => {
+            let ExploreValue::String(value) = predicate
+                .value
+                .as_ref()
+                .ok_or(ExploreStoreError::InvalidData)?
+            else {
+                return Err(ExploreStoreError::InvalidData);
+            };
+            let escaped = escape_regex(value);
+            let pattern = match predicate.op {
+                ExplorePredicateOp::StartsWith => format!("^{escaped}"),
+                ExplorePredicateOp::EndsWith => format!("{escaped}$"),
+                ExplorePredicateOp::Contains => escaped,
+                _ => unreachable!(),
+            };
+            doc! { field: Bson::RegularExpression(Regex {
+                pattern,
+                options: String::new(),
+            }) }
+        }
+        ExplorePredicateOp::Range => {
+            let lower = predicate
+                .value
+                .as_ref()
+                .ok_or(ExploreStoreError::InvalidData)?;
+            let upper = predicate
+                .upper
+                .as_ref()
+                .ok_or(ExploreStoreError::InvalidData)?;
+            doc! { field: {
+                "$gte": physical_value(dataset, predicate.field, lower)?,
+                "$lt": physical_value(dataset, predicate.field, upper)?,
+            }}
+        }
+        ExplorePredicateOp::Greater
+        | ExplorePredicateOp::GreaterOrEqual
+        | ExplorePredicateOp::Less
+        | ExplorePredicateOp::LessOrEqual => {
+            let value = predicate
+                .value
+                .as_ref()
+                .ok_or(ExploreStoreError::InvalidData)?;
+            let operator = match predicate.op {
+                ExplorePredicateOp::Greater => "$gt",
+                ExplorePredicateOp::GreaterOrEqual => "$gte",
+                ExplorePredicateOp::Less => "$lt",
+                ExplorePredicateOp::LessOrEqual => "$lte",
+                _ => unreachable!(),
+            };
+            doc! { field: { operator: physical_value(dataset, predicate.field, value)? } }
+        }
+    })
 }
 
 fn escape_regex(value: &str) -> String {
@@ -596,6 +645,12 @@ fn display_bson_value(
     field: ExploreField,
     value: &Bson,
 ) -> Result<ExploreValue, ExploreStoreError> {
+    if matches!(dataset, ExploreDataset::Logs | ExploreDataset::Spans)
+        && matches!(field, ExploreField::Timestamp | ExploreField::DurationMs)
+    {
+        let value = value.as_i64().ok_or(ExploreStoreError::InvalidData)?;
+        return Ok(ExploreValue::Number(value as f64 / 1_000_000.0));
+    }
     if let Bson::Int32(code) = value {
         if field == ExploreField::Level {
             let label = match (dataset, *code) {

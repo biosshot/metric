@@ -13,7 +13,8 @@ import type {
   CreateProjectResponse,
   Event,
   ExploreRequest,
-  ExploreResult,
+  UnifiedQueryRequest,
+  UnifiedQueryResult,
   Feedback,
   FeedbackStatus,
   Identity,
@@ -40,11 +41,9 @@ import type {
   Release,
   ReleaseIssue,
   ReleaseHealth,
-  ReleaseSummary,
   Replay,
   SavedQuery,
   Deploy,
-  Span,
   StructuredLog,
   Trace,
   UserOrganization,
@@ -63,11 +62,14 @@ const messages: Record<string, string> = {
   conflict: 'The object changed. Refresh it before trying again.',
   rate_limited: 'Too many requests. Wait briefly and retry.',
   temporarily_unavailable: 'A required Metric component is unavailable.',
-  search_syntax_invalid: 'The search expression is not valid.',
-  search_field_not_indexed: 'That search field is not indexed.',
-  search_limit_exceeded: 'The search is too complex. Remove some conditions.',
-  search_requires_positive_anchor: 'Add at least one positive indexed search condition.',
-  search_too_broad: 'The search is too broad. Add another condition.',
+  query_syntax_invalid: 'The query expression is not valid.',
+  query_capability_unavailable: 'This field or result is not available for the selected source.',
+  query_limit_exceeded: 'The query is too complex. Remove some conditions.',
+  query_requires_positive_anchor: 'Add a positive indexed condition or a bounded time range.',
+  query_too_broad: 'The query examined too many candidates. Add another condition.',
+  query_cost_exceeded: 'The query is too expensive. Shorten the range or grouping.',
+  query_capacity: 'Query capacity is busy. Wait briefly and retry.',
+  query_unavailable: 'Query storage is temporarily unavailable.',
   explore_invalid_query: 'This Explore query uses an unsupported field or combination.',
   explore_cost_exceeded: 'This Explore query is too expensive. Shorten the range or grouping.',
   explore_capacity: 'Explore is busy. Wait briefly and retry.',
@@ -382,21 +384,19 @@ export const api = {
         inbound_filters: policy.inbound_filters,
       }),
     }),
-  issues: (
+  query: <T = Record<string, string | number | boolean | null>>(
     projectId: string,
-    status?: string,
-    cursor?: string | null,
-    range: { from?: number; until?: number } = {},
+    body: UnifiedQueryRequest,
+    signal?: AbortSignal,
   ) =>
-    request<Page<Issue>>(
-      `/api/v1/projects/${projectId}/issues${query({
-        status,
-        cursor,
-        from: queryTimestamp(range.from),
-        until: queryTimestamp(range.until),
-        limit: 50,
-      })}`,
-    ),
+    request<UnifiedQueryResult<T>>(`/api/v1/projects/${projectId}/query`, {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({
+        ...body,
+        limit: body.limit ?? (body.result.kind === 'values' ? 20 : 50),
+      }),
+    }),
   issue: (projectId: string, issueId: string) =>
     request<Issue>(`/api/v1/projects/${projectId}/issues/${issueId}`),
   issueStatistics: (projectId: string, issueId: string) =>
@@ -447,58 +447,8 @@ export const api = {
         limit: page.limit ?? 100000,
       })}`,
     ),
-  logs: (
-    projectId: string,
-    filters: {
-      level?: string;
-      message?: string;
-      environment?: string;
-      release?: string;
-      service?: string;
-      traceId?: string;
-      from?: number;
-      until?: number;
-      cursor?: string | null;
-    } = {},
-  ) =>
-    request<Page<StructuredLog>>(
-      `/api/v1/projects/${projectId}/logs${query({
-        level: filters.level,
-        message: filters.message,
-        environment: filters.environment,
-        release: filters.release,
-        service: filters.service,
-        trace_id: filters.traceId,
-        from: queryTimestamp(filters.from),
-        until: queryTimestamp(filters.until),
-        cursor: filters.cursor,
-        limit: 50,
-      })}`,
-    ),
   log: (projectId: string, logId: string) =>
     request<StructuredLog>(`/api/v1/projects/${projectId}/logs/${logId}`),
-  transactions: (
-    projectId: string,
-    filters: {
-      environment?: string;
-      release?: string;
-      service?: string;
-      from?: number;
-      until?: number;
-      cursor?: string | null;
-    } = {},
-  ) =>
-    request<Page<Span>>(
-      `/api/v1/projects/${projectId}/transactions${query({
-        environment: filters.environment,
-        release: filters.release,
-        service: filters.service,
-        from: queryTimestamp(filters.from),
-        until: queryTimestamp(filters.until),
-        cursor: filters.cursor,
-        limit: 50,
-      })}`,
-    ),
   trace: (projectId: string, traceId: string) =>
     request<Trace>(`/api/v1/projects/${projectId}/traces/${traceId}`),
   performance: (
@@ -521,23 +471,10 @@ export const api = {
         limit: 100,
       })}`,
     ),
-  replays: (projectId: string, range: { from?: number; until?: number } = {}) =>
-    request<Page<Replay>>(
-      `/api/v1/projects/${projectId}/replays${query({
-        from: queryTimestamp(range.from),
-        until: queryTimestamp(range.until),
-        limit: 50,
-      })}`,
-    ),
   replay: (projectId: string, replayId: string) =>
     request<Replay>(`/api/v1/projects/${projectId}/replays/${replayId}`),
   replaySegment: (projectId: string, replayId: string, segmentId: number) =>
     binaryRequest(`/api/v1/projects/${projectId}/replays/${replayId}/segments/${segmentId}`),
-  explore: (projectId: string, body: ExploreRequest) =>
-    request<ExploreResult>(`/api/v1/projects/${projectId}/explore`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
   savedQueries: (projectId: string) =>
     request<{ items: SavedQuery[] }>(`/api/v1/projects/${projectId}/saved-queries`),
   createSavedQuery: (projectId: string, name: string, query: ExploreRequest) =>
@@ -629,15 +566,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  feedback: (projectId: string, status?: string, cursor?: string | null, replayId?: string) =>
-    request<Page<Feedback>>(
-      `/api/v1/projects/${projectId}/feedback${query({
-        status,
-        cursor,
-        replay_id: replayId,
-        limit: 50,
-      })}`,
-    ),
   feedbackItem: (projectId: string, feedbackId: string) =>
     request<Feedback>(`/api/v1/projects/${projectId}/feedback/${feedbackId}`),
   updateFeedbackStatus: (projectId: string, feedbackId: string, status: FeedbackStatus) =>
@@ -647,10 +575,6 @@ export const api = {
     }),
   feedbackAttachment: (projectId: string, feedbackId: string, attachmentId: string) =>
     blobRequest(`/api/v1/projects/${projectId}/feedback/${feedbackId}/attachments/${attachmentId}`),
-  releases: (projectId: string, cursor?: string | null) =>
-    request<Page<ReleaseSummary>>(
-      `/api/v1/projects/${projectId}/releases${query({ cursor, limit: 50 })}`,
-    ),
   release: (projectId: string, releaseId: string) =>
     request<Release>(`/api/v1/projects/${projectId}/releases/${releaseId}`),
   createRelease: (projectId: string, version: string, url?: string) =>
@@ -684,14 +608,6 @@ export const api = {
     ),
   releaseHealth: (projectId: string, releaseId: string) =>
     request<ReleaseHealth>(`/api/v1/projects/${projectId}/releases/${releaseId}/health`),
-  search: (projectId: string, expression: string, cursor?: string | null) =>
-    request<Page<Event> & { candidates_examined: number }>(
-      `/api/v1/projects/${projectId}/events/search${query({
-        q: expression,
-        cursor,
-        limit: 50,
-      })}`,
-    ),
   capabilities: () => request<CapabilityDocument>('/api/v1/capabilities', {}, { public: true }),
   status: () => request<ComponentStatus>('/api/v1/status'),
 };

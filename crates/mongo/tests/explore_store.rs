@@ -78,6 +78,7 @@ fn analytic_plan(project_id: ProjectId) -> ExplorePlan {
         from: Timestamp::from_unix_millis(1_700_000_000_000).unwrap(),
         until: Timestamp::from_unix_millis(1_700_000_200_000).unwrap(),
         predicates: Vec::new(),
+        expression: None,
         aggregates: vec![
             ExploreAggregate {
                 kind: ExploreAggregateKind::Count,
@@ -110,6 +111,7 @@ fn count_plan(project_id: ProjectId) -> ExplorePlan {
         from: Timestamp::from_unix_millis(1_700_000_000_000).unwrap(),
         until: Timestamp::from_unix_millis(1_700_000_200_000).unwrap(),
         predicates: Vec::new(),
+        expression: None,
         aggregates: vec![ExploreAggregate {
             kind: ExploreAggregateKind::Count,
             field: None,

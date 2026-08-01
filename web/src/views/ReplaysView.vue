@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
@@ -8,78 +9,90 @@ import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { api } from '../api/client';
 import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
+import type { Replay } from '../api/types';
 
 const session = useSessionStore();
+const route = useRoute();
 const { locale } = useI18n();
-const PAGE_SIZE = 10;
-const projectId = computed(() => session.selectedProjectId ?? '');
-const search = ref('');
-const submittedSearch = ref('');
-const page = ref(1);
+const initialQuery = typeof route.query.q === 'string' ? route.query.q : '';
+const query = ref(initialQuery);
+const appliedQuery = ref(initialQuery);
 const range = ref('all');
 const appliedRange = ref('all');
 const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
+const cursor = ref<string | null>(null);
+const history = ref<(string | null)[]>([]);
+const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
-  () => Boolean(search.value.trim() || submittedSearch.value) || range.value !== 'all',
+  () => Boolean(query.value.trim() || appliedQuery.value) || range.value !== 'all',
 );
+
 const replays = useQuery({
   queryKey: computed(() => [
+    'unified-query',
     'replays',
     projectId.value,
+    appliedQuery.value,
     appliedRange.value,
     appliedWindow.value.from,
     appliedWindow.value.until,
+    cursor.value,
   ]),
   queryFn: () =>
-    api.replays(projectId.value, optionalTimeWindow(appliedRange.value, appliedWindow.value)),
+    api.query<Replay>(projectId.value, {
+      source: 'replays',
+      query: appliedQuery.value,
+      ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
+      result: { kind: 'records' },
+      cursor: cursor.value,
+      limit: 50,
+    }),
   enabled: computed(() => Boolean(projectId.value)),
 });
-const visibleReplays = computed(() => {
-  const term = submittedSearch.value.toLowerCase();
-  const items = replays.data.value?.items ?? [];
-  if (!term) return items;
-  return items.filter((replay) =>
-    [replay.id, replay.url, replay.environment, replay.release]
-      .filter((value): value is string => Boolean(value))
-      .some((value) => value.toLowerCase().includes(term)),
-  );
-});
-const pageCount = computed(() => Math.max(1, Math.ceil(visibleReplays.value.length / PAGE_SIZE)));
-const paginatedReplays = computed(() => {
-  const start = (page.value - 1) * PAGE_SIZE;
-  return visibleReplays.value.slice(start, start + PAGE_SIZE);
-});
 
-watch(pageCount, (count) => {
-  if (page.value > count) page.value = count;
-});
+watch(projectId, resetPage);
 
-function submitSearch(): void {
-  page.value = 1;
-  submittedSearch.value = search.value.trim();
+function submitQuery(): void {
+  appliedQuery.value = query.value.trim();
   appliedRange.value = range.value;
   appliedWindow.value = { ...selectedWindow.value };
+  resetPage();
 }
 
-function clearSearch(): void {
-  page.value = 1;
-  search.value = '';
-  submittedSearch.value = '';
+function resetFilters(): void {
+  query.value = '';
+  appliedQuery.value = '';
   range.value = 'all';
   appliedRange.value = 'all';
   selectedWindow.value = timeWindow('all');
   appliedWindow.value = { ...selectedWindow.value };
+  resetPage();
+}
+
+function resetPage(): void {
+  cursor.value = null;
+  history.value = [];
+}
+
+function nextPage(): void {
+  const next = replays.data.value?.next_cursor;
+  if (!next) return;
+  history.value.push(cursor.value);
+  cursor.value = next;
+}
+
+function previousPage(): void {
+  cursor.value = history.value.pop() ?? null;
 }
 
 function duration(milliseconds: number): string {
   if (milliseconds < 1000) return `${milliseconds} ms`;
-  return `${new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 }).format(
-    milliseconds / 1000,
-  )} s`;
+  return `${new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 }).format(milliseconds / 1000)} s`;
 }
 
 function formatTime(value: string): string {
@@ -105,47 +118,23 @@ function formatTime(value: string): string {
       <AppIcon name="shield" :size="18" />
       <span>{{ $t('replays.privacy') }}</span>
     </div>
-    <form
-      class="signal-toolbar signal-toolbar--replays"
-      role="search"
-      @submit.prevent="submitSearch"
+    <UnifiedQueryBar
+      v-model="query"
+      source="replays"
+      :placeholder="$t('replays.searchPlaceholder')"
+      :show-reset="hasFilters"
+      @submit="submitQuery"
+      @reset="resetFilters"
     >
-      <label class="search-field">
-        <span>{{ $t('replays.searchLabel') }}</span>
-        <input
-          v-model="search"
-          type="search"
-          maxlength="2048"
-          :placeholder="$t('replays.searchPlaceholder')"
-        />
-        <small>{{ $t('replays.searchHelp') }}</small>
-      </label>
-      <div class="signal-toolbar__actions">
+      <template #actions>
         <TimeRangeSelect
           v-model="range"
           :window-value="selectedWindow"
           :aria-label="$t('replays.timeRange')"
           @update:window-value="selectedWindow = $event"
         />
-        <button class="button button--primary" type="submit">
-          <AppIcon name="search" :size="16" />
-          {{ $t('common.search') }}
-        </button>
-        <button
-          v-if="hasFilters"
-          class="button button--secondary"
-          type="button"
-          @click="clearSearch"
-        >
-          <AppIcon name="close" :size="16" />
-          {{ $t('common.reset') }}
-        </button>
-      </div>
-    </form>
-    <div v-if="submittedSearch" class="search-context">
-      {{ $t('replays.matches', visibleReplays.length) }} {{ $t('replays.for') }}
-      <code>{{ submittedSearch }}</code>
-    </div>
+      </template>
+    </UnifiedQueryBar>
     <LoadingPanel v-if="replays.isPending.value" :label="$t('replays.loading')" />
     <ApiErrorPanel
       v-else-if="replays.error.value"
@@ -155,44 +144,35 @@ function formatTime(value: string): string {
     <EmptyState
       v-else-if="!replays.data.value?.items.length"
       icon="replay"
-      :title="$t('replays.empty')"
-      :description="$t('replays.emptyDescription')"
+      :title="appliedQuery ? $t('replays.noMatches') : $t('replays.empty')"
+      :description="
+        appliedQuery ? $t('replays.noMatchesDescription') : $t('replays.emptyDescription')
+      "
     >
-      <SdkSetupButton />
-    </EmptyState>
-    <EmptyState
-      v-else-if="!visibleReplays.length"
-      icon="search"
-      :title="$t('replays.noMatches')"
-      :description="$t('replays.noMatchesDescription')"
-    >
-      <button class="button button--secondary" type="button" @click="clearSearch">
-        <AppIcon name="close" :size="16" />
-        {{ $t('replays.reset') }}
-      </button>
+      <SdkSetupButton v-if="!appliedQuery" />
     </EmptyState>
     <div v-else class="transaction-list">
       <nav class="pagination" :aria-label="$t('replays.pages')">
         <button
           class="button button--secondary"
           type="button"
-          :disabled="page === 1"
-          @click="page -= 1"
+          :disabled="!history.length"
+          @click="previousPage"
         >
           {{ $t('common.previous') }}
         </button>
-        <span>{{ $t('replays.page', { page, count: pageCount }) }}</span>
+        <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
         <button
           class="button button--secondary"
           type="button"
-          :disabled="page === pageCount"
-          @click="page += 1"
+          :disabled="!replays.data.value.next_cursor"
+          @click="nextPage"
         >
           {{ $t('common.next') }}
         </button>
       </nav>
       <RouterLink
-        v-for="replay in paginatedReplays"
+        v-for="replay in replays.data.value.items"
         :key="replay.id"
         class="transaction-row replay-row"
         :to="`/replays/${replay.id}`"

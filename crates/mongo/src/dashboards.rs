@@ -7,8 +7,8 @@ use metric_domain::{
         SavedQuery, SavedQueryId, WidgetShape,
     },
     explore::{
-        ExploreAggregate, ExploreAggregateKind, ExploreDataset, ExploreField, ExploreInterval,
-        ExplorePredicate, ExplorePredicateOp, ExploreQuery, ExploreValue,
+        ExploreAggregate, ExploreAggregateKind, ExploreDataset, ExploreExpression, ExploreField,
+        ExploreInterval, ExplorePredicate, ExplorePredicateOp, ExploreQuery, ExploreValue,
     },
 };
 use metric_ports::{DashboardStore, DashboardStoreError, PortFuture};
@@ -442,30 +442,10 @@ fn encode_query(query: &ExploreQuery) -> Result<Document, DashboardStoreError> {
     if query.cursor.is_some() {
         return Err(DashboardStoreError::InvalidData);
     }
-    Ok(doc! {
+    let mut document = doc! {
         "dataset": query.dataset.as_str(),
         "from": query.from.unix_millis(),
         "until": query.until.unix_millis(),
-        "predicates": query.predicates.iter().map(|predicate| {
-            let mut document = doc! {
-                "field": predicate.field.as_str(),
-                "op": match predicate.op {
-                    ExplorePredicateOp::Exact => "exact",
-                    ExplorePredicateOp::Contains => "contains",
-                    ExplorePredicateOp::StartsWith => "starts_with",
-                    ExplorePredicateOp::EndsWith => "ends_with",
-                    ExplorePredicateOp::Present => "present",
-                    ExplorePredicateOp::Range => "range",
-                },
-            };
-            if let Some(value) = &predicate.value {
-                document.insert("value", encode_value(value));
-            }
-            if let Some(value) = &predicate.upper {
-                document.insert("upper", encode_value(value));
-            }
-            Bson::Document(document)
-        }).collect::<Vec<_>>(),
         "aggregates": query.aggregates.iter().map(|aggregate| {
             let mut document = doc! {
                 "function": aggregate.kind.as_str(),
@@ -479,40 +459,50 @@ fn encode_query(query: &ExploreQuery) -> Result<Document, DashboardStoreError> {
         "group_by": query.group_by.iter().map(|field| field.as_str()).collect::<Vec<_>>(),
         "interval": query.interval.map(ExploreInterval::as_str),
         "limit": i64::try_from(query.limit).map_err(|_| DashboardStoreError::InvalidData)?,
-    })
+    };
+    if let Some(expression) = &query.expression {
+        document.insert("v", 2_i32);
+        document.insert("expression", encode_expression(expression));
+    } else {
+        document.insert(
+            "predicates",
+            query
+                .predicates
+                .iter()
+                .map(|predicate| Bson::Document(encode_predicate(predicate)))
+                .collect::<Vec<_>>(),
+        );
+    }
+    Ok(document)
 }
 
 fn decode_query(document: &Document) -> Result<ExploreQuery, DashboardStoreError> {
+    let expression = if document.get_i32("v").ok() == Some(2) {
+        decode_expression(document.get_document("expression").map_err(invalid)?)?
+    } else {
+        ExploreExpression::And(
+            document
+                .get_array("predicates")
+                .map_err(invalid)?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_document()
+                        .ok_or(DashboardStoreError::InvalidData)
+                        .and_then(decode_predicate)
+                        .map(ExploreExpression::Predicate)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+    };
     Ok(ExploreQuery {
         dataset: parse_dataset(required_str(document, "dataset")?)?,
         from: Timestamp::from_unix_millis(required_i64(document, "from")?)
             .map_err(|_| DashboardStoreError::InvalidData)?,
         until: Timestamp::from_unix_millis(required_i64(document, "until")?)
             .map_err(|_| DashboardStoreError::InvalidData)?,
-        predicates: document
-            .get_array("predicates")
-            .map_err(invalid)?
-            .iter()
-            .map(|value| {
-                let value = value
-                    .as_document()
-                    .ok_or(DashboardStoreError::InvalidData)?;
-                Ok(ExplorePredicate {
-                    field: parse_field(required_str(value, "field")?)?,
-                    op: match required_str(value, "op")? {
-                        "exact" => ExplorePredicateOp::Exact,
-                        "contains" => ExplorePredicateOp::Contains,
-                        "starts_with" => ExplorePredicateOp::StartsWith,
-                        "ends_with" => ExplorePredicateOp::EndsWith,
-                        "present" => ExplorePredicateOp::Present,
-                        "range" => ExplorePredicateOp::Range,
-                        _ => return Err(DashboardStoreError::InvalidData),
-                    },
-                    value: value.get("value").map(decode_value).transpose()?,
-                    upper: value.get("upper").map(decode_value).transpose()?,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?,
+        predicates: Vec::new(),
+        expression: Some(expression),
         aggregates: document
             .get_array("aggregates")
             .map_err(invalid)?
@@ -547,6 +537,99 @@ fn decode_query(document: &Document) -> Result<ExploreQuery, DashboardStoreError
         cursor: None,
         limit: usize::try_from(required_i64(document, "limit")?)
             .map_err(|_| DashboardStoreError::InvalidData)?,
+    })
+}
+
+fn encode_expression(expression: &ExploreExpression) -> Bson {
+    Bson::Document(match expression {
+        ExploreExpression::Predicate(predicate) => {
+            let mut document = doc! { "type": "predicate" };
+            document.insert("predicate", encode_predicate(predicate));
+            document
+        }
+        ExploreExpression::Not(value) => {
+            doc! { "type": "not", "value": encode_expression(value) }
+        }
+        ExploreExpression::And(values) | ExploreExpression::Or(values) => doc! {
+            "type": if matches!(expression, ExploreExpression::And(_)) { "and" } else { "or" },
+            "values": values.iter().map(encode_expression).collect::<Vec<_>>(),
+        },
+    })
+}
+
+fn decode_expression(document: &Document) -> Result<ExploreExpression, DashboardStoreError> {
+    match required_str(document, "type")? {
+        "predicate" => Ok(ExploreExpression::Predicate(decode_predicate(
+            document.get_document("predicate").map_err(invalid)?,
+        )?)),
+        "not" => Ok(ExploreExpression::Not(Box::new(decode_expression(
+            document.get_document("value").map_err(invalid)?,
+        )?))),
+        "and" | "or" => {
+            let values = document
+                .get_array("values")
+                .map_err(invalid)?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_document()
+                        .ok_or(DashboardStoreError::InvalidData)
+                        .and_then(decode_expression)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(if required_str(document, "type")? == "and" {
+                ExploreExpression::And(values)
+            } else {
+                ExploreExpression::Or(values)
+            })
+        }
+        _ => Err(DashboardStoreError::InvalidData),
+    }
+}
+
+fn encode_predicate(predicate: &ExplorePredicate) -> Document {
+    let mut document = doc! {
+        "field": predicate.field.as_str(),
+        "op": match predicate.op {
+            ExplorePredicateOp::Exact => "exact",
+            ExplorePredicateOp::Contains => "contains",
+            ExplorePredicateOp::StartsWith => "starts_with",
+            ExplorePredicateOp::EndsWith => "ends_with",
+            ExplorePredicateOp::Present => "present",
+            ExplorePredicateOp::Range => "range",
+            ExplorePredicateOp::Greater => "greater",
+            ExplorePredicateOp::GreaterOrEqual => "greater_or_equal",
+            ExplorePredicateOp::Less => "less",
+            ExplorePredicateOp::LessOrEqual => "less_or_equal",
+        },
+    };
+    if let Some(value) = &predicate.value {
+        document.insert("value", encode_value(value));
+    }
+    if let Some(value) = &predicate.upper {
+        document.insert("upper", encode_value(value));
+    }
+    document
+}
+
+fn decode_predicate(document: &Document) -> Result<ExplorePredicate, DashboardStoreError> {
+    Ok(ExplorePredicate {
+        field: parse_field(required_str(document, "field")?)?,
+        op: match required_str(document, "op")? {
+            "exact" => ExplorePredicateOp::Exact,
+            "contains" => ExplorePredicateOp::Contains,
+            "starts_with" => ExplorePredicateOp::StartsWith,
+            "ends_with" => ExplorePredicateOp::EndsWith,
+            "present" => ExplorePredicateOp::Present,
+            "range" => ExplorePredicateOp::Range,
+            "greater" => ExplorePredicateOp::Greater,
+            "greater_or_equal" => ExplorePredicateOp::GreaterOrEqual,
+            "less" => ExplorePredicateOp::Less,
+            "less_or_equal" => ExplorePredicateOp::LessOrEqual,
+            _ => return Err(DashboardStoreError::InvalidData),
+        },
+        value: document.get("value").map(decode_value).transpose()?,
+        upper: document.get("upper").map(decode_value).transpose()?,
     })
 }
 
@@ -731,6 +814,7 @@ mod tests {
                     value: Some(ExploreValue::String("gauge".into())),
                     upper: None,
                 }],
+                expression: None,
                 aggregates: vec![
                     ExploreAggregate {
                         kind: ExploreAggregateKind::Sum,
@@ -766,7 +850,32 @@ mod tests {
         };
 
         let document = encode_saved_query(&value).unwrap();
-        assert_eq!(decode_saved_query(document.clone()).unwrap(), value);
+        let mut decoded_value = value.clone();
+        decoded_value.query.expression = Some(ExploreExpression::And(
+            decoded_value
+                .query
+                .predicates
+                .drain(..)
+                .map(ExploreExpression::Predicate)
+                .collect(),
+        ));
+        assert_eq!(decode_saved_query(document.clone()).unwrap(), decoded_value);
+
+        let predicate = match decoded_value.query.expression.as_ref().unwrap() {
+            ExploreExpression::And(values) => values[0].clone(),
+            _ => unreachable!(),
+        };
+        let mut v2_value = decoded_value.clone();
+        v2_value.query.expression = Some(ExploreExpression::Or(vec![
+            predicate.clone(),
+            ExploreExpression::Not(Box::new(predicate)),
+        ]));
+        let v2_document = encode_saved_query(&v2_value).unwrap();
+        assert_eq!(
+            v2_document.get_document("query").unwrap().get_i32("v"),
+            Ok(2)
+        );
+        assert_eq!(decode_saved_query(v2_document).unwrap(), v2_value);
 
         let mut malformed = document.clone();
         malformed.insert("query", "not a query");
@@ -774,6 +883,6 @@ mod tests {
             .into_iter()
             .filter_map(decode_saved_query_for_list)
             .collect::<Vec<_>>();
-        assert_eq!(listed, vec![value]);
+        assert_eq!(listed, vec![decoded_value]);
     }
 }

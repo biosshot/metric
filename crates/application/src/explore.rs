@@ -5,8 +5,9 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use metric_domain::{
     ProjectId, Timestamp,
     explore::{
-        ExploreAggregateKind, ExploreField, ExplorePlan, ExplorePredicateOp, ExploreQuery,
-        ExploreResult, ExploreValue, MAX_EXPLORE_AGGREGATES, MAX_EXPLORE_GROUPS,
+        ExploreAggregateKind, ExploreExpression, ExploreField, ExplorePlan, ExplorePredicate,
+        ExplorePredicateOp, ExploreQuery, ExploreResult, ExploreValue, MAX_EXPLORE_AGGREGATES,
+        MAX_EXPLORE_EXPRESSION_NODES, MAX_EXPLORE_GROUPS, MAX_EXPLORE_OR_ALTERNATIVES,
         MAX_EXPLORE_PREDICATES, MAX_EXPLORE_ROWS, normalize_query,
     },
 };
@@ -94,7 +95,11 @@ impl ExploreService {
         let all_time = query.from.unix_millis() == ALL_TIME_FROM_MILLIS;
         if range <= 0
             || (!all_time && range > MAX_RANGE_MILLIS)
-            || query.predicates.len() > MAX_EXPLORE_PREDICATES
+            || effective_predicate_count(&query) > MAX_EXPLORE_PREDICATES
+            || query.expression.as_ref().is_some_and(|value| {
+                value.node_count() > MAX_EXPLORE_EXPRESSION_NODES
+                    || value.or_alternatives() > MAX_EXPLORE_OR_ALTERNATIVES
+            })
             || query.aggregates.len() > MAX_EXPLORE_AGGREGATES
             || query.group_by.len() > MAX_EXPLORE_GROUPS
             || query.limit == 0
@@ -108,18 +113,16 @@ impl ExploreService {
         if query.interval.is_some() && query.aggregates.is_empty() {
             return Err(ExploreError::InvalidQuery);
         }
-        for predicate in &query.predicates {
-            if !predicate.field.accepted_by(query.dataset)
-                || !valid_predicate(
-                    query.dataset,
-                    predicate.op,
-                    predicate.field,
-                    predicate.value.as_ref(),
-                    predicate.upper.as_ref(),
-                )
-            {
+        if let Some(expression) = &query.expression {
+            if !valid_expression(query.dataset, expression) {
                 return Err(ExploreError::InvalidQuery);
             }
+        } else if !query
+            .predicates
+            .iter()
+            .all(|predicate| valid_typed_predicate(query.dataset, predicate))
+        {
+            return Err(ExploreError::InvalidQuery);
         }
         for field in &query.group_by {
             if !field.groupable(query.dataset) {
@@ -159,7 +162,18 @@ impl ExploreService {
         }
         let range_hours =
             u32::try_from(costed_range.saturating_add(3_599_999) / 3_600_000).unwrap_or(u32::MAX);
-        let predicate_cost = u32::try_from(query.predicates.len()).unwrap_or(u32::MAX) * 40;
+        let predicate_cost = u32::try_from(effective_predicate_count(&query))
+            .unwrap_or(u32::MAX)
+            .saturating_mul(40)
+            .saturating_add(
+                query
+                    .expression
+                    .as_ref()
+                    .map_or(0, |value| {
+                        u32::try_from(value.or_alternatives()).unwrap_or(u32::MAX)
+                    })
+                    .saturating_mul(20),
+            );
         let group_fanout = query.group_by.iter().fold(1_u32, |fanout, field| {
             fanout.saturating_mul(
                 field
@@ -206,6 +220,43 @@ impl ExploreService {
     }
 }
 
+fn effective_predicate_count(query: &ExploreQuery) -> usize {
+    query
+        .expression
+        .as_ref()
+        .map_or(query.predicates.len(), ExploreExpression::predicate_count)
+}
+
+fn valid_expression(
+    dataset: metric_domain::explore::ExploreDataset,
+    expression: &ExploreExpression,
+) -> bool {
+    match expression {
+        ExploreExpression::Predicate(predicate) => valid_typed_predicate(dataset, predicate),
+        ExploreExpression::Not(value) => valid_expression(dataset, value),
+        ExploreExpression::And(values) => {
+            values.iter().all(|value| valid_expression(dataset, value))
+        }
+        ExploreExpression::Or(values) => {
+            !values.is_empty() && values.iter().all(|value| valid_expression(dataset, value))
+        }
+    }
+}
+
+fn valid_typed_predicate(
+    dataset: metric_domain::explore::ExploreDataset,
+    predicate: &ExplorePredicate,
+) -> bool {
+    predicate.field.accepted_by(dataset)
+        && valid_predicate(
+            dataset,
+            predicate.op,
+            predicate.field,
+            predicate.value.as_ref(),
+            predicate.upper.as_ref(),
+        )
+}
+
 fn valid_predicate(
     dataset: metric_domain::explore::ExploreDataset,
     operation: ExplorePredicateOp,
@@ -234,6 +285,14 @@ fn valid_predicate(
                 && value
                     .zip(upper)
                     .is_some_and(|(lower, upper)| value_less_than(lower, upper))
+        }
+        ExplorePredicateOp::Greater
+        | ExplorePredicateOp::GreaterOrEqual
+        | ExplorePredicateOp::Less
+        | ExplorePredicateOp::LessOrEqual => {
+            field.numeric()
+                && value.is_some_and(|value| value_matches(dataset, field, value))
+                && upper.is_none()
         }
     }
 }
@@ -367,6 +426,7 @@ mod tests {
             from: Timestamp::from_unix_millis(0).unwrap(),
             until: Timestamp::from_unix_millis(3_600_000).unwrap(),
             predicates: Vec::new(),
+            expression: None,
             aggregates: Vec::new(),
             group_by: Vec::new(),
             interval: None,
@@ -396,6 +456,7 @@ mod tests {
             from: Timestamp::from_unix_millis(0).unwrap(),
             until: Timestamp::from_unix_millis(30 * 86_400_000).unwrap(),
             predicates: Vec::new(),
+            expression: None,
             aggregates: vec![ExploreAggregate {
                 kind: ExploreAggregateKind::Count,
                 field: None,
@@ -419,6 +480,7 @@ mod tests {
             from: Timestamp::from_unix_millis(0).unwrap(),
             until: Timestamp::from_unix_millis(1_800_000_000_000).unwrap(),
             predicates: Vec::new(),
+            expression: None,
             aggregates: vec![ExploreAggregate {
                 kind: ExploreAggregateKind::Count,
                 field: None,
@@ -454,6 +516,7 @@ mod tests {
                 value: Some(ExploreValue::String("timeout".into())),
                 upper: None,
             }],
+            expression: None,
             aggregates: Vec::new(),
             group_by: Vec::new(),
             interval: None,

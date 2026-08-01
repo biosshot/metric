@@ -9,6 +9,7 @@ import type {
   ExploreDataset,
   ExploreRequest,
   ExploreShape,
+  QuerySource,
   SavedQuery,
 } from '../api/types';
 import { api } from '../api/client';
@@ -18,6 +19,7 @@ import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { timeWindow, type TimeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
@@ -31,9 +33,7 @@ const canWrite = computed(() => session.has('issue:write'));
 const savedName = ref('');
 const savedDataset = ref<ExploreDataset>('logs');
 const savedShape = ref<ExploreShape>('number');
-const savedField = ref('');
-const savedOperator = ref<'exact' | 'contains' | 'starts_with' | 'ends_with'>('exact');
-const savedValue = ref('');
+const savedQueryText = ref('');
 const savedRange = ref('all');
 const savedWindow = ref<TimeWindow>(timeWindow('all'));
 const savedMetricMeasure = ref<'value' | 'samples'>('value');
@@ -84,57 +84,8 @@ const metricMeasureOptions = computed<SelectOption[]>(() => [
     description: t('queryBuilder.sampleCountHelp'),
   },
 ]);
-const fieldOptionsByDataset = computed<Record<ExploreDataset, SelectOption[]>>(() => ({
-  errors: [
-    { value: 'level', label: t('queryBuilder.level') },
-    { value: 'platform', label: t('queryBuilder.platform') },
-  ],
-  logs: [
-    { value: 'message', label: t('queryBuilder.message') },
-    { value: 'level', label: t('queryBuilder.level') },
-    { value: 'environment', label: t('queryBuilder.environment') },
-    { value: 'release', label: t('queryBuilder.release') },
-    { value: 'service', label: t('queryBuilder.service') },
-  ],
-  spans: [
-    { value: 'name', label: t('queryBuilder.name') },
-    { value: 'operation', label: t('queryBuilder.operation') },
-    { value: 'status', label: t('queryBuilder.status') },
-    { value: 'environment', label: t('queryBuilder.environment') },
-    { value: 'release', label: t('queryBuilder.release') },
-    { value: 'service', label: t('queryBuilder.service') },
-  ],
-  metrics: [
-    { value: 'name', label: t('queryBuilder.metricName') },
-    { value: 'metric_kind', label: t('queryBuilder.metricKind') },
-    { value: 'unit', label: t('queryBuilder.unit') },
-  ],
-}));
-const widgetFieldOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('queryBuilder.noFilter') },
-  ...fieldOptionsByDataset.value[savedDataset.value],
-]);
-const operatorOptions = computed<SelectOption[]>(() => [
-  { value: 'exact', label: t('queryBuilder.equals') },
-  { value: 'contains', label: t('queryBuilder.contains') },
-  { value: 'starts_with', label: t('queryBuilder.startsWith') },
-  { value: 'ends_with', label: t('queryBuilder.endsWith') },
-]);
-const exactOperatorOptions = computed<SelectOption[]>(() => [
-  { value: 'exact', label: t('queryBuilder.equals') },
-]);
-const widgetTextFields = new Set([
-  'message',
-  'environment',
-  'release',
-  'service',
-  'name',
-  'operation',
-  'status',
-  'unit',
-]);
-const widgetOperatorOptions = computed(() =>
-  widgetTextFields.has(savedField.value) ? operatorOptions.value : exactOperatorOptions.value,
+const savedQuerySource = computed<QuerySource>(() =>
+  savedDataset.value === 'spans' ? 'traces' : savedDataset.value,
 );
 
 const savedQueries = useQuery({
@@ -176,6 +127,7 @@ watch(projectId, () => {
   editingSavedId.value = '';
   editingDashboardId.value = '';
   savedName.value = '';
+  savedQueryText.value = '';
   dashboardName.value = '';
   editing.value = false;
   Object.keys(refreshResults).forEach((key) => delete refreshResults[key]);
@@ -209,6 +161,7 @@ const createSaved = useMutation({
       draftWidgets.value.push(saved);
     }
     savedName.value = '';
+    savedQueryText.value = '';
     editingSavedId.value = '';
     await queryClient.invalidateQueries({ queryKey: ['saved-queries', projectId.value] });
   },
@@ -258,21 +211,12 @@ const mutation = useMutation({
 
 function buildQuery(dataset: ExploreDataset, shape: ExploreShape): ExploreRequest {
   const window = savedRange.value === 'custom' ? savedWindow.value : timeWindow(savedRange.value);
-  const predicates: ExploreRequest['predicates'] =
-    savedField.value && savedValue.value.trim()
-      ? [
-          {
-            field: savedField.value,
-            op: widgetTextFields.has(savedField.value) ? savedOperator.value : 'exact',
-            value: savedValue.value.trim(),
-          },
-        ]
-      : [];
   return {
     dataset,
     from: window.from,
     until: window.until,
-    predicates,
+    query: savedQueryText.value.trim(),
+    predicates: [],
     aggregates:
       shape === 'table'
         ? []
@@ -368,13 +312,7 @@ function editSaved(saved: SavedQuery): void {
   savedName.value = saved.name;
   savedDataset.value = saved.query.dataset;
   savedShape.value = shapeFor(saved.query);
-  const predicate = saved.query.predicates[0];
-  savedField.value = predicate?.field ?? '';
-  savedOperator.value =
-    predicate?.op === 'contains' || predicate?.op === 'starts_with' || predicate?.op === 'ends_with'
-      ? predicate.op
-      : 'exact';
-  savedValue.value = typeof predicate?.value === 'string' ? predicate.value : '';
+  savedQueryText.value = saved.query.query ?? '';
   const age = saved.query.until - saved.query.from;
   savedRange.value =
     saved.query.from === 0
@@ -517,28 +455,15 @@ onUnmounted(() => window.clearInterval(autoRefreshTimer));
           :options="metricMeasureOptions"
           :label="$t('queryBuilder.metricMeasure')"
         />
-        <div class="dashboard-widget-filter">
-          <BaseSelect
-            v-model="savedField"
-            :options="widgetFieldOptions"
-            :label="$t('queryBuilder.filterField')"
-          />
-          <BaseSelect
-            v-if="savedField"
-            v-model="savedOperator"
-            :options="widgetOperatorOptions"
-            :label="$t('queryBuilder.match')"
-          />
-          <label v-if="savedField">
-            <span>{{ $t('queryBuilder.value') }}</span>
-            <input
-              v-model="savedValue"
-              maxlength="256"
-              required
-              :placeholder="$t('queryBuilder.filterValue')"
-            />
-          </label>
-        </div>
+        <UnifiedQueryBar
+          v-model="savedQueryText"
+          :source="savedQuerySource"
+          :show-submit="false"
+          :show-reset="Boolean(savedQueryText)"
+          :sync-url="false"
+          :disabled="createSaved.isPending.value"
+          @reset="savedQueryText = ''"
+        />
         <button
           class="button button--primary"
           :disabled="createSaved.isPending.value"

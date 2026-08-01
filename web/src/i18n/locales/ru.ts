@@ -54,6 +54,7 @@ export default {
     replays: 'Записи сессий',
     monitors: 'Мониторы',
     feedback: 'Отзывы',
+    explore: 'Исследование',
     delivery: 'Доставка',
     releases: 'Релизы',
     configure: 'Настройка',

@@ -31,13 +31,14 @@ use metric_application::{
         IncidentEventSelection,
     },
     native_api::{
-        AttachmentView, EventListRequest, FeedbackListRequest, LogListRequest, MonitorInput,
-        NativeApiError, NativeApiService, PerformanceListRequest, TransactionListRequest,
-        encode_explore_cursor,
+        AttachmentView, EventListRequest, MonitorInput, NativeApiError, NativeApiService,
+        PerformanceListRequest, UnifiedQueryRequest, UnifiedQueryResult, UnifiedQueryResultSpec,
+        UnifiedQueryShape, encode_explore_cursor,
     },
     notifications::{NotificationAdminService, NotificationError},
     observability::RequestId,
     projects::CreateProject,
+    query::{ParsedQuery, QueryError, QuerySource, parse_query_field},
     releases::CreateDeployRequest,
     search::SearchError,
 };
@@ -60,8 +61,8 @@ use metric_domain::{
     },
     deletion::{ProjectDeletionOperationId, ProjectDeletionPhase, ProjectDeletionStatus},
     explore::{
-        ExploreAggregate, ExploreAggregateKind, ExploreDataset, ExploreField, ExploreInterval,
-        ExplorePredicate, ExplorePredicateOp, ExploreQuery, ExploreValue,
+        ExploreAggregate, ExploreAggregateKind, ExploreDataset, ExploreExpression, ExploreField,
+        ExploreInterval, ExplorePredicate, ExplorePredicateOp, ExploreQuery, ExploreValue,
     },
     feedback::{FeedbackRecord, FeedbackStatus},
     grouping::IssueId,
@@ -82,7 +83,7 @@ use metric_domain::{
         NotificationDestinationKind, NotificationText, RuleName, SmtpDestination, SmtpSecurity,
         WebhookEndpoint,
     },
-    signals::{LogId, LogRecord, LogSeverity, SpanRecord, TraceId},
+    signals::{LogId, LogRecord, SpanRecord, TraceId},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -255,6 +256,14 @@ impl IntoResponse for HttpApiError {
                             StatusCode::SERVICE_UNAVAILABLE
                         }
                     },
+                    NativeApiError::Query(error) => match error {
+                        QueryError::Syntax | QueryError::InvalidCursor => StatusCode::BAD_REQUEST,
+                        QueryError::CapabilityUnavailable
+                        | QueryError::LimitExceeded
+                        | QueryError::CostExceeded => StatusCode::UNPROCESSABLE_ENTITY,
+                        QueryError::Capacity => StatusCode::TOO_MANY_REQUESTS,
+                        QueryError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+                    },
                     NativeApiError::Dashboard(error) => match error {
                         metric_application::dashboards::DashboardError::InvalidRequest
                         | metric_application::dashboards::DashboardError::CostExceeded => {
@@ -377,6 +386,17 @@ fn public_message(error: &NativeApiError) -> &'static str {
                 "Explore is temporarily unavailable"
             }
         },
+        NativeApiError::Query(error) => match error {
+            QueryError::Syntax => "query syntax is invalid",
+            QueryError::CapabilityUnavailable => {
+                "query field or operation is unavailable for this source"
+            }
+            QueryError::LimitExceeded => "query structural limit is exceeded",
+            QueryError::CostExceeded => "query exceeds its deterministic cost budget",
+            QueryError::Capacity => "query capacity is exhausted",
+            QueryError::InvalidCursor => "query cursor is invalid",
+            QueryError::Unavailable => "query storage is temporarily unavailable",
+        },
         NativeApiError::Dashboard(error) => match error {
             metric_application::dashboards::DashboardError::InvalidRequest => {
                 "dashboard request is invalid"
@@ -489,7 +509,7 @@ pub fn router_with_limits(
             "/api/v1/projects/{project_id}/policy",
             get(get_project_policy).patch(update_project_policy),
         )
-        .route("/api/v1/projects/{project_id}/issues", get(list_issues))
+        .route("/api/v1/projects/{project_id}/query", post(unified_query))
         .route(
             "/api/v1/projects/{project_id}/issues/{issue_id}",
             get(get_issue),
@@ -515,10 +535,6 @@ pub fn router_with_limits(
             post(export_incident_capsule),
         )
         .route(
-            "/api/v1/projects/{project_id}/events/search",
-            get(search_events),
-        )
-        .route(
             "/api/v1/projects/{project_id}/events/{event_id}/attachments",
             get(event_attachments),
         )
@@ -530,8 +546,6 @@ pub fn router_with_limits(
             "/api/v1/projects/{project_id}/events/{event_id}",
             get(get_event),
         )
-        .route("/api/v1/projects/{project_id}/events", get(list_events))
-        .route("/api/v1/projects/{project_id}/feedback", get(list_feedback))
         .route(
             "/api/v1/projects/{project_id}/monitors",
             get(list_monitors).post(put_monitor),
@@ -552,8 +566,6 @@ pub fn router_with_limits(
             "/api/v1/projects/{project_id}/feedback/{feedback_id}",
             get(get_feedback).patch(update_feedback_status),
         )
-        .route("/api/v1/projects/{project_id}/logs", get(list_logs))
-        .route("/api/v1/projects/{project_id}/replays", get(list_replays))
         .route(
             "/api/v1/projects/{project_id}/replays/{replay_id}",
             get(get_replay),
@@ -562,7 +574,6 @@ pub fn router_with_limits(
             "/api/v1/projects/{project_id}/replays/{replay_id}/segments/{segment_id}",
             get(download_replay_segment),
         )
-        .route("/api/v1/projects/{project_id}/explore", post(explore))
         .route(
             "/api/v1/projects/{project_id}/saved-queries",
             get(list_saved_queries).post(create_saved_query),
@@ -613,10 +624,6 @@ pub fn router_with_limits(
         )
         .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
         .route(
-            "/api/v1/projects/{project_id}/transactions",
-            get(list_transactions),
-        )
-        .route(
             "/api/v1/projects/{project_id}/traces/{trace_id}",
             get(get_trace),
         )
@@ -626,7 +633,7 @@ pub fn router_with_limits(
         )
         .route(
             "/api/v1/projects/{project_id}/releases",
-            get(list_releases).post(create_release),
+            post(create_release),
         )
         .route(
             "/api/v1/projects/{project_id}/releases/{release_id}",
@@ -696,41 +703,6 @@ async fn event_attachments(
             "size": attachment.size,
             "checksum": attachment.checksum,
         })).collect::<Vec<_>>()
-    })))
-}
-
-async fn list_feedback(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let status = query
-        .get("status")
-        .map(|value| FeedbackStatus::parse(value).map_err(|_| HttpApiError::InvalidRequest))
-        .transpose()?;
-    let replay_id = query
-        .get("replay_id")
-        .map(|value| EventId::parse(value).map_err(|_| HttpApiError::InvalidRequest))
-        .transpose()?;
-    let page = api(&state)?
-        .feedback_list(
-            &context,
-            project_id_from(&project_id)?,
-            FeedbackListRequest {
-                status,
-                replay_id,
-                cursor: query.get("cursor").map(String::as_str),
-                limit: query_limit(&query)?,
-            },
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(feedback_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next_cursor,
     })))
 }
 
@@ -903,10 +875,254 @@ async fn delete_monitor(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct UnifiedQueryBody {
+    source: String,
+    #[serde(default)]
+    query: String,
+    from: Option<i64>,
+    until: Option<i64>,
+    result: UnifiedQueryResultBody,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum UnifiedQueryResultBody {
+    Records {},
+    Number {
+        #[serde(default)]
+        aggregates: Vec<ExploreAggregateBody>,
+        #[serde(default)]
+        group_by: Vec<String>,
+    },
+    Timeseries {
+        #[serde(default)]
+        aggregates: Vec<ExploreAggregateBody>,
+        #[serde(default)]
+        group_by: Vec<String>,
+        interval: String,
+    },
+    Values {
+        field: String,
+    },
+}
+
+async fn unified_query(
+    State(state): State<NativeHttpState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<UnifiedQueryBody>, JsonRejection>,
+) -> Result<Json<Value>, HttpApiError> {
+    let context = authenticate(&state, &headers, false).await?;
+    let body = json_body(body)?;
+    let project_id = project_id_from(&project_id)?;
+    let source = QuerySource::parse(&body.source)
+        .map_err(NativeApiError::Query)
+        .map_err(HttpApiError::Api)?;
+    let result = match body.result {
+        UnifiedQueryResultBody::Records {} => UnifiedQueryResultSpec::Records,
+        UnifiedQueryResultBody::Number {
+            aggregates,
+            group_by,
+        } => UnifiedQueryResultSpec::Number {
+            aggregates: aggregates
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| explore_aggregate_from(value, index))
+                .collect::<Result<Vec<_>, _>>()?,
+            group_by: group_by
+                .into_iter()
+                .map(|value| parse_explore_field(&value))
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        UnifiedQueryResultBody::Timeseries {
+            aggregates,
+            group_by,
+            interval,
+        } => UnifiedQueryResultSpec::Timeseries {
+            aggregates: aggregates
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| explore_aggregate_from(value, index))
+                .collect::<Result<Vec<_>, _>>()?,
+            group_by: group_by
+                .into_iter()
+                .map(|value| parse_explore_field(&value))
+                .collect::<Result<Vec<_>, _>>()?,
+            interval: parse_explore_interval(&interval)?,
+        },
+        UnifiedQueryResultBody::Values { field } => UnifiedQueryResultSpec::Values {
+            field: parse_query_field(source, &field)
+                .map_err(NativeApiError::Query)
+                .map_err(HttpApiError::Api)?,
+        },
+    };
+    let result = api(&state)?
+        .unified_query(
+            &context,
+            project_id,
+            UnifiedQueryRequest {
+                source,
+                text: &body.query,
+                from: body
+                    .from
+                    .map(Timestamp::from_unix_millis)
+                    .transpose()
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                until: body
+                    .until
+                    .map(Timestamp::from_unix_millis)
+                    .transpose()
+                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                result,
+                cursor: body.cursor.as_deref(),
+                limit: body.limit,
+            },
+        )
+        .await
+        .map_err(HttpApiError::Api)?;
+    unified_query_value(project_id, result)
+}
+
+fn unified_query_value(
+    project_id: ProjectId,
+    result: UnifiedQueryResult,
+) -> Result<Json<Value>, HttpApiError> {
+    let value = match result {
+        UnifiedQueryResult::Issues {
+            page,
+            normalized,
+            cost,
+        } => json!({
+            "source": "issues",
+            "kind": "records",
+            "items": page.items.iter().map(issue_value).collect::<Result<Vec<_>, _>>()?,
+            "next_cursor": page.next_cursor,
+            "normalized_query": normalized,
+            "cost": cost,
+        }),
+        UnifiedQueryResult::Errors {
+            page,
+            normalized,
+            cost,
+        } => json!({
+            "source": "errors",
+            "kind": "records",
+            "items": page.items.iter().map(event_value).collect::<Result<Vec<_>, _>>()?,
+            "next_cursor": page.next_cursor,
+            "candidates_examined": page.candidates_examined,
+            "normalized_query": normalized,
+            "cost": cost,
+        }),
+        UnifiedQueryResult::Rows {
+            source,
+            shape,
+            result,
+            normalized,
+            cost,
+        } => {
+            let dataset = match source {
+                QuerySource::Errors => ExploreDataset::Errors,
+                QuerySource::Logs => ExploreDataset::Logs,
+                QuerySource::Traces => ExploreDataset::Spans,
+                QuerySource::Metrics => ExploreDataset::Metrics,
+                _ => return Err(HttpApiError::Unavailable),
+            };
+            let kind = match shape {
+                UnifiedQueryShape::Records => "records",
+                UnifiedQueryShape::Number => "number",
+                UnifiedQueryShape::Timeseries => "timeseries",
+            };
+            json!({
+                "source": source.as_str(),
+                "kind": kind,
+                "items": result.rows.into_iter().map(|row| {
+                    row.values.into_iter().map(|(key, value)| {
+                        (key.to_string(), explore_json_value(value))
+                    }).collect::<serde_json::Map<_, _>>()
+                }).collect::<Vec<_>>(),
+                "next_cursor": result.next.map(|cursor| encode_explore_cursor(
+                    cursor,
+                    project_id,
+                    &normalized,
+                    dataset as u8,
+                )),
+                "normalized_query": normalized,
+                "cost": cost,
+            })
+        }
+        UnifiedQueryResult::Replays {
+            page,
+            next_cursor,
+            normalized,
+            cost,
+        } => json!({
+            "source": "replays",
+            "kind": "records",
+            "items": page.items.iter().map(replay_value).collect::<Result<Vec<_>, _>>()?,
+            "next_cursor": next_cursor,
+            "normalized_query": normalized,
+            "cost": cost,
+        }),
+        UnifiedQueryResult::Feedback {
+            page,
+            normalized,
+            cost,
+        } => json!({
+            "source": "feedback",
+            "kind": "records",
+            "items": page.items.iter().map(feedback_value).collect::<Result<Vec<_>, _>>()?,
+            "next_cursor": page.next_cursor,
+            "normalized_query": normalized,
+            "cost": cost,
+        }),
+        UnifiedQueryResult::Releases {
+            page,
+            normalized,
+            cost,
+        } => json!({
+            "source": "releases",
+            "kind": "records",
+            "items": page.items.iter().map(release_value).collect::<Result<Vec<_>, _>>()?,
+            "next_cursor": page.next_cursor,
+            "normalized_query": normalized,
+            "cost": cost,
+        }),
+        UnifiedQueryResult::Values {
+            source,
+            field,
+            items,
+            normalized,
+            cost,
+        } => json!({
+            "source": source.as_str(),
+            "kind": "values",
+            "field": field.as_str(),
+            "items": items,
+            "next_cursor": Value::Null,
+            "normalized_query": normalized,
+            "cost": cost,
+        }),
+    };
+    Ok(Json(value))
+}
+
+fn explore_aggregate_from(
+    value: ExploreAggregateBody,
+    _index: usize,
+) -> Result<ExploreAggregate, HttpApiError> {
+    parse_explore_aggregate(value)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ExploreBody {
     dataset: String,
     from: i64,
     until: i64,
+    #[serde(default)]
+    query: Option<String>,
     #[serde(default)]
     predicates: Vec<ExplorePredicateBody>,
     #[serde(default)]
@@ -914,7 +1130,6 @@ struct ExploreBody {
     #[serde(default)]
     group_by: Vec<String>,
     interval: Option<String>,
-    cursor: Option<String>,
     #[serde(default = "default_explore_limit")]
     limit: usize,
 }
@@ -940,50 +1155,29 @@ const fn default_explore_limit() -> usize {
     50
 }
 
-async fn explore(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<ExploreBody>,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let project_id = project_id_from(&project_id)?;
-    let cursor = body.cursor.clone();
-    let query = explore_query_from(body)?;
-    let dataset = query.dataset;
-    let shape =
-        if query.aggregates.len() == 1 && query.group_by.is_empty() && query.interval.is_none() {
-            "number"
-        } else if query.interval.is_some() {
-            "timeseries"
-        } else {
-            "table"
-        };
-    let dataset_kind = query.dataset as u8;
-    let (result, normalized, cost) = api(&state)?
-        .explore(&context, project_id, query, cursor.as_deref())
-        .await
-        .map_err(HttpApiError::Api)?;
-    let next_cursor = result
-        .next
-        .map(|cursor| encode_explore_cursor(cursor, project_id, &normalized, dataset_kind));
-    Ok(Json(json!({
-        "shape": shape,
-        "dataset": dataset.as_str(),
-        "normalized": normalized,
-        "cost": cost,
-        "items": result.rows.into_iter().map(|row| {
-            row.values.into_iter().map(|(key, value)| {
-                (key.to_string(), explore_json_value(value))
-            }).collect::<serde_json::Map<_, _>>()
-        }).collect::<Vec<_>>(),
-        "next_cursor": next_cursor,
-    })))
-}
-
 fn explore_query_from(body: ExploreBody) -> Result<ExploreQuery, HttpApiError> {
+    if body.query.is_some() && !body.predicates.is_empty() {
+        return Err(HttpApiError::InvalidRequest);
+    }
+    let dataset = parse_explore_dataset(&body.dataset)?;
+    let source = match dataset {
+        ExploreDataset::Errors => QuerySource::Errors,
+        ExploreDataset::Logs => QuerySource::Logs,
+        ExploreDataset::Spans => QuerySource::Traces,
+        ExploreDataset::Metrics => QuerySource::Metrics,
+    };
+    let expression = body
+        .query
+        .as_deref()
+        .map(|query| {
+            ParsedQuery::parse(source, query)
+                .and_then(|query| query.explore_expression())
+                .map_err(|_| HttpApiError::InvalidRequest)
+        })
+        .transpose()?
+        .flatten();
     Ok(ExploreQuery {
-        dataset: parse_explore_dataset(&body.dataset)?,
+        dataset,
         from: Timestamp::from_unix_millis(body.from).map_err(|_| HttpApiError::InvalidRequest)?,
         until: Timestamp::from_unix_millis(body.until).map_err(|_| HttpApiError::InvalidRequest)?,
         predicates: body
@@ -991,6 +1185,7 @@ fn explore_query_from(body: ExploreBody) -> Result<ExploreQuery, HttpApiError> {
             .into_iter()
             .map(parse_explore_predicate)
             .collect::<Result<Vec<_>, _>>()?,
+        expression,
         aggregates: body
             .aggregates
             .into_iter()
@@ -2110,6 +2305,9 @@ fn explore_query_value(query: &ExploreQuery) -> Value {
         "dataset": query.dataset.as_str(),
         "from": query.from.unix_millis(),
         "until": query.until.unix_millis(),
+        "query": query.expression.as_ref()
+            .and_then(|expression| explore_expression_text(query.dataset, expression))
+            .unwrap_or_default(),
         "predicates": query.predicates.iter().map(|predicate| json!({
             "field": predicate.field.as_str(),
             "op": match predicate.op {
@@ -2118,7 +2316,11 @@ fn explore_query_value(query: &ExploreQuery) -> Value {
                 ExplorePredicateOp::StartsWith => "starts_with",
                 ExplorePredicateOp::EndsWith => "ends_with",
                 ExplorePredicateOp::Present => "present",
-                ExplorePredicateOp::Range => "range",
+            ExplorePredicateOp::Range => "range",
+            ExplorePredicateOp::Greater => "greater",
+            ExplorePredicateOp::GreaterOrEqual => "greater_or_equal",
+            ExplorePredicateOp::Less => "less",
+            ExplorePredicateOp::LessOrEqual => "less_or_equal",
             },
             "value": predicate.value.clone().map(explore_json_value),
             "upper": predicate.upper.clone().map(explore_json_value),
@@ -2132,6 +2334,87 @@ fn explore_query_value(query: &ExploreQuery) -> Value {
         "interval": query.interval.map(ExploreInterval::as_str),
         "limit": query.limit,
     })
+}
+
+fn explore_expression_text(
+    dataset: ExploreDataset,
+    expression: &ExploreExpression,
+) -> Option<String> {
+    Some(match expression {
+        ExploreExpression::Predicate(predicate) => explore_predicate_text(dataset, predicate)?,
+        ExploreExpression::Not(value) => {
+            format!("!({})", explore_expression_text(dataset, value)?)
+        }
+        ExploreExpression::And(values) => values
+            .iter()
+            .map(|value| explore_expression_text(dataset, value))
+            .collect::<Option<Vec<_>>>()?
+            .join(" AND "),
+        ExploreExpression::Or(values) => format!(
+            "({})",
+            values
+                .iter()
+                .map(|value| explore_expression_text(dataset, value))
+                .collect::<Option<Vec<_>>>()?
+                .join(" OR ")
+        ),
+    })
+}
+
+fn explore_predicate_text(dataset: ExploreDataset, predicate: &ExplorePredicate) -> Option<String> {
+    if predicate.op == ExplorePredicateOp::Contains {
+        let is_default = matches!(
+            (dataset, predicate.field),
+            (ExploreDataset::Logs, ExploreField::Message)
+                | (
+                    ExploreDataset::Spans,
+                    ExploreField::Name | ExploreField::Operation
+                )
+                | (ExploreDataset::Metrics, ExploreField::Name)
+        );
+        return is_default.then(|| {
+            predicate
+                .value
+                .as_ref()
+                .map(explore_value_text)
+                .unwrap_or_default()
+        });
+    }
+    let operator = match predicate.op {
+        ExplorePredicateOp::Greater => ">",
+        ExplorePredicateOp::GreaterOrEqual => ">=",
+        ExplorePredicateOp::Less => "<",
+        ExplorePredicateOp::LessOrEqual => "<=",
+        ExplorePredicateOp::Exact => "",
+        ExplorePredicateOp::Contains
+        | ExplorePredicateOp::StartsWith
+        | ExplorePredicateOp::EndsWith
+        | ExplorePredicateOp::Present
+        | ExplorePredicateOp::Range => return None,
+    };
+    let value = predicate
+        .value
+        .as_ref()
+        .map(explore_value_text)
+        .unwrap_or_default();
+    Some(format!(
+        "{}:{}{}",
+        predicate.field.as_str(),
+        operator,
+        value
+    ))
+}
+
+fn explore_value_text(value: &ExploreValue) -> String {
+    match value {
+        ExploreValue::String(value) => {
+            format!("\"{}\"", value.replace('\\', "\\\\").replace('\"', "\\\""))
+        }
+        ExploreValue::Number(value) => value.to_string(),
+        ExploreValue::Integer(value) => value.to_string(),
+        ExploreValue::Bool(value) => value.to_string(),
+        ExploreValue::Null => "null".to_owned(),
+    }
 }
 
 async fn get_feedback(
@@ -3168,38 +3451,6 @@ async fn update_project_policy(
     Ok(Json(policy_value(&project)))
 }
 
-async fn list_issues(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let status = query
-        .get("status")
-        .map(|value| issue_status(value))
-        .transpose()?;
-    let page = api(&state)?
-        .list_issues(
-            &context,
-            project_id_from(&project_id)?,
-            metric_application::native_api::IssueListRequest {
-                status,
-                from: optional_query_timestamp(&query, "from")?,
-                until: optional_query_timestamp(&query, "until")?,
-                cursor: query.get("cursor").map(String::as_str),
-                limit: query_limit(&query)?,
-            },
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(issue_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next_cursor,
-    })))
-}
-
 async fn get_issue(
     State(state): State<NativeHttpState>,
     Path((project_id, issue_id)): Path<(String, String)>,
@@ -3322,67 +3573,6 @@ async fn issue_events(
     .await
 }
 
-async fn list_events(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    event_page(&state, &headers, &project_id, None, raw.as_deref()).await
-}
-
-async fn list_logs(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let severity = query
-        .get("level")
-        .map(|value| match value.as_str() {
-            "trace" => Ok(LogSeverity::Trace),
-            "debug" => Ok(LogSeverity::Debug),
-            "info" => Ok(LogSeverity::Info),
-            "warn" | "warning" => Ok(LogSeverity::Warn),
-            "error" => Ok(LogSeverity::Error),
-            "fatal" => Ok(LogSeverity::Fatal),
-            _ => Err(HttpApiError::InvalidRequest),
-        })
-        .transpose()?;
-    let trace_id = query
-        .get("trace_id")
-        .map(|value| TraceId::parse(value).map_err(|_| HttpApiError::InvalidRequest))
-        .transpose()?;
-    let page = api(&state)?
-        .list_logs(
-            &context,
-            project_id_from(&project_id)?,
-            LogListRequest {
-                from: optional_query_timestamp(&query, "from")?,
-                until: optional_query_timestamp(&query, "until")?,
-                severity,
-                message: query.get("message").cloned().map(String::into_boxed_str),
-                environment: query
-                    .get("environment")
-                    .cloned()
-                    .map(String::into_boxed_str),
-                release: query.get("release").cloned().map(String::into_boxed_str),
-                service: query.get("service").cloned().map(String::into_boxed_str),
-                trace_id,
-                cursor: query.get("cursor").map(String::as_str),
-                limit: query_limit(&query)?,
-            },
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(log_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next_cursor,
-    })))
-}
-
 async fn get_log(
     State(state): State<NativeHttpState>,
     Path((project_id, log_id)): Path<(String, String)>,
@@ -3398,34 +3588,6 @@ async fn get_log(
         .await
         .map_err(HttpApiError::Api)?;
     Ok(Json(log_value(&log)?))
-}
-
-async fn list_replays(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let page = api(&state)?
-        .replays(
-            &context,
-            project_id_from(&project_id)?,
-            optional_query_timestamp(&query, "from")?,
-            optional_query_timestamp(&query, "until")?,
-            query_limit(&query)?,
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(replay_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next.map(|cursor| format!(
-            "{}:{}",
-            cursor.received_at.unix_millis(),
-            cursor.replay_id
-        )),
-    })))
 }
 
 async fn get_replay(
@@ -3491,39 +3653,6 @@ async fn download_replay_segment(
         HeaderValue::from_static("nosniff"),
     );
     Ok(response)
-}
-
-async fn list_transactions(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let page = api(&state)?
-        .list_transactions(
-            &context,
-            project_id_from(&project_id)?,
-            TransactionListRequest {
-                from: optional_query_timestamp(&query, "from")?,
-                until: optional_query_timestamp(&query, "until")?,
-                environment: query
-                    .get("environment")
-                    .cloned()
-                    .map(String::into_boxed_str),
-                release: query.get("release").cloned().map(String::into_boxed_str),
-                service: query.get("service").cloned().map(String::into_boxed_str),
-                cursor: query.get("cursor").map(String::as_str),
-                limit: query_limit(&query)?,
-            },
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(span_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next_cursor,
-    })))
 }
 
 async fn get_trace(
@@ -3639,32 +3768,6 @@ async fn event_page(
     })))
 }
 
-async fn search_events(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let text = query.get("q").ok_or(HttpApiError::InvalidRequest)?;
-    let page = api(&state)?
-        .search(
-            &context,
-            project_id_from(&project_id)?,
-            text,
-            query.get("cursor").map(String::as_str),
-            query_limit(&query)?,
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(event_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next_cursor,
-        "candidates_examined": page.candidates_examined,
-    })))
-}
-
 async fn get_event(
     State(state): State<NativeHttpState>,
     Path((project_id, event_id)): Path<(String, String)>,
@@ -3680,29 +3783,6 @@ async fn get_event(
         .await
         .map_err(HttpApiError::Api)?;
     Ok(Json(event_value(&event)?))
-}
-
-async fn list_releases(
-    State(state): State<NativeHttpState>,
-    Path(project_id): Path<String>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-) -> Result<Json<Value>, HttpApiError> {
-    let context = authenticate(&state, &headers, false).await?;
-    let query = query_map(raw.as_deref())?;
-    let page = api(&state)?
-        .releases(
-            &context,
-            project_id_from(&project_id)?,
-            query.get("cursor").map(String::as_str),
-            query_limit(&query)?,
-        )
-        .await
-        .map_err(HttpApiError::Api)?;
-    Ok(Json(json!({
-        "items": page.items.iter().map(release_value).collect::<Result<Vec<_>, _>>()?,
-        "next_cursor": page.next_cursor,
-    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -4389,15 +4469,6 @@ fn project_id_from(value: &str) -> Result<ProjectId, HttpApiError> {
 
 fn issue_id_from(value: &str) -> Result<IssueId, HttpApiError> {
     Ok(IssueId::from_bytes(hex_16(value)?))
-}
-
-fn issue_status(value: &str) -> Result<IssueStatus, HttpApiError> {
-    match value {
-        "open" => Ok(IssueStatus::Open),
-        "resolved" => Ok(IssueStatus::Resolved),
-        "ignored" => Ok(IssueStatus::Ignored),
-        _ => Err(HttpApiError::InvalidRequest),
-    }
 }
 
 fn lifecycle_action(
@@ -5173,6 +5244,15 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(accepted.dataset, "logs");
+        let mixed: ExploreBody = serde_json::from_value(json!({
+            "dataset": "logs",
+            "from": 1,
+            "until": 2,
+            "query": "svc:api",
+            "predicates": [{"field": "service", "op": "exact", "value": "worker"}],
+        }))
+        .unwrap();
+        assert!(explore_query_from(mixed).is_err());
         assert!(
             serde_json::from_value::<ExploreBody>(json!({
                 "dataset": "logs",
@@ -5191,6 +5271,41 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn unified_query_body_is_source_scoped_and_has_no_storage_escape_hatch() {
+        let accepted: UnifiedQueryBody = serde_json::from_value(json!({
+            "source": "logs",
+            "query": "level:error AND (svc:api OR svc:worker)",
+            "result": { "kind": "records" },
+            "limit": 50
+        }))
+        .unwrap();
+        assert_eq!(accepted.source, "logs");
+        assert_eq!(accepted.limit, Some(50));
+        assert!(
+            ParsedQuery::parse(
+                QuerySource::parse(&accepted.source).unwrap(),
+                &accepted.query
+            )
+            .is_ok()
+        );
+        for injected in [
+            json!({
+                "source": "logs",
+                "query": "",
+                "result": { "kind": "records" },
+                "project_id": 999,
+            }),
+            json!({
+                "source": "logs",
+                "query": "",
+                "result": { "kind": "records", "$match": { "p": 999 } },
+            }),
+        ] {
+            assert!(serde_json::from_value::<UnifiedQueryBody>(injected).is_err());
+        }
     }
 
     #[test]
@@ -5270,10 +5385,7 @@ mod tests {
                 "PATCH /projects/:id/policy",
                 RouteAccess::Permission(Permission::ProjectAdmin),
             ),
-            (
-                "GET /projects/:id/issues",
-                RouteAccess::Permission(Permission::IssueRead),
-            ),
+            ("POST /projects/:id/query", RouteAccess::Authenticated),
             (
                 "GET /projects/:id/issues/:issue",
                 RouteAccess::Permission(Permission::IssueRead),
@@ -5299,10 +5411,6 @@ mod tests {
                 RouteAccess::Permission(Permission::IncidentExport),
             ),
             (
-                "GET /projects/:id/events",
-                RouteAccess::Permission(Permission::EventRead),
-            ),
-            (
                 "GET /projects/:id/events/:event",
                 RouteAccess::Permission(Permission::EventRead),
             ),
@@ -5313,14 +5421,6 @@ mod tests {
             (
                 "GET /projects/:id/events/:event/attachments/:attachment",
                 RouteAccess::Permission(Permission::EventRead),
-            ),
-            (
-                "GET /projects/:id/events/search",
-                RouteAccess::Permission(Permission::EventRead),
-            ),
-            (
-                "GET /projects/:id/feedback",
-                RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
                 "GET /projects/:id/feedback/:feedback",
@@ -5335,20 +5435,12 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
-                "GET /projects/:id/replays",
-                RouteAccess::Permission(Permission::ProjectRead),
-            ),
-            (
                 "GET /projects/:id/replays/:replay",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             (
                 "GET /projects/:id/replays/:replay/segments/:segment",
                 RouteAccess::Permission(Permission::ProjectRead),
-            ),
-            (
-                "POST /projects/:id/explore",
-                RouteAccess::Permission(Permission::EventRead),
             ),
             (
                 "GET /projects/:id/saved-queries",
@@ -5427,17 +5519,13 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectAdmin),
             ),
             (
-                "GET /projects/:id/releases",
-                RouteAccess::Permission(Permission::ProjectRead),
-            ),
-            (
                 "GET /projects/:id/environments",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 69);
+        assert_eq!(matrix.len(), 63);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

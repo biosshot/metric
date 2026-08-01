@@ -8,99 +8,70 @@ import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
-import AppIcon from '../components/AppIcon.vue';
-import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
 import SdkSetupButton from '../components/SdkSetupButton.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
+import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { optionalTimeWindow, timeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
-import type { Event, Issue, Page } from '../api/types';
-
-type InvestigationResult = Page<Issue> | (Page<Event> & { candidates_examined: number });
+import type { Issue } from '../api/types';
 
 const session = useSessionStore();
 const route = useRoute();
-const { locale, t } = useI18n();
-const status = ref('');
-const submittedStatus = ref('');
-const initialSearch = typeof route.query.q === 'string' ? route.query.q : '';
-const search = ref(initialSearch);
-const submittedSearch = ref(initialSearch);
+const { locale } = useI18n();
+const initialQuery = typeof route.query.q === 'string' ? route.query.q : '';
+const query = ref(initialQuery);
+const appliedQuery = ref(initialQuery);
 const range = ref('all');
 const appliedRange = ref('all');
 const selectedWindow = ref(timeWindow('all'));
 const appliedWindow = ref({ ...selectedWindow.value });
 const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
-const statusOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('issues.allStatuses'), icon: 'filter' },
-  { value: 'open', label: t('issues.open'), icon: 'status' },
-  { value: 'resolved', label: t('issues.resolved'), icon: 'success' },
-  { value: 'ignored', label: t('issues.ignored'), icon: 'blocked' },
-]);
-
 const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
-  () =>
-    Boolean(
-      search.value.trim() || submittedSearch.value || status.value || submittedStatus.value,
-    ) || range.value !== 'all',
+  () => Boolean(query.value.trim() || appliedQuery.value) || range.value !== 'all',
 );
-const queryKey = computed(() => [
-  submittedSearch.value ? 'event-search' : 'issues',
-  projectId.value,
-  submittedStatus.value,
-  submittedSearch.value,
-  appliedRange.value,
-  appliedWindow.value.from,
-  appliedWindow.value.until,
-  cursor.value,
-]);
 
-const result = useQuery<InvestigationResult>({
-  queryKey,
+const result = useQuery({
+  queryKey: computed(() => [
+    'unified-query',
+    'issues',
+    projectId.value,
+    appliedQuery.value,
+    appliedRange.value,
+    appliedWindow.value.from,
+    appliedWindow.value.until,
+    cursor.value,
+  ]),
   queryFn: () =>
-    submittedSearch.value
-      ? api.search(projectId.value, submittedSearch.value, cursor.value)
-      : api.issues(
-          projectId.value,
-          submittedStatus.value || undefined,
-          cursor.value,
-          optionalTimeWindow(appliedRange.value, appliedWindow.value),
-        ),
+    api.query<Issue>(projectId.value, {
+      source: 'issues',
+      query: appliedQuery.value,
+      ...optionalTimeWindow(appliedRange.value, appliedWindow.value),
+      result: { kind: 'records' },
+      cursor: cursor.value,
+      limit: 50,
+    }),
   enabled: computed(() => Boolean(projectId.value)),
 });
-const issueItems = computed(() =>
-  submittedSearch.value ? [] : ((result.data.value?.items ?? []) as Issue[]),
-);
-const eventItems = computed(() =>
-  submittedSearch.value ? ((result.data.value?.items ?? []) as Event[]) : [],
-);
-const candidatesExamined = computed(() => {
-  const value = result.data.value;
-  return value && 'candidates_examined' in value ? value.candidates_examined : null;
-});
 
-watch(projectId, () => resetPage(false));
+watch(projectId, resetPage);
 
-function submitSearch(): void {
-  submittedSearch.value = search.value.trim();
-  submittedStatus.value = status.value;
+function submitQuery(): void {
+  appliedQuery.value = query.value.trim();
   appliedRange.value = range.value;
   appliedWindow.value = { ...selectedWindow.value };
-  resetPage(false);
+  resetPage();
 }
 
 function resetFilters(): void {
-  status.value = '';
-  submittedStatus.value = '';
-  search.value = '';
-  submittedSearch.value = '';
+  query.value = '';
+  appliedQuery.value = '';
   range.value = 'all';
   appliedRange.value = 'all';
   selectedWindow.value = timeWindow('all');
   appliedWindow.value = { ...selectedWindow.value };
-  resetPage(false);
+  resetPage();
 }
 
 function nextPage(): void {
@@ -114,13 +85,9 @@ function previousPage(): void {
   cursor.value = history.value.pop() ?? null;
 }
 
-function resetPage(clear = true): void {
+function resetPage(): void {
   cursor.value = null;
   history.value = [];
-  if (clear) {
-    search.value = '';
-    submittedSearch.value = '';
-  }
 }
 
 function formatTime(value: string): string {
@@ -143,57 +110,23 @@ function formatTime(value: string): string {
       </div>
     </header>
 
-    <form
-      class="signal-toolbar signal-toolbar--issues"
-      role="search"
-      @submit.prevent="submitSearch"
+    <UnifiedQueryBar
+      v-model="query"
+      source="issues"
+      :placeholder="$t('issues.searchPlaceholder')"
+      :show-reset="hasFilters"
+      @submit="submitQuery"
+      @reset="resetFilters"
     >
-      <label class="search-field">
-        <span class="sr-only">{{ $t('issues.searchLabel') }}</span>
-        <input
-          v-model="search"
-          type="search"
-          :placeholder="$t('issues.searchPlaceholder')"
-          maxlength="4096"
-        />
-      </label>
-      <BaseSelect
-        v-if="!submittedSearch"
-        v-model="status"
-        class="status-filter"
-        :options="statusOptions"
-        :aria-label="$t('issues.status')"
-      />
-      <div class="signal-toolbar__actions">
+      <template #actions>
         <TimeRangeSelect
-          v-if="!submittedSearch"
           v-model="range"
           :window-value="selectedWindow"
           :aria-label="$t('issues.timeRange')"
           @update:window-value="selectedWindow = $event"
         />
-        <button class="button button--primary" type="submit">
-          <AppIcon name="search" :size="16" />
-          {{ $t('common.search') }}
-        </button>
-        <button
-          v-if="hasFilters"
-          class="button button--secondary"
-          type="button"
-          @click="resetFilters"
-        >
-          <AppIcon name="close" :size="16" />
-          {{ $t('common.reset') }}
-        </button>
-      </div>
-    </form>
-
-    <div v-if="submittedSearch" class="search-context">
-      {{ $t('issues.matching') }} <code>{{ submittedSearch }}</code>
-      <span v-if="candidatesExamined !== null">
-        · {{ $t('issues.candidates', candidatesExamined) }}
-      </span>
-    </div>
+      </template>
+    </UnifiedQueryBar>
 
     <LoadingPanel v-if="result.isPending.value" :label="$t('issues.loading')" />
     <ApiErrorPanel
@@ -203,12 +136,12 @@ function formatTime(value: string): string {
     />
     <EmptyState
       v-else-if="!result.data.value?.items.length"
-      :title="submittedSearch ? $t('issues.noMatches') : $t('issues.empty')"
+      :title="appliedQuery ? $t('issues.noMatches') : $t('issues.empty')"
       :description="
-        submittedSearch ? $t('issues.noMatchesDescription') : $t('issues.emptyDescription')
+        appliedQuery ? $t('issues.noMatchesDescription') : $t('issues.emptyDescription')
       "
     >
-      <SdkSetupButton v-if="!submittedSearch" />
+      <SdkSetupButton v-if="!appliedQuery" />
     </EmptyState>
 
     <div v-else class="issue-table-wrap">
@@ -232,7 +165,7 @@ function formatTime(value: string): string {
         </button>
       </nav>
       <div class="issue-table-scroll">
-        <table v-if="!submittedSearch" class="issue-table">
+        <table class="issue-table">
           <thead>
             <tr>
               <th scope="col">{{ $t('issues.issue') }}</th>
@@ -242,7 +175,7 @@ function formatTime(value: string): string {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="issue in issueItems" :key="issue.id">
+            <tr v-for="issue in result.data.value.items" :key="issue.id">
               <td>
                 <RouterLink :to="`/issues/${issue.id}`" class="issue-title">
                   {{ issue.title }}
@@ -262,20 +195,6 @@ function formatTime(value: string): string {
             </tr>
           </tbody>
         </table>
-        <div v-else class="event-results">
-          <RouterLink
-            v-for="event in eventItems"
-            :key="event.event_id"
-            :to="`/events/${event.event_id}`"
-            class="event-row"
-          >
-            <span class="level-dot" :class="`level-dot--${event.level}`"></span>
-            <strong>{{ $t(`status.${event.level}`) }}</strong>
-            <span>{{ event.platform }}</span>
-            <code>{{ event.event_id }}</code>
-            <time :datetime="event.occurred_at">{{ formatTime(event.occurred_at) }}</time>
-          </RouterLink>
-        </div>
       </div>
     </div>
   </section>
