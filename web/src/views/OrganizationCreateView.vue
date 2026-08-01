@@ -95,7 +95,11 @@ const createOrganization = useMutation({
         </label>
       </div>
 
-      <button class="button" type="submit" :disabled="createOrganization.isPending.value">
+      <button
+        class="button button--primary"
+        type="submit"
+        :disabled="createOrganization.isPending.value"
+      >
         <AppIcon :name="createOrganization.isPending.value ? 'loading' : 'plus'" :size="16" />
         {{
           createOrganization.isPending.value
