@@ -94,7 +94,7 @@ function timestamp(value: string | null): string {
 </script>
 
 <template>
-  <section>
+  <section class="releases-page">
     <header class="page-header">
       <div>
         <p class="eyebrow">
