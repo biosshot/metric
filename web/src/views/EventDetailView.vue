@@ -6,6 +6,7 @@ import { useRoute } from 'vue-router';
 import { api } from '../api/client';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RawPayload from '../components/RawPayload.vue';
 import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import StackTrace from '../components/StackTrace.vue';
 import StatusBadge from '../components/StatusBadge.vue';
@@ -164,17 +165,11 @@ const replayDisabled = computed(() =>
         </dl>
       </header>
       <StackTrace :body="event.data.value.body" />
-      <details class="raw-event">
-        <summary>{{ $t('eventDetail.raw') }}</summary>
-        <p>{{ $t('eventDetail.rawDescription') }}</p>
-        <pre tabindex="0" :aria-label="$t('eventDetail.rawJson')"><code>{{
-          JSON.stringify(event.data.value.body, null, 2)
-        }}</code></pre>
-      </details>
       <RelatedSignals :links="relatedLinks" />
       <p v-if="replayDisabled" class="permission-note" :title="relations.replayId">
         {{ $t('relations.replayDisabled') }}
       </p>
+      <RawPayload :code="JSON.stringify(event.data.value.body, null, 2)" />
     </template>
   </section>
 </template>

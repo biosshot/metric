@@ -5,8 +5,8 @@ import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
-import CodeBlock from '../components/CodeBlock.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RawPayload from '../components/RawPayload.vue';
 import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import { api } from '../api/client';
 import { queryLink } from '../lib/queryLinks';
@@ -118,16 +118,8 @@ function formatTime(value: string): string {
           ><strong>{{ log.data.value.span_id || '—' }}</strong>
         </article>
       </div>
-      <section class="detail-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">{{ $t('logDetail.payload') }}</p>
-            <h2>{{ $t('logDetail.attributes') }}</h2>
-          </div>
-        </div>
-        <CodeBlock language="json" :code="JSON.stringify(log.data.value.body, null, 2)" />
-      </section>
       <RelatedSignals :links="relatedLinks" />
+      <RawPayload :code="JSON.stringify(log.data.value.body, null, 2)" />
     </template>
   </section>
 </template>

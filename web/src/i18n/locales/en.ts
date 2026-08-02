@@ -28,6 +28,9 @@ export default {
     approximateCount: 'Approximate count',
     close: 'Close',
     cancel: 'Cancel',
+    rawPayload: 'Raw normalized payload',
+    rawPayloadDescription:
+      'Complete server-normalized JSON. Secrets and disallowed PII have already been processed by the project policy.',
   },
   app: {
     skipToContent: 'Skip to content',
@@ -349,10 +352,6 @@ export default {
     occurred: 'Occurred',
     eventId: 'Event ID',
     issueId: 'Issue ID',
-    raw: 'Raw normalized Event',
-    rawDescription:
-      'This is the complete stable API representation. Secrets and disallowed PII have already been processed by the server policy.',
-    rawJson: 'Scrollable normalized Event JSON',
   },
   logs: {
     eyebrow: '{project} / signals',
@@ -384,8 +383,6 @@ export default {
     release: 'Release',
     trace: 'Trace',
     span: 'Span',
-    payload: 'Accepted payload',
-    attributes: 'Attributes and context',
   },
   transactions: {
     eyebrow: '{project} / tracing',

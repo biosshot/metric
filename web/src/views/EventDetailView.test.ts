@@ -100,8 +100,8 @@ describe('EventDetailView relations', () => {
     );
     expect(
       screen
-        .getByText('Raw normalized Event')
-        .compareDocumentPosition(screen.getByRole('heading', { name: 'Related data' })) &
+        .getByRole('heading', { name: 'Related data' })
+        .compareDocumentPosition(screen.getByText('Raw normalized payload')) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });

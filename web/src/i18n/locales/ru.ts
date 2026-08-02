@@ -28,6 +28,9 @@ export default {
     approximateCount: 'Приблизительное значение',
     close: 'Закрыть',
     cancel: 'Отмена',
+    rawPayload: 'Исходные нормализованные данные',
+    rawPayloadDescription:
+      'Полный нормализованный сервером JSON. Секреты и запрещённые персональные данные уже обработаны политикой проекта.',
   },
   app: {
     skipToContent: 'Перейти к содержимому',
@@ -349,10 +352,6 @@ export default {
     occurred: 'Время события',
     eventId: 'ID события',
     issueId: 'ID проблемы',
-    raw: 'Нормализованное событие',
-    rawDescription:
-      'Это полное стабильное представление API. Секреты и запрещённые персональные данные уже обработаны политикой сервера.',
-    rawJson: 'Прокручиваемый JSON нормализованного события',
   },
   logs: {
     eyebrow: '{project} / сигналы',
@@ -384,8 +383,6 @@ export default {
     release: 'Релиз',
     trace: 'Трейс',
     span: 'Спан',
-    payload: 'Принятые данные',
-    attributes: 'Атрибуты и контекст',
   },
   transactions: {
     eyebrow: '{project} / трассировка',

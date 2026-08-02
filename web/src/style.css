@@ -3030,14 +3030,14 @@ label small,
   font-size: 0.82rem;
 }
 
-.raw-event pre {
+.raw-event .code-block {
   max-height: 560px;
-  margin: 0;
-  padding: 1rem;
+  margin: 0 1rem 1rem;
+}
+
+.raw-event .code-block__lines {
+  max-height: 510px;
   overflow: auto;
-  border-top: 1px solid var(--border);
-  background: var(--canvas);
-  font-size: 0.75rem;
 }
 
 .setup-steps ol,
