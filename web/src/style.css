@@ -1986,6 +1986,19 @@ label small,
   color: var(--text-muted);
 }
 
+.related-signals .compact-list {
+  margin-inline: -1rem;
+  margin-bottom: -1rem;
+}
+
+.related-signals .compact-list a {
+  padding-inline: 1rem;
+}
+
+.related-signals .compact-list a:last-child {
+  border-bottom: 0;
+}
+
 .signal-toolbar {
   display: grid;
   align-items: end;
