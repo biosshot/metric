@@ -1580,6 +1580,8 @@ pub trait MetricStore: Send + Sync + 'static {
 pub struct ReplayQuery {
     pub from: Option<metric_domain::Timestamp>,
     pub until: Option<metric_domain::Timestamp>,
+    pub error_id: Option<metric_domain::EventId>,
+    pub trace_id: Option<metric_domain::signals::TraceId>,
     pub before: Option<ReplayCursor>,
     pub limit: usize,
 }
@@ -1773,6 +1775,8 @@ pub enum FeedbackStoreError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedbackQuery {
     pub status: Option<FeedbackStatus>,
+    pub event_id: Option<metric_domain::EventId>,
+    pub trace_id: Option<metric_domain::signals::TraceId>,
     pub replay_id: Option<metric_domain::EventId>,
     pub before: Option<FeedbackAnchor>,
     pub limit: usize,

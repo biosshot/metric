@@ -238,12 +238,6 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
         </article>
       </div>
 
-      <RelatedSignals :links="relatedLinks" />
-      <p v-if="replayDisabled" class="permission-note" :title="feedback.data.value.replay_id ?? ''">
-        {{ $t('relations.replayDisabled') }}
-      </p>
-      <p v-if="noTelemetry" class="permission-note">{{ $t('feedbackDetail.noTelemetry') }}</p>
-
       <section v-if="feedback.data.value.attachments.length" class="detail-panel">
         <div class="section-heading">
           <div>
@@ -283,6 +277,11 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
           </button>
         </div>
       </section>
+      <RelatedSignals :links="relatedLinks" />
+      <p v-if="replayDisabled" class="permission-note" :title="feedback.data.value.replay_id ?? ''">
+        {{ $t('relations.replayDisabled') }}
+      </p>
+      <p v-if="noTelemetry" class="permission-note">{{ $t('feedbackDetail.noTelemetry') }}</p>
     </template>
   </section>
 </template>

@@ -118,7 +118,6 @@ function formatTime(value: string): string {
           ><strong>{{ log.data.value.span_id || '—' }}</strong>
         </article>
       </div>
-      <RelatedSignals :links="relatedLinks" />
       <section class="detail-panel">
         <div class="section-heading">
           <div>
@@ -128,6 +127,7 @@ function formatTime(value: string): string {
         </div>
         <CodeBlock language="json" :code="JSON.stringify(log.data.value.body, null, 2)" />
       </section>
+      <RelatedSignals :links="relatedLinks" />
     </template>
   </section>
 </template>

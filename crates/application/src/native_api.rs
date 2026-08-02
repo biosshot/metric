@@ -135,6 +135,12 @@ pub struct NativePage<T> {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactCorrelations {
+    pub replay_ids: Vec<EventId>,
+    pub feedback_ids: Vec<EventId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EventListRequest<'a> {
     pub issue_id: Option<IssueId>,
@@ -772,6 +778,12 @@ impl NativeApiService {
         let before = cursor
             .map(|value| decode_replay_anchor(value, digest))
             .transpose()?;
+        let error_id = positive_predicate(parsed.expression.as_ref(), QueryField::EventId)
+            .map(|value| EventId::parse(&value.value).map_err(|_| QueryError::Syntax))
+            .transpose()?;
+        let trace_id = positive_predicate(parsed.expression.as_ref(), QueryField::TraceId)
+            .map(|value| TraceId::parse(&value.value).map_err(|_| QueryError::Syntax))
+            .transpose()?;
         let mut page = self
             .replay_store()?
             .list_replays(
@@ -779,6 +791,8 @@ impl NativeApiService {
                 ReplayQuery {
                     from,
                     until,
+                    error_id,
+                    trace_id,
                     before,
                     limit: limit.min(100),
                 },
@@ -824,12 +838,20 @@ impl NativeApiService {
         let replay_id = positive_predicate(parsed.expression.as_ref(), QueryField::ReplayId)
             .map(|value| EventId::parse(&value.value).map_err(|_| QueryError::Syntax))
             .transpose()?;
+        let event_id = positive_predicate(parsed.expression.as_ref(), QueryField::EventId)
+            .map(|value| EventId::parse(&value.value).map_err(|_| QueryError::Syntax))
+            .transpose()?;
+        let trace_id = positive_predicate(parsed.expression.as_ref(), QueryField::TraceId)
+            .map(|value| TraceId::parse(&value.value).map_err(|_| QueryError::Syntax))
+            .transpose()?;
         let page = self
             .feedback_store()?
             .list_feedback(
                 project_id,
                 FeedbackQuery {
                     status,
+                    event_id,
+                    trace_id,
                     replay_id,
                     before,
                     limit: limit.min(100),
@@ -1035,6 +1057,8 @@ impl NativeApiService {
                 ReplayQuery {
                     from,
                     until,
+                    error_id: None,
+                    trace_id: None,
                     before: None,
                     limit: page_size(limit)?,
                 },
@@ -1490,6 +1514,8 @@ impl NativeApiService {
                 project_id,
                 FeedbackQuery {
                     status: request.status,
+                    event_id: None,
+                    trace_id: None,
                     replay_id: request.replay_id,
                     before,
                     limit: page_size(request.limit)?,
@@ -1589,6 +1615,65 @@ impl NativeApiService {
         self.replay_store
             .as_ref()
             .ok_or(NativeApiError::Unavailable)
+    }
+
+    async fn exact_correlations(
+        &self,
+        project_id: ProjectId,
+        event_id: Option<EventId>,
+        trace_id: Option<TraceId>,
+        replay_id: Option<EventId>,
+    ) -> Result<ExactCorrelations, NativeApiError> {
+        let replay_ids = if let Some(store) = &self.replay_store
+            && (event_id.is_some() || trace_id.is_some())
+        {
+            store
+                .list_replays(
+                    project_id,
+                    ReplayQuery {
+                        from: None,
+                        until: None,
+                        error_id: event_id,
+                        trace_id,
+                        before: None,
+                        limit: MAX_PAGE,
+                    },
+                )
+                .await
+                .map_err(map_signal_error)?
+                .items
+                .into_iter()
+                .map(|replay| replay.replay_id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let feedback_ids = if let Some(store) = &self.feedback_store {
+            store
+                .list_feedback(
+                    project_id,
+                    FeedbackQuery {
+                        status: None,
+                        event_id,
+                        trace_id,
+                        replay_id,
+                        before: None,
+                        limit: MAX_PAGE,
+                    },
+                )
+                .await
+                .map_err(map_feedback_error)?
+                .items
+                .into_iter()
+                .map(|feedback| feedback.feedback_id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(ExactCorrelations {
+            replay_ids,
+            feedback_ids,
+        })
     }
 
     fn dashboard_service(&self) -> Result<&Arc<DashboardService>, NativeApiError> {
@@ -2168,6 +2253,42 @@ impl NativeApiService {
             .map_err(map_store_error)
     }
 
+    pub async fn event_correlations(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        event_id: EventId,
+    ) -> Result<ExactCorrelations, NativeApiError> {
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        self.exact_correlations(project_id, Some(event_id), None, None)
+            .await
+    }
+
+    pub async fn trace_correlations(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        trace_id: TraceId,
+    ) -> Result<ExactCorrelations, NativeApiError> {
+        self.authorize(context, project_id, Permission::EventRead)
+            .await?;
+        self.exact_correlations(project_id, None, Some(trace_id), None)
+            .await
+    }
+
+    pub async fn replay_correlations(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        replay_id: EventId,
+    ) -> Result<ExactCorrelations, NativeApiError> {
+        self.authorize(context, project_id, Permission::ProjectRead)
+            .await?;
+        self.exact_correlations(project_id, None, None, Some(replay_id))
+            .await
+    }
+
     pub async fn event_attachments(
         &self,
         context: &AuthContext,
@@ -2735,7 +2856,15 @@ fn issue_matches(expression: Option<&QueryExpression>, issue: &IssueSnapshot) ->
 
 fn replay_matches(expression: Option<&QueryExpression>, replay: &ReplayRecord) -> bool {
     matches_expression(expression, &mut |predicate| match predicate.field {
+        QueryField::EventId => replay
+            .error_ids
+            .iter()
+            .any(|value| string_matches(&value.to_string(), predicate)),
         QueryField::ReplayId => string_matches(&replay.replay_id.to_string(), predicate),
+        QueryField::TraceId => replay
+            .trace_ids
+            .iter()
+            .any(|value| string_matches(&value.to_string(), predicate)),
         QueryField::Url => string_matches(replay.url.as_deref().unwrap_or_default(), predicate),
         QueryField::Environment => {
             string_matches(replay.environment.as_deref().unwrap_or_default(), predicate)
@@ -2754,9 +2883,15 @@ fn replay_matches(expression: Option<&QueryExpression>, replay: &ReplayRecord) -
 
 fn feedback_matches(expression: Option<&QueryExpression>, feedback: &FeedbackRecord) -> bool {
     matches_expression(expression, &mut |predicate| match predicate.field {
+        QueryField::EventId => feedback
+            .associated_event_id
+            .is_some_and(|value| string_matches(&value.to_string(), predicate)),
         QueryField::FeedbackId => string_matches(&feedback.feedback_id.to_string(), predicate),
         QueryField::ReplayId => feedback
             .replay_id
+            .is_some_and(|value| string_matches(&value.to_string(), predicate)),
+        QueryField::TraceId => feedback
+            .trace_id
             .is_some_and(|value| string_matches(&value.to_string(), predicate)),
         QueryField::Status => string_matches(feedback.status.as_str(), predicate),
         QueryField::Message => string_matches(&feedback.message, predicate),

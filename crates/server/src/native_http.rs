@@ -4058,15 +4058,25 @@ async fn get_replay(
     headers: HeaderMap,
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
+    let project_id = project_id_from(&project_id)?;
+    let replay_id = EventId::parse(&replay_id).map_err(|_| HttpApiError::InvalidRequest)?;
     let replay = api(&state)?
-        .replay(
-            &context,
-            project_id_from(&project_id)?,
-            EventId::parse(&replay_id).map_err(|_| HttpApiError::InvalidRequest)?,
-        )
+        .replay(&context, project_id, replay_id)
         .await
         .map_err(HttpApiError::Api)?;
-    Ok(Json(replay_value(&replay)?))
+    let correlations = api(&state)?
+        .replay_correlations(&context, project_id, replay_id)
+        .await
+        .map_err(HttpApiError::Api)?;
+    let mut value = replay_value(&replay)?;
+    value["feedback_ids"] = json!(
+        correlations
+            .feedback_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    Ok(Json(value))
 }
 
 async fn download_replay_segment(
@@ -4123,12 +4133,14 @@ async fn get_trace(
     headers: HeaderMap,
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
+    let project_id = project_id_from(&project_id)?;
+    let trace_id = TraceId::parse(&trace_id).map_err(|_| HttpApiError::InvalidRequest)?;
     let trace = api(&state)?
-        .trace(
-            &context,
-            project_id_from(&project_id)?,
-            TraceId::parse(&trace_id).map_err(|_| HttpApiError::InvalidRequest)?,
-        )
+        .trace(&context, project_id, trace_id)
+        .await
+        .map_err(HttpApiError::Api)?;
+    let correlations = api(&state)?
+        .trace_correlations(&context, project_id, trace_id)
         .await
         .map_err(HttpApiError::Api)?;
     Ok(Json(json!({
@@ -4138,6 +4150,8 @@ async fn get_trace(
         "errors": trace.errors.iter().map(|event_id| json!({
             "event_id": event_id.to_string(),
         })).collect::<Vec<_>>(),
+        "replay_ids": correlations.replay_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "feedback_ids": correlations.feedback_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "partial": trace.partial,
         "omitted_spans": trace.omitted_spans,
     })))
@@ -4236,15 +4250,32 @@ async fn get_event(
     headers: HeaderMap,
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
+    let project_id = project_id_from(&project_id)?;
+    let event_id = EventId::parse(&event_id).map_err(|_| HttpApiError::InvalidRequest)?;
     let event = api(&state)?
-        .event(
-            &context,
-            project_id_from(&project_id)?,
-            EventId::parse(&event_id).map_err(|_| HttpApiError::InvalidRequest)?,
-        )
+        .event(&context, project_id, event_id)
         .await
         .map_err(HttpApiError::Api)?;
-    Ok(Json(event_value(&event)?))
+    let correlations = api(&state)?
+        .event_correlations(&context, project_id, event_id)
+        .await
+        .map_err(HttpApiError::Api)?;
+    let mut value = event_value(&event)?;
+    value["replay_ids"] = json!(
+        correlations
+            .replay_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    value["feedback_ids"] = json!(
+        correlations
+            .feedback_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    Ok(Json(value))
 }
 
 #[derive(Debug, Deserialize)]

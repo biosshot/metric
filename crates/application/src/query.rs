@@ -895,19 +895,23 @@ const fn field_accepted(source: QuerySource, field: QueryField) -> bool {
         ),
         QuerySource::Replays => matches!(
             field,
-            QueryField::ReplayId
+            QueryField::EventId
+                | QueryField::ReplayId
                 | QueryField::Timestamp
                 | QueryField::Url
                 | QueryField::Environment
                 | QueryField::Release
+                | QueryField::TraceId
         ),
         QuerySource::Feedback => matches!(
             field,
-            QueryField::FeedbackId
+            QueryField::EventId
+                | QueryField::FeedbackId
                 | QueryField::Timestamp
                 | QueryField::Status
                 | QueryField::Message
                 | QueryField::ReplayId
+                | QueryField::TraceId
         ),
         QuerySource::Releases => matches!(field, QueryField::Release | QueryField::Timestamp),
     }
@@ -1030,6 +1034,20 @@ mod tests {
     fn source_fields_and_typed_values_are_validated_before_planning() {
         assert!(ParsedQuery::parse(QuerySource::Traces, "dur:>=500 op:http.server").is_ok());
         assert!(ParsedQuery::parse(QuerySource::Metrics, "metric:requests kind:counter").is_ok());
+        assert!(
+            ParsedQuery::parse(
+                QuerySource::Replays,
+                "event.id:0123456789abcdef0123456789abcdef trace:fedcba9876543210fedcba9876543210",
+            )
+            .is_ok()
+        );
+        assert!(
+            ParsedQuery::parse(
+                QuerySource::Feedback,
+                "event.id:0123456789abcdef0123456789abcdef trace:fedcba9876543210fedcba9876543210",
+            )
+            .is_ok()
+        );
         assert_eq!(
             ParsedQuery::parse(QuerySource::Replays, "level:error"),
             Err(QueryError::CapabilityUnavailable)

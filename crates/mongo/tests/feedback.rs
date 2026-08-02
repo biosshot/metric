@@ -10,6 +10,7 @@ use metric_domain::{
         BlobObjectId, EventAttachment,
     },
     feedback::{FeedbackRecord, FeedbackStatus},
+    signals::TraceId,
 };
 use metric_mongo::{EventCodecConfig, MongoProjectStore};
 use metric_ports::{
@@ -45,10 +46,10 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         name: Some("Ada".into()),
         contact_email: Some("ada@example.com".into()),
         url: Some("https://example.test/checkout".into()),
-        associated_event_id: None,
+        associated_event_id: Some(EventId::from_bytes([8; 16])),
         issue_id: None,
-        trace_id: None,
-        replay_id: None,
+        trace_id: Some(TraceId::from_bytes([9; 16])),
+        replay_id: Some(EventId::from_bytes([10; 16])),
         attachments: vec![EventAttachment {
             attachment_id: object_id,
             blob: BlobObject {
@@ -83,6 +84,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             project_id,
             FeedbackQuery {
                 status: Some(FeedbackStatus::Open),
+                event_id: None,
+                trace_id: None,
                 replay_id: None,
                 before: None,
                 limit: 10,
@@ -90,6 +93,34 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         )
         .await?;
     assert_eq!(page.items, vec![record]);
+    for query in [
+        FeedbackQuery {
+            status: None,
+            event_id: Some(EventId::from_bytes([8; 16])),
+            trace_id: None,
+            replay_id: None,
+            before: None,
+            limit: 10,
+        },
+        FeedbackQuery {
+            status: None,
+            event_id: None,
+            trace_id: Some(TraceId::from_bytes([9; 16])),
+            replay_id: None,
+            before: None,
+            limit: 10,
+        },
+        FeedbackQuery {
+            status: None,
+            event_id: None,
+            trace_id: None,
+            replay_id: Some(EventId::from_bytes([10; 16])),
+            before: None,
+            limit: 10,
+        },
+    ] {
+        assert_eq!(store.list_feedback(project_id, query).await?.items.len(), 1);
+    }
     assert_eq!(
         store
             .update_feedback_status(

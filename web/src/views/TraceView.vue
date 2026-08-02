@@ -38,8 +38,28 @@ const representativeSpan = computed(() => {
 });
 const relatedLinks = computed<RelatedSignalLink[]>(() => {
   const span = representativeSpan.value;
-  if (!span) return [];
   const links: RelatedSignalLink[] = [];
+  if (session.selectedProject?.policy.items.replay) {
+    for (const replayId of new Set(trace.data.value?.replay_ids ?? [])) {
+      links.push({
+        key: `replay-${replayId}`,
+        icon: 'replay',
+        label: t('relations.openReplay'),
+        description: replayId,
+        to: { path: `/replays/${replayId}` },
+      });
+    }
+  }
+  for (const feedbackId of new Set(trace.data.value?.feedback_ids ?? [])) {
+    links.push({
+      key: `feedback-${feedbackId}`,
+      icon: 'message',
+      label: t('relations.feedback'),
+      description: feedbackId,
+      to: { path: `/feedback/${feedbackId}` },
+    });
+  }
+  if (!span) return links;
   if (span.release) {
     links.push({
       key: 'release',
@@ -75,6 +95,9 @@ const relatedLinks = computed<RelatedSignalLink[]>(() => {
   }
   return links;
 });
+const replayDisabled = computed(() =>
+  Boolean(trace.data.value?.replay_ids?.length && !session.selectedProject?.policy.items.replay),
+);
 const bounds = computed(() => {
   const spans = trace.data.value?.spans ?? [];
   const start = Math.min(...spans.map((span) => Number(span.started_at_ns)));
@@ -125,7 +148,6 @@ function formatTime(value: string): string {
           {{ $t('traceDetail.omitted', trace.data.value.omitted_spans) }}
         </span>
       </header>
-      <RelatedSignals :links="relatedLinks" />
       <section class="trace-waterfall">
         <div class="section-heading">
           <div>
@@ -163,7 +185,6 @@ function formatTime(value: string): string {
       <section v-if="trace.data.value.errors.length" class="detail-panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">{{ $t('traceDetail.correlation') }}</p>
             <h2>{{ $t('traceDetail.errorEvents') }}</h2>
           </div>
         </div>
@@ -185,7 +206,6 @@ function formatTime(value: string): string {
       <section class="detail-panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">{{ $t('traceDetail.correlation') }}</p>
             <h2>{{ $t('traceDetail.structuredLogs') }}</h2>
           </div>
         </div>
@@ -209,6 +229,10 @@ function formatTime(value: string): string {
           </RouterLink>
         </div>
       </section>
+      <RelatedSignals :links="relatedLinks" />
+      <p v-if="replayDisabled" class="permission-note">
+        {{ $t('relations.replayDisabled') }}
+      </p>
     </template>
   </section>
 </template>

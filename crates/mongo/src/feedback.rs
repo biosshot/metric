@@ -84,6 +84,12 @@ impl MongoFeedbackStore {
         if let Some(status) = query.status {
             filter.insert("s", status.as_str());
         }
+        if let Some(event_id) = query.event_id {
+            filter.insert("e", binary(event_id.as_bytes()));
+        }
+        if let Some(trace_id) = query.trace_id {
+            filter.insert("t", binary(trace_id.as_bytes()));
+        }
         if let Some(replay_id) = query.replay_id {
             filter.insert("r", binary(replay_id.as_bytes()));
         }

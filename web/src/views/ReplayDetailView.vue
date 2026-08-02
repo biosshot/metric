@@ -37,6 +37,33 @@ const relatedLinks = computed<RelatedSignalLink[]>(() => {
   const value = replay.data.value;
   if (!value) return [];
   const links: RelatedSignalLink[] = [];
+  for (const feedbackId of new Set(value.feedback_ids ?? [])) {
+    links.push({
+      key: `feedback-${feedbackId}`,
+      icon: 'message',
+      label: t('relations.feedback'),
+      description: feedbackId,
+      to: { path: `/feedback/${feedbackId}` },
+    });
+  }
+  for (const eventId of new Set(value.error_ids)) {
+    links.push({
+      key: `event-${eventId}`,
+      icon: 'bug',
+      label: t('relations.event'),
+      description: eventId,
+      to: { path: `/events/${eventId}` },
+    });
+  }
+  for (const traceId of new Set(value.trace_ids)) {
+    links.push({
+      key: `trace-${traceId}`,
+      icon: 'traces',
+      label: t('relations.openTrace'),
+      description: traceId,
+      to: { path: `/traces/${traceId}` },
+    });
+  }
   if (value.release) {
     links.push({
       key: 'release',
@@ -203,7 +230,6 @@ onBeforeUnmount(() => player?.$destroy());
           <strong>{{ replay.data.value.release || '—' }}</strong>
         </article>
       </div>
-      <RelatedSignals :links="relatedLinks" />
       <ApiErrorPanel
         v-if="playerError"
         :error="playerError"
@@ -227,31 +253,7 @@ onBeforeUnmount(() => player?.$destroy());
         <LoadingPanel v-if="loadingPlayer" :label="$t('replayDetail.downloading')" />
         <div ref="target" class="replay-player"></div>
       </div>
-      <section class="detail-panel">
-        <h2>{{ $t('replayDetail.correlations') }}</h2>
-        <p v-if="!replay.data.value.error_ids.length && !replay.data.value.trace_ids.length">
-          {{ $t('replayDetail.noCorrelations') }}
-        </p>
-        <div class="correlation-links">
-          <RouterLink :to="queryLink('/feedback', 'replay', replay.data.value.id)">
-            {{ $t('replayDetail.linkedFeedback') }}
-          </RouterLink>
-          <RouterLink
-            v-for="eventId in replay.data.value.error_ids"
-            :key="eventId"
-            :to="`/events/${eventId}`"
-          >
-            {{ $t('replayDetail.error', { id: eventId }) }}
-          </RouterLink>
-          <RouterLink
-            v-for="traceId in replay.data.value.trace_ids"
-            :key="traceId"
-            :to="`/traces/${traceId}`"
-          >
-            {{ $t('replayDetail.trace', { id: traceId }) }}
-          </RouterLink>
-        </div>
-      </section>
+      <RelatedSignals :links="relatedLinks" />
     </template>
   </section>
 </template>

@@ -51,6 +51,7 @@ const issue = {
 const traceId = '41'.repeat(16);
 const spanId = '51'.repeat(8);
 const replayId = 'a1477a22ee174888834b000d10a284f7';
+const feedbackId = '71'.repeat(16);
 
 const event = {
   event_id: issue.latest_event_id,
@@ -60,6 +61,8 @@ const event = {
   occurred_at: '2026-07-23T09:00:00Z',
   level: 'error',
   platform: 'javascript',
+  replay_ids: [replayId],
+  feedback_ids: [feedbackId],
   body: {
     message: 'TypeError: cannot read session',
     contexts: { trace: { trace_id: traceId }, replay: { replay_id: replayId } },
@@ -91,6 +94,8 @@ const event = {
 const uncorrelatedEvent = {
   ...event,
   event_id: '91'.repeat(16),
+  replay_ids: [],
+  feedback_ids: [],
   body: { message: 'Uncorrelated exact event' },
 };
 
@@ -106,6 +111,7 @@ const replayRecord = {
   url: 'https://example.test/replay',
   error_ids: [event.event_id],
   trace_ids: [traceId],
+  feedback_ids: [feedbackId],
   segments: [
     {
       segment_id: 0,
@@ -171,6 +177,8 @@ const traceRecord = {
   spans: [transactionRecord],
   logs: [logRecord],
   errors: [{ event_id: event.event_id }],
+  replay_ids: [replayId],
+  feedback_ids: [feedbackId],
   partial: false,
   omitted_spans: 0,
 };
@@ -186,7 +194,7 @@ const releaseRecord = {
 };
 
 const feedbackRecord = {
-  id: '71'.repeat(16),
+  id: feedbackId,
   project_id: '42',
   received_at: '2026-07-23T09:00:00Z',
   status: 'open',
@@ -1186,11 +1194,19 @@ test('exact related data links connect Event, Trace, Replay, Release, User and S
   await page.getByRole('link', { name: /Open trace/ }).click();
   await expect(page).toHaveURL(new RegExp(`/traces/${traceId}$`));
   await expect(page.getByRole('heading', { name: traceId })).toBeVisible();
+  await expect(page.getByText('Correlation', { exact: true })).toHaveCount(1);
 
   await page.goBack();
   await page.getByRole('link', { name: /Open replay/ }).click();
   await expect(page).toHaveURL(new RegExp(`/replays/${replayId}$`));
   await expect(page.getByRole('heading', { name: 'Session Replay' })).toBeVisible();
+
+  await page.goBack();
+  await page
+    .locator('.related-signals')
+    .getByRole('link', { name: /Feedback/ })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/feedback/${feedbackId}$`));
 
   await page.goBack();
   await page.getByRole('link', { name: /View release/ }).click();
@@ -1208,18 +1224,19 @@ test('exact related data links connect Event, Trace, Replay, Release, User and S
   expect(new URL(page.url()).searchParams.get('span')).toBe(spanId);
 
   await page.goto(`/replays/${replayId}`);
-  await expect(page.getByRole('link', { name: `Error ${event.event_id}` })).toHaveAttribute(
+  await expect(page.locator('.related-signals')).toHaveCount(1);
+  await expect(page.getByText('Correlation', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('link', { name: /Event/ })).toHaveAttribute(
     'href',
     `/events/${event.event_id}`,
   );
-  await expect(page.getByRole('link', { name: new RegExp(traceId) })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: /Open trace/ })).toHaveAttribute(
     'href',
     `/traces/${traceId}`,
   );
-  const feedbackLink = page.getByRole('link', { name: 'Feedback linked to this Replay' });
-  const feedbackHref = await feedbackLink.getAttribute('href');
-  expect(new URL(feedbackHref!, page.url()).pathname).toBe('/feedback');
-  expect(new URL(feedbackHref!, page.url()).searchParams.get('q')).toBe(`replay:"${replayId}"`);
+  await expect(
+    page.locator('.related-signals').getByRole('link', { name: /Feedback/ }),
+  ).toHaveAttribute('href', `/feedback/${feedbackId}`);
 
   await page.goto(`/events/${uncorrelatedEvent.event_id}`);
   await expect(page.getByRole('heading', { name: 'Uncorrelated exact event' })).toBeVisible();

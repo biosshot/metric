@@ -178,8 +178,6 @@ function formatTime(value: string): string {
         </article>
       </div>
 
-      <RelatedSignals :links="relatedLinks" />
-
       <section class="panel" aria-labelledby="frequency-heading">
         <div class="section-heading">
           <div>
@@ -282,6 +280,7 @@ function formatTime(value: string): string {
           </ol>
         </section>
       </div>
+      <RelatedSignals :links="relatedLinks" />
     </template>
   </section>
 </template>

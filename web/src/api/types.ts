@@ -218,6 +218,8 @@ export interface Event {
   level: string;
   platform: string;
   body: Record<string, unknown>;
+  replay_ids?: string[];
+  feedback_ids?: string[];
 }
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
@@ -267,6 +269,8 @@ export interface Trace {
   spans: Span[];
   logs: StructuredLog[];
   errors: Array<{ event_id: string }>;
+  replay_ids?: string[];
+  feedback_ids?: string[];
   partial: boolean;
   omitted_spans: number;
 }
@@ -594,6 +598,7 @@ export interface Replay {
   url: string | null;
   error_ids: string[];
   trace_ids: string[];
+  feedback_ids?: string[];
   segments: ReplaySegment[];
   partial: boolean;
   expires_at: string | null;

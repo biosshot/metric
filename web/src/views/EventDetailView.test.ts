@@ -5,6 +5,7 @@ import EventDetailView from './EventDetailView.vue';
 
 const traceId = '0123456789abcdef0123456789abcdef';
 const replayId = 'fedcba9876543210fedcba9876543210';
+const feedbackId = '11111111111111111111111111111111';
 const { api, state } = vi.hoisted(() => ({
   api: { event: vi.fn() },
   state: { replayEnabled: true },
@@ -60,6 +61,8 @@ describe('EventDetailView relations', () => {
       occurred_at: '2026-08-02T09:20:00Z',
       level: 'error',
       platform: 'javascript',
+      replay_ids: [replayId],
+      feedback_ids: [feedbackId],
       body: {
         message: 'Metric test event',
         contexts: { trace: { trace_id: traceId }, replay: { replay_id: replayId } },
@@ -78,9 +81,14 @@ describe('EventDetailView relations', () => {
       'data-to',
       JSON.stringify({ path: `/traces/${traceId}` }),
     );
+    expect(screen.getAllByRole('link', { name: /Open replay/ })).toHaveLength(1);
     expect(screen.getByRole('link', { name: /Open replay/ })).toHaveAttribute(
       'data-to',
       JSON.stringify({ path: `/replays/${replayId}` }),
+    );
+    expect(screen.getByRole('link', { name: /Feedback/ })).toHaveAttribute(
+      'data-to',
+      JSON.stringify({ path: `/feedback/${feedbackId}` }),
     );
     expect(screen.getByRole('link', { name: /View release/ })).toHaveAttribute(
       'data-to',
@@ -90,6 +98,12 @@ describe('EventDetailView relations', () => {
       'data-to',
       JSON.stringify({ path: '/explore', query: { q: 'user:"user-42"' } }),
     );
+    expect(
+      screen
+        .getByText('Raw normalized Event')
+        .compareDocumentPosition(screen.getByRole('heading', { name: 'Related data' })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('does not link Replay when the project capability is disabled', async () => {

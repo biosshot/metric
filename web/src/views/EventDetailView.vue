@@ -53,13 +53,29 @@ const relatedLinks = computed<RelatedSignalLink[]>(() => {
       to: { path: `/traces/${relations.value.traceId}` },
     });
   }
-  if (relations.value.replayId && session.selectedProject?.policy.items.replay) {
+  const replayIds = new Set(
+    [relations.value.replayId, ...(value.replay_ids ?? [])].filter(
+      (candidate): candidate is string => Boolean(candidate),
+    ),
+  );
+  if (session.selectedProject?.policy.items.replay) {
+    for (const replayId of replayIds) {
+      links.push({
+        key: `replay-${replayId}`,
+        icon: 'replay',
+        label: t('relations.openReplay'),
+        description: replayId,
+        to: { path: `/replays/${replayId}` },
+      });
+    }
+  }
+  for (const feedbackId of new Set(value.feedback_ids ?? [])) {
     links.push({
-      key: 'replay',
-      icon: 'replay',
-      label: t('relations.openReplay'),
-      description: relations.value.replayId,
-      to: { path: `/replays/${relations.value.replayId}` },
+      key: `feedback-${feedbackId}`,
+      icon: 'message',
+      label: t('relations.feedback'),
+      description: feedbackId,
+      to: { path: `/feedback/${feedbackId}` },
     });
   }
   if (relations.value.release) {
@@ -92,7 +108,10 @@ const relatedLinks = computed<RelatedSignalLink[]>(() => {
   return links;
 });
 const replayDisabled = computed(() =>
-  Boolean(relations.value.replayId && !session.selectedProject?.policy.items.replay),
+  Boolean(
+    (relations.value.replayId || event.data.value?.replay_ids?.length) &&
+      !session.selectedProject?.policy.items.replay,
+  ),
 );
 </script>
 
@@ -144,10 +163,6 @@ const replayDisabled = computed(() =>
           </div>
         </dl>
       </header>
-      <RelatedSignals :links="relatedLinks" />
-      <p v-if="replayDisabled" class="permission-note" :title="relations.replayId">
-        {{ $t('relations.replayDisabled') }}
-      </p>
       <StackTrace :body="event.data.value.body" />
       <details class="raw-event">
         <summary>{{ $t('eventDetail.raw') }}</summary>
@@ -156,6 +171,10 @@ const replayDisabled = computed(() =>
           JSON.stringify(event.data.value.body, null, 2)
         }}</code></pre>
       </details>
+      <RelatedSignals :links="relatedLinks" />
+      <p v-if="replayDisabled" class="permission-note" :title="relations.replayId">
+        {{ $t('relations.replayDisabled') }}
+      </p>
     </template>
   </section>
 </template>

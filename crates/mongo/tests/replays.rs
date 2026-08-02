@@ -7,6 +7,7 @@ use metric_domain::{
     EventId, ProjectId, SecretBytes, Timestamp,
     blob::{BlobChecksum, BlobKey, BlobKind, BlobObject},
     replays::{ReplayMetadata, ReplaySegment, ReplaySegmentCommit},
+    signals::TraceId,
 };
 use metric_mongo::{MongoProjectStore, ReplayRetention};
 use metric_ports::{DurableOutcome, ReplayQuery, ReplayStore};
@@ -61,6 +62,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         vec![0, 2]
     );
     assert_eq!(record.error_ids, vec![EventId::from_bytes([8; 16])]);
+    assert_eq!(record.trace_ids, vec![TraceId::from_bytes([9; 16])]);
     assert_eq!(
         store
             .list_replays(
@@ -68,6 +70,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                 ReplayQuery {
                     from: None,
                     until: None,
+                    error_id: None,
+                    trace_id: None,
                     before: None,
                     limit: 10,
                 },
@@ -84,6 +88,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
                 ReplayQuery {
                     from: None,
                     until: None,
+                    error_id: None,
+                    trace_id: None,
                     before: None,
                     limit: 10,
                 },
@@ -92,6 +98,26 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             .items
             .is_empty()
     );
+    for query in [
+        ReplayQuery {
+            from: None,
+            until: None,
+            error_id: Some(EventId::from_bytes([8; 16])),
+            trace_id: None,
+            before: None,
+            limit: 10,
+        },
+        ReplayQuery {
+            from: None,
+            until: None,
+            error_id: None,
+            trace_id: Some(TraceId::from_bytes([9; 16])),
+            before: None,
+            limit: 10,
+        },
+    ] {
+        assert_eq!(store.list_replays(project, query).await?.items.len(), 1);
+    }
 
     let replays = database.collection::<mongodb::bson::Document>("replays");
     assert_eq!(
@@ -144,7 +170,7 @@ fn commit(project_id: ProjectId, replay_id: EventId, segment_id: u32) -> ReplayS
             release: Some("web@1.0.0".into()),
             url: Some("https://example.test/checkout".into()),
             error_ids: vec![EventId::from_bytes([8; 16])],
-            trace_ids: Vec::new(),
+            trace_ids: vec![TraceId::from_bytes([9; 16])],
         },
         segment: ReplaySegment {
             segment_id,

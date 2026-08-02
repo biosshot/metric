@@ -153,6 +153,12 @@ impl MongoReplayStore {
             }
             filter.insert("r", range);
         }
+        if let Some(error_id) = query.error_id {
+            filter.insert("x", binary(error_id.as_bytes()));
+        }
+        if let Some(trace_id) = query.trace_id {
+            filter.insert("t", binary(trace_id.as_bytes()));
+        }
         if let Some(before) = query.before {
             filter.insert(
                 "$or",
