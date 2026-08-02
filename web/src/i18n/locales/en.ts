@@ -645,8 +645,11 @@ export default {
     example: 'Ready-to-use example',
     initialize: 'Initialize the SDK',
     sdk: 'SDK',
-    capabilities:
-      "Metric accepts Error Events, Structured Logs, Transactions, Spans, Application Metrics, and browser Session Replays. Replay capture requires {'@'}sentry/browser 10.66.0 and client-side masking.",
+    installation: 'Installation',
+    minimalExample: 'Minimal Error Event',
+    nextSteps: 'Next steps',
+    openIssues: 'Open Issues',
+    documentation: 'Sentry SDK documentation',
   },
   apiTokens: {
     releases: 'Releases and deploys',

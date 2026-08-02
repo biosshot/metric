@@ -3154,6 +3154,24 @@ label small,
   width: min(290px, 100%);
 }
 
+.code-examples__blocks {
+  display: grid;
+  gap: 1rem;
+}
+
+.code-examples__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-top: 1rem;
+}
+
+.code-examples__links a {
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .code-block {
   overflow: hidden;
   border: 1px solid var(--border-strong);

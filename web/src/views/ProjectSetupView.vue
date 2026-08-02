@@ -12,7 +12,115 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { useSessionStore } from '../stores/session';
 
-type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet';
+type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet' | 'go' | 'rust';
+
+interface SdkSetup {
+  id: SdkId;
+  label: string;
+  language: string;
+  install: string;
+  initialize(dsn: string): string;
+  documentationUrl: string;
+}
+
+const sdkSetups: SdkSetup[] = [
+  {
+    id: 'browser',
+    label: 'JavaScript Browser',
+    language: 'javascript',
+    install: 'npm install @sentry/browser@10.66.0',
+    initialize: (dsn) => `import * as Sentry from "@sentry/browser";
+
+Sentry.init({
+  dsn: "${dsn}"
+});
+
+Sentry.captureMessage("Metric test event");`,
+    documentationUrl: 'https://docs.sentry.io/platforms/javascript/guides/browser/',
+  },
+  {
+    id: 'node',
+    label: 'Node.js',
+    language: 'javascript',
+    install: 'npm install @sentry/node@10.66.0',
+    initialize: (dsn) => `import * as Sentry from "@sentry/node";
+
+Sentry.init({
+  dsn: "${dsn}"
+});
+
+Sentry.captureMessage("Metric test event");`,
+    documentationUrl: 'https://docs.sentry.io/platforms/javascript/guides/node/',
+  },
+  {
+    id: 'python',
+    label: 'Python',
+    language: 'python',
+    install: 'pip install sentry-sdk==2.32.0',
+    initialize: (dsn) => `import sentry_sdk
+
+sentry_sdk.init(dsn="${dsn}")
+sentry_sdk.capture_message("Metric test event")`,
+    documentationUrl: 'https://docs.sentry.io/platforms/python/',
+  },
+  {
+    id: 'java',
+    label: 'Java',
+    language: 'java',
+    install: 'implementation("io.sentry:sentry:8.50.1")',
+    initialize: (dsn) => `import io.sentry.Sentry;
+
+Sentry.init(options -> options.setDsn("${dsn}"));
+Sentry.captureMessage("Metric test event");`,
+    documentationUrl: 'https://docs.sentry.io/platforms/java/',
+  },
+  {
+    id: 'dotnet',
+    label: '.NET',
+    language: 'csharp',
+    install: 'dotnet add package Sentry --version 6.7.0',
+    initialize: (dsn) => `using Sentry;
+
+using var sdk = SentrySdk.Init(options =>
+{
+    options.Dsn = "${dsn}";
+});
+
+SentrySdk.CaptureMessage("Metric test event");`,
+    documentationUrl: 'https://docs.sentry.io/platforms/dotnet/',
+  },
+  {
+    id: 'go',
+    label: 'Go',
+    language: 'go',
+    install: 'go get github.com/getsentry/sentry-go@v0.48.0',
+    initialize: (dsn) => `package main
+
+import (
+    "time"
+
+    "github.com/getsentry/sentry-go"
+)
+
+func main() {
+    sentry.Init(sentry.ClientOptions{Dsn: "${dsn}"})
+    defer sentry.Flush(2 * time.Second)
+    sentry.CaptureMessage("Metric test event")
+}`,
+    documentationUrl: 'https://docs.sentry.io/platforms/go/',
+  },
+  {
+    id: 'rust',
+    label: 'Rust',
+    language: 'rust',
+    install: 'cargo add sentry@0.48.5',
+    initialize: (dsn) => `fn main() {
+    let _guard = sentry::init(("${dsn}", sentry::ClientOptions::default()));
+    sentry::capture_message("Metric test event", sentry::Level::Info);
+}`,
+    documentationUrl: 'https://docs.sentry.io/platforms/rust/',
+  },
+];
 
 const session = useSessionStore();
 const { t } = useI18n();
@@ -21,13 +129,11 @@ const canAdministerProject = computed(() => session.has('project:admin'));
 const copyNotice = ref('');
 const copyError = ref('');
 const selectedSdk = ref<SdkId>('browser');
-const sdkOptions: SelectOption[] = [
-  { value: 'browser', label: 'JavaScript — Browser', icon: 'fileCode' },
-  { value: 'node', label: 'JavaScript — Node.js', icon: 'server' },
-  { value: 'python', label: 'Python', icon: 'fileCode' },
-  { value: 'java', label: 'Java', icon: 'fileCode' },
-  { value: 'dotnet', label: 'C# / .NET', icon: 'fileCode' },
-];
+const sdkOptions: SelectOption[] = sdkSetups.map((sdk) => ({
+  value: sdk.id,
+  label: sdk.label,
+  icon: sdk.id === 'node' ? 'server' : 'fileCode',
+}));
 const keys = useQuery({
   queryKey: computed(() => ['project-keys', projectId.value]),
   queryFn: () => api.keys(projectId.value),
@@ -45,72 +151,10 @@ const activeDsn = computed(() => {
   const key = activeKeys.value[0];
   return key ? dsn(key.dsn_key) : '';
 });
-
-const codeExample = computed(() => {
-  const value = activeDsn.value;
-  const examples: Record<SdkId, { language: string; title: string; code: string }> = {
-    browser: {
-      language: 'javascript',
-      title: 'JavaScript — Browser',
-      code: `import * as Sentry from "@sentry/browser";
-
-Sentry.init({
-  dsn: "${value}",
-  tracesSampleRate: 0,
-  integrations: [
-    Sentry.replayIntegration({
-      maskAllText: true,
-      blockAllMedia: true
-    })
-  ],
-  replaysSessionSampleRate: 0.1,
-  replaysOnErrorSampleRate: 1.0
-});`,
-    },
-    node: {
-      language: 'javascript',
-      title: 'JavaScript — Node.js',
-      code: `import * as Sentry from "@sentry/node";
-
-Sentry.init({
-  dsn: "${value}",
-  tracesSampleRate: 0
-});`,
-    },
-    python: {
-      language: 'python',
-      title: 'Python',
-      code: `import sentry_sdk
-
-sentry_sdk.init(
-    dsn="${value}",
-    traces_sample_rate=0,
-)`,
-    },
-    java: {
-      language: 'java',
-      title: 'Java',
-      code: `import io.sentry.Sentry;
-
-Sentry.init(options -> {
-    options.setDsn("${value}");
-    options.setTracesSampleRate(0.0);
-});`,
-    },
-    dotnet: {
-      language: 'csharp',
-      title: 'C# / .NET',
-      code: `using Sentry;
-
-SentrySdk.Init(options =>
-{
-    options.Dsn = "${value}";
-    options.TracesSampleRate = 0;
-});`,
-    },
-  };
-  return examples[selectedSdk.value];
-});
+const selectedSetup = computed(
+  () => sdkSetups.find((sdk) => sdk.id === selectedSdk.value) ?? sdkSetups[0]!,
+);
+const codeExample = computed(() => selectedSetup.value.initialize(activeDsn.value));
 
 function setSdk(value: string): void {
   selectedSdk.value = value as SdkId;
@@ -236,15 +280,24 @@ async function copy(value: string): Promise<void> {
           @update:model-value="setSdk"
         />
       </div>
-      <CodeBlock
-        :code="codeExample.code"
-        :language="codeExample.language"
-        :title="codeExample.title"
-      />
-      <p class="info-note">
-        <AppIcon name="info" :size="16" />
-        {{ $t('projectSetup.capabilities') }}
-      </p>
+      <div class="code-examples__blocks">
+        <CodeBlock
+          :code="selectedSetup.install"
+          language="shell"
+          :title="$t('projectSetup.installation')"
+        />
+        <CodeBlock
+          :code="codeExample"
+          :language="selectedSetup.language"
+          :title="$t('projectSetup.minimalExample')"
+        />
+      </div>
+      <nav class="code-examples__links" :aria-label="$t('projectSetup.nextSteps')">
+        <RouterLink to="/issues">{{ $t('projectSetup.openIssues') }}</RouterLink>
+        <a :href="selectedSetup.documentationUrl" target="_blank" rel="noopener noreferrer">
+          {{ $t('projectSetup.documentation') }}
+        </a>
+      </nav>
     </section>
   </section>
 </template>

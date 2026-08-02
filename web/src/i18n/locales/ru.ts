@@ -646,8 +646,11 @@ export default {
     example: 'Готовый пример',
     initialize: 'Инициализация SDK',
     sdk: 'SDK',
-    capabilities:
-      "Metric принимает события ошибок, структурированные логи, транзакции, спаны, метрики приложения и записи сессий браузера. Для записи сессий требуется {'@'}sentry/browser 10.66.0 и маскирование на стороне клиента.",
+    installation: 'Установка',
+    minimalExample: 'Минимальное событие ошибки',
+    nextSteps: 'Что дальше',
+    openIssues: 'Открыть Issues',
+    documentation: 'Документация Sentry SDK',
   },
   apiTokens: {
     releases: 'Релизы и развёртывания',
