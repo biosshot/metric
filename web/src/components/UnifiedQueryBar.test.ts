@@ -25,6 +25,10 @@ describe('UnifiedQueryBar', () => {
       global: { plugins: [router] },
     });
     const input = screen.getByRole('searchbox', { name: 'Query' });
+    expect(input).toHaveAttribute(
+      'placeholder',
+      'Filter Logs: msg:"connection refused", svc:payments, or level:error',
+    );
 
     await fireEvent.update(input, 's');
     await view.rerender({ modelValue: 's', source: 'logs' });
@@ -51,5 +55,29 @@ describe('UnifiedQueryBar', () => {
 
     await view.rerender({ modelValue: 'l', source: 'errors' });
     expect(screen.getByRole('option', { name: /level/ })).toBeVisible();
+
+    await view.rerender({ modelValue: 'd', source: 'traces', allowedFields: ['service'] });
+    expect(screen.queryByRole('option', { name: /dur/ })).not.toBeInTheDocument();
+  });
+
+  it('restores a source default without storing it in the URL', async () => {
+    const router = await testRouter();
+    const view = render(UnifiedQueryBar, {
+      props: {
+        modelValue: 'title:checkout',
+        source: 'issues',
+        defaultQuery: 'status:open',
+        showReset: true,
+      },
+      global: { plugins: [router] },
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+
+    await waitFor(() => {
+      const updates = view.emitted()['update:modelValue'];
+      expect(updates?.at(-1)).toEqual(['status:open']);
+      expect(router.currentRoute.value.query.q).toBeUndefined();
+    });
   });
 });

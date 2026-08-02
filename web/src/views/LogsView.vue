@@ -142,7 +142,6 @@ function formatTime(value: number): string {
     <UnifiedQueryBar
       v-model="query"
       source="logs"
-      :placeholder="$t('logs.messagePlaceholder')"
       :show-reset="hasFilters"
       @submit="submitQuery"
       @reset="resetFilters"

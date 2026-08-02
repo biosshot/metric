@@ -12,12 +12,22 @@ const props = withDefaults(
     modelValue: string;
     source: QuerySource;
     placeholder?: string;
+    defaultQuery?: string;
+    allowedFields?: string[];
     showSubmit?: boolean;
     showReset?: boolean;
     syncUrl?: boolean;
     disabled?: boolean;
   }>(),
-  { placeholder: '', showSubmit: true, showReset: false, syncUrl: true, disabled: false },
+  {
+    placeholder: '',
+    defaultQuery: '',
+    allowedFields: () => [],
+    showSubmit: true,
+    showReset: false,
+    syncUrl: true,
+    disabled: false,
+  },
 );
 
 const emit = defineEmits<{
@@ -126,11 +136,21 @@ const orderedFields = new Set([
 ]);
 
 const activeToken = computed(() => props.modelValue.match(/(?:^|\s)([^\s()]*)$/)?.[1] ?? '');
+const sourceFields = computed(() => {
+  if (!props.allowedFields?.length) return fields[props.source];
+  const allowed = new Set(props.allowedFields);
+  return fields[props.source].filter(
+    ([alias, canonical]) => allowed.has(alias) || allowed.has(canonical),
+  );
+});
+const effectivePlaceholder = computed(
+  () => props.placeholder || t(`unifiedQuery.placeholders.${props.source}`),
+);
 const activeField = computed(() => activeToken.value.split(':', 1)[0] ?? '');
 const activeValue = computed(() => activeToken.value.split(':').slice(1).join(':'));
 const activeCanonicalField = computed(
   () =>
-    fields[props.source].find(
+    sourceFields.value.find(
       ([alias, canonical]) => alias === activeField.value || canonical === activeField.value,
     )?.[1] ?? '',
 );
@@ -143,7 +163,7 @@ const chips = computed(
 const suggestions = computed<Suggestion[]>(() => {
   const token = activeToken.value.toLowerCase();
   if (!token.includes(':')) {
-    return fields[props.source]
+    return sourceFields.value
       .filter(([alias, canonical]) => alias.startsWith(token) || canonical.startsWith(token))
       .slice(0, 20)
       .map(([alias, canonical]) => ({ value: `${alias}:`, label: alias, detail: canonical }));
@@ -205,7 +225,7 @@ watch(
   () => route.query.q,
   (value) => {
     if (!props.syncUrl) return;
-    const query = typeof value === 'string' ? value : '';
+    const query = typeof value === 'string' ? value : props.defaultQuery;
     if (query !== props.modelValue) {
       emit('update:modelValue', query);
       queueMicrotask(() => emit('submit'));
@@ -257,7 +277,7 @@ async function submit(): Promise<void> {
   if (props.syncUrl) {
     const query = props.modelValue.trim();
     const next = { ...route.query };
-    if (query) next.q = query;
+    if (query && query !== props.defaultQuery) next.q = query;
     else delete next.q;
     await router.replace({ query: next });
   }
@@ -265,7 +285,7 @@ async function submit(): Promise<void> {
 }
 
 async function reset(): Promise<void> {
-  emit('update:modelValue', '');
+  emit('update:modelValue', props.defaultQuery);
   if (props.syncUrl) {
     const next = { ...route.query };
     delete next.q;
@@ -279,12 +299,12 @@ async function reset(): Promise<void> {
   <div class="unified-query-bar" role="search">
     <div class="unified-query-bar__input-wrap">
       <AppIcon name="search" :size="17" />
-      <label class="sr-only" :for="inputId">Query</label>
+      <label class="sr-only" :for="inputId">{{ t('unifiedQuery.label') }}</label>
       <input
         :id="inputId"
         :value="modelValue"
         type="search"
-        :placeholder="placeholder"
+        :placeholder="effectivePlaceholder"
         maxlength="32768"
         autocomplete="off"
         spellcheck="false"
@@ -330,7 +350,11 @@ async function reset(): Promise<void> {
       {{ t('common.reset') }}
     </button>
   </div>
-  <div v-if="chips.length" class="unified-query-bar__chips" aria-label="Query conditions">
+  <div
+    v-if="chips.length"
+    class="unified-query-bar__chips"
+    :aria-label="t('unifiedQuery.conditions')"
+  >
     <code v-for="chip in chips" :key="chip">{{ chip }}</code>
   </div>
 </template>

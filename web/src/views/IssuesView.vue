@@ -18,7 +18,8 @@ import type { Issue } from '../api/types';
 const session = useSessionStore();
 const route = useRoute();
 const { locale } = useI18n();
-const initialQuery = typeof route.query.q === 'string' ? route.query.q : '';
+const defaultQuery = 'status:open';
+const initialQuery = typeof route.query.q === 'string' ? route.query.q : defaultQuery;
 const query = ref(initialQuery);
 const appliedQuery = ref(initialQuery);
 const range = ref('all');
@@ -29,7 +30,13 @@ const cursor = ref<string | null>(null);
 const history = ref<(string | null)[]>([]);
 const projectId = computed(() => session.selectedProjectId ?? '');
 const hasFilters = computed(
-  () => Boolean(query.value.trim() || appliedQuery.value) || range.value !== 'all',
+  () =>
+    query.value.trim() !== defaultQuery ||
+    appliedQuery.value !== defaultQuery ||
+    range.value !== 'all',
+);
+const isDefaultView = computed(
+  () => appliedQuery.value === defaultQuery && appliedRange.value === 'all',
 );
 
 const result = useQuery({
@@ -65,8 +72,8 @@ function submitQuery(): void {
 }
 
 function resetFilters(): void {
-  query.value = '';
-  appliedQuery.value = '';
+  query.value = defaultQuery;
+  appliedQuery.value = defaultQuery;
   range.value = 'all';
   appliedRange.value = 'all';
   selectedWindow.value = timeWindow('all');
@@ -113,7 +120,7 @@ function formatTime(value: string): string {
     <UnifiedQueryBar
       v-model="query"
       source="issues"
-      :placeholder="$t('issues.searchPlaceholder')"
+      :default-query="defaultQuery"
       :show-reset="hasFilters"
       @submit="submitQuery"
       @reset="resetFilters"
@@ -136,12 +143,12 @@ function formatTime(value: string): string {
     />
     <EmptyState
       v-else-if="!result.data.value?.items.length"
-      :title="appliedQuery ? $t('issues.noMatches') : $t('issues.empty')"
+      :title="isDefaultView ? $t('issues.empty') : $t('issues.noMatches')"
       :description="
-        appliedQuery ? $t('issues.noMatchesDescription') : $t('issues.emptyDescription')
+        isDefaultView ? $t('issues.emptyDescription') : $t('issues.noMatchesDescription')
       "
     >
-      <SdkSetupButton v-if="!appliedQuery" />
+      <SdkSetupButton v-if="isDefaultView" />
     </EmptyState>
 
     <div v-else class="issue-table-wrap">

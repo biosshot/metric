@@ -121,7 +121,6 @@ function formatTime(value: string): string {
     <UnifiedQueryBar
       v-model="query"
       source="replays"
-      :placeholder="$t('replays.searchPlaceholder')"
       :show-reset="hasFilters"
       @submit="submitQuery"
       @reset="resetFilters"

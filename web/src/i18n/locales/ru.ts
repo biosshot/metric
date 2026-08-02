@@ -405,6 +405,8 @@ export default {
     eyebrow: '{project} / производительность',
     title: 'Анализ производительности',
     description: 'Ограниченные почасовые сводки из сохранённых корневых спанов.',
+    queryInvalid:
+      'Сводки производительности поддерживают точные фильтры svc:, env: и rel:, объединённые через AND.',
     timeRange: 'Период производительности',
     loading: 'Загружаем сводки производительности…',
     empty: 'Данных о производительности нет',
@@ -1110,6 +1112,21 @@ export default {
     chartLabel: 'Запусков монитора: {count}, период: {range}',
     runLabel: '{status}, {time}, {duration}',
     notObserved: 'Не наблюдалось',
+  },
+  unifiedQuery: {
+    label: 'Запрос',
+    conditions: 'Условия запроса',
+    placeholders: {
+      issues: 'Фильтр проблем: status:open, title:"ошибка оплаты" или issue:0123abcd',
+      errors: 'Фильтр ошибок: level:error, env:production или issue:0123abcd',
+      logs: 'Фильтр логов: msg:"connection refused", svc:payments или level:error',
+      traces: 'Фильтр трасс: svc:payments, dur:>500 или op:http.server',
+      metrics: 'Фильтр метрик: metric:requests, kind:counter или unit:ms',
+      replays: 'Фильтр записей: url:"/checkout", env:production или rel:backend-1.4.2',
+      feedback: 'Фильтр отзывов: status:open, msg:"оплата" или replay:0123abcd',
+      releases: 'Фильтр релизов: rel:backend-2.4.0',
+      performance: 'Фильтр сводок: svc:payments env:production rel:backend-1.4.2',
+    },
   },
   queryBuilder: {
     errors: 'Ошибки',

@@ -404,6 +404,8 @@ export default {
     eyebrow: '{project} / performance',
     title: 'Performance Insights',
     description: 'Bounded hourly summaries built from durable root spans.',
+    queryInvalid:
+      'Performance summaries support exact svc:, env:, and rel: filters joined with AND.',
     timeRange: 'Performance time range',
     loading: 'Loading performance summaries…',
     empty: 'No performance data',
@@ -1101,6 +1103,21 @@ export default {
     chartLabel: '{count} monitor runs over {range}',
     runLabel: '{status}, {time}, {duration}',
     notObserved: 'Not observed',
+  },
+  unifiedQuery: {
+    label: 'Query',
+    conditions: 'Query conditions',
+    placeholders: {
+      issues: 'Filter Issues: status:open, title:"checkout failed", or issue:0123abcd',
+      errors: 'Filter Errors: level:error, env:production, or issue:0123abcd',
+      logs: 'Filter Logs: msg:"connection refused", svc:payments, or level:error',
+      traces: 'Filter Traces: svc:payments, dur:>500, or op:http.server',
+      metrics: 'Filter Metrics: metric:requests, kind:counter, or unit:ms',
+      replays: 'Filter Replays: url:"/checkout", env:production, or rel:backend-1.4.2',
+      feedback: 'Filter Feedback: status:open, msg:"checkout", or replay:0123abcd',
+      releases: 'Filter Releases: rel:backend-2.4.0',
+      performance: 'Filter summaries: svc:payments env:production rel:backend-1.4.2',
+    },
   },
   queryBuilder: {
     errors: 'Errors',

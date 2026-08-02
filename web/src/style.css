@@ -4144,10 +4144,6 @@ label small,
 }
 
 .explore-builder {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(10rem, 1fr)) auto;
-  align-items: end;
-  gap: 0.85rem;
   margin-bottom: 1rem;
 }
 
@@ -4528,7 +4524,6 @@ label small,
     grid-column: 2 / -1;
   }
 
-  .explore-builder,
   .explore-chart article {
     grid-template-columns: 1fr;
   }
@@ -4579,25 +4574,57 @@ label small,
 .unified-query-bar {
   position: relative;
   display: flex;
-  align-items: center;
+  min-width: 0;
+  align-items: flex-end;
   gap: 0.6rem;
   margin-bottom: 1rem;
 }
 
 .explore-builder {
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.85rem;
 }
 
 .explore-builder__shape {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: end;
   gap: 0.85rem;
-  margin-bottom: 0.9rem;
+  margin: 0;
+}
+
+.explore-builder__shape > .base-select {
+  width: clamp(12rem, 14vw, 16rem);
+  min-width: 12rem;
+  flex: 1 1 12rem;
 }
 
 .explore-builder > .unified-query-bar {
+  min-width: 0;
+  max-width: 64rem;
+  flex: 1 1 38rem;
   margin-bottom: 0;
+}
+
+.explore-builder > .unified-query-bar__chips {
+  flex: 1 0 100%;
+  margin: -0.25rem 0 0;
+}
+
+.unified-query-bar > .time-range-control {
+  width: min(17.5rem, 100%);
+  min-width: 0;
+  flex: 0 1 17.5rem;
+}
+
+.unified-query-bar > .time-range-control .base-select,
+.unified-query-bar > .time-range-control .time-range-select {
+  width: 100%;
+  min-width: 0;
 }
 
 .unified-query-bar__input-wrap {
@@ -4673,13 +4700,39 @@ label small,
   font-size: 0.75rem;
 }
 
+.performance-query-error {
+  margin: -0.35rem 0 1rem;
+}
+
 @media (max-width: 720px) {
+  .explore-builder__shape,
+  .explore-builder > .unified-query-bar {
+    width: 100%;
+    flex-basis: 100%;
+  }
+
   .unified-query-bar {
-    align-items: stretch;
+    align-items: flex-end;
     flex-wrap: wrap;
   }
 
   .unified-query-bar__input-wrap {
+    flex-basis: 100%;
+  }
+
+  .unified-query-bar > .time-range-control {
+    width: auto;
+    flex: 1 1 15rem;
+  }
+
+  .unified-query-bar > .button--primary {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .unified-query-bar > .time-range-control {
+    width: 100%;
     flex-basis: 100%;
   }
 }

@@ -108,7 +108,6 @@ function timestamp(value: string | null): string {
     <UnifiedQueryBar
       v-model="query"
       source="releases"
-      placeholder="rel:backend@2.4.0"
       :show-reset="Boolean(query || appliedQuery)"
       @submit="submitQuery"
       @reset="resetQuery"

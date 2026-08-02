@@ -387,7 +387,7 @@ function formatNumber(value: ExploreScalar | undefined): string {
           <TimeRangeSelect
             v-model="range"
             :window-value="selectedWindow"
-            :label="$t('queryBuilder.timeRange')"
+            :aria-label="$t('queryBuilder.timeRange')"
             @update:window-value="selectedWindow = $event"
           />
         </template>

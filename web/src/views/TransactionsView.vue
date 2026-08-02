@@ -133,7 +133,6 @@ function formatTime(value: number): string {
     <UnifiedQueryBar
       v-model="query"
       source="traces"
-      :placeholder="$t('transactions.service')"
       :show-reset="hasFilters"
       @submit="submitQuery"
       @reset="resetFilters"
