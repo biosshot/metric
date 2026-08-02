@@ -48,6 +48,10 @@ const issue = {
   grouping: { strategy: 'stacktrace', summary: 'Application stack trace' },
 };
 
+const traceId = '41'.repeat(16);
+const spanId = '51'.repeat(8);
+const replayId = 'a1477a22ee174888834b000d10a284f7';
+
 const event = {
   event_id: issue.latest_event_id,
   project_id: '42',
@@ -58,6 +62,10 @@ const event = {
   platform: 'javascript',
   body: {
     message: 'TypeError: cannot read session',
+    contexts: { trace: { trace_id: traceId }, replay: { replay_id: replayId } },
+    release: 'backend@1.1',
+    environment: 'production',
+    user: { id: 'user-42' },
     exception: {
       values: [
         {
@@ -80,8 +88,14 @@ const event = {
   },
 };
 
+const uncorrelatedEvent = {
+  ...event,
+  event_id: '91'.repeat(16),
+  body: { message: 'Uncorrelated exact event' },
+};
+
 const replayRecord = {
-  id: 'a1477a22ee174888834b000d10a284f7',
+  id: replayId,
   project_id: '42',
   started_at: '2026-07-23T09:00:00Z',
   ended_at: '2026-07-23T09:00:09Z',
@@ -90,8 +104,8 @@ const replayRecord = {
   environment: 'manual-replay-demo',
   release: 'metric-browser-replay-demo@1.0.0',
   url: 'https://example.test/replay',
-  error_ids: [],
-  trace_ids: [],
+  error_ids: [event.event_id],
+  trace_ids: [traceId],
   segments: [
     {
       segment_id: 0,
@@ -120,8 +134,8 @@ const logRecord = {
   timestamp_ns: '1784797200000000000',
   level: 'info',
   message: 'Worker accepted the scheduled job',
-  trace_id: '41'.repeat(16),
-  span_id: '51'.repeat(8),
+  trace_id: traceId,
+  span_id: spanId,
   environment: 'production',
   release: 'backend@1.1',
   service: 'worker',
@@ -137,8 +151,8 @@ const transactionRecord = {
   ended_at: '2026-07-23T09:00:00.125Z',
   duration_ns: '125000000',
   duration_ms: 125,
-  trace_id: '41'.repeat(16),
-  span_id: '51'.repeat(8),
+  trace_id: traceId,
+  span_id: spanId,
   parent_span_id: null,
   is_segment: true,
   operation_class: 'http',
@@ -150,6 +164,25 @@ const transactionRecord = {
   service: 'api',
   insight_flags: 0,
   body: {},
+};
+
+const traceRecord = {
+  trace_id: traceId,
+  spans: [transactionRecord],
+  logs: [logRecord],
+  errors: [{ event_id: event.event_id }],
+  partial: false,
+  omitted_spans: 0,
+};
+
+const releaseRecord = {
+  id: '81'.repeat(16),
+  version: 'backend@1.1',
+  activity_at: '2026-07-23T09:00:00Z',
+  first_seen: '2026-07-23T08:00:00Z',
+  last_seen: '2026-07-23T09:00:00Z',
+  released_at: null,
+  explicit: true,
 };
 
 const feedbackRecord = {
@@ -414,6 +447,8 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       });
     } else if (body.source === 'feedback') {
       items = [feedbackRecord];
+    } else if (body.source === 'releases') {
+      items = [releaseRecord];
     } else if (body.source === 'metrics') {
       const grouped = body.result.group_by?.includes('name');
       items = grouped
@@ -480,6 +515,11 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     return json({ applied: true, issue });
   }
   if (path === `/api/v1/projects/42/events/${event.event_id}`) return json(event);
+  if (path === `/api/v1/projects/42/events/${uncorrelatedEvent.event_id}`) {
+    return json(uncorrelatedEvent);
+  }
+  if (path === `/api/v1/projects/42/logs/${logRecord.id}`) return json(logRecord);
+  if (path === `/api/v1/projects/42/traces/${traceId}`) return json(traceRecord);
   if (path === '/api/v1/projects/42/logs') {
     return json({ items: [logRecord], next_cursor: null });
   }
@@ -1008,11 +1048,17 @@ test('first setup creates a project and reaches an actionable SDK DSN', async ({
   await expect(page.getByRole('heading', { name: 'Connect an SDK' })).toBeVisible();
   await expect(page.getByText('Default')).toBeVisible();
   await expect(page.locator('.dsn-list code')).toContainText('e'.repeat(32));
-  await expect(page.locator('.code-block')).toContainText('e'.repeat(32));
-  await expect(page.locator('.code-block')).not.toContainText('PASTE_DSN_HERE');
+  await expect(page.getByRole('region', { name: 'javascript code example' })).toContainText(
+    'e'.repeat(32),
+  );
+  await expect(page.getByRole('region', { name: 'javascript code example' })).not.toContainText(
+    'PASTE_DSN_HERE',
+  );
   await page.getByRole('combobox', { name: 'SDK' }).click();
   await page.getByRole('option', { name: 'Python', exact: true }).click();
-  await expect(page.locator('.code-block')).toContainText('sentry_sdk.init');
+  await expect(page.getByRole('region', { name: 'python code example' })).toContainText(
+    'sentry_sdk.init',
+  );
   expect(state.bootstrapSeen).toBe(true);
   expect(state.projectCreationSeen).toBe(true);
   expect(state.createdProjectBody).toMatchObject({
@@ -1106,7 +1152,7 @@ test('Feedback detail exposes workflow, Replay and authenticated attachment down
   await expect(page.getByRole('heading', { name: feedbackRecord.message })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Resolve' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Mark as spam' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Replay', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: /Open replay/ })).toHaveAttribute(
     'href',
     `/replays/${replayRecord.id}`,
   );
@@ -1120,6 +1166,68 @@ test('Feedback detail exposes workflow, Replay and authenticated attachment down
   await page.getByRole('button', { name: /feedback.txt/ }).click();
   await download;
   expect(state.feedbackAttachmentHeaderSeen).toBe(true);
+});
+
+test('exact related data links connect Event, Trace, Replay, Release, User and Span views', async ({
+  page,
+}) => {
+  const state: ApiState = {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  };
+  await installApi(page, state);
+  await login(page);
+
+  await page.goto(`/events/${event.event_id}`);
+  await expect(page.getByRole('heading', { name: 'Related data' })).toBeVisible();
+
+  await page.getByRole('link', { name: /Open trace/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/traces/${traceId}$`));
+  await expect(page.getByRole('heading', { name: traceId })).toBeVisible();
+
+  await page.goBack();
+  await page.getByRole('link', { name: /Open replay/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/replays/${replayId}$`));
+  await expect(page.getByRole('heading', { name: 'Session Replay' })).toBeVisible();
+
+  await page.goBack();
+  await page.getByRole('link', { name: /View release/ }).click();
+  await expect(page.getByRole('heading', { name: 'Releases' })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('q')).toBe('rel:"backend@1.1"');
+
+  await page.goBack();
+  await page.getByRole('link', { name: /Other errors from user/ }).click();
+  await expect(page.getByRole('heading', { name: 'Unified Explore' })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('q')).toBe('user:"user-42"');
+
+  await page.goto(`/logs/${logRecord.id}`);
+  await page.getByRole('link', { name: /Open span/ }).click();
+  expect(new URL(page.url()).pathname).toBe(`/traces/${traceId}`);
+  expect(new URL(page.url()).searchParams.get('span')).toBe(spanId);
+
+  await page.goto(`/replays/${replayId}`);
+  await expect(page.getByRole('link', { name: `Error ${event.event_id}` })).toHaveAttribute(
+    'href',
+    `/events/${event.event_id}`,
+  );
+  await expect(page.getByRole('link', { name: new RegExp(traceId) })).toHaveAttribute(
+    'href',
+    `/traces/${traceId}`,
+  );
+  const feedbackLink = page.getByRole('link', { name: 'Feedback linked to this Replay' });
+  const feedbackHref = await feedbackLink.getAttribute('href');
+  expect(new URL(feedbackHref!, page.url()).pathname).toBe('/feedback');
+  expect(new URL(feedbackHref!, page.url()).searchParams.get('q')).toBe(`replay:"${replayId}"`);
+
+  await page.goto(`/events/${uncorrelatedEvent.event_id}`);
+  await expect(page.getByRole('heading', { name: 'Uncorrelated exact event' })).toBeVisible();
+  await expect(page.locator('.related-signals a')).toHaveCount(1);
+  await expect(page.getByRole('link', { name: /Open trace|Open replay|View release/ })).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole('link', { name: /environment|user/i })).toHaveCount(0);
 });
 
 test('unknown routes show a clear 404 instead of redirecting', async ({ page }) => {

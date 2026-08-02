@@ -19,9 +19,7 @@ const session = useSessionStore();
 const route = useRoute();
 const { locale } = useI18n();
 const routeQuery = typeof route.query.q === 'string' ? route.query.q : '';
-const replayQuery =
-  typeof route.query.replay_id === 'string' ? `replay:${route.query.replay_id}` : '';
-const query = ref(routeQuery || replayQuery);
+const query = ref(routeQuery);
 const appliedQuery = ref(query.value);
 const range = ref('all');
 const appliedRange = ref('all');

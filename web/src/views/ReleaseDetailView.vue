@@ -9,6 +9,7 @@ import AppIcon from '../components/AppIcon.vue';
 import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import { queryLink } from '../lib/queryLinks';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
@@ -178,15 +179,13 @@ function timestamp(value: string | null): string {
       </div>
 
       <nav class="release-signal-links" :aria-label="$t('releaseDetail.relatedSignals')">
-        <RouterLink
-          :to="{ path: '/issues', query: { q: `release:${release.data.value.version}` } }"
-        >
+        <RouterLink :to="queryLink('/issues', 'rel', release.data.value.version)">
           <AppIcon name="bug" :size="16" /> {{ $t('releaseDetail.errors') }}
         </RouterLink>
-        <RouterLink :to="{ path: '/logs', query: { release: release.data.value.version } }">
+        <RouterLink :to="queryLink('/logs', 'rel', release.data.value.version)">
           <AppIcon name="logs" :size="16" /> {{ $t('releaseDetail.logs') }}
         </RouterLink>
-        <RouterLink :to="{ path: '/traces', query: { release: release.data.value.version } }">
+        <RouterLink :to="queryLink('/traces', 'rel', release.data.value.version)">
           <AppIcon name="traces" :size="16" /> {{ $t('releaseDetail.spans') }}
         </RouterLink>
       </nav>

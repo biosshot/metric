@@ -7,18 +7,62 @@ import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import CodeBlock from '../components/CodeBlock.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import { api } from '../api/client';
+import { queryLink } from '../lib/queryLinks';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
 const session = useSessionStore();
-const { locale } = useI18n();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const logId = computed(() => String(route.params.logId ?? ''));
 const log = useQuery({
   queryKey: computed(() => ['log', projectId.value, logId.value]),
   queryFn: () => api.log(projectId.value, logId.value),
   enabled: computed(() => Boolean(projectId.value && logId.value)),
+});
+const relatedLinks = computed<RelatedSignalLink[]>(() => {
+  const value = log.data.value;
+  if (!value) return [];
+  const links: RelatedSignalLink[] = [];
+  if (value.release) {
+    links.push({
+      key: 'release',
+      icon: 'release',
+      label: t('relations.viewRelease'),
+      description: value.release,
+      to: queryLink('/releases', 'rel', value.release),
+    });
+  }
+  if (value.environment) {
+    links.push({
+      key: 'environment',
+      icon: 'logs',
+      label: t('relations.environmentLogs'),
+      description: value.environment,
+      to: queryLink('/logs', 'env', value.environment),
+    });
+  }
+  if (value.service) {
+    links.push({
+      key: 'service',
+      icon: 'server',
+      label: t('relations.serviceLogs'),
+      description: value.service,
+      to: queryLink('/logs', 'svc', value.service),
+    });
+  }
+  if (value.trace_id && value.span_id) {
+    links.push({
+      key: 'span',
+      icon: 'traces',
+      label: t('relations.openSpan'),
+      description: value.span_id,
+      to: { path: `/traces/${value.trace_id}`, query: { span: value.span_id } },
+    });
+  }
+  return links;
 });
 
 function formatTime(value: string): string {
@@ -74,6 +118,7 @@ function formatTime(value: string): string {
           ><strong>{{ log.data.value.span_id || '—' }}</strong>
         </article>
       </div>
+      <RelatedSignals :links="relatedLinks" />
       <section class="detail-panel">
         <div class="section-heading">
           <div>

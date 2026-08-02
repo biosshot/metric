@@ -66,6 +66,8 @@ jobs:
           npm run lint
           npm test
           npm run build
+          npx playwright install --with-deps chromium firefox
+          npm run test:e2e
       - name: Verify real Node SDK
         working-directory: sdk-tests/node
         run: |

@@ -8,7 +8,9 @@ import 'rrweb-player/dist/style.css';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import { api, ApiError } from '../api/client';
+import { queryLink } from '../lib/queryLinks';
 import { useSessionStore } from '../stores/session';
 import { prepareReplayEvents } from './replayEvents';
 
@@ -30,6 +32,46 @@ const replay = useQuery({
   queryKey: computed(() => ['replay', projectId.value, replayId.value]),
   queryFn: () => api.replay(projectId.value, replayId.value),
   enabled: computed(() => Boolean(projectId.value && replayId.value)),
+});
+const relatedLinks = computed<RelatedSignalLink[]>(() => {
+  const value = replay.data.value;
+  if (!value) return [];
+  const links: RelatedSignalLink[] = [];
+  if (value.release) {
+    links.push({
+      key: 'release',
+      icon: 'release',
+      label: t('relations.viewRelease'),
+      description: value.release,
+      to: queryLink('/releases', 'rel', value.release),
+    });
+  }
+  if (value.environment) {
+    links.push(
+      {
+        key: 'environment-errors',
+        icon: 'bug',
+        label: t('relations.environmentErrors'),
+        description: value.environment,
+        to: queryLink('/explore', 'env', value.environment),
+      },
+      {
+        key: 'environment-logs',
+        icon: 'logs',
+        label: t('relations.environmentLogs'),
+        description: value.environment,
+        to: queryLink('/logs', 'env', value.environment),
+      },
+      {
+        key: 'environment-traces',
+        icon: 'traces',
+        label: t('relations.environmentTraces'),
+        description: value.environment,
+        to: queryLink('/traces', 'env', value.environment),
+      },
+    );
+  }
+  return links;
 });
 
 async function inflate(payload: Uint8Array): Promise<string> {
@@ -161,6 +203,7 @@ onBeforeUnmount(() => player?.$destroy());
           <strong>{{ replay.data.value.release || '—' }}</strong>
         </article>
       </div>
+      <RelatedSignals :links="relatedLinks" />
       <ApiErrorPanel
         v-if="playerError"
         :error="playerError"
@@ -190,7 +233,7 @@ onBeforeUnmount(() => player?.$destroy());
           {{ $t('replayDetail.noCorrelations') }}
         </p>
         <div class="correlation-links">
-          <RouterLink :to="`/feedback?replay_id=${replay.data.value.id}`">
+          <RouterLink :to="queryLink('/feedback', 'replay', replay.data.value.id)">
             {{ $t('replayDetail.linkedFeedback') }}
           </RouterLink>
           <RouterLink

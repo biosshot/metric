@@ -8,13 +8,15 @@ import AppIcon from '../components/AppIcon.vue';
 import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import { api } from '../api/client';
 import type { Span } from '../api/types';
+import { queryLink, queryLinks } from '../lib/queryLinks';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
 const session = useSessionStore();
-const { locale } = useI18n();
+const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const traceId = computed(() => String(route.params.traceId ?? ''));
 const trace = useQuery({
@@ -26,6 +28,53 @@ const selectedSpanId = computed(() => String(route.query.span ?? ''));
 const selectedSpan = computed(() =>
   trace.data.value?.spans.find((span) => span.span_id === selectedSpanId.value),
 );
+const representativeSpan = computed(() => {
+  const spans = trace.data.value?.spans ?? [];
+  return (
+    spans.find((span) => span.parent_span_id === null) ??
+    spans.find((span) => span.is_segment) ??
+    spans[0]
+  );
+});
+const relatedLinks = computed<RelatedSignalLink[]>(() => {
+  const span = representativeSpan.value;
+  if (!span) return [];
+  const links: RelatedSignalLink[] = [];
+  if (span.release) {
+    links.push({
+      key: 'release',
+      icon: 'release',
+      label: t('relations.viewRelease'),
+      description: span.release,
+      to: queryLink('/releases', 'rel', span.release),
+    });
+  }
+  if (span.environment) {
+    links.push({
+      key: 'environment-logs',
+      icon: 'logs',
+      label: t('relations.environmentLogs'),
+      description: span.environment,
+      to: queryLinks('/logs', [
+        ['env', span.environment],
+        ['trace', traceId.value],
+      ]),
+    });
+  }
+  if (span.service) {
+    links.push({
+      key: 'service-logs',
+      icon: 'server',
+      label: t('relations.serviceLogs'),
+      description: span.service,
+      to: queryLinks('/logs', [
+        ['svc', span.service],
+        ['trace', traceId.value],
+      ]),
+    });
+  }
+  return links;
+});
 const bounds = computed(() => {
   const spans = trace.data.value?.spans ?? [];
   const start = Math.min(...spans.map((span) => Number(span.started_at_ns)));
@@ -76,6 +125,7 @@ function formatTime(value: string): string {
           {{ $t('traceDetail.omitted', trace.data.value.omitted_spans) }}
         </span>
       </header>
+      <RelatedSignals :links="relatedLinks" />
       <section class="trace-waterfall">
         <div class="section-heading">
           <div>

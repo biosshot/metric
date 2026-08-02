@@ -35,11 +35,7 @@ const session = useSessionStore();
 const route = useRoute();
 const { locale } = useI18n();
 const routeQuery = typeof route.query.q === 'string' ? route.query.q : '';
-const releaseQuery =
-  typeof route.query.release === 'string'
-    ? `rel:"${route.query.release.replaceAll('"', '\\"')}"`
-    : '';
-const query = ref(routeQuery || releaseQuery);
+const query = ref(routeQuery);
 const appliedQuery = ref(query.value);
 const range = ref('all');
 const appliedRange = ref('all');

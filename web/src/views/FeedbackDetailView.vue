@@ -6,6 +6,7 @@ import { useRoute } from 'vue-router';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { api } from '../api/client';
 import type { FeedbackAttachment, FeedbackStatus } from '../api/types';
@@ -24,6 +25,57 @@ const feedback = useQuery({
   queryKey: computed(() => ['feedback-item', projectId.value, feedbackId.value]),
   queryFn: () => api.feedbackItem(projectId.value, feedbackId.value),
   enabled: computed(() => Boolean(projectId.value && feedbackId.value)),
+});
+const relatedLinks = computed<RelatedSignalLink[]>(() => {
+  const value = feedback.data.value;
+  if (!value) return [];
+  const links: RelatedSignalLink[] = [];
+  if (value.associated_event_id) {
+    links.push({
+      key: 'event',
+      icon: 'bug',
+      label: t('relations.event'),
+      description: value.associated_event_id,
+      to: { path: `/events/${value.associated_event_id}` },
+    });
+  }
+  if (value.issue_id) {
+    links.push({
+      key: 'issue',
+      icon: 'clipboard',
+      label: t('relations.issue'),
+      description: value.issue_id,
+      to: { path: `/issues/${value.issue_id}` },
+    });
+  }
+  if (value.trace_id) {
+    links.push({
+      key: 'trace',
+      icon: 'traces',
+      label: t('relations.openTrace'),
+      description: value.trace_id,
+      to: { path: `/traces/${value.trace_id}` },
+    });
+  }
+  if (value.replay_id && session.selectedProject?.policy.items.replay) {
+    links.push({
+      key: 'replay',
+      icon: 'replay',
+      label: t('relations.openReplay'),
+      description: value.replay_id,
+      to: { path: `/replays/${value.replay_id}` },
+    });
+  }
+  return links;
+});
+const replayDisabled = computed(() =>
+  Boolean(feedback.data.value?.replay_id && !session.selectedProject?.policy.items.replay),
+);
+const noTelemetry = computed(() => {
+  const value = feedback.data.value;
+  return Boolean(
+    value && !value.associated_event_id && !value.issue_id && !value.trace_id && !value.replay_id,
+  );
 });
 
 const saveStatus = useMutation({
@@ -186,65 +238,11 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
         </article>
       </div>
 
-      <section class="detail-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">{{ $t('feedbackDetail.investigation') }}</p>
-            <h2>{{ $t('feedbackDetail.telemetry') }}</h2>
-          </div>
-        </div>
-        <div class="feedback-links">
-          <RouterLink
-            v-if="feedback.data.value.associated_event_id"
-            class="button button--secondary"
-            :to="`/events/${feedback.data.value.associated_event_id}`"
-          >
-            <AppIcon name="bug" :size="16" /> {{ $t('feedbackDetail.event') }}
-          </RouterLink>
-          <RouterLink
-            v-if="feedback.data.value.issue_id"
-            class="button button--secondary"
-            :to="`/issues/${feedback.data.value.issue_id}`"
-          >
-            <AppIcon name="clipboard" :size="16" /> {{ $t('feedbackDetail.issue') }}
-          </RouterLink>
-          <RouterLink
-            v-if="feedback.data.value.trace_id"
-            class="button button--secondary"
-            :to="`/traces/${feedback.data.value.trace_id}`"
-          >
-            <AppIcon name="traces" :size="16" /> {{ $t('feedbackDetail.trace') }}
-          </RouterLink>
-          <RouterLink
-            v-if="feedback.data.value.replay_id && session.selectedProject?.policy.items.replay"
-            class="button button--secondary"
-            :to="`/replays/${feedback.data.value.replay_id}`"
-          >
-            <AppIcon name="replay" :size="16" /> {{ $t('feedbackDetail.replay') }}
-          </RouterLink>
-          <span
-            v-else-if="feedback.data.value.replay_id"
-            class="permission-note feedback-replay-note"
-          >
-            {{
-              $t('feedbackDetail.replayDisabled', {
-                id: feedback.data.value.replay_id.slice(0, 12),
-              })
-            }}
-          </span>
-          <span
-            v-if="
-              !feedback.data.value.associated_event_id &&
-              !feedback.data.value.issue_id &&
-              !feedback.data.value.trace_id &&
-              !feedback.data.value.replay_id
-            "
-            class="permission-note"
-          >
-            {{ $t('feedbackDetail.noTelemetry') }}
-          </span>
-        </div>
-      </section>
+      <RelatedSignals :links="relatedLinks" />
+      <p v-if="replayDisabled" class="permission-note" :title="feedback.data.value.replay_id ?? ''">
+        {{ $t('relations.replayDisabled') }}
+      </p>
+      <p v-if="noTelemetry" class="permission-note">{{ $t('feedbackDetail.noTelemetry') }}</p>
 
       <section v-if="feedback.data.value.attachments.length" class="detail-panel">
         <div class="section-heading">

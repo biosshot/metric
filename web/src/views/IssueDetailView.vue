@@ -8,6 +8,8 @@ import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import AppIcon from '../components/AppIcon.vue';
+import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
+import { queryLink } from '../lib/queryLinks';
 import { useSessionStore } from '../stores/session';
 
 const route = useRoute();
@@ -33,6 +35,27 @@ const activity = useQuery({
 const events = useQuery({
   queryKey: computed(() => ['issue-events', projectId.value, issueId.value]),
   queryFn: () => api.issueEvents(projectId.value, issueId.value),
+});
+const relatedLinks = computed<RelatedSignalLink[]>(() => {
+  const value = issue.data.value;
+  if (!value) return [];
+  const links: RelatedSignalLink[] = [];
+  const releases = [
+    ['first-release', t('relations.firstRelease'), value.first_release],
+    ['last-release', t('relations.lastRelease'), value.last_release],
+    ['regression-release', t('relations.regressionRelease'), value.regression?.release],
+  ] as const;
+  for (const [key, label, release] of releases) {
+    if (!release) continue;
+    links.push({
+      key,
+      icon: 'release',
+      label,
+      description: release,
+      to: queryLink('/releases', 'rel', release),
+    });
+  }
+  return links;
 });
 
 const lifecycle = useMutation({
@@ -154,6 +177,8 @@ function formatTime(value: string): string {
           <small>{{ formatTime(issue.data.value.regression.time) }}</small>
         </article>
       </div>
+
+      <RelatedSignals :links="relatedLinks" />
 
       <section class="panel" aria-labelledby="frequency-heading">
         <div class="section-heading">
