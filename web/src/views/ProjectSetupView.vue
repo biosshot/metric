@@ -36,7 +36,7 @@ Sentry.init({
 });
 
 Sentry.captureMessage("Metric test event");`,
-    documentationUrl: 'https://docs.sentry.io/platforms/javascript/guides/browser/',
+    documentationUrl: 'https://docs.sentry.io/platforms/javascript/',
   },
   {
     id: 'node',

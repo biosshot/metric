@@ -121,7 +121,7 @@ describe('ProjectSetupView', () => {
     expect(screen.getByRole('link', { name: 'Open Issues' })).toHaveAttribute('href', '/issues');
     expect(screen.getByRole('link', { name: 'Sentry SDK documentation' })).toHaveAttribute(
       'href',
-      'https://docs.sentry.io/platforms/javascript/guides/browser/',
+      'https://docs.sentry.io/platforms/javascript/',
     );
 
     await fireEvent.click(screen.getByRole('combobox', { name: 'SDK' }));
