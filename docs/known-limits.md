@@ -43,6 +43,9 @@ empty database, but it cannot migrate data from an older generation. Read
 
 ## Delivery behavior
 
+- Query downloads are limited to 10,000 rows, 16 MiB and 15 seconds, with at most
+  two concurrent exports per Metric process. The response is assembled in bounded
+  application memory before it is sent; it is not HTTP chunk streaming.
 - Webhooks may be delivered more than once. Receivers should ignore a repeated
   delivery ID.
 - Retrying an application metric after an unclear response can count it twice.

@@ -5,7 +5,9 @@
 - receive errors from official Sentry SDKs;
 - remove or pseudonymize private data before storage;
 - group repeated errors into issues;
-- search and inspect events in the web interface;
+- search Issues, Errors, Logs, Traces, Metrics, Replays, Feedback and Releases
+  through one bounded query language;
+- download current bounded query results as JSON or CSV;
 - receive structured logs, transactions and spans;
 - track releases, deploys and release health;
 - collect user feedback;
@@ -41,7 +43,6 @@ Min disables attachments. Min and Low omit Symbolicator. See
 
 ## Selected next work
 
-- bounded JSON/CSV export for current filtered datasets;
 - bounded search over cold archive objects without automatic hot restore.
 
 ## Outside the current roadmap

@@ -87,7 +87,8 @@ Accepted first scope:
 - an input cursor is rejected in download mode; the server starts from the normalized
   query boundary and follows its own signed cursors only until an export limit is
   reached;
-- streaming generation with explicit row, byte, duration and concurrency limits;
+- bounded in-memory response assembly with explicit row, byte, duration and
+  concurrency limits;
 - the server hard limits always cap any smaller caller-requested export limit;
 - stable DTO fields rather than compact storage names;
 - source-specific deterministic CSV columns rather than one sparse union schema;
@@ -142,7 +143,7 @@ being restored to the hot database.
 
 ## Later amendment: Unified Query v2
 
-ADR-0048 accepts an unnumbered cross-cutting replacement of the fragmented hot-data
+ADR-0048 records the completed unnumbered cross-cutting replacement of the fragmented hot-data
 list/search transports. It extends the existing Search/Explore implementation and
 does not reopen Phase 27 or change the accepted Phase 40/42 storage scope. It keeps
 schema generation 19, all collections, validators, indexes and retained data

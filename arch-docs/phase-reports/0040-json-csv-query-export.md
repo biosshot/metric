@@ -10,8 +10,8 @@
 - JSON and CSV download mode on the existing project-scoped `/query` endpoint.
 - Records export for Issues, Errors, Logs, Traces, Metrics, Replays, Feedback and
   Releases through their existing Query v2 adapters and signed cursors.
-- Explicit row, byte, duration and concurrency ceilings with no unbounded row
-  accumulation.
+- A bounded in-memory response buffer capped at 16 MiB, 10,000 rows and 15 seconds,
+  with at most two concurrent exports and 500 rows per adapter page.
 - Deterministic source-specific CSV schemas, nested DTO encoding and spreadsheet
   formula-injection protection.
 - Existing authorization and scrubbed stable DTO representations are reused.

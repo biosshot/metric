@@ -31,7 +31,7 @@ not an inter-role protocol.
 
 ## Current execution status
 
-Status as of 2026-07-27:
+Status as of 2026-08-02:
 
 | Phase | Capability | Status |
 | ---: | --- | --- |
@@ -51,23 +51,23 @@ Status as of 2026-07-27:
 | 37 | Application Metrics | Complete |
 | 38 | Session Replay | Complete |
 | 39 | Investigation UX expansion | Cancelled as a phase; ideas returned to backlog |
-| 40 | Bounded JSON/CSV export | Accepted, next focus |
+| 40 | Bounded JSON/CSV export | Complete |
 | 41 | English/Russian Web localization | Complete |
 | 42 | Bounded cold-archive search | Accepted after/reusing Phase 40 |
-| unnumbered | Unified Query v2 over current hot data | Accepted by ADR-0048 |
+| unnumbered | Unified Query v2 over current hot data | Complete |
 
 Phase 23 evidence is published in
 `arch-docs/phase-reports/0023-dark-monochrome-web.md`. Phase 24-26 implementation
 evidence is published in the corresponding reports under `arch-docs/phase-reports/`.
-Phase 28-38 evidence is published in their corresponding reports.
+Phase 28-38 and Phase 40 evidence is published in their corresponding reports.
 
 ADR-0044 originally paused product ordering after Phase 26. The 2026-07-26 owner
 decision deferred execution of Phase 27 without completing it. ADR-0047 closes that
-program as obsolete without claiming its gates, records completed Phase 41 and owns
-the selected Phase 40/42 focus. All other unselected items below remain unnumbered
+program as obsolete without claiming its gates, records completed Phases 40/41 and
+owns the selected Phase 42 focus. All other unselected items below remain unnumbered
 backlog.
 
-ADR-0048 additionally accepts Unified Query v2 as an unnumbered cross-cutting
+ADR-0048 additionally records the completed Unified Query v2 unnumbered cross-cutting
 replacement. It extends the existing Search/Explore code, uses one public query
 endpoint across product pages and explicitly makes no MongoDB schema, collection,
 validator, index, retained-data or migration change.
@@ -900,7 +900,7 @@ The completed chain, deferred gate and selected product wave are:
 -> 36 Uptime
 -> 37 Application Metrics (complete)
 -> 38 Session Replay (complete)
--> 40 JSON/CSV export (accepted)
+-> 40 JSON/CSV export (complete)
 -> 41 English/Russian localization (complete)
 -> 42 bounded cold-archive search (accepted)
 ```

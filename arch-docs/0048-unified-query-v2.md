@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-01
+- Implementation: Complete (2026-08-02)
 - Amends: ADR-0009, ADR-0023, ADR-0024, ADR-0040, ADR-0045 and ADR-0047
 - Storage effect: none; schema generation remains 19
 
@@ -291,6 +292,16 @@ commits:
     Alert and E2E gates.
 
 There is no intermediate public release with two supported query APIs.
+
+## Completion evidence
+
+The implementation reuses the generalized Boolean parser, source-aware Query v2
+adapters and one project-scoped `/query` endpoint for Issues, Errors, Logs, Traces,
+Metrics, Replays, Feedback and Releases. The bundled Web pages, Saved Queries,
+Dashboards and Alerts use that contract; replaced public list/search transports were
+removed. Parser, authorization, cursor, source-adapter, Web client and route coverage
+verify the replacement. MongoDB schema generation remains 19 and no collection,
+validator, index, migration or retained-data rewrite was introduced.
 
 ## Consequences
 

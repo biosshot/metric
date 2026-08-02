@@ -26,6 +26,10 @@ The export semaphore is separate from ingest writers. Query v2 parsing,
 source-aware validation, authorization, estimation, reservation and physical
 adapters remain authoritative.
 
+The first implementation assembles the response in memory and returns it only after
+serialization completes; it is not HTTP chunk streaming. The 16 MiB response ceiling
+and two-export process semaphore bound aggregate export-buffer memory.
+
 ## Serialization and security
 
 JSON contains the stable scrubbed record DTO array. CSV has a deterministic closed
@@ -45,4 +49,3 @@ The implementation adds no endpoint, collection, validator, index, migration,
 backfill, export job, worker, Blob object, query cache or materialized result. MongoDB
 schema generation remains 19. Cancellation cannot leave a durable partial export
 because the bounded response has no durable export object.
-
