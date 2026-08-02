@@ -105,112 +105,114 @@ function timestamp(value: string | null): string {
       </div>
     </header>
 
-    <UnifiedQueryBar
-      v-model="query"
-      source="releases"
-      :show-reset="Boolean(query || appliedQuery)"
-      @submit="submitQuery"
-      @reset="resetQuery"
-    />
+    <div class="release-workspace">
+      <UnifiedQueryBar
+        v-model="query"
+        source="releases"
+        :show-reset="Boolean(query || appliedQuery)"
+        @submit="submitQuery"
+        @reset="resetQuery"
+      />
 
-    <ApiErrorPanel
-      v-if="createRelease.error.value"
-      :error="createRelease.error.value"
-      :title="$t('releases.createFailed')"
-    />
+      <ApiErrorPanel
+        v-if="createRelease.error.value"
+        :error="createRelease.error.value"
+        :title="$t('releases.createFailed')"
+      />
 
-    <LoadingPanel v-if="releases.isPending.value" :label="$t('releases.loading')" />
-    <ApiErrorPanel
-      v-else-if="releases.error.value"
-      :error="releases.error.value"
-      :title="$t('releases.loadFailed')"
-      @retry="releases.refetch()"
-    />
-    <EmptyState
-      v-else-if="!releases.data.value?.items.length"
-      icon="release"
-      :title="$t('releases.empty')"
-      :description="$t('releases.emptyDescription')"
-    />
-    <div v-else class="release-list">
-      <nav class="pagination" aria-label="Release pages">
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="!history.length"
-          @click="previousPage"
+      <LoadingPanel v-if="releases.isPending.value" :label="$t('releases.loading')" />
+      <ApiErrorPanel
+        v-else-if="releases.error.value"
+        :error="releases.error.value"
+        :title="$t('releases.loadFailed')"
+        @retry="releases.refetch()"
+      />
+      <EmptyState
+        v-else-if="!releases.data.value?.items.length"
+        icon="release"
+        :title="$t('releases.empty')"
+        :description="$t('releases.emptyDescription')"
+      />
+      <div v-else class="release-list">
+        <nav class="pagination" aria-label="Release pages">
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="!history.length"
+            @click="previousPage"
+          >
+            {{ $t('common.previous') }}
+          </button>
+          <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="!releases.data.value.next_cursor"
+            @click="nextPage"
+          >
+            {{ $t('common.next') }}
+          </button>
+        </nav>
+        <RouterLink
+          v-for="release in releases.data.value.items"
+          :key="release.id"
+          class="panel release-card"
+          :to="`/releases/${release.id}`"
         >
-          {{ $t('common.previous') }}
-        </button>
-        <span>{{ $t('common.page', { page: history.length + 1 }) }}</span>
-        <button
-          class="button button--secondary"
-          type="button"
-          :disabled="!releases.data.value.next_cursor"
-          @click="nextPage"
-        >
-          {{ $t('common.next') }}
-        </button>
-      </nav>
-      <RouterLink
-        v-for="release in releases.data.value.items"
-        :key="release.id"
-        class="panel release-card"
-        :to="`/releases/${release.id}`"
-      >
-        <span class="release-card__icon"><AppIcon name="release" :size="20" /></span>
-        <span>
-          <strong>{{ release.version }}</strong>
-          <small>
-            {{
-              release.released_at
-                ? $t('releases.finalized', { time: timestamp(release.released_at) })
-                : $t('releases.open')
-            }}
-          </small>
-        </span>
-        <span class="release-card__seen">
-          {{ $t('releases.lastError') }}
-          <strong>{{ timestamp(release.last_seen) }}</strong>
-        </span>
-        <AppIcon name="view" :size="18" />
-      </RouterLink>
-    </div>
-
-    <form
-      v-if="session.has('release:write')"
-      class="panel release-create"
-      @submit.prevent="createRelease.mutate()"
-    >
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">{{ $t('releases.explicit') }}</p>
-          <h2>{{ $t('releases.createBeforeDeploy') }}</h2>
-        </div>
+          <span class="release-card__icon"><AppIcon name="release" :size="20" /></span>
+          <span>
+            <strong>{{ release.version }}</strong>
+            <small>
+              {{
+                release.released_at
+                  ? $t('releases.finalized', { time: timestamp(release.released_at) })
+                  : $t('releases.open')
+              }}
+            </small>
+          </span>
+          <span class="release-card__seen">
+            {{ $t('releases.lastError') }}
+            <strong>{{ timestamp(release.last_seen) }}</strong>
+          </span>
+          <AppIcon name="view" :size="18" />
+        </RouterLink>
       </div>
-      <label>
-        {{ $t('releases.exactVersion') }}
-        <input
-          v-model.trim="version"
-          required
-          maxlength="200"
-          placeholder="backend@2.4.0"
-          autocomplete="off"
-        />
-      </label>
-      <label>
-        {{ $t('releases.releaseUrl') }}
-        <span class="muted">{{ $t('releases.optional') }}</span>
-        <input v-model.trim="url" maxlength="2048" placeholder="https://ci.example/build/1042" />
-      </label>
-      <button
-        class="button button--primary"
-        type="submit"
-        :disabled="!version || createRelease.isPending.value"
+
+      <form
+        v-if="session.has('release:write')"
+        class="panel release-create"
+        @submit.prevent="createRelease.mutate()"
       >
-        <AppIcon name="plus" :size="16" />
-        {{ createRelease.isPending.value ? $t('releases.creating') : $t('releases.create') }}
-      </button>
-    </form>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">{{ $t('releases.explicit') }}</p>
+            <h2>{{ $t('releases.createBeforeDeploy') }}</h2>
+          </div>
+        </div>
+        <label>
+          {{ $t('releases.exactVersion') }}
+          <input
+            v-model.trim="version"
+            required
+            maxlength="200"
+            placeholder="backend@2.4.0"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          {{ $t('releases.releaseUrl') }}
+          <span class="muted">{{ $t('releases.optional') }}</span>
+          <input v-model.trim="url" maxlength="2048" placeholder="https://ci.example/build/1042" />
+        </label>
+        <button
+          class="button button--primary"
+          type="submit"
+          :disabled="!version || createRelease.isPending.value"
+        >
+          <AppIcon name="plus" :size="16" />
+          {{ createRelease.isPending.value ? $t('releases.creating') : $t('releases.create') }}
+        </button>
+      </form>
+    </div>
   </section>
 </template>

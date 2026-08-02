@@ -3805,7 +3805,6 @@ label small,
 
 .release-create {
   display: grid;
-  max-width: 72rem;
   grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 1.4fr) auto;
   align-items: end;
   gap: 0.8rem;
@@ -3823,9 +3822,9 @@ label small,
   margin-bottom: 1rem;
 }
 
-.releases-page > .unified-query-bar,
-.releases-page > .unified-query-bar__chips {
-  max-width: 64rem;
+.release-workspace {
+  width: 100%;
+  max-width: 72rem;
 }
 
 .release-card {
