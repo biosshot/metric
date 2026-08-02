@@ -59,6 +59,7 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['status', 'status'],
     ['issue', 'issue_id'],
     ['title', 'title'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   errors: [
@@ -68,6 +69,7 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['platform', 'platform'],
     ['issue', 'issue_id'],
     ['user', 'user.id'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   logs: [
@@ -78,6 +80,7 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['rel', 'release'],
     ['trace', 'trace_id'],
     ['span', 'span_id'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   traces: [
@@ -89,6 +92,7 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['status', 'status'],
     ['trace', 'trace_id'],
     ['span', 'span_id'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   metrics: [
@@ -96,6 +100,7 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['kind', 'metric_kind'],
     ['unit', 'unit'],
     ['trace', 'trace_id'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   replays: [
@@ -103,6 +108,7 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['url', 'url'],
     ['env', 'environment'],
     ['rel', 'release'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   feedback: [
@@ -110,10 +116,12 @@ const fields: Record<QuerySource, Array<[string, string]>> = {
     ['status', 'status'],
     ['msg', 'message'],
     ['replay', 'replay_id'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
   releases: [
     ['rel', 'release'],
+    ['date', 'timestamp'],
     ['timestamp', 'timestamp'],
   ],
 };

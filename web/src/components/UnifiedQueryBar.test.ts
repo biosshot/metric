@@ -56,6 +56,9 @@ describe('UnifiedQueryBar', () => {
     await view.rerender({ modelValue: 'l', source: 'errors' });
     expect(screen.getByRole('option', { name: /level/ })).toBeVisible();
 
+    await view.rerender({ modelValue: 'd', source: 'logs' });
+    expect(screen.getByRole('option', { name: /date/ })).toBeVisible();
+
     await view.rerender({ modelValue: 'd', source: 'traces', allowedFields: ['service'] });
     expect(screen.queryByRole('option', { name: /dur/ })).not.toBeInTheDocument();
   });

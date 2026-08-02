@@ -48,6 +48,7 @@ import type {
   Trace,
   UserOrganization,
 } from './types';
+import { queryForBackend } from '../lib/queryDate';
 
 type SessionProvider = () => { organizationId: string | null; csrfToken: string | null };
 type SessionInvalidator = () => void;
@@ -171,6 +172,10 @@ function query(values: Record<string, string | number | null | undefined>): stri
 
 function queryTimestamp(value: number | undefined): string | undefined {
   return value === undefined ? undefined : new Date(value).toISOString();
+}
+
+function exploreRequestForBackend(value: ExploreRequest): ExploreRequest {
+  return value.query ? { ...value, query: queryForBackend(value.query) } : value;
 }
 
 async function binaryRequest(path: string): Promise<ArrayBuffer> {
@@ -394,6 +399,7 @@ export const api = {
       signal,
       body: JSON.stringify({
         ...body,
+        query: queryForBackend(body.query),
         limit: body.limit ?? (body.result.kind === 'values' ? 20 : 50),
       }),
     }),
@@ -480,12 +486,16 @@ export const api = {
   createSavedQuery: (projectId: string, name: string, query: ExploreRequest) =>
     request<SavedQuery>(`/api/v1/projects/${projectId}/saved-queries`, {
       method: 'POST',
-      body: JSON.stringify({ name, query }),
+      body: JSON.stringify({ name, query: exploreRequestForBackend(query) }),
     }),
   updateSavedQuery: (projectId: string, value: SavedQuery) =>
     request<SavedQuery>(`/api/v1/projects/${projectId}/saved-queries/${value.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ revision: value.revision, name: value.name, query: value.query }),
+      body: JSON.stringify({
+        revision: value.revision,
+        name: value.name,
+        query: exploreRequestForBackend(value.query),
+      }),
     }),
   deleteSavedQuery: (projectId: string, id: string) =>
     request<void>(`/api/v1/projects/${projectId}/saved-queries/${id}`, {

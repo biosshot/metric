@@ -444,4 +444,32 @@ describe('native API client', () => {
       message: 'Metric returned HTTP 502 without a recognized error.',
     });
   });
+
+  it('converts the Web-only date field before sending a unified query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          source: 'logs',
+          kind: 'records',
+          items: [],
+          next_cursor: null,
+          normalized_query: '',
+          cost: 1,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.query('42', {
+      source: 'logs',
+      query: 'date:>=2026-08-02T09:20 level:error',
+      result: { kind: 'records' },
+    });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const timestamp = new Date(2026, 7, 2, 9, 20, 0, 0).getTime();
+    expect(path).toBe('/api/v1/projects/42/query');
+    expect(JSON.parse(String(init.body)).query).toBe(`timestamp:>=${timestamp} level:error`);
+  });
 });
