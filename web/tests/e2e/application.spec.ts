@@ -341,6 +341,94 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
     state.policyRevisionSeen = body.expected_revision === 1;
     return json({ ...project.policy, revision: 2, ip_policy: body.ip_policy });
   }
+  if (path === '/api/v1/projects/42/query' && request.method() === 'POST') {
+    const body = request.postDataJSON() as {
+      source: string;
+      query: string;
+      from?: number;
+      until?: number;
+      cursor?: string | null;
+      result: {
+        kind: 'records' | 'number' | 'timeseries' | 'values';
+        aggregates?: Array<{ function: string; field?: string; alias?: string }>;
+        group_by?: string[];
+      };
+    };
+    let items: unknown[] = [];
+    if (body.source === 'issues') {
+      state.issueRequests = (state.issueRequests ?? 0) + 1;
+      if (state.slowIssues) await new Promise((resolve) => setTimeout(resolve, 700));
+      if (state.expireIssues) {
+        return json(
+          {
+            error: {
+              code: 'invalid_credentials',
+              message: 'session expired',
+              request_id: 'issues-expired',
+            },
+          },
+          401,
+        );
+      }
+      if (state.failIssues) {
+        return json(
+          {
+            error: {
+              code: 'temporarily_unavailable',
+              message: 'service is temporarily unavailable',
+              request_id: 'browser-request-503',
+            },
+          },
+          503,
+        );
+      }
+      items = state.emptyIssues ? [] : [issue];
+    } else if (body.source === 'errors') {
+      items = body.result.kind === 'number' ? [{ count: 17 }] : [event];
+    } else if (body.source === 'logs') {
+      items = [logRecord];
+    } else if (body.source === 'traces') {
+      items = [
+        {
+          ...transactionRecord,
+          timestamp: Date.parse(transactionRecord.started_at),
+          received_at: Date.parse(transactionRecord.received_at),
+        },
+      ];
+    } else if (body.source === 'replays') {
+      state.signalFromSeen = body.from;
+      const replayTerm = body.query.split(':').slice(1).join(':').replaceAll('"', '') || body.query;
+      const matching = (state.replays ?? [replayRecord]).filter(
+        (replay) => !replayTerm || JSON.stringify(replay).includes(replayTerm),
+      );
+      const offset = Number(body.cursor?.replace('offset-', '') ?? 0);
+      items = matching.slice(offset, offset + 10);
+      const nextCursor = offset + 10 < matching.length ? `offset-${offset + 10}` : null;
+      return json({
+        source: body.source,
+        kind: body.result.kind,
+        items,
+        next_cursor: nextCursor,
+        normalized_query: body.query,
+        cost: 198,
+      });
+    } else if (body.source === 'feedback') {
+      items = [feedbackRecord];
+    } else if (body.source === 'metrics') {
+      const grouped = body.result.group_by?.includes('name');
+      items = grouped
+        ? [{ name: 'checkout.requests', value: 42.5, samples: 12 }]
+        : [{ value: 42.5 }];
+    }
+    return json({
+      source: body.source,
+      kind: body.result.kind,
+      items,
+      next_cursor: null,
+      normalized_query: body.query,
+      cost: 198,
+    });
+  }
   if (path === '/api/v1/projects/42/issues') {
     state.issueRequests = (state.issueRequests ?? 0) + 1;
     if (state.slowIssues) await new Promise((resolve) => setTimeout(resolve, 700));
@@ -909,7 +997,7 @@ test('first setup creates a project and reaches an actionable SDK DSN', async ({
   await page.getByLabel('Slug').fill('acme');
   await page.getByRole('button', { name: 'Create owner and organization' }).click();
 
-  await expect(page.getByText('Organization created. Its ID is')).toContainText('7');
+  await expect(page.getByText('Organization created. Sign in to continue.')).toBeVisible();
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Create your first project' })).toBeVisible();
 
@@ -1081,7 +1169,7 @@ test('Explore submits a typed bounded query and renders a number result', async 
   await expect(page.getByRole('heading', { name: 'Unified Explore' })).toBeVisible();
   await page.getByRole('combobox', { name: 'Result' }).click();
   await page.getByRole('option', { name: /^Number/ }).click();
-  await page.getByRole('button', { name: 'Run query' }).click();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.locator('.explore-number')).toContainText('17');
   await expect(page.getByText('Estimated cost')).toContainText('198');
 });
@@ -1117,20 +1205,21 @@ test('Metrics uses metric values and a custom time range', async ({ page }) => {
   await page.getByRole('button', { name: 'Apply range' }).click();
 
   const requestPromise = page.waitForRequest(
-    (request) =>
-      request.url().endsWith('/api/v1/projects/42/explore') && request.method() === 'POST',
+    (request) => request.url().endsWith('/api/v1/projects/42/query') && request.method() === 'POST',
   );
-  await page.getByRole('button', { name: 'Run query' }).click();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
   const request = await requestPromise;
   const body = request.postDataJSON() as {
-    dataset: string;
+    source: string;
     from: number;
     until: number;
-    aggregates: Array<{ function: string; field?: string; alias?: string }>;
+    result: { aggregates: Array<{ function: string; field?: string; alias?: string }> };
   };
-  expect(body.dataset).toBe('metrics');
+  expect(body.source).toBe('metrics');
   expect(body.until - body.from).toBe(26 * 60 * 60 * 1_000);
-  expect(body.aggregates).toEqual([{ function: 'sum', field: 'metric_sum', alias: 'value' }]);
+  expect(body.result.aggregates).toEqual([
+    { function: 'sum', field: 'metric_sum', alias: 'value' },
+  ]);
   await expect(page.locator('.explore-number')).toContainText('42.5');
 });
 
@@ -1249,31 +1338,28 @@ test('mobile pagination stays outside horizontal data scrolling and dashboard ca
       );
     }
     if (target.url === '/logs' || target.url === '/traces') {
-      const toolbarBox = await page.locator('.signal-toolbar').boundingBox();
-      const actionsBox = await page.locator('.signal-toolbar__actions').boundingBox();
-      const timeRangeBox = await page.locator('.time-range-control').boundingBox();
+      const toolbar = page.locator('.unified-query-bar');
+      const toolbarBox = await toolbar.boundingBox();
+      const timeRangeBox = await toolbar.locator('.time-range-control').boundingBox();
       expect(toolbarBox).not.toBeNull();
-      expect(actionsBox).not.toBeNull();
       expect(timeRangeBox).not.toBeNull();
-      expect(actionsBox!.x).toBeGreaterThanOrEqual(toolbarBox!.x);
-      expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(
-        toolbarBox!.x + toolbarBox!.width,
-      );
-      expect(timeRangeBox!.x).toBeGreaterThanOrEqual(actionsBox!.x);
+      expect(timeRangeBox!.x).toBeGreaterThanOrEqual(toolbarBox!.x);
       expect(timeRangeBox!.x + timeRangeBox!.width).toBeLessThanOrEqual(
-        actionsBox!.x + actionsBox!.width,
+        toolbarBox!.x + toolbarBox!.width,
       );
     }
   }
 
   await page.setViewportSize({ width: 1050, height: 900 });
   await page.goto('/logs');
-  const tabletToolbarActionsBox = await page.locator('.signal-toolbar__actions').boundingBox();
-  const tabletTimeRangeBox = await page.locator('.time-range-control').boundingBox();
-  expect(tabletToolbarActionsBox).not.toBeNull();
+  const tabletToolbarBox = await page.locator('.unified-query-bar').boundingBox();
+  const tabletTimeRangeBox = await page
+    .locator('.unified-query-bar .time-range-control')
+    .boundingBox();
+  expect(tabletToolbarBox).not.toBeNull();
   expect(tabletTimeRangeBox).not.toBeNull();
-  expect(Math.abs(tabletTimeRangeBox!.x - tabletToolbarActionsBox!.x)).toBeLessThanOrEqual(1);
-  expect(tabletTimeRangeBox!.width).toBeGreaterThan(240);
+  expect(tabletTimeRangeBox!.x).toBeGreaterThanOrEqual(tabletToolbarBox!.x);
+  expect(tabletTimeRangeBox!.width).toBeGreaterThan(160);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/issues/${issue.id}`);
@@ -1337,34 +1423,26 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await login(page);
 
   await page.goto('/issues');
-  const issueToolbar = page.locator('.signal-toolbar--issues');
+  const issueToolbar = page.locator('.unified-query-bar');
   const issueSearch = issueToolbar.getByRole('searchbox');
-  const issueStatus = issueToolbar.getByRole('combobox', { name: 'Issue status' });
-  const issueActions = issueToolbar.locator('.signal-toolbar__actions');
+  const issueTimeRange = issueToolbar.getByRole('combobox', { name: 'Issue time range' });
   await expect(issueToolbar.getByRole('button', { name: 'Reset' })).toBeHidden();
-  await issueStatus.click();
-  await page.getByRole('option', { name: /^Open/ }).click();
+  await issueSearch.fill('status:resolved');
   await expect(issueToolbar.getByRole('button', { name: 'Reset' })).toBeVisible();
   const issueSearchBox = await issueSearch.boundingBox();
-  const issueStatusBox = await issueStatus.boundingBox();
-  const issueActionsBox = await issueActions.boundingBox();
+  const issueTimeRangeBox = await issueTimeRange.boundingBox();
   expect(issueSearchBox).not.toBeNull();
-  expect(issueStatusBox).not.toBeNull();
-  expect(issueActionsBox).not.toBeNull();
-  expect(issueActionsBox!.y).toBeLessThan(issueSearchBox!.y + issueSearchBox!.height);
-  expect(issueActionsBox!.x).toBeGreaterThanOrEqual(issueStatusBox!.x + issueStatusBox!.width);
-  await issueToolbar.getByRole('combobox', { name: 'Issue time range' }).click();
+  expect(issueTimeRangeBox).not.toBeNull();
+  expect(issueTimeRangeBox!.y).toBeLessThan(issueSearchBox!.y + issueSearchBox!.height);
+  await issueTimeRange.click();
   await page.getByRole('option', { name: /^Custom range/ }).click();
   const customRangePopover = page.getByRole('dialog', { name: 'Custom time range' });
   const issueSearchWithPopoverBox = await issueSearch.boundingBox();
-  const issueStatusWithPopoverBox = await issueStatus.boundingBox();
-  const issueActionsWithPopoverBox = await issueActions.boundingBox();
+  const issueTimeRangeWithPopoverBox = await issueTimeRange.boundingBox();
   expect(issueSearchWithPopoverBox).not.toBeNull();
-  expect(issueStatusWithPopoverBox).not.toBeNull();
-  expect(issueActionsWithPopoverBox).not.toBeNull();
+  expect(issueTimeRangeWithPopoverBox).not.toBeNull();
   expect(Math.abs(issueSearchWithPopoverBox!.width - issueSearchBox!.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(issueStatusWithPopoverBox!.x - issueStatusBox!.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(issueActionsWithPopoverBox!.x - issueActionsBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(issueTimeRangeWithPopoverBox!.x - issueTimeRangeBox!.x)).toBeLessThanOrEqual(1);
   await expect
     .poll(() =>
       customRangePopover.evaluate(
@@ -1375,75 +1453,59 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await page.keyboard.press('Escape');
 
   await page.goto('/logs');
-  const logToolbar = page.locator('.signal-toolbar');
-  const logActions = logToolbar.locator('.signal-toolbar__actions');
-  const logMessage = logToolbar.getByPlaceholder('Message contains…');
+  const logToolbar = page.locator('.unified-query-bar');
+  const logMessage = logToolbar.getByRole('searchbox');
   const logTimeRange = logToolbar.getByRole('combobox', { name: 'Log time range' });
   const logSearch = logToolbar.getByRole('button', { name: 'Search', exact: true });
   const logToolbarBox = await logToolbar.boundingBox();
-  const logActionsBox = await logActions.boundingBox();
   const logMessageBox = await logMessage.boundingBox();
   const logTimeRangeBox = await logTimeRange.boundingBox();
   const logSearchBox = await logSearch.boundingBox();
   expect(logToolbarBox).not.toBeNull();
-  expect(logActionsBox).not.toBeNull();
   expect(logMessageBox).not.toBeNull();
   expect(logTimeRangeBox).not.toBeNull();
   expect(logSearchBox).not.toBeNull();
-  expect(
-    Math.abs(
-      logToolbarBox!.x + logToolbarBox!.width - (logActionsBox!.x + logActionsBox!.width) - 12,
-    ),
-  ).toBeLessThanOrEqual(2);
-  expect(logActionsBox!.y).toBeLessThanOrEqual(logTimeRangeBox!.y);
-  expect(logActionsBox!.y).toBeLessThan(logMessageBox!.y + logMessageBox!.height);
+  expect(logTimeRangeBox!.y).toBeLessThan(logMessageBox!.y + logMessageBox!.height);
   expect(logSearchBox!.x).toBeGreaterThanOrEqual(logTimeRangeBox!.x + logTimeRangeBox!.width);
   await expect(logToolbar.getByRole('button', { name: 'Reset' })).toBeHidden();
-  await logToolbar.getByPlaceholder('Service').fill('checkout');
+  await logMessage.fill('svc:checkout');
   await expect(logToolbar.getByRole('button', { name: 'Reset' })).toBeVisible();
   await logToolbar.getByRole('button', { name: 'Reset' }).click();
   await expect(logToolbar.getByRole('button', { name: 'Reset' })).toBeHidden();
 
   await page.goto('/traces');
-  const traceToolbar = page.locator('.signal-toolbar--compact');
-  const traceRelease = traceToolbar.getByPlaceholder('Release');
-  const traceActions = traceToolbar.locator('.signal-toolbar__actions');
-  const traceReleaseBox = await traceRelease.boundingBox();
-  const traceActionsBox = await traceActions.boundingBox();
-  expect(traceReleaseBox).not.toBeNull();
-  expect(traceActionsBox).not.toBeNull();
-  expect(traceActionsBox!.y).toBeLessThan(traceReleaseBox!.y + traceReleaseBox!.height);
-  expect(traceActionsBox!.x).toBeGreaterThanOrEqual(traceReleaseBox!.x + traceReleaseBox!.width);
+  const traceToolbar = page.locator('.unified-query-bar');
+  const traceSearch = traceToolbar.getByRole('searchbox');
+  const traceTimeRange = traceToolbar.getByRole('combobox', { name: 'Trace time range' });
+  const traceSearchBox = await traceSearch.boundingBox();
+  const traceTimeRangeBox = await traceTimeRange.boundingBox();
+  expect(traceSearchBox).not.toBeNull();
+  expect(traceTimeRangeBox).not.toBeNull();
+  expect(traceTimeRangeBox!.y).toBeLessThan(traceSearchBox!.y + traceSearchBox!.height);
 
   await page.goto('/replays');
 
-  const replayToolbar = page.locator('.signal-toolbar--replays');
-  const replaySearch = replayToolbar.getByLabel('Search loaded Replays');
-  const replayActions = replayToolbar.locator('.signal-toolbar__actions');
+  const replayToolbar = page.locator('.unified-query-bar');
+  const replaySearch = replayToolbar.getByRole('searchbox');
   const replayTimeRange = replayToolbar.getByRole('combobox', { name: 'Replay time range' });
   const replaySearchButton = replayToolbar.getByRole('button', { name: 'Search', exact: true });
   const toolbarBox = await replayToolbar.boundingBox();
   const searchBox = await replaySearch.boundingBox();
-  const actionsBox = await replayActions.boundingBox();
   const replayTimeRangeBox = await replayTimeRange.boundingBox();
   const replaySearchButtonBox = await replaySearchButton.boundingBox();
   expect(toolbarBox).not.toBeNull();
   expect(searchBox).not.toBeNull();
-  expect(actionsBox).not.toBeNull();
   expect(replayTimeRangeBox).not.toBeNull();
   expect(replaySearchButtonBox).not.toBeNull();
-  expect(
-    Math.abs(toolbarBox!.x + toolbarBox!.width - (actionsBox!.x + actionsBox!.width) - 12),
-  ).toBeLessThanOrEqual(2);
-  expect(Math.abs(actionsBox!.y - searchBox!.y)).toBeLessThanOrEqual(4);
+  expect(Math.abs(replayTimeRangeBox!.y - searchBox!.y)).toBeLessThanOrEqual(4);
   expect(replaySearchButtonBox!.x).toBeGreaterThanOrEqual(
     replayTimeRangeBox!.x + replayTimeRangeBox!.width,
   );
   const replayPages = page.getByRole('navigation', { name: 'Replay pages' });
-  await expect(replayPages).toContainText('Page 1 of 3');
+  await expect(replayPages).toContainText('Page 1');
   await expect(page.locator('.replay-row')).toHaveCount(10);
   await replayPages.getByRole('button', { name: 'Next' }).click();
-  await expect(replayPages).toContainText('Page 2 of 3');
+  await expect(replayPages).toContainText('Page 2');
   await expect(page.locator('.replay-row')).toHaveCount(10);
 
   await page.getByRole('combobox', { name: 'Replay time range' }).click();
@@ -1458,13 +1520,13 @@ test('Replay search and detail keep controls and metadata in their content flow'
   await expect(page.getByRole('combobox', { name: 'Replay time range' })).not.toContainText(
     'Custom range',
   );
-  await page.getByLabel('Search loaded Replays').fill('manual-replay-demo');
+  await replaySearch.fill('env:manual-replay-demo');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect.poll(() => state.signalFromSeen).toBe(new Date('2026-07-20T00:00').getTime());
-  await expect(replayPages).toContainText('Page 1 of 1');
+  await expect(replayPages).toContainText('Page 1');
   await expect(replayPages.getByRole('button', { name: 'Previous' })).toBeDisabled();
   await expect(replayPages.getByRole('button', { name: 'Next' })).toBeDisabled();
-  await expect(page.getByText('1 matching Replay for')).toBeVisible();
+  await expect(page.locator('.replay-row')).toHaveCount(1);
   await page.getByRole('link', { name: /example\.test\/replay/ }).click();
 
   await expect(page.getByRole('heading', { name: 'Session Replay', exact: true })).toBeVisible();
