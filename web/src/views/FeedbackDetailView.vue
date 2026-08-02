@@ -163,7 +163,7 @@ async function downloadAttachment(attachment: FeedbackAttachment): Promise<void>
         </div>
         <div
           v-if="session.has('issue:write')"
-          class="feedback-workflow"
+          class="detail-workflow"
           :aria-label="$t('feedbackDetail.workflow')"
         >
           <span class="eyebrow">{{ $t('feedbackDetail.workflowStatus') }}</span>

@@ -106,39 +106,42 @@ function formatTime(value: string): string {
         </div>
         <div
           v-if="session.has('issue:write')"
-          class="button-group"
+          class="detail-workflow"
           :aria-label="$t('issueDetail.actions')"
         >
-          <button
-            v-if="issue.data.value.status !== 'resolved'"
-            class="button button--primary"
-            type="button"
-            :disabled="lifecycle.isPending.value"
-            @click="lifecycle.mutate('resolve')"
-          >
-            <AppIcon name="success" :size="16" />
-            {{ $t('issueDetail.resolve') }}
-          </button>
-          <button
-            v-if="issue.data.value.status !== 'ignored'"
-            class="button button--secondary"
-            type="button"
-            :disabled="lifecycle.isPending.value"
-            @click="lifecycle.mutate('ignore')"
-          >
-            <AppIcon name="blocked" :size="16" />
-            {{ $t('issueDetail.ignore') }}
-          </button>
-          <button
-            v-if="issue.data.value.status !== 'open'"
-            class="button button--secondary"
-            type="button"
-            :disabled="lifecycle.isPending.value"
-            @click="lifecycle.mutate('reopen')"
-          >
-            <AppIcon name="refresh" :size="16" />
-            {{ $t('issueDetail.reopen') }}
-          </button>
+          <span class="eyebrow">{{ $t('issueDetail.actions') }}</span>
+          <div class="button-group">
+            <button
+              v-if="issue.data.value.status !== 'resolved'"
+              class="button button--primary"
+              type="button"
+              :disabled="lifecycle.isPending.value"
+              @click="lifecycle.mutate('resolve')"
+            >
+              <AppIcon name="success" :size="16" />
+              {{ $t('issueDetail.resolve') }}
+            </button>
+            <button
+              v-if="issue.data.value.status !== 'ignored'"
+              class="button button--secondary"
+              type="button"
+              :disabled="lifecycle.isPending.value"
+              @click="lifecycle.mutate('ignore')"
+            >
+              <AppIcon name="blocked" :size="16" />
+              {{ $t('issueDetail.ignore') }}
+            </button>
+            <button
+              v-if="issue.data.value.status !== 'open'"
+              class="button button--secondary"
+              type="button"
+              :disabled="lifecycle.isPending.value"
+              @click="lifecycle.mutate('reopen')"
+            >
+              <AppIcon name="refresh" :size="16" />
+              {{ $t('issueDetail.reopen') }}
+            </button>
+          </div>
         </div>
         <p v-else class="permission-note">{{ $t('issueDetail.readOnly') }}</p>
       </header>

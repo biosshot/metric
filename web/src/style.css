@@ -4126,14 +4126,14 @@ label small,
   overflow-wrap: anywhere;
 }
 
-.feedback-workflow {
+.detail-workflow {
   display: grid;
   flex: none;
   justify-items: end;
   gap: 0.55rem;
 }
 
-.feedback-workflow .eyebrow {
+.detail-workflow .eyebrow {
   margin: 0;
 }
 
