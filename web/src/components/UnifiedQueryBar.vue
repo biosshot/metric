@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api/client';
 import type { QuerySource } from '../api/types';
 import { useSessionStore } from '../stores/session';
 import AppIcon from './AppIcon.vue';
+import BaseSelect, { type SelectOption } from './BaseSelect.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -53,11 +54,17 @@ const router = useRouter();
 const session = useSessionStore();
 const { t } = useI18n();
 const inputId = useId();
+const exportTitleId = useId();
+const exportFilenameId = useId();
 const focused = ref(false);
 const highlighted = ref(0);
 const dynamicValues = ref<string[]>([]);
 const exporting = ref(false);
 const exportError = ref('');
+const exportDialogOpen = ref(false);
+const exportFormat = ref<'json' | 'csv'>('json');
+const exportFilename = ref('');
+const exportFilenameInput = ref<HTMLInputElement>();
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let valuesAbort: AbortController | null = null;
 let requestGeneration = 0;
@@ -205,6 +212,20 @@ const suggestions = computed<Suggestion[]>(() => {
   return [...operators, ...values].slice(0, 20);
 });
 const open = computed(() => focused.value && suggestions.value.length > 0);
+const exportFormatOptions = computed<SelectOption[]>(() => [
+  {
+    value: 'json',
+    label: 'JSON',
+    description: t('unifiedQuery.jsonDescription'),
+    icon: 'code',
+  },
+  {
+    value: 'csv',
+    label: 'CSV',
+    description: t('unifiedQuery.csvDescription'),
+    icon: 'clipboard',
+  },
+]);
 
 watch(activeToken, () => {
   highlighted.value = 0;
@@ -248,6 +269,11 @@ watch(
     }
   },
 );
+
+watch(exportFormat, (format) => {
+  if (!exportDialogOpen.value) return;
+  exportFilename.value = exportFilename.value.replace(/\.(?:json|csv)$/i, `.${format}`);
+});
 
 onBeforeUnmount(() => {
   requestGeneration += 1;
@@ -310,7 +336,46 @@ async function reset(): Promise<void> {
   emit('reset');
 }
 
-async function download(format: 'json' | 'csv'): Promise<void> {
+function defaultExportFilename(format: 'json' | 'csv'): string {
+  const type = props.source === 'traces' ? 'spans' : props.source;
+  const filter = safeFilenameText(props.modelValue.trim().slice(0, 16))
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[._]+|[._]+$/g, '');
+  return `${type}_${filter || 'all'}.${format}`;
+}
+
+function safeFilenameText(value: string): string {
+  const invalid = '<>:"/\\|?*';
+  return [...value]
+    .map((character) =>
+      invalid.includes(character) || character.charCodeAt(0) < 32 ? '_' : character,
+    )
+    .join('');
+}
+
+function normalizedExportFilename(): string {
+  const extension = `.${exportFormat.value}`;
+  const value = safeFilenameText(exportFilename.value.trim()).replace(/[. ]+$/g, '');
+  const basename =
+    value.replace(/\.(?:json|csv)$/i, '') || defaultExportFilename(exportFormat.value);
+  return basename.endsWith(extension) ? basename : `${basename}${extension}`;
+}
+
+function showExportDialog(): void {
+  exportError.value = '';
+  exportFormat.value = 'json';
+  exportFilename.value = defaultExportFilename('json');
+  exportDialogOpen.value = true;
+  void nextTick(() => exportFilenameInput.value?.focus());
+}
+
+function closeExportDialog(): void {
+  if (exporting.value) return;
+  exportDialogOpen.value = false;
+}
+
+async function download(): Promise<void> {
   const projectId = session.selectedProjectId;
   if (!projectId || exporting.value) return;
   exporting.value = true;
@@ -325,14 +390,15 @@ async function download(format: 'json' | 'csv'): Promise<void> {
         until: props.exportUntil,
         result: { kind: 'records' },
       },
-      format,
+      exportFormat.value,
     );
     const url = URL.createObjectURL(result.blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = result.filename;
+    anchor.download = normalizedExportFilename();
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    exportDialogOpen.value = false;
   } catch (error) {
     exportError.value = error instanceof Error ? error.message : t('unifiedQuery.exportFailed');
   } finally {
@@ -380,20 +446,10 @@ async function download(format: 'json' | 'csv'): Promise<void> {
       class="button button--secondary unified-query-bar__export"
       type="button"
       :disabled="disabled || exporting"
-      @click="download('json')"
+      @click="showExportDialog"
     >
       <AppIcon name="download" :size="16" />
-      {{ t('unifiedQuery.exportJson') }}
-    </button>
-    <button
-      v-if="exportable"
-      class="button button--secondary unified-query-bar__export"
-      type="button"
-      :disabled="disabled || exporting"
-      @click="download('csv')"
-    >
-      <AppIcon name="download" :size="16" />
-      {{ t('unifiedQuery.exportCsv') }}
+      {{ t('unifiedQuery.export') }}
     </button>
     <button
       v-if="showSubmit"
@@ -416,9 +472,6 @@ async function download(format: 'json' | 'csv'): Promise<void> {
       {{ t('common.reset') }}
     </button>
   </div>
-  <p v-if="exportError" class="field-error unified-query-bar__error" role="alert">
-    {{ exportError }}
-  </p>
   <div
     v-if="chips.length"
     class="unified-query-bar__chips"
@@ -426,4 +479,75 @@ async function download(format: 'json' | 'csv'): Promise<void> {
   >
     <code v-for="chip in chips" :key="chip">{{ chip }}</code>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="exportDialogOpen"
+      class="export-dialog-backdrop"
+      @click.self="closeExportDialog"
+      @keydown.esc="closeExportDialog"
+    >
+      <form
+        class="panel export-dialog"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="exportTitleId"
+        @submit.prevent="download"
+      >
+        <header class="export-dialog__header">
+          <div>
+            <p class="eyebrow">{{ t('unifiedQuery.exportEyebrow') }}</p>
+            <h2 :id="exportTitleId">{{ t('unifiedQuery.exportTitle') }}</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            :aria-label="t('common.close')"
+            :disabled="exporting"
+            @click="closeExportDialog"
+          >
+            <AppIcon name="close" :size="17" />
+          </button>
+        </header>
+
+        <BaseSelect
+          v-model="exportFormat"
+          :options="exportFormatOptions"
+          :label="t('unifiedQuery.exportFormat')"
+          :disabled="exporting"
+        />
+
+        <label :for="exportFilenameId">
+          {{ t('unifiedQuery.exportFilename') }}
+          <input
+            :id="exportFilenameId"
+            ref="exportFilenameInput"
+            v-model="exportFilename"
+            required
+            maxlength="180"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="exporting"
+          />
+        </label>
+
+        <p v-if="exportError" class="field-error" role="alert">{{ exportError }}</p>
+
+        <footer class="export-dialog__actions">
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="exporting"
+            @click="closeExportDialog"
+          >
+            {{ t('common.cancel') }}
+          </button>
+          <button class="button button--primary" type="submit" :disabled="exporting">
+            <AppIcon :name="exporting ? 'loading' : 'download'" :size="16" />
+            {{ exporting ? t('unifiedQuery.exporting') : t('unifiedQuery.download') }}
+          </button>
+        </footer>
+      </form>
+    </div>
+  </Teleport>
 </template>

@@ -4714,6 +4714,52 @@ label small,
   margin: -0.35rem 0 1rem;
 }
 
+.export-dialog-backdrop {
+  position: fixed;
+  z-index: 120;
+  display: grid;
+  padding: 1rem;
+  background: rgb(0 0 0 / 72%);
+  inset: 0;
+  place-items: center;
+}
+
+.export-dialog {
+  display: grid;
+  width: min(100%, 32rem);
+  gap: 1rem;
+  margin: 0;
+  padding: 1.15rem;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 58%);
+}
+
+.export-dialog__header,
+.export-dialog__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.export-dialog__header .eyebrow,
+.export-dialog__header h2,
+.export-dialog .field-error {
+  margin: 0;
+}
+
+.export-dialog__actions {
+  justify-content: flex-end;
+  padding-top: 0.25rem;
+}
+
+.export-dialog .base-select,
+.export-dialog label,
+.export-dialog input {
+  width: 100%;
+  min-width: 0;
+}
+
 .performance-query-error {
   margin: -0.35rem 0 1rem;
 }

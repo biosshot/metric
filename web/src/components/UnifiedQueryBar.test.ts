@@ -83,4 +83,28 @@ describe('UnifiedQueryBar', () => {
       expect(router.currentRoute.value.query.q).toBeUndefined();
     });
   });
+
+  it('uses one export dialog with a custom format select and safe default filename', async () => {
+    const router = await testRouter();
+    render(UnifiedQueryBar, {
+      props: {
+        modelValue: 'level:error svc:api',
+        source: 'logs',
+        exportable: true,
+      },
+      global: { plugins: [router] },
+    });
+
+    expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Download records' });
+    expect(dialog).toBeVisible();
+    const filename = screen.getByRole('textbox', { name: 'File name' });
+    expect(filename).toHaveValue('logs_level_error_svc.json');
+
+    await fireEvent.click(screen.getByRole('combobox', { name: 'Format' }));
+    await fireEvent.click(screen.getByRole('option', { name: /CSV/ }));
+    expect(filename).toHaveValue('logs_level_error_svc.csv');
+  });
 });
