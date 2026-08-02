@@ -5,9 +5,9 @@ import { useRoute } from 'vue-router';
 import { useQuery } from '@tanstack/vue-query';
 import ApiErrorPanel from '../components/ApiErrorPanel.vue';
 import AppIcon from '../components/AppIcon.vue';
-import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
+import RawPayload from '../components/RawPayload.vue';
 import RelatedSignals, { type RelatedSignalLink } from '../components/RelatedSignals.vue';
 import { api } from '../api/client';
 import type { Span } from '../api/types';
@@ -182,15 +182,6 @@ function formatTime(value: string): string {
           </span>
         </RouterLink>
       </section>
-      <section v-if="selectedSpan" class="detail-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">{{ $t('traceDetail.spanDetail') }}</p>
-            <h2>{{ selectedSpan.name }}</h2>
-          </div>
-        </div>
-        <CodeBlock language="json" :code="JSON.stringify(selectedSpan.body, null, 2)" />
-      </section>
       <section class="detail-panel">
         <div class="section-heading">
           <div>
@@ -222,6 +213,15 @@ function formatTime(value: string): string {
       <p v-if="replayDisabled" class="permission-note">
         {{ $t('relations.replayDisabled') }}
       </p>
+      <section v-if="selectedSpan" class="detail-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">{{ $t('traceDetail.spanDetail') }}</p>
+            <h2>{{ selectedSpan.name }}</h2>
+          </div>
+        </div>
+        <RawPayload :code="JSON.stringify(selectedSpan.body, null, 2)" />
+      </section>
     </template>
   </section>
 </template>
