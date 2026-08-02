@@ -4706,6 +4706,14 @@ label small,
   font-size: 0.75rem;
 }
 
+.unified-query-bar__export {
+  flex: 0 0 auto;
+}
+
+.unified-query-bar__error {
+  margin: -0.35rem 0 1rem;
+}
+
 .performance-query-error {
   margin: -0.35rem 0 1rem;
 }

@@ -36,36 +36,70 @@ does not weaken an already accepted module contract.
 | ---: | --- | --- |
 | 27 | Historical production-readiness program | Closed as obsolete |
 | 39 | Investigation UX expansion | Cancelled as a phase; ideas returned to backlog |
-| 40 | Bounded JSON/CSV query export | Accepted, next focus |
+| 40 | Bounded JSON/CSV query export | Complete |
 | 41 | English/Russian Web localization | Complete |
 | 42 | Bounded cold-archive search | Accepted after/reusing Phase 40 contracts |
 
-Only Phase 40 and Phase 42 remain active product work after the completed
-localization. Profiling, SQLite, MCP/AI, distributed roles and the other broad Sentry
-parity backlog remain unnumbered and unselected.
+Only Phase 42 remains active numbered product work after the completed localization
+and query export. Profiling, SQLite, MCP/AI, distributed roles and the other broad
+Sentry parity backlog remain unnumbered and unselected.
 
 ## Phase 40: bounded JSON/CSV query export
 
-Phase 40 exports the result of an already authorized, validated and bounded current
-query. It does not expose MongoDB documents and does not create a second query
-language.
+ADR-0048 supersedes the earlier Explore-specific transport assumption for this
+phase. Phase 40 is now a download mode of the existing Unified Query v2 endpoint:
+
+```http
+POST /api/v1/projects/{project_id}/query
+```
+
+The ordinary request remains unchanged when no download output is selected. A
+download request uses the same `source`, query text, time range and `records` result
+specification, and adds an explicit bounded output selection such as:
+
+```json
+{
+  "source": "logs",
+  "query": "level:error env:production",
+  "from": 1785542400000,
+  "until": 1785628800000,
+  "result": { "kind": "records" },
+  "output": { "kind": "download", "format": "csv" }
+}
+```
+
+There is no `/query/export` endpoint and no second export query DTO. Download mode
+passes through the same source-aware parser, validation, authorization, estimator,
+reservation and physical adapter as the ordinary `/query` request. Export code owns
+only bounded cursor iteration and stable JSON/CSV serialization of the resulting
+record DTOs. It never accepts a MongoDB collection, field path, BSON predicate or
+already-materialized client-supplied row set.
 
 Accepted first scope:
 
 - JSON and CSV formats;
-- Error, Log, Span and Application Metric datasets already supported by the current
-  investigation/Explore contracts;
-- project, dataset, time range and current filters are mandatory inputs;
+- `records` output for every current Unified Query v2 source: Issues, Errors, Logs,
+  Traces, Metrics, Replays, Feedback and Releases;
+- project, source, query and the source-appropriate bounded time range are the same
+  inputs used by ordinary Unified Query v2;
+- `number`, `timeseries` and `values` remain inline query results and are not download
+  formats in the first implementation;
+- an input cursor is rejected in download mode; the server starts from the normalized
+  query boundary and follows its own signed cursors only until an export limit is
+  reached;
 - streaming generation with explicit row, byte, duration and concurrency limits;
+- the server hard limits always cap any smaller caller-requested export limit;
 - stable DTO fields rather than compact storage names;
+- source-specific deterministic CSV columns rather than one sparse union schema;
 - CSV formula-injection protection and deterministic UTF-8 output;
 - the existing scrubbed/authorized representation only;
-- an audit record for each export;
+- an audit record in the existing audit storage for each export attempt and outcome;
 - cancellation stops generation without leaving a partial durable export object.
 
 The first implementation is a bounded response and creates no export-job collection,
-background worker or Blob object. Incident Capsule remains the richer Issue-specific
-evidence bundle and is not replaced by tabular export.
+background worker, Blob object, query cache or materialized result. It adds no MongoDB
+collection, validator, index, migration or backfill. Incident Capsule remains the
+richer Issue-specific evidence bundle and is not replaced by tabular export.
 
 ## Phase 42: bounded cold-archive search
 

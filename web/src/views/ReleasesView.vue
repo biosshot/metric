@@ -110,6 +110,7 @@ function timestamp(value: string | null): string {
         v-model="query"
         source="releases"
         :show-reset="Boolean(query || appliedQuery)"
+        exportable
         @submit="submitQuery"
         @reset="resetQuery"
       />

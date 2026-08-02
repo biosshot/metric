@@ -349,6 +349,7 @@ export interface UnifiedQueryRequest {
   result: UnifiedQueryResultSpec;
   cursor?: string | null;
   limit?: number;
+  output?: { kind: 'download'; format: 'json' | 'csv' };
 }
 
 export interface UnifiedQueryResult<T = Record<string, ExploreScalar>> {
@@ -691,6 +692,13 @@ export interface CapabilityDocument {
     max_page_size: number;
   };
   features: Record<string, boolean>;
+  query_export: {
+    formats: Array<'json' | 'csv'>;
+    max_rows: number;
+    max_bytes: number;
+    max_duration_seconds: number;
+    max_concurrency: number;
+  };
   retention: {
     events_days: number;
     feedback_days: number;

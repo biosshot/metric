@@ -104,6 +104,17 @@ impl Default for AuthConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct QueryExportAudit {
+    pub request_id: RequestCorrelationId,
+    pub project_id: ProjectId,
+    pub source: &'static str,
+    pub format: &'static str,
+    pub outcome: &'static str,
+    pub row_count: usize,
+    pub byte_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AuthError {
     #[error("authentication configuration is invalid")]
@@ -1170,6 +1181,59 @@ impl IdentityService {
             action,
             target_kind,
             target_id,
+            metadata,
+        )
+        .await
+    }
+
+    pub async fn record_query_export_audit(
+        &self,
+        context: &AuthContext,
+        export: QueryExportAudit,
+    ) -> Result<(), AuthError> {
+        if !context.permissions.contains(Permission::IncidentExport)
+            || !matches!(
+                export.outcome,
+                "success" | "failed" | "capacity" | "timeout"
+            )
+        {
+            return Err(AuthError::Forbidden);
+        }
+        let outcome = format!("{}:{}:{}", export.outcome, export.source, export.format);
+        let result_size_class = if export.byte_count < 1024 * 1024 {
+            "small"
+        } else if export.byte_count < 8 * 1024 * 1024 {
+            "medium"
+        } else {
+            "large"
+        };
+        let metadata = AuditMetadata::new([
+            (
+                AuditMetadataKey::ProjectId,
+                AuditMetadataValue::new(export.project_id.get().to_string())
+                    .map_err(|_| AuthError::Forbidden)?,
+            ),
+            (
+                AuditMetadataKey::Outcome,
+                AuditMetadataValue::new(outcome).map_err(|_| AuthError::Forbidden)?,
+            ),
+            (
+                AuditMetadataKey::SelectedEventCount,
+                AuditMetadataValue::new(export.row_count.to_string())
+                    .map_err(|_| AuthError::Forbidden)?,
+            ),
+            (
+                AuditMetadataKey::ResultSizeClass,
+                AuditMetadataValue::new(result_size_class).map_err(|_| AuthError::Forbidden)?,
+            ),
+        ])
+        .map_err(|_| AuthError::Forbidden)?;
+        self.audit(
+            context,
+            export.request_id,
+            AuditAction::QueryExported,
+            "project",
+            export.project_id.get().to_string(),
             metadata,
         )
         .await
@@ -2652,6 +2716,38 @@ mod tests {
                 .await,
             Err(AuthError::Forbidden)
         );
+    }
+
+    #[tokio::test]
+    async fn query_export_uses_the_existing_bounded_audit_schema() {
+        let (service, store, _clock, owner, _session) = bootstrapped().await;
+        service
+            .record_query_export_audit(
+                &owner,
+                QueryExportAudit {
+                    request_id: BoundedId::new("query-export-1").unwrap(),
+                    project_id: ProjectId::new(42).unwrap(),
+                    source: "logs",
+                    format: "csv",
+                    outcome: "success",
+                    row_count: 120,
+                    byte_count: 2 * 1024 * 1024,
+                },
+            )
+            .await
+            .unwrap();
+        let state = store.state.lock().unwrap();
+        let audit = state.audits.last().unwrap();
+        assert_eq!(audit.action, AuditAction::QueryExported);
+        assert_eq!(audit.target_kind, "project");
+        assert!(audit.metadata.values().contains(&(
+            AuditMetadataKey::Outcome,
+            AuditMetadataValue::new("success:logs:csv").unwrap()
+        )));
+        assert!(audit.metadata.values().contains(&(
+            AuditMetadataKey::ResultSizeClass,
+            AuditMetadataValue::new("medium").unwrap()
+        )));
     }
 
     #[tokio::test]

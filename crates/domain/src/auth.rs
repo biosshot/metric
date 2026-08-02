@@ -456,6 +456,7 @@ pub enum AuditAction {
     NotificationDestinationUpserted,
     AlertRuleUpserted,
     ReplayAccessed,
+    QueryExported,
 }
 
 impl AuditAction {
@@ -484,6 +485,7 @@ impl AuditAction {
             Self::NotificationDestinationUpserted => "notification_destination.upserted",
             Self::AlertRuleUpserted => "alert_rule.upserted",
             Self::ReplayAccessed => "replay.accessed",
+            Self::QueryExported => "query.exported",
         }
     }
 }

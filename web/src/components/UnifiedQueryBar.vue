@@ -18,6 +18,9 @@ const props = withDefaults(
     showReset?: boolean;
     syncUrl?: boolean;
     disabled?: boolean;
+    exportable?: boolean;
+    exportFrom?: number;
+    exportUntil?: number;
   }>(),
   {
     placeholder: '',
@@ -27,6 +30,9 @@ const props = withDefaults(
     showReset: false,
     syncUrl: true,
     disabled: false,
+    exportable: false,
+    exportFrom: undefined,
+    exportUntil: undefined,
   },
 );
 
@@ -50,6 +56,8 @@ const inputId = useId();
 const focused = ref(false);
 const highlighted = ref(0);
 const dynamicValues = ref<string[]>([]);
+const exporting = ref(false);
+const exportError = ref('');
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let valuesAbort: AbortController | null = null;
 let requestGeneration = 0;
@@ -301,6 +309,36 @@ async function reset(): Promise<void> {
   }
   emit('reset');
 }
+
+async function download(format: 'json' | 'csv'): Promise<void> {
+  const projectId = session.selectedProjectId;
+  if (!projectId || exporting.value) return;
+  exporting.value = true;
+  exportError.value = '';
+  try {
+    const result = await api.exportQuery(
+      projectId,
+      {
+        source: props.source,
+        query: props.modelValue.trim(),
+        from: props.exportFrom,
+        until: props.exportUntil,
+        result: { kind: 'records' },
+      },
+      format,
+    );
+    const url = URL.createObjectURL(result.blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = result.filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  } catch (error) {
+    exportError.value = error instanceof Error ? error.message : t('unifiedQuery.exportFailed');
+  } finally {
+    exporting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -338,6 +376,26 @@ async function reset(): Promise<void> {
     </div>
     <slot name="actions" />
     <button
+      v-if="exportable"
+      class="button button--secondary unified-query-bar__export"
+      type="button"
+      :disabled="disabled || exporting"
+      @click="download('json')"
+    >
+      <AppIcon name="download" :size="16" />
+      {{ t('unifiedQuery.exportJson') }}
+    </button>
+    <button
+      v-if="exportable"
+      class="button button--secondary unified-query-bar__export"
+      type="button"
+      :disabled="disabled || exporting"
+      @click="download('csv')"
+    >
+      <AppIcon name="download" :size="16" />
+      {{ t('unifiedQuery.exportCsv') }}
+    </button>
+    <button
       v-if="showSubmit"
       class="button button--primary"
       type="button"
@@ -358,6 +416,9 @@ async function reset(): Promise<void> {
       {{ t('common.reset') }}
     </button>
   </div>
+  <p v-if="exportError" class="field-error unified-query-bar__error" role="alert">
+    {{ exportError }}
+  </p>
   <div
     v-if="chips.length"
     class="unified-query-bar__chips"

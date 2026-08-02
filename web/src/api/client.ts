@@ -230,6 +230,57 @@ async function blobRequest(path: string): Promise<Blob> {
   return response.blob();
 }
 
+async function queryDownloadRequest(
+  projectId: string,
+  body: UnifiedQueryRequest,
+  format: 'json' | 'csv',
+): Promise<{ blob: Blob; filename: string }> {
+  const session = sessionProvider();
+  if (!session.csrfToken) {
+    invalidateSession();
+    throw new ApiError(
+      403,
+      'csrf_missing',
+      null,
+      'This tab cannot safely change data. Sign in again to restore the security token.',
+    );
+  }
+  const headers = authenticatedHeaders();
+  headers.set('accept', format === 'csv' ? 'text/csv' : 'application/json');
+  headers.set('content-type', 'application/json');
+  headers.set('x-csrf-token', session.csrfToken);
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1/projects/${projectId}/query`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({
+        ...body,
+        query: queryForBackend(body.query),
+        cursor: undefined,
+        output: { kind: 'download', format },
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      'network_error',
+      null,
+      'Cannot reach Metric. Check the connection and server status.',
+      true,
+    );
+  }
+  if (!response.ok) {
+    const error = await responseError(response);
+    if (invalidatesSession(error)) invalidateSession();
+    throw error;
+  }
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `metric-export.${format}`;
+  return { blob: await response.blob(), filename };
+}
+
 function authenticatedHeaders(): Headers {
   const headers = new Headers();
   const session = sessionProvider();
@@ -403,6 +454,8 @@ export const api = {
         limit: body.limit ?? (body.result.kind === 'values' ? 20 : 50),
       }),
     }),
+  exportQuery: (projectId: string, body: UnifiedQueryRequest, format: 'json' | 'csv') =>
+    queryDownloadRequest(projectId, body, format),
   issue: (projectId: string, issueId: string) =>
     request<Issue>(`/api/v1/projects/${projectId}/issues/${issueId}`),
   issueStatistics: (projectId: string, issueId: string) =>

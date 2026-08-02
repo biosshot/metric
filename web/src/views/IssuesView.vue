@@ -122,6 +122,9 @@ function formatTime(value: string): string {
       source="issues"
       :default-query="defaultQuery"
       :show-reset="hasFilters"
+      exportable
+      :export-from="optionalTimeWindow(range, selectedWindow).from"
+      :export-until="optionalTimeWindow(range, selectedWindow).until"
       @submit="submitQuery"
       @reset="resetFilters"
     >

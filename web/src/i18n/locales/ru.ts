@@ -1114,6 +1114,9 @@ export default {
     notObserved: 'Не наблюдалось',
   },
   unifiedQuery: {
+    exportJson: 'JSON',
+    exportCsv: 'CSV',
+    exportFailed: 'Не удалось скачать выгрузку.',
     label: 'Запрос',
     conditions: 'Условия запроса',
     placeholders: {

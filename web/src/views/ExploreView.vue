@@ -380,6 +380,9 @@ function formatNumber(value: ExploreScalar | undefined): string {
         :source="source"
         :show-reset="Boolean(queryText)"
         :disabled="result.isPending.value"
+        :exportable="mode === 'table'"
+        :export-from="optionalTimeWindow(range, selectedWindow).from"
+        :export-until="optionalTimeWindow(range, selectedWindow).until"
         @submit="run(null)"
         @reset="reset"
       >

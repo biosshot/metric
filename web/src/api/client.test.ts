@@ -472,4 +472,37 @@ describe('native API client', () => {
     expect(path).toBe('/api/v1/projects/42/query');
     expect(JSON.parse(String(init.body)).query).toBe(`timestamp:>=${timestamp} level:error`);
   });
+
+  it('downloads query records through the same endpoint and security context', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('id,message\r\n"1","safe"\r\n', {
+        status: 200,
+        headers: {
+          'content-type': 'text/csv',
+          'content-disposition': 'attachment; filename="metric-logs-export.csv"',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await api.exportQuery(
+      '42',
+      {
+        source: 'logs',
+        query: 'date:>=2026-08-02T09:20 level:error',
+        result: { kind: 'records' },
+      },
+      'csv',
+    );
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Headers;
+    const body = JSON.parse(String(init.body));
+    expect(path).toBe('/api/v1/projects/42/query');
+    expect(headers.get('x-metric-organization-id')).toBe('7');
+    expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
+    expect(body.output).toEqual({ kind: 'download', format: 'csv' });
+    expect(body.cursor).toBeUndefined();
+    expect(result.filename).toBe('metric-logs-export.csv');
+  });
 });

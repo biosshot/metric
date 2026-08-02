@@ -122,6 +122,9 @@ function formatTime(value: string): string {
       v-model="query"
       source="replays"
       :show-reset="hasFilters"
+      exportable
+      :export-from="optionalTimeWindow(range, selectedWindow).from"
+      :export-until="optionalTimeWindow(range, selectedWindow).until"
       @submit="submitQuery"
       @reset="resetFilters"
     >

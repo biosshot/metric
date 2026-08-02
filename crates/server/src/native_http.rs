@@ -5,7 +5,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     num::NonZeroU32,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -23,7 +23,7 @@ use axum::{
 use metric_application::{
     auth::{
         BootstrapRequest, CreateApiTokenRequest, CreateOrganizationRequest, IdentityService,
-        InviteUserRequest, LoginRequest, PasswordInput,
+        InviteUserRequest, LoginRequest, PasswordInput, QueryExportAudit,
     },
     dashboards::{DashboardInput, DashboardWidgetInput, SavedQueryInput},
     incident_capsule::{
@@ -99,6 +99,10 @@ const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 const MAX_TELEGRAM_RESPONSE_BYTES: u64 = 256 * 1024;
+const MAX_EXPORT_ROWS: usize = 10_000;
+const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_EXPORT_DURATION: Duration = Duration::from_secs(15);
+const MAX_CONCURRENT_EXPORTS: usize = 2;
 
 #[derive(Clone)]
 struct NativeHttpState {
@@ -114,6 +118,7 @@ struct NativeHttpState {
     notification_admin: Option<Arc<NotificationAdminService>>,
     notification_secret_box: Option<crate::webhook::WebhookSecretBox>,
     trusted_proxies: Arc<[TrustedProxy]>,
+    export_permits: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -459,6 +464,7 @@ pub fn router_with_limits(
         notification_admin: modules.notification_admin,
         notification_secret_box: modules.notification_secret_box,
         trusted_proxies: limits.trusted_proxies.into(),
+        export_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_EXPORTS)),
     };
     let admission = NativeAdmissionState {
         permits: Arc::new(Semaphore::new(limits.max_active_requests)),
@@ -884,6 +890,36 @@ struct UnifiedQueryBody {
     result: UnifiedQueryResultBody,
     cursor: Option<String>,
     limit: Option<usize>,
+    output: Option<UnifiedQueryOutputBody>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum UnifiedQueryOutputBody {
+    Download { format: QueryExportFormat },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum QueryExportFormat {
+    Json,
+    Csv,
+}
+
+impl QueryExportFormat {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Csv => "csv",
+        }
+    }
+
+    const fn media_type(self) -> &'static str {
+        match self {
+            Self::Json => "application/json; charset=utf-8",
+            Self::Csv => "text/csv; charset=utf-8",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -912,8 +948,9 @@ async fn unified_query(
     State(state): State<NativeHttpState>,
     Path(project_id): Path<String>,
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     body: Result<Json<UnifiedQueryBody>, JsonRejection>,
-) -> Result<Json<Value>, HttpApiError> {
+) -> Result<Response, HttpApiError> {
     let context = authenticate(&state, &headers, false).await?;
     let body = json_body(body)?;
     let project_id = project_id_from(&project_id)?;
@@ -958,6 +995,34 @@ async fn unified_query(
                 .map_err(HttpApiError::Api)?,
         },
     };
+    let from = body
+        .from
+        .map(Timestamp::from_unix_millis)
+        .transpose()
+        .map_err(|_| HttpApiError::InvalidRequest)?;
+    let until = body
+        .until
+        .map(Timestamp::from_unix_millis)
+        .transpose()
+        .map_err(|_| HttpApiError::InvalidRequest)?;
+    if let Some(UnifiedQueryOutputBody::Download { format }) = body.output {
+        if !matches!(result, UnifiedQueryResultSpec::Records) || body.cursor.is_some() {
+            return Err(HttpApiError::Api(QueryError::InvalidCursor.into()));
+        }
+        return export_unified_query(
+            &state,
+            &context,
+            correlation_id(request_id)?,
+            project_id,
+            source,
+            &body.query,
+            from,
+            until,
+            body.limit,
+            format,
+        )
+        .await;
+    }
     let result = api(&state)?
         .unified_query(
             &context,
@@ -965,16 +1030,8 @@ async fn unified_query(
             UnifiedQueryRequest {
                 source,
                 text: &body.query,
-                from: body
-                    .from
-                    .map(Timestamp::from_unix_millis)
-                    .transpose()
-                    .map_err(|_| HttpApiError::InvalidRequest)?,
-                until: body
-                    .until
-                    .map(Timestamp::from_unix_millis)
-                    .transpose()
-                    .map_err(|_| HttpApiError::InvalidRequest)?,
+                from,
+                until,
                 result,
                 cursor: body.cursor.as_deref(),
                 limit: body.limit,
@@ -982,7 +1039,412 @@ async fn unified_query(
         )
         .await
         .map_err(HttpApiError::Api)?;
-    unified_query_value(project_id, result)
+    Ok(unified_query_value(project_id, result)?.into_response())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn export_unified_query(
+    state: &NativeHttpState,
+    context: &AuthContext,
+    request_id: RequestCorrelationId,
+    project_id: ProjectId,
+    source: QuerySource,
+    query: &str,
+    from: Option<Timestamp>,
+    until: Option<Timestamp>,
+    requested_limit: Option<usize>,
+    format: QueryExportFormat,
+) -> Result<Response, HttpApiError> {
+    if !context.permissions.contains(Permission::IncidentExport) {
+        return Err(HttpApiError::Api(NativeApiError::Forbidden));
+    }
+    let row_limit = requested_limit.unwrap_or(MAX_EXPORT_ROWS);
+    if !(1..=MAX_EXPORT_ROWS).contains(&row_limit) {
+        return Err(HttpApiError::Api(QueryError::LimitExceeded.into()));
+    }
+    let Ok(_permit) = Arc::clone(&state.export_permits).try_acquire_owned() else {
+        let _ = audit_query_export(
+            state, context, request_id, project_id, source, format, "capacity", 0, 0,
+        )
+        .await;
+        return Err(HttpApiError::Api(QueryError::Capacity.into()));
+    };
+
+    let started = Instant::now();
+    let mut cursor = None;
+    let mut row_count = 0_usize;
+    let mut bytes = export_prefix(source, format);
+    let mut truncated = false;
+    loop {
+        let remaining = row_limit.saturating_sub(row_count);
+        if remaining == 0 {
+            truncated = cursor.is_some();
+            break;
+        }
+        let page_limit = remaining.min(metric_application::query::MAX_QUERY_ROWS);
+        let Some(budget) = MAX_EXPORT_DURATION.checked_sub(started.elapsed()) else {
+            let _ = audit_query_export(
+                state,
+                context,
+                request_id,
+                project_id,
+                source,
+                format,
+                "timeout",
+                row_count,
+                bytes.len(),
+            )
+            .await;
+            return Err(HttpApiError::Unavailable);
+        };
+        let page = timeout(
+            budget,
+            api(state)?.unified_query(
+                context,
+                project_id,
+                UnifiedQueryRequest {
+                    source,
+                    text: query,
+                    from,
+                    until,
+                    result: UnifiedQueryResultSpec::Records,
+                    cursor: cursor.as_deref(),
+                    limit: Some(page_limit),
+                },
+            ),
+        )
+        .await;
+        let result = match page {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                let _ = audit_query_export(
+                    state,
+                    context,
+                    request_id,
+                    project_id,
+                    source,
+                    format,
+                    "failed",
+                    row_count,
+                    bytes.len(),
+                )
+                .await;
+                return Err(HttpApiError::Api(error));
+            }
+            Err(_) => {
+                let _ = audit_query_export(
+                    state,
+                    context,
+                    request_id,
+                    project_id,
+                    source,
+                    format,
+                    "timeout",
+                    row_count,
+                    bytes.len(),
+                )
+                .await;
+                return Err(HttpApiError::Unavailable);
+            }
+        };
+        let (items, next) = export_page(project_id, result)?;
+        for item in items {
+            let row = export_row(source, format, &item, row_count > 0)?;
+            if bytes.len().saturating_add(row.len()).saturating_add(1) > MAX_EXPORT_BYTES {
+                let _ = audit_query_export(
+                    state,
+                    context,
+                    request_id,
+                    project_id,
+                    source,
+                    format,
+                    "failed",
+                    row_count,
+                    bytes.len(),
+                )
+                .await;
+                return Err(HttpApiError::Api(QueryError::LimitExceeded.into()));
+            }
+            bytes.extend_from_slice(&row);
+            row_count += 1;
+        }
+        cursor = next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    if matches!(format, QueryExportFormat::Json) {
+        bytes.push(b']');
+    }
+    audit_query_export(
+        state,
+        context,
+        request_id,
+        project_id,
+        source,
+        format,
+        "success",
+        row_count,
+        bytes.len(),
+    )
+    .await?;
+
+    let filename = format!("metric-{}-export.{}", source.as_str(), format.as_str());
+    let mut response = Body::from(bytes).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(format.media_type()),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|_| HttpApiError::Unavailable)?,
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        "x-metric-export-truncated",
+        HeaderValue::from_static(if truncated { "true" } else { "false" }),
+    );
+    Ok(response)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn audit_query_export(
+    state: &NativeHttpState,
+    context: &AuthContext,
+    request_id: RequestCorrelationId,
+    project_id: ProjectId,
+    source: QuerySource,
+    format: QueryExportFormat,
+    outcome: &'static str,
+    rows: usize,
+    bytes: usize,
+) -> Result<(), HttpApiError> {
+    identity(state)?
+        .record_query_export_audit(
+            context,
+            QueryExportAudit {
+                request_id,
+                project_id,
+                source: source.as_str(),
+                format: format.as_str(),
+                outcome,
+                row_count: rows,
+                byte_count: bytes,
+            },
+        )
+        .await
+        .map_err(map_auth)
+        .map_err(HttpApiError::Api)
+}
+
+fn export_page(
+    project_id: ProjectId,
+    result: UnifiedQueryResult,
+) -> Result<(Vec<Value>, Option<String>), HttpApiError> {
+    let Json(mut value) = unified_query_value(project_id, result)?;
+    let items = value
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+        .ok_or(HttpApiError::Unavailable)?;
+    let cursor = value
+        .get("next_cursor")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok((items, cursor))
+}
+
+#[cfg(test)]
+fn serialize_query_export(
+    source: QuerySource,
+    format: QueryExportFormat,
+    rows: &[Value],
+) -> Result<Vec<u8>, HttpApiError> {
+    let mut output = export_prefix(source, format);
+    for (index, row) in rows.iter().enumerate() {
+        output.extend_from_slice(&export_row(source, format, row, index > 0)?);
+    }
+    if matches!(format, QueryExportFormat::Json) {
+        output.push(b']');
+    }
+    Ok(output)
+}
+
+fn export_prefix(source: QuerySource, format: QueryExportFormat) -> Vec<u8> {
+    if matches!(format, QueryExportFormat::Json) {
+        return vec![b'['];
+    }
+    let columns = export_columns(source);
+    let mut output = Vec::new();
+    output.extend_from_slice(columns.join(",").as_bytes());
+    output.extend_from_slice(b"\r\n");
+    output
+}
+
+fn export_row(
+    source: QuerySource,
+    format: QueryExportFormat,
+    row: &Value,
+    has_previous: bool,
+) -> Result<Vec<u8>, HttpApiError> {
+    if matches!(format, QueryExportFormat::Json) {
+        let mut output = Vec::new();
+        if has_previous {
+            output.push(b',');
+        }
+        serde_json::to_writer(&mut output, row).map_err(|_| HttpApiError::Unavailable)?;
+        return Ok(output);
+    }
+    let object = row.as_object().ok_or(HttpApiError::Unavailable)?;
+    let columns = export_columns(source);
+    let mut output = Vec::new();
+    for (index, column) in columns.iter().enumerate() {
+        if index > 0 {
+            output.push(b',');
+        }
+        let value = object.get(*column).unwrap_or(&Value::Null);
+        output.extend_from_slice(csv_cell(value)?.as_bytes());
+    }
+    output.extend_from_slice(b"\r\n");
+    Ok(output)
+}
+
+fn csv_cell(value: &Value) -> Result<String, HttpApiError> {
+    let (mut text, sanitize) = match value {
+        Value::Null => (String::new(), false),
+        Value::String(value) => (value.clone(), true),
+        Value::Bool(value) => (value.to_string(), false),
+        Value::Number(value) => (value.to_string(), false),
+        Value::Array(_) | Value::Object(_) => (
+            serde_json::to_string(value).map_err(|_| HttpApiError::Unavailable)?,
+            true,
+        ),
+    };
+    if sanitize && text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        text.insert(0, '\'');
+    }
+    Ok(format!("\"{}\"", text.replace('"', "\"\"")))
+}
+
+const fn export_columns(source: QuerySource) -> &'static [&'static str] {
+    match source {
+        QuerySource::Issues => &[
+            "id",
+            "project_id",
+            "title",
+            "culprit",
+            "status",
+            "first_seen",
+            "last_seen",
+            "first_event_id",
+            "latest_event_id",
+            "representative_event_id",
+            "occurrence_count",
+            "occurrence_count_approximate",
+            "assignee",
+            "first_release",
+            "last_release",
+            "regression",
+            "grouping",
+        ],
+        QuerySource::Errors => &[
+            "event_id",
+            "project_id",
+            "issue_id",
+            "received_at",
+            "occurred_at",
+            "level",
+            "platform",
+            "body",
+        ],
+        QuerySource::Logs => &[
+            "id",
+            "timestamp",
+            "received_at",
+            "level",
+            "message",
+            "environment",
+            "release",
+            "service",
+            "trace_id",
+            "span_id",
+        ],
+        QuerySource::Traces => &[
+            "id",
+            "timestamp",
+            "received_at",
+            "duration_ms",
+            "operation_class",
+            "name",
+            "operation",
+            "status",
+            "environment",
+            "release",
+            "service",
+            "trace_id",
+            "span_id",
+            "is_segment",
+        ],
+        QuerySource::Metrics => &[
+            "id",
+            "timestamp",
+            "received_at",
+            "name",
+            "metric_kind",
+            "unit",
+            "trace_id",
+            "metric_count",
+            "metric_sum",
+            "metric_min",
+            "metric_max",
+        ],
+        QuerySource::Replays => &[
+            "id",
+            "project_id",
+            "started_at",
+            "ended_at",
+            "received_at",
+            "duration_ms",
+            "environment",
+            "release",
+            "url",
+            "error_ids",
+            "trace_ids",
+            "segments",
+            "partial",
+            "expires_at",
+        ],
+        QuerySource::Feedback => &[
+            "id",
+            "project_id",
+            "received_at",
+            "status",
+            "status_changed_at",
+            "message",
+            "name",
+            "contact_email",
+            "url",
+            "associated_event_id",
+            "issue_id",
+            "trace_id",
+            "replay_id",
+            "attachments",
+            "expires_at",
+        ],
+        QuerySource::Releases => &[
+            "id",
+            "version",
+            "activity_at",
+            "first_seen",
+            "last_seen",
+            "released_at",
+            "explicit",
+        ],
+    }
 }
 
 fn unified_query_value(
@@ -4131,6 +4593,7 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "performance_insights": state.required_ready,
             "application_metrics": state.required_ready,
             "session_replay": state.required_ready,
+            "query_export": state.required_ready,
             "sessions": state.required_ready,
             "release_health": state.required_ready,
             "user_feedback": state.required_ready,
@@ -4145,6 +4608,13 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
             "nats": false,
             "sharding": false,
             "disk_spool": false,
+        },
+        "query_export": {
+            "formats": ["json", "csv"],
+            "max_rows": MAX_EXPORT_ROWS,
+            "max_bytes": MAX_EXPORT_BYTES,
+            "max_duration_seconds": MAX_EXPORT_DURATION.as_secs(),
+            "max_concurrency": MAX_CONCURRENT_EXPORTS,
         },
         "retention": retention,
         "explore": {
@@ -5284,6 +5754,7 @@ mod tests {
         .unwrap();
         assert_eq!(accepted.source, "logs");
         assert_eq!(accepted.limit, Some(50));
+        assert!(accepted.output.is_none());
         assert!(
             ParsedQuery::parse(
                 QuerySource::parse(&accepted.source).unwrap(),
@@ -5305,6 +5776,85 @@ mod tests {
             }),
         ] {
             assert!(serde_json::from_value::<UnifiedQueryBody>(injected).is_err());
+        }
+    }
+
+    #[test]
+    fn query_download_reuses_the_query_body_without_an_escape_hatch() {
+        let accepted: UnifiedQueryBody = serde_json::from_value(json!({
+            "source": "logs",
+            "query": "level:error",
+            "from": 1_785_542_400_000_i64,
+            "until": 1_785_628_800_000_i64,
+            "result": { "kind": "records" },
+            "limit": 1_000,
+            "output": { "kind": "download", "format": "csv" }
+        }))
+        .unwrap();
+        assert!(matches!(
+            accepted.output,
+            Some(UnifiedQueryOutputBody::Download {
+                format: QueryExportFormat::Csv
+            })
+        ));
+        assert!(
+            serde_json::from_value::<UnifiedQueryBody>(json!({
+                "source": "logs",
+                "query": "",
+                "result": { "kind": "records" },
+                "output": {
+                    "kind": "download",
+                    "format": "json",
+                    "collection": "logs"
+                }
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn csv_export_has_stable_columns_and_neutralizes_formulas() {
+        let bytes = serialize_query_export(
+            QuerySource::Logs,
+            QueryExportFormat::Csv,
+            &[json!({
+                "id": "1",
+                "timestamp": 1,
+                "received_at": 2,
+                "level": "error",
+                "message": "=HYPERLINK(\"https://example.invalid\")",
+                "environment": "production",
+            })],
+        )
+        .unwrap();
+        let csv = String::from_utf8(bytes).unwrap();
+        assert!(csv.starts_with("id,timestamp,received_at,level,message,environment,release,service,trace_id,span_id\r\n"));
+        assert!(csv.contains("\"'=HYPERLINK(\"\"https://example.invalid\"\")\""));
+        assert_eq!(csv.lines().count(), 2);
+        assert_eq!(csv_cell(&json!(-12)).unwrap(), "\"-12\"");
+    }
+
+    #[test]
+    fn every_query_source_has_a_deterministic_export_schema() {
+        for source in [
+            QuerySource::Issues,
+            QuerySource::Errors,
+            QuerySource::Logs,
+            QuerySource::Traces,
+            QuerySource::Metrics,
+            QuerySource::Replays,
+            QuerySource::Feedback,
+            QuerySource::Releases,
+        ] {
+            let columns = export_columns(source);
+            assert!(!columns.is_empty());
+            assert_eq!(
+                columns
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                columns.len()
+            );
         }
     }
 

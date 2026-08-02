@@ -1105,6 +1105,9 @@ export default {
     notObserved: 'Not observed',
   },
   unifiedQuery: {
+    exportJson: 'JSON',
+    exportCsv: 'CSV',
+    exportFailed: 'The export could not be downloaded.',
     label: 'Query',
     conditions: 'Query conditions',
     placeholders: {

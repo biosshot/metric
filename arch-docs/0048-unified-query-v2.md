@@ -81,6 +81,12 @@ values       // bounded autocomplete values
 many absent fields. Aggregate shapes remain available only for source/field pairs
 already accepted by the typed planner.
 
+Phase 40 extends this same endpoint with an optional bounded `output` selection
+for JSON/CSV downloads. Absence of `output` preserves the ordinary JSON query
+response. Download output is permitted only with `records`, reuses the same parsed
+and authorized request, and does not introduce `/query/export`, another query DTO or
+another query language. ADR-0047 owns the export limits and serialization contract.
+
 One endpoint does not mean one cross-collection MongoDB operation. Enum dispatch
 selects one source adapter and one existing physical collection/query path. Normal
 requests do not use `$unionWith`, joins or cross-source ranking. A later global Web
@@ -295,4 +301,3 @@ There is no intermediate public release with two supported query APIs.
 - Adding a source means adding a typed adapter, not a new public filter endpoint.
 - Schema generation 19 data remains directly usable without migration.
 - Query features remain limited to what current storage can execute predictably.
-

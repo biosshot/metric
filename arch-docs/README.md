@@ -28,7 +28,7 @@ Status as of 2026-08-01:
 | Phase 37 Application Metrics | Complete | ADR-0046 and Phase 37 report |
 | Phase 38 Session Replay | Complete | ADR-0046 and Phase 38 report |
 | Phase 39 Investigation UX | Cancelled as a phase; ideas returned to backlog | ADR-0047 |
-| Phase 40 JSON/CSV export | Accepted, next focus | ADR-0047 |
+| Phase 40 JSON/CSV export through Unified Query v2 | Complete | ADR-0047/0048 and Phase 40 report |
 | Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
@@ -37,7 +37,7 @@ Status as of 2026-08-01:
 
 Phase 27 did not pass its historical gates. By the 2026-08-01 owner decision it is
 closed as obsolete and is no longer a release or roadmap gate. Phases 28-38 and 41
-are complete. Phase 40 and Phase 42 remain selected numbered product work. The
+are complete. Phase 42 remains selected numbered product work. The
 unnumbered Unified Query v2 replacement is also accepted by ADR-0048 and precedes
 any new independent hot-data search surface.
 ADR-0045 owns the completed lightweight wave; ADR-0046 owns the post-Phase-36
