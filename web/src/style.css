@@ -2415,6 +2415,24 @@ label small,
   text-transform: uppercase;
 }
 
+.signal-accent--info .signal-level {
+  color: var(--semantic-info);
+}
+
+.signal-accent--warn .signal-level {
+  color: var(--semantic-warning);
+}
+
+.signal-accent--error .signal-level,
+.signal-accent--fatal .signal-level {
+  color: var(--semantic-error);
+}
+
+.signal-accent--debug .signal-level,
+.signal-accent--trace .signal-level {
+  color: var(--syntax-keyword);
+}
+
 .signal-title,
 .text-link {
   color: var(--text);

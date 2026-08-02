@@ -39,6 +39,15 @@ const representativeSpan = computed(() => {
 const relatedLinks = computed<RelatedSignalLink[]>(() => {
   const span = representativeSpan.value;
   const links: RelatedSignalLink[] = [];
+  for (const error of trace.data.value?.errors ?? []) {
+    links.push({
+      key: `event-${error.event_id}`,
+      icon: 'failure',
+      label: t('traceDetail.errorEvent'),
+      description: error.event_id,
+      to: { path: `/events/${error.event_id}` },
+    });
+  }
   if (session.selectedProject?.policy.items.replay) {
     for (const replayId of new Set(trace.data.value?.replay_ids ?? [])) {
       links.push({
@@ -182,27 +191,6 @@ function formatTime(value: string): string {
         </div>
         <CodeBlock language="json" :code="JSON.stringify(selectedSpan.body, null, 2)" />
       </section>
-      <section v-if="trace.data.value.errors.length" class="detail-panel">
-        <div class="section-heading">
-          <div>
-            <h2>{{ $t('traceDetail.errorEvents') }}</h2>
-          </div>
-        </div>
-        <div class="compact-list">
-          <RouterLink
-            v-for="error in trace.data.value.errors"
-            :key="error.event_id"
-            :to="`/events/${error.event_id}`"
-          >
-            <AppIcon name="failure" :size="16" />
-            <span
-              ><strong>{{ $t('traceDetail.errorEvent') }}</strong
-              ><small>{{ error.event_id }}</small></span
-            >
-            <AppIcon name="view" :size="16" />
-          </RouterLink>
-        </div>
-      </section>
       <section class="detail-panel">
         <div class="section-heading">
           <div>
@@ -220,6 +208,7 @@ function formatTime(value: string): string {
             v-for="log in trace.data.value.logs"
             :key="log.id"
             class="log-row"
+            :class="`signal-accent--${log.level}`"
             :to="`/logs/${log.id}`"
           >
             <span class="signal-level">{{ $t(`status.${log.level}`) }}</span>
