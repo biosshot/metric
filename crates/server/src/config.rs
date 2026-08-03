@@ -660,6 +660,16 @@ impl SecretReference {
             Self::Literal(_) => "<redacted:literal>",
         }
     }
+
+    fn diagnostic_origin(&self) -> String {
+        match self {
+            Self::Environment(reference) => {
+                format!("environment variable {}", reference.env)
+            }
+            Self::File(reference) => format!("secret file {}", reference.file.display()),
+            Self::Literal(_) => "a literal configuration value".to_owned(),
+        }
+    }
 }
 
 impl fmt::Debug for SecretReference {
@@ -1575,12 +1585,18 @@ pub enum ConfigError {
     InvalidProcessorConfig,
     #[error("auth configuration is invalid or outside supported bounds")]
     InvalidAuthConfig,
-    #[error("projects.scrub_hmac_key is required when MongoDB is configured")]
+    #[error(
+        "projects.scrub_hmac_key is missing\n  reason: mongodb.uri is configured\n  expected: a secret reference resolving to exactly 64 hexadecimal characters (32 bytes)"
+    )]
     MissingScrubHmacKey,
     #[error(
-        "projects.scrub_hmac_key must resolve to exactly 32 bytes encoded as 64 hexadecimal characters"
+        "projects.scrub_hmac_key is invalid\n  source: {origin}\n  problem: {problem}\n  expected: exactly 64 hexadecimal characters (32 bytes), using only 0-9, a-f, or A-F\n  hint: do not use a 0x prefix, spaces, hyphens, or Base64{environment_hint}"
     )]
-    InvalidScrubHmacKey,
+    InvalidScrubHmacKey {
+        origin: String,
+        problem: String,
+        environment_hint: &'static str,
+    },
     #[error("secret reference is invalid")]
     InvalidSecretReference,
     #[error("literal secrets require development.allow_literal_secrets=true")]
@@ -2036,10 +2052,11 @@ impl AppConfig {
             return Err(ConfigError::MissingScrubHmacKey);
         }
         let scrub_hmac_key = scrub_hmac_key
-            .map(|value| {
+            .zip(self.projects.scrub_hmac_key.as_ref())
+            .map(|(value, reference)| {
                 let mut bytes = [0_u8; 32];
                 hex::decode_to_slice(value.expose(), &mut bytes)
-                    .map_err(|_| ConfigError::InvalidScrubHmacKey)?;
+                    .map_err(|_| invalid_scrub_hmac_key(reference, value.expose()))?;
                 Ok::<_, ConfigError>(metric_domain::SecretBytes::new(bytes))
             })
             .transpose()?;
@@ -2799,6 +2816,29 @@ fn validate_secret_bytes(bytes: &[u8]) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn invalid_scrub_hmac_key(reference: &SecretReference, value: &str) -> ConfigError {
+    let actual_characters = value.chars().count();
+    let contains_non_hexadecimal = !value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let problem = match (actual_characters == 64, contains_non_hexadecimal) {
+        (false, true) => {
+            format!("received {actual_characters} characters and found non-hexadecimal characters")
+        }
+        (false, false) => format!("received {actual_characters} characters"),
+        (true, true) => "found non-hexadecimal characters".to_owned(),
+        (true, false) => "the decoded value has an unexpected size".to_owned(),
+    };
+    let environment_hint = if matches!(reference, SecretReference::Environment(_)) {
+        "\n  note: when --env-file is used, an existing process environment variable with the same name takes precedence"
+    } else {
+        ""
+    };
+    ConfigError::InvalidScrubHmacKey {
+        origin: reference.diagnostic_origin(),
+        problem,
+        environment_hint,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3208,6 +3248,20 @@ mod tests {
         let value = SecretValue("sensitive".into());
         assert_eq!(format!("{value:?}"), "<redacted>");
         assert_eq!(value.expose(), "sensitive");
+    }
+
+    #[test]
+    fn invalid_scrub_key_error_is_specific_without_exposing_the_secret() {
+        let reference = SecretReference::Environment(EnvironmentReference {
+            env: "SCRUB_HMAC_KEY".to_owned(),
+        });
+        let error = invalid_scrub_hmac_key(&reference, "oops!").to_string();
+
+        assert!(error.contains("environment variable SCRUB_HMAC_KEY"));
+        assert!(error.contains("received 5 characters"));
+        assert!(error.contains("non-hexadecimal"));
+        assert!(error.contains("process environment variable"));
+        assert!(!error.contains("oops!"));
     }
 
     #[test]
