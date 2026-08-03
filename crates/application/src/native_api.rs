@@ -2198,7 +2198,12 @@ impl NativeApiService {
     ) -> Result<NativePage<EventView>, NativeApiError> {
         self.authorize(context, project_id, Permission::EventRead)
             .await?;
-        let (from, until) = time_range(self.clock.now(), request.from, request.until)?;
+        let (from, until) = event_time_range(
+            self.clock.now(),
+            request.issue_id.is_some(),
+            request.from,
+            request.until,
+        )?;
         let normalized = format!(
             "events:issue={}:from={}:until={}",
             request
@@ -3021,6 +3026,20 @@ fn time_range(
     Ok((from, until))
 }
 
+fn event_time_range(
+    now: Timestamp,
+    issue_scoped: bool,
+    from: Option<Timestamp>,
+    until: Option<Timestamp>,
+) -> Result<(Timestamp, Timestamp), NativeApiError> {
+    if issue_scoped && from.is_none() && until.is_none() {
+        let from = Timestamp::from_unix_millis(0).expect("the Unix epoch is a valid timestamp");
+        let until = Timestamp::from_unix_millis(now.unix_millis().saturating_add(1)).unwrap_or(now);
+        return Ok((from, until));
+    }
+    time_range(now, from, until)
+}
+
 fn validate_time_range(from: Timestamp, until: Timestamp) -> Result<(), NativeApiError> {
     if from >= until || until.unix_millis().saturating_sub(from.unix_millis()) > MAX_RANGE_MILLIS {
         Err(NativeApiError::InvalidRequest)
@@ -3416,6 +3435,24 @@ mod tests {
             decode_monitor_run_anchor(&cursor, other_digest),
             Err(NativeApiError::InvalidCursor)
         );
+    }
+
+    #[test]
+    fn issue_event_pages_default_to_all_retained_time() {
+        let now = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let (from, until) = event_time_range(now, true, None, None).unwrap();
+
+        assert_eq!(from.unix_millis(), 0);
+        assert_eq!(until.unix_millis(), now.unix_millis() + 1);
+    }
+
+    #[test]
+    fn project_event_pages_keep_the_bounded_default() {
+        let now = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let (from, until) = event_time_range(now, false, None, None).unwrap();
+
+        assert_eq!(from.unix_millis(), now.unix_millis() - DAY_MILLIS);
+        assert_eq!(until.unix_millis(), now.unix_millis() + 1);
     }
 
     #[test]
