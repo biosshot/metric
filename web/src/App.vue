@@ -155,7 +155,7 @@ async function logout(): Promise<void> {
     <aside class="sidebar" :class="{ 'sidebar--open': navigationOpen }">
       <div class="sidebar__brand">
         <span class="brand-mark brand-mark--small" aria-hidden="true">
-          <LogoMark :size="18" />
+          <LogoMark :size="32" />
         </span>
         <strong>Metric</strong>
       </div>

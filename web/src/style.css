@@ -400,17 +400,13 @@ input[type='checkbox'] {
   display: grid;
   width: 54px;
   height: 54px;
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
   place-items: center;
-  background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--accent);
 }
 
 .brand-mark--small {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
 }
 
 .sidebar nav {
@@ -778,6 +774,18 @@ input[type='checkbox'] {
 .auth-brand h1 {
   max-width: 12ch;
   margin-top: 1.5rem;
+}
+
+.auth-brand__logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.4rem;
+}
+
+.auth-brand__logo .eyebrow {
+  margin-bottom: 0;
 }
 
 .auth-brand > p:not(.eyebrow) {

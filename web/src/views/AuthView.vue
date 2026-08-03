@@ -111,10 +111,12 @@ async function setupInvitedPassword(): Promise<void> {
 <template>
   <main id="main-content" class="auth-layout">
     <section class="auth-brand">
-      <div class="brand-mark" aria-hidden="true">
-        <LogoMark :size="30" />
+      <div class="auth-brand__logo">
+        <div class="brand-mark" aria-hidden="true">
+          <LogoMark :size="54" />
+        </div>
+        <p class="eyebrow">Metric</p>
       </div>
-      <p class="eyebrow">Metric</p>
       <h1>{{ $t('auth.taglineLead') }}<br />{{ $t('auth.taglineEnd') }}</h1>
       <p>{{ $t('auth.introduction') }}</p>
       <ul>
