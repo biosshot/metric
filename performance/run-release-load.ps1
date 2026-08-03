@@ -85,13 +85,13 @@ try {
     if (-not (Test-Path -LiteralPath $Result)) { throw 'k6 did not write its result artifact' }
     $artifact = Get-Content -LiteralPath $Result -Raw | ConvertFrom-Json
     $accepted = [uint64]$artifact.metrics.failures.status_200
-    $countText = & mongosh $MongoUri --quiet --eval "db.getSiblingDB('$Database').events.countDocuments({})"
+    $countText = & mongosh $MongoUri --quiet --eval "db.getSiblingDB('$Database').error_events.countDocuments({})"
     if ($LASTEXITCODE -ne 0) { throw 'MongoDB durable-count verification failed' }
     $durable = [uint64]($countText | Select-Object -Last 1)
     if ($durable -ne $accepted) {
         throw "acknowledged/durable mismatch: status_200=$accepted durable=$durable"
     }
-    Write-Output "verified durable Events: $durable; duplicate/lost acknowledged identities: 0"
+    Write-Output "verified durable error_events: $durable; duplicate/lost acknowledged identities: 0"
     if ($k6Exit -ne 0) { throw "k6 thresholds failed with exit code $k6Exit; artifact retained at $Result" }
 }
 finally {
