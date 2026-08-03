@@ -68,7 +68,9 @@ const MAX_PAGE: usize = 100;
 const MAX_MONITORS_PAGE: usize = 100_000;
 const DAY_MILLIS: i64 = 86_400_000;
 const MAX_RANGE_MILLIS: i64 = 30 * DAY_MILLIS;
-const ALL_TIME_UNTIL_MILLIS: i64 = 253_402_300_799_999;
+// Logs and spans persist timestamps as signed nanoseconds, so the shared upper
+// bound must remain representable after the Mongo adapter converts milliseconds.
+const ALL_TIME_UNTIL_MILLIS: i64 = i64::MAX / 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum NativeApiError {
@@ -3482,6 +3484,7 @@ mod tests {
         assert_eq!(first, later);
         assert_eq!(first.0.unix_millis(), 0);
         assert_eq!(first.1.unix_millis(), ALL_TIME_UNTIL_MILLIS);
+        assert!(first.1.unix_millis().checked_mul(1_000_000).is_some());
     }
 
     #[test]
