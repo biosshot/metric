@@ -391,6 +391,7 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
       cursor?: string | null;
       result: {
         kind: 'records' | 'number' | 'timeseries' | 'values';
+        field?: string;
         aggregates?: Array<{ function: string; field?: string; alias?: string }>;
         group_by?: string[];
       };
@@ -436,6 +437,22 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
           received_at: Date.parse(transactionRecord.received_at),
         },
       ];
+    } else if (body.source === 'replays' && body.result.kind === 'values') {
+      const values = (state.replays ?? [replayRecord])
+        .map((replay) => {
+          if (body.result.field === 'environment') return replay.environment;
+          if (body.result.field === 'release') return replay.release;
+          return null;
+        })
+        .filter((value): value is string => Boolean(value));
+      return json({
+        source: body.source,
+        kind: body.result.kind,
+        items: [...new Set(values)],
+        next_cursor: null,
+        normalized_query: body.query,
+        cost: 198,
+      });
     } else if (body.source === 'replays') {
       state.signalFromSeen = body.from;
       const replayTerm = body.query.split(':').slice(1).join(':').replaceAll('"', '') || body.query;
@@ -1165,7 +1182,7 @@ test('Feedback detail exposes workflow, Replay and authenticated attachment down
     `/replays/${replayRecord.id}`,
   );
   await expect(page.getByRole('heading', { name: 'Attachments' })).toBeVisible();
-  const workflowBox = await page.locator('.feedback-workflow').boundingBox();
+  const workflowBox = await page.getByLabel('Feedback workflow', { exact: true }).boundingBox();
   const attachmentsBox = await page.getByRole('heading', { name: 'Attachments' }).boundingBox();
   expect(workflowBox).not.toBeNull();
   expect(attachmentsBox).not.toBeNull();
