@@ -68,6 +68,7 @@ const MAX_PAGE: usize = 100;
 const MAX_MONITORS_PAGE: usize = 100_000;
 const DAY_MILLIS: i64 = 86_400_000;
 const MAX_RANGE_MILLIS: i64 = 30 * DAY_MILLIS;
+const ALL_TIME_UNTIL_MILLIS: i64 = 253_402_300_799_999;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum NativeApiError {
@@ -2813,6 +2814,13 @@ fn unified_time_range(
     until: Option<Timestamp>,
     source: QuerySource,
 ) -> Result<(Timestamp, Timestamp), NativeApiError> {
+    if from.is_none() && until.is_none() {
+        let from = Timestamp::from_unix_millis(0).expect("the Unix epoch is a valid timestamp");
+        let until = Timestamp::from_unix_millis(ALL_TIME_UNTIL_MILLIS)
+            .expect("the all-time upper bound is a valid timestamp");
+        return Ok((from, until));
+    }
+
     let default = if source == QuerySource::Metrics {
         7 * DAY_MILLIS
     } else {
@@ -3461,6 +3469,19 @@ mod tests {
         let (from, until) = signal_time_range(now, None, None, DAY_MILLIS).unwrap();
         assert_eq!(from.unix_millis(), 0);
         assert_eq!(until.unix_millis(), now.unix_millis() + 1);
+    }
+
+    #[test]
+    fn unified_all_time_bounds_are_stable_across_requests() {
+        let first_now = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let later_now = Timestamp::from_unix_millis(1_800_000_010_000).unwrap();
+
+        let first = unified_time_range(first_now, None, None, QuerySource::Logs).unwrap();
+        let later = unified_time_range(later_now, None, None, QuerySource::Logs).unwrap();
+
+        assert_eq!(first, later);
+        assert_eq!(first.0.unix_millis(), 0);
+        assert_eq!(first.1.unix_millis(), ALL_TIME_UNTIL_MILLIS);
     }
 
     #[test]
