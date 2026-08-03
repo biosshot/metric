@@ -29,13 +29,13 @@ Medium is used when no profile is specified.
 Medium:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.sh | sh
 ```
 
 Another profile:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
@@ -46,14 +46,14 @@ Replace `min` with `low` or `high` when needed.
 Medium:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.ps1 | iex
 ```
 
 Another profile:
 
 ```powershell
 $env:METRIC_PROFILE = 'min'
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.ps1 | iex
 Remove-Item Env:METRIC_PROFILE
 ```
 
@@ -66,8 +66,8 @@ The installer:
 5. starts the containers and waits until they are healthy.
 
 You can review the
-[Linux installer](https://github.com/biosshot/metric/blob/v0.1.2/deploy/install.sh)
-or [Windows installer](https://github.com/biosshot/metric/blob/v0.1.2/deploy/install.ps1)
+[Linux installer](https://github.com/biosshot/metric/blob/v0.1.3/deploy/install.sh)
+or [Windows installer](https://github.com/biosshot/metric/blob/v0.1.3/deploy/install.ps1)
 before running it.
 
 ## Open Metric
@@ -102,10 +102,10 @@ metric/
 
 All four files must stay in the same directory:
 
-- [`compose.yml`](https://github.com/biosshot/metric/blob/v0.1.2/deploy/compose.yml)
+- [`compose.yml`](https://github.com/biosshot/metric/blob/v0.1.3/deploy/compose.yml)
   describes all available containers;
 - `metric.toml` is the selected Min, Low, Medium or High configuration;
-- [`symbolicator.yml`](https://github.com/biosshot/metric/blob/v0.1.2/deploy/symbolicator.yml)
+- [`symbolicator.yml`](https://github.com/biosshot/metric/blob/v0.1.3/deploy/symbolicator.yml)
   is used only by Medium and High;
 - `.env` contains the selected profile, passwords, image versions and Docker
   resource limits.
@@ -127,17 +127,17 @@ data.
 
 Create an empty directory and download:
 
-- [compose.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/compose.yml)
-- [symbolicator.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/symbolicator.yml)
+- [compose.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/compose.yml)
+- [symbolicator.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/symbolicator.yml)
 
 Then choose one pair and save it under the name shown:
 
 | Profile | Save as `metric.toml` | Save as `.env` |
 | --- | --- | --- |
-| Min | [min.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/min.toml) | [min.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/min.env.example) |
-| Low | [low.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/low.toml) | [low.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/low.env.example) |
-| Medium | [medium.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/medium.toml) | [medium.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/medium.env.example) |
-| High | [high.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/high.toml) | [high.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/profiles/high.env.example) |
+| Min | [min.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/min.toml) | [min.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/min.env.example) |
+| Low | [low.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/low.toml) | [low.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/low.env.example) |
+| Medium | [medium.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/medium.toml) | [medium.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/medium.env.example) |
+| High | [high.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/high.toml) | [high.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/profiles/high.env.example) |
 
 Replace the two placeholder secrets in `.env`:
 

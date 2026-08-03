@@ -21,7 +21,7 @@ same Rust binary.
 No SaaS account. No repository clone for Docker installation. No 65-service
 Compose stack. Your telemetry stays on infrastructure you control.
 
-> Metric 0.1.2 is an early release. Read the
+> Metric 0.1.3 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
 > for important production data.
 
@@ -53,7 +53,7 @@ data-residency questions or the operational weight of self-hosted Sentry.
 
 ## Metric vs. self-hosted Sentry
 
-| | **Metric 0.1.2** | **Self-hosted Sentry 26.7.2** |
+| | **Metric 0.1.3** | **Self-hosted Sentry 26.7.2** |
 | --- | --- | --- |
 | Core stack | One Rust application serving the bundled Vue UI, plus MongoDB | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
 | Compose footprint | **2 services** in Min/Low; **4 services** in Medium/High with Symbolicator and its cleanup companion | **65 service definitions** in the official release Compose file¹ |
@@ -123,7 +123,7 @@ Change the DSN. Keep the SDK.
 Sentry.init({ dsn: "http://<key>@your-metric-host:4001/<project_id>" });
 ```
 
-Metric 0.1.2 is tested with real processes of:
+Metric 0.1.3 is tested with real processes of:
 
 - `@sentry/browser` 10.66.0 and `@sentry/node` 10.66.0;
 - Python `sentry-sdk` 2.32.0 and Java `sentry-java` 8.50.1;
@@ -166,17 +166,17 @@ The exact supported, optional and unavailable capabilities are kept in
 Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.ps1 | iex
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
-`ghcr.io/biosshot/metric:0.1.2` and starts the recommended Medium profile.
+`ghcr.io/biosshot/metric:0.1.3` and starts the recommended Medium profile.
 Running the installer again reuses the existing `.env` and database password.
 You do not need to clone the repository.
 
@@ -207,7 +207,7 @@ storing important data.
 Install Min on a small Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.2/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.3/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
