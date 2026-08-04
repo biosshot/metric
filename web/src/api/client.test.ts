@@ -19,6 +19,29 @@ describe('native API client', () => {
     expect(headers.get('x-csrf-token')).toBe('a'.repeat(64));
   });
 
+  it('sends issue lifecycle mutations without requiring crypto.randomUUID', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          applied: true,
+          issue: { status: 'resolved' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.mutateIssue('12', '34', 'resolve');
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/v1/projects/12/issues/34/lifecycle');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      action: 'resolve',
+      idempotency_key: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
+  });
+
   it('creates a scoped personal token through the authenticated CSRF contract', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

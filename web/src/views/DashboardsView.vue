@@ -21,6 +21,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
 import { timeWindow, type TimeWindow } from '../lib/timeRange';
+import { randomHexId } from '../lib/randomId';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -188,7 +189,7 @@ const createDashboard = useMutation({
       widgets: input.widgets.map((widget) => ({
         id:
           existing.widgets.find((item) => item.saved_query_id === widget.saved_query_id)?.id ??
-          crypto.randomUUID().replaceAll('-', ''),
+          randomHexId(),
         ...widget,
         shape: widget.shape,
       })),

@@ -49,6 +49,7 @@ import type {
   UserOrganization,
 } from './types';
 import { queryForBackend } from '../lib/queryDate';
+import { randomHexId } from '../lib/randomId';
 
 type SessionProvider = () => { organizationId: string | null; csrfToken: string | null };
 type SessionInvalidator = () => void;
@@ -475,7 +476,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({
           action,
-          idempotency_key: crypto.randomUUID().replaceAll('-', ''),
+          idempotency_key: randomHexId(),
         }),
       },
     ),
@@ -659,7 +660,7 @@ export const api = {
   ) =>
     request<Deploy>(`/api/v1/projects/${projectId}/releases/${releaseId}/deploys`, {
       method: 'POST',
-      headers: { 'idempotency-key': crypto.randomUUID().replaceAll('-', '') },
+      headers: { 'idempotency-key': randomHexId() },
       body: JSON.stringify(input),
     }),
   releaseIssues: (projectId: string, releaseId: string, kind: 'new' | 'regressed') =>

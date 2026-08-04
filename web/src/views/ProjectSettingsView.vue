@@ -17,6 +17,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import AppIcon from '../components/AppIcon.vue';
 import BaseSelect, { type SelectOption } from '../components/BaseSelect.vue';
+import { randomHexId } from '../lib/randomId';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -221,11 +222,7 @@ const disableKey = useMutation({
 });
 const requestDeletion = useMutation({
   mutationFn: () =>
-    api.requestProjectDeletion(
-      projectId.value,
-      deleteConfirmation.value,
-      crypto.randomUUID().replaceAll('-', ''),
-    ),
+    api.requestProjectDeletion(projectId.value, deleteConfirmation.value, randomHexId()),
   onSuccess: async (value) => {
     queryClient.setQueryData(['project-deletion', projectId.value], value);
     notice.value = t('projectSettings.deletionScheduled');
