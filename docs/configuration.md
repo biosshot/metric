@@ -26,10 +26,10 @@ once at startup, so restart the container after a change.
 
 | Profile file | Main purpose |
 | --- | --- |
-| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.4/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
-| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.4/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
-| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.4/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
-| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.4/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
+| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.5/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
+| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.5/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
+| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.5/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
+| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.5/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
 
 Profile settings are designed as a group. Copying only High queue sizes into Min
 can make a 1 GiB server run out of memory. Copying only High retention into a

@@ -1,6 +1,6 @@
 # Known limits
 
-Metric 0.1.4 is an early release. Read these limits before using it for important
+Metric 0.1.5 is an early release. Read these limits before using it for important
 production data.
 
 ## Updates
