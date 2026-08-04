@@ -179,7 +179,7 @@ function timestamp(value: string | null): string {
       </div>
 
       <nav class="release-signal-links" :aria-label="$t('releaseDetail.relatedSignals')">
-        <RouterLink :to="queryLink('/issues', 'rel', release.data.value.version)">
+        <RouterLink :to="queryLink('/explore', 'rel', release.data.value.version)">
           <AppIcon name="bug" :size="16" /> {{ $t('releaseDetail.errors') }}
         </RouterLink>
         <RouterLink :to="queryLink('/logs', 'rel', release.data.value.version)">

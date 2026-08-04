@@ -1301,6 +1301,8 @@ export default {
     datasetMeta: '{dataset} dataset',
     estimatedCost: 'Estimated cost {cost} / 10,000',
     resultMeta: '{shape} result',
+    openResult: 'Open',
+    openResultLabel: 'Open result {number}',
     nextPage: 'Next page',
   },
 } as const;

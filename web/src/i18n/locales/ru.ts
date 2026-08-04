@@ -1312,6 +1312,8 @@ export default {
     datasetMeta: 'Набор данных: {dataset}',
     estimatedCost: 'Примерная стоимость: {cost} / 10 000',
     resultMeta: 'Результат: {shape}',
+    openResult: 'Открыть',
+    openResultLabel: 'Открыть результат {number}',
     nextPage: 'Следующая страница',
   },
 } as const;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery } from '@tanstack/vue-query';
@@ -19,6 +19,7 @@ import LoadingPanel from '../components/LoadingPanel.vue';
 import MetricsSectionNav from '../components/MetricsSectionNav.vue';
 import TimeRangeSelect from '../components/TimeRangeSelect.vue';
 import UnifiedQueryBar from '../components/UnifiedQueryBar.vue';
+import { exploreRecordLink } from '../lib/exploreRecordLink';
 import { optionalTimeWindow, timeWindow, type TimeWindow } from '../lib/timeRange';
 import { useSessionStore } from '../stores/session';
 
@@ -179,6 +180,13 @@ const chartMaximum = computed(() =>
     ...(result.data.value?.items ?? []).map((item) => Number(item[resultValueColumn.value] ?? 0)),
   ),
 );
+const recordLinks = computed(() => {
+  const value = result.data.value;
+  return value?.kind === 'records'
+    ? value.items.map((item) => exploreRecordLink(value.source, item))
+    : [];
+});
+const hasRecordLinks = computed(() => recordLinks.value.some(Boolean));
 
 function aggregates(): QueryAggregate[] {
   if (dataset.value !== 'metrics') return [{ function: 'count', alias: 'count' }];
@@ -213,6 +221,20 @@ async function run(nextCursor: string | null = null): Promise<void> {
     limit: 50,
   });
 }
+
+function runRouteQuery(value: unknown): void {
+  if (typeof value !== 'string' || !value.trim()) return;
+  queryText.value = value;
+  void run(null).catch(() => undefined);
+}
+
+onMounted(() => runRouteQuery(route.query.q));
+watch(
+  () => route.query.q,
+  (value, previous) => {
+    if (value !== previous) runRouteQuery(value);
+  },
+);
 
 function reset(): void {
   queryText.value = '';
@@ -468,11 +490,27 @@ function formatNumber(value: ExploreScalar | undefined): string {
         <table class="issue-table explore-table">
           <thead>
             <tr>
+              <th v-if="hasRecordLinks">{{ $t('explore.openResult') }}</th>
               <th v-for="column in columns" :key="column">{{ fieldLabel(column) }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(item, index) in result.data.value.items" :key="String(item.id ?? index)">
+            <tr
+              v-for="(item, index) in result.data.value.items"
+              :key="String(item.event_id ?? item.id ?? item.trace_id ?? index)"
+            >
+              <td v-if="hasRecordLinks">
+                <RouterLink
+                  v-if="recordLinks[index]"
+                  class="text-link explore-table__open"
+                  :to="recordLinks[index] ?? '/explore'"
+                  :aria-label="$t('explore.openResultLabel', { number: index + 1 })"
+                >
+                  <AppIcon name="view" :size="15" />
+                  {{ $t('explore.openResult') }}
+                </RouterLink>
+                <span v-else>—</span>
+              </td>
               <td v-for="column in columns" :key="column">{{ display(item[column], column) }}</td>
             </tr>
           </tbody>

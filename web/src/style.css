@@ -4302,6 +4302,13 @@ label small,
   white-space: nowrap;
 }
 
+.explore-table__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+
 .dashboard-builders {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr));
