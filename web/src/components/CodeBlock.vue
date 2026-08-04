@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import { tokenizeSyntaxLine } from './syntaxHighlight';
+import { copyText } from '../lib/clipboard';
 
 const props = withDefaults(
   defineProps<{
@@ -22,7 +23,7 @@ async function copyCode(): Promise<void> {
   copyFailed.value = false;
   clearTimeout(copyTimer);
   try {
-    await navigator.clipboard.writeText(props.code);
+    await copyText(props.code);
     copied.value = true;
     copyTimer = setTimeout(() => {
       copied.value = false;

@@ -18,4 +18,23 @@ describe('CodeBlock', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(code));
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
   });
+
+  it('falls back to document copy when Clipboard API is unavailable on HTTP', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    const execCommand = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(CodeBlock, { props: { code: 'http://key@example/1', language: 'text' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
+    expect(document.querySelector('textarea')).toBeNull();
+  });
 });

@@ -11,6 +11,7 @@ import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { useSessionStore } from '../stores/session';
+import { copyText } from '../lib/clipboard';
 
 type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet' | 'go' | 'rust';
 
@@ -164,7 +165,7 @@ async function copy(value: string): Promise<void> {
   copyNotice.value = '';
   copyError.value = '';
   try {
-    await navigator.clipboard.writeText(value);
+    await copyText(value);
     copyNotice.value = t('projectSetup.copied');
   } catch {
     copyError.value = t('projectSetup.copyDenied');
