@@ -48,10 +48,11 @@ docker compose run --rm --no-deps metric \
 
 Unknown names and invalid values stop startup instead of being ignored.
 
-The current Metric version requires MongoDB schema generation **19 exactly**. An
-empty database is prepared automatically. A database created by another schema
-generation is rejected; follow [Update Metric](upgrading.md) and do not delete data
-to bypass this check.
+The current Metric version targets MongoDB schema generation **19**. An empty
+database is prepared automatically. A supported older generation is migrated only
+when the image contains the complete adjacent transition chain; this release has no
+older-to-19 production transition. Follow [Update Metric](upgrading.md) and do not
+delete data to bypass a compatibility error.
 
 ## How values are selected
 
@@ -111,7 +112,7 @@ for that installation. The main profile differences are summarized in
 | `server.request_timeout` | `30s` | General HTTP request deadline. |
 | `mongodb.uri` | `MONGODB_URI` | MongoDB connection string. Keep it secret. |
 | `mongodb.database` | `metric` | MongoDB database name. |
-| `mongodb.bootstrap_timeout` | `10s` (Docker: `30s`) | Time allowed for database startup checks. |
+| `mongodb.bootstrap_timeout` | `10s` (Docker: `30s`) | Time allowed to establish the initial MongoDB connection. A published migration has no overall timeout and reports liveness and progress separately. |
 | `projects.scrub_hmac_key` | `SCRUB_HMAC_KEY` | Secret used to pseudonymize stored values such as IP addresses. |
 | `projects.identity_collision_retries` | `16` | Attempts to create a unique project identifier. |
 | `projects.max_keys_per_project` | `32` | Maximum DSN keys for one project. |

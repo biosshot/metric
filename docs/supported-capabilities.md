@@ -21,6 +21,8 @@
 - export an Incident Capsule for an issue;
 - deliver signed webhooks;
 - store files on the local Docker volume;
+- run release-shipped adjacent MongoDB schema migrations automatically before
+  application startup;
 - symbolicate native and JavaScript stack traces with the Symbolicator container
   included in Medium and High.
 
@@ -51,7 +53,7 @@ Min disables attachments. Min and Low omit Symbolicator. See
 - single sign-on, SCIM, MFA and passkeys;
 - multiple Metric processing nodes;
 - built-in high-availability deployment;
-- automatic migration between different database schema generations;
+- arbitrary or reverse database-schema migration and mixed-version rolling upgrades;
 - a Prometheus metrics endpoint.
 
 Metric also provides a machine-readable feature list at

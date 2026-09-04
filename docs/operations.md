@@ -43,8 +43,11 @@ curl http://localhost:4001/live
 curl http://localhost:4001/ready
 ```
 
-`/live` confirms that the process is running. `/ready` confirms that Metric and
-its required workers are ready.
+`/live` confirms that the process event loop is running. `/ready` confirms that
+Metric, its target database schema and its required workers are ready. During an
+automatic schema migration, `/live` stays at HTTP 200 while `/ready` returns HTTP
+503. Browser navigation shows bounded step progress; API and SDK requests return
+HTTP 503 with `Retry-After` until runtime activation.
 
 Metric intentionally does not expose a Prometheus endpoint in the current product
 scope. The `/metrics` browser path is a page in the web interface, not a monitoring
@@ -133,9 +136,10 @@ complete target profile in [Configuration](configuration.md#supplied-profiles).
 
 ## Updates
 
-The current binary requires schema generation **19 exactly**. It rejects a
-database created by an incompatible Metric version instead of changing or
-deleting it.
+The current binary targets schema generation **19**. On a future update for which
+the image contains every adjacent transition, Metric migrates automatically before
+starting application workers. This release contains the runner but no
+older-to-19 production transition.
 
 Do not edit `schema_meta`, delete MongoDB collections or remove Docker volumes
 after a schema error. Follow [Update Metric](upgrading.md).

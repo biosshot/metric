@@ -134,8 +134,15 @@ disk. Container logs already rotate according to the selected profile.
 
 ## Schema mismatch
 
-Stop the update and keep the data unchanged. Do not edit `schema_meta`, drop the
-database or delete Docker volumes. Follow [Update Metric](upgrading.md).
+During a supported automatic migration, `/live` is HTTP 200, `/ready` is HTTP 503
+and the root browser page shows migration progress. Follow the Metric logs; do not
+start a second manual migration command.
+
+If Metric exits with a schema error, the condition is not transient: the image is
+missing a required transition, the database is newer, a required invariant failed
+or the transformation is ambiguous. Keep the data unchanged. Do not edit
+`schema_meta`, drop the database or delete Docker volumes. Follow
+[Update Metric](upgrading.md).
 
 ## Ask for help
 

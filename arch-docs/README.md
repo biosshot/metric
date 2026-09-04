@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-08-01:
+Status as of 2026-09-04:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -32,6 +32,7 @@ Status as of 2026-08-01:
 | Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
+| Automatic schema-migration framework | Complete; production registry remains empty at generation 19 | ADR-0049 |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
@@ -66,11 +67,14 @@ truth. Generation numbers in older ADR amendments, module contracts and phase
 reports describe the schema those phases tested; they are historical evidence, not
 current upgrade targets.
 
-Metric has no online or automatic migration and no supported data-preserving
+ADR-0049 accepts an automatic, forward-only and crash-resumable MongoDB migration
+framework, but this framework release deliberately keeps generation 19 and registers
+no production transition. There is still no supported data-preserving
 generation-18-to-19 conversion. Operators must not edit `schema_meta`, delete a
 data-bearing database or recreate it after an incompatibility error. The current
 upgrade decision table and backup warning, including MongoDB/BlobStore consistency
-for Session Replay, are in [`docs/upgrading.md`](../docs/upgrading.md).
+for Session Replay, are in [`docs/upgrading.md`](../docs/upgrading.md). The first real
+production transition will receive its own schema amendment and tests.
 
 ## Current signal durability
 
@@ -154,6 +158,8 @@ current production declaration gate. Current limits are stated directly in
   closure, completed localization and accepted Export/Cold Search scope.
 - `0048-unified-query-v2.md`: accepted one-endpoint Search/Explore consolidation,
   shared Web query language and explicit generation-19 no-migration invariant.
+- `0049-automatic-crash-resumable-schema-migrations.md`: accepted automatic MongoDB
+  generation chains, bounded forward recovery and maintenance-mode startup behavior.
 - `phase-reports/0041-web-localization.md`: Phase 41 implementation evidence.
 - `module-contracts/0037-application-metrics-phase-37.md`: Phase 37 implementation
   boundary and exit gate.

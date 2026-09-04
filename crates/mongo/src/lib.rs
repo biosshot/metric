@@ -17,6 +17,7 @@ mod issue;
 mod maintenance;
 #[path = "metrics.rs"]
 mod metric_storage;
+mod migrations;
 mod monitors;
 mod notifications;
 mod releases;
@@ -43,6 +44,12 @@ pub use finalizer::{DecodedFinalizedEvent, MongoFinalizationStore, decode_finali
 pub use issue::{IssueCodecConfig, IssueCodecError, MongoIssueStore, decode_issue};
 pub use maintenance::MongoMaintenanceStore;
 pub use metric_storage::{MetricRetention, MongoMetricStore};
+pub use migrations::{
+    BoundedDocumentPage, MigrationAttemptError, MigrationBatch, MigrationCheckpoint,
+    MigrationDocumentLimits, MigrationFuture, MigrationRegistry, MigrationRunnerConfig,
+    MongoMigration, MongoMigrationError, RecordErrorPolicy, SchemaMigrationProgress,
+    SchemaMigrationReporter, load_bounded_document_page, migrate_to_target,
+};
 pub use monitors::{MongoMonitorStore, MonitorRetention};
 pub use notifications::MongoNotificationStore;
 pub use releases::MongoReleaseStore;
@@ -71,6 +78,8 @@ use mongodb::{
     options::IndexOptions,
 };
 use thiserror::Error;
+
+static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 0] = [];
 
 pub const SCHEMA_GENERATION: i32 = 19;
 const SCHEMA_ID: &str = "metric.schema";
@@ -149,6 +158,8 @@ pub enum MongoBootstrapError {
     IncompatibleSchema,
     #[error("configured database contains data but no Metric schema")]
     NonEmptyUnmanagedDatabase,
+    #[error(transparent)]
+    Migration(#[from] MongoMigrationError),
 }
 
 impl From<MongoError> for MongoBootstrapError {
@@ -311,13 +322,48 @@ impl MongoProjectStore {
     }
 
     pub async fn bootstrap_or_validate(&self) -> Result<(), MongoBootstrapError> {
+        self.bootstrap_or_migrate(&|_| {}).await
+    }
+
+    pub async fn bootstrap_or_migrate(
+        &self,
+        reporter: &dyn SchemaMigrationReporter,
+    ) -> Result<(), MongoBootstrapError> {
         let mut names = self.database.list_collection_names().await?;
         names.sort();
         if names.is_empty() {
-            self.bootstrap_empty().await
-        } else {
-            self.validate_existing(&names).await
+            self.bootstrap_empty().await?;
+            reporter.report(SchemaMigrationProgress::Complete {
+                generation: SCHEMA_GENERATION,
+            });
+            return Ok(());
         }
+        if !names.iter().any(|name| name == "schema_meta") {
+            return Err(MongoBootstrapError::NonEmptyUnmanagedDatabase);
+        }
+        let marker = self
+            .database
+            .collection::<Document>("schema_meta")
+            .find_one(doc! { "_id": SCHEMA_ID })
+            .await?
+            .ok_or(MongoBootstrapError::MissingSchemaMarker)?;
+        let generation = marker
+            .get_i32("generation")
+            .map_err(|_| MongoBootstrapError::IncompatibleSchema)?;
+        let state = marker
+            .get_str("state")
+            .map_err(|_| MongoBootstrapError::IncompatibleSchema)?;
+        if generation != SCHEMA_GENERATION || state == "migrating" {
+            migrate_to_target(
+                &self.database,
+                MigrationRegistry::new(SCHEMA_GENERATION, &PRODUCTION_MIGRATIONS),
+                reporter,
+            )
+            .await?;
+            names = self.database.list_collection_names().await?;
+            names.sort();
+        }
+        self.validate_existing(&names).await
     }
 
     async fn bootstrap_empty(&self) -> Result<(), MongoBootstrapError> {

@@ -232,12 +232,15 @@ The supplied deployment is deliberately single-node:
 - one Metric process and one MongoDB server;
 - no sharding, split processing roles or built-in high availability;
 - no built-in backup/restore command;
-- no automatic migration between database schema generations;
+- no reverse migrations, mixed-version rolling upgrades or currently published
+  converter from a pre-19 schema;
 - cold archives cannot yet be searched or restored through Metric.
 
-The current binary requires MongoDB schema generation **19 exactly**. Never
-delete the database, Docker volumes or the `schema_meta` record to fix a version
-mismatch. Follow the [update guide](https://biosshot.github.io/metric/upgrading).
+The current binary targets MongoDB schema generation **19** and contains an
+automatic forward migration runner, but this release has no production transition
+from an older generation. Never delete the database, Docker volumes or the
+`schema_meta` record to fix a version mismatch. Follow the
+[update guide](https://biosshot.github.io/metric/upgrading).
 
 Minidumps and cold archive exist but remain disabled in the supplied profiles.
 Session Replay is off for each new project. These features require an explicit

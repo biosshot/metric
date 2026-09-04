@@ -11,7 +11,9 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
-The current Metric binary requires MongoDB schema generation **19 exactly**.
+The current Metric binary targets MongoDB schema generation **19**. It contains
+the automatic migration runner, but this release does not publish a production
+transition from an older generation.
 
 ::: danger Protect existing data
 You must never drop or recreate a data-bearing MongoDB database to make another
@@ -54,16 +56,28 @@ High as part of an ordinary version update.
 | --- | --- | --- |
 | Empty | Creates schema generation 19 | Wait for `/ready` |
 | Complete generation 19 | Starts normally | No schema action |
-| Older generation | Refuses to start | Stop and keep the data unchanged |
+| Older generation with a complete transition chain in the new image | Migrates automatically, then starts | Keep the browser or logs open and wait for `/ready` |
+| Older generation without a complete transition chain | Exits with a stable error | Stop and keep the data unchanged |
 | Newer or different generation | Refuses to start | Use the matching Metric version |
 | Non-empty database without Metric metadata | Refuses to start | Check the database name; do not erase it |
 
-Metric 0.1.5 cannot automatically migrate an older database to generation 19.
-An empty-database setup is not a migration.
+While a published migration runs, `/live` remains HTTP 200 and `/ready` remains
+HTTP 503. Browser navigation shows a maintenance page with completed and remaining
+steps; API and SDK requests receive HTTP 503 with `Retry-After`. Metric starts no
+ordinary application workers until the target schema has been verified.
 
-Changing back to an older image is safe only when that image supports the same
-schema generation. Do not assume that changing the image tag is always a valid
-rollback.
+There is no separate migration command or interactive confirmation. Starting the
+new image authorizes every required transition shipped in that image. Transient
+database failures are retried inside the process. A missing transition, newer
+schema, ambiguous transformation or failed required invariant stops startup with a
+nonzero exit instead of guessing or deleting data.
+
+Metric 0.1.5 has no older-to-19 production transition, so an older database still
+fails closed in this release. An empty-database setup is not a migration.
+
+Migrations are forward-only. Changing back to an older image is safe only when that
+image supports the resulting schema generation. Do not assume that changing the
+image tag is always a valid rollback.
 
 ## Backup rule
 

@@ -74,7 +74,10 @@ use metric_application::{
 };
 use metric_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
 use metric_domain::Timestamp;
-use metric_mongo::{EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore};
+use metric_mongo::{
+    EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore,
+    SchemaMigrationProgress,
+};
 use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
     FeedbackSink, FeedbackStore, LogSink, MetricSink, MetricStore, MonitorSink, MonitorStore,
@@ -85,6 +88,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -100,8 +104,8 @@ pub enum ServerError {
     Mongo(#[from] MongoBootstrapError),
     #[error(transparent)]
     Projects(#[from] ProjectServiceError),
-    #[error("MongoDB schema bootstrap/check exceeded its deadline")]
-    MongoBootstrapTimeout,
+    #[error("initial MongoDB connection exceeded its deadline")]
+    MongoConnectTimeout,
     #[error(transparent)]
     Writer(#[from] MongoWriterStartError),
     #[error(transparent)]
@@ -215,6 +219,27 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     init_tracing()?;
     let metrics = Metrics;
     let shutdown = ShutdownRoot::new();
+    let os_shutdown = CancellationToken::new();
+    let os_shutdown_signal = os_shutdown.clone();
+    let _os_shutdown_task = tokio::spawn(async move {
+        wait_for_os_shutdown().await;
+        os_shutdown_signal.cancel();
+    });
+    let startup_gate = http::StartupGate::new();
+    let listener = TcpListener::bind(config.server.http_address).await?;
+    let startup_app = http::startup_router(shutdown.signal(), metrics, startup_gate.clone());
+    let mut server_task = tokio::spawn(http::run(
+        listener,
+        shutdown.signal(),
+        config.server.shutdown_grace.get(),
+        startup_app,
+    ));
+    info!(
+        operation = "runtime.listening",
+        role = %config.role,
+        address = %config.server.http_address,
+        "HTTP startup listener ready"
+    );
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
     let random: std::sync::Arc<dyn RandomSource> = std::sync::Arc::new(SystemRandom);
     let blob_store: std::sync::Arc<dyn BlobStore> = match config.blob.backend {
@@ -318,20 +343,48 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .expect("validated MongoDB configuration has a scrub HMAC key");
         let webhook_secret_box = webhook::WebhookSecretBox::new(&hmac_key);
         let notification_secret_box = webhook_secret_box.clone();
-        let setup = async {
-            let store = MongoProjectStore::connect(
-                uri.expose(),
-                &config.mongodb.database,
-                hmac_key,
-                config.projects.max_keys_per_project,
-            )
-            .await?;
-            store.bootstrap_or_validate().await?;
-            Ok::<_, MongoBootstrapError>(store)
+        startup_gate.report(http::StartupProgress {
+            phase: http::StartupPhase::InspectingSchema,
+            ..http::StartupProgress::default()
+        });
+        let connect = MongoProjectStore::connect(
+            uri.expose(),
+            &config.mongodb.database,
+            hmac_key,
+            config.projects.max_keys_per_project,
+        );
+        let store = tokio::select! {
+            result = timeout(config.mongodb.bootstrap_timeout.get(), connect) => {
+                result.map_err(|_| ServerError::MongoConnectTimeout)??
+            }
+            () = os_shutdown.cancelled() => {
+                warn!(operation = "runtime.shutdown", "shutdown signal received during startup");
+                shutdown.begin();
+                server_task
+                    .await
+                    .map_err(|error| ServerError::Http(io::Error::other(error)))??;
+                return Ok(ExitCode::SUCCESS);
+            }
         };
-        let store = timeout(config.mongodb.bootstrap_timeout.get(), setup)
-            .await
-            .map_err(|_| ServerError::MongoBootstrapTimeout)??;
+        let progress_gate = startup_gate.clone();
+        let migration_reporter = move |progress| {
+            report_schema_migration_progress(&progress_gate, progress);
+        };
+        tokio::select! {
+            result = store.bootstrap_or_migrate(&migration_reporter) => result?,
+            () = os_shutdown.cancelled() => {
+                warn!(operation = "runtime.shutdown", "shutdown signal received during schema migration");
+                shutdown.begin();
+                server_task
+                    .await
+                    .map_err(|error| ServerError::Http(io::Error::other(error)))??;
+                return Ok(ExitCode::SUCCESS);
+            }
+        }
+        startup_gate.report(http::StartupProgress {
+            phase: http::StartupPhase::StartingServices,
+            ..http::StartupProgress::default()
+        });
         let project_service = std::sync::Arc::new(ProjectService::new(
             std::sync::Arc::new(store.clone()),
             std::sync::Arc::clone(&clock),
@@ -1196,28 +1249,26 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             release_service,
         ))
         .merge(web_http::router());
-    let app = http::router_with_probe(shutdown.signal(), metrics, application_routes, readiness);
-    let listener = TcpListener::bind(config.server.http_address).await?;
+    let gate_readiness = readiness.clone();
+    let application =
+        http::router_with_probe(shutdown.signal(), metrics, application_routes, readiness);
+    startup_gate.activate(application, gate_readiness);
     info!(
         operation = "runtime.ready",
         role = %config.role,
         address = %config.server.http_address,
-        "HTTP listener ready"
+        "application runtime ready"
     );
-
-    let server = http::run(
-        listener,
-        shutdown.signal(),
-        config.server.shutdown_grace.get(),
-        app,
-    );
-    tokio::pin!(server);
     tokio::select! {
-        result = &mut server => result?,
-        () = wait_for_os_shutdown() => {
+        result = &mut server_task => {
+            result.map_err(|error| ServerError::Http(io::Error::other(error)))??;
+        },
+        () = os_shutdown.cancelled() => {
             warn!(operation = "runtime.shutdown", "shutdown signal received");
             shutdown.begin();
-            server.await?;
+            server_task
+                .await
+                .map_err(|error| ServerError::Http(io::Error::other(error)))??;
         }
     }
     shutdown.begin();
@@ -1360,6 +1411,46 @@ fn startup_bootstrap_token(
         Err(AuthError::BootstrapClosed) => Ok(None),
         result => result,
     }
+}
+
+fn report_schema_migration_progress(gate: &http::StartupGate, progress: SchemaMigrationProgress) {
+    let progress = match progress {
+        SchemaMigrationProgress::Inspecting => http::StartupProgress {
+            phase: http::StartupPhase::InspectingSchema,
+            ..http::StartupProgress::default()
+        },
+        SchemaMigrationProgress::Waiting {
+            completed_steps,
+            total_steps,
+            processed_records,
+            warnings,
+            ..
+        } => http::StartupProgress {
+            phase: http::StartupPhase::WaitingForMigration,
+            completed_steps,
+            total_steps,
+            processed_records,
+            warnings,
+        },
+        SchemaMigrationProgress::Running {
+            completed_steps,
+            total_steps,
+            processed_records,
+            warnings,
+            ..
+        } => http::StartupProgress {
+            phase: http::StartupPhase::Migrating,
+            completed_steps,
+            total_steps,
+            processed_records,
+            warnings,
+        },
+        SchemaMigrationProgress::Complete { .. } => http::StartupProgress {
+            phase: http::StartupPhase::StartingServices,
+            ..http::StartupProgress::default()
+        },
+    };
+    gate.report(progress);
 }
 
 fn init_tracing() -> Result<(), ServerError> {
