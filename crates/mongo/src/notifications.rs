@@ -13,11 +13,12 @@ use metric_domain::{
     monitors::{MonitorId, MonitorRunStatus},
     notifications::{
         AggregateAlert, AlertRule, AlertRuleId, ClaimedNotificationDelivery,
-        IssueNotificationTransition, MAX_EMAIL_ADDRESS_BYTES, MonitorAlert, NotificationDelivery,
-        NotificationDeliveryId, NotificationDeliveryStatus, NotificationDestination,
-        NotificationDestinationId, NotificationDestinationKind, NotificationPayload,
-        NotificationText, RuleName, SealedWebhookSecret, SmtpDestination, SmtpSecurity,
-        WebhookEndpoint,
+        IssueNotificationTransition, MAX_EMAIL_ADDRESS_BYTES, MAX_TELEGRAM_DISPLAY_NAME_BYTES,
+        MAX_TELEGRAM_USERNAME_BYTES, MonitorAlert, NotificationDelivery, NotificationDeliveryId,
+        NotificationDeliveryStatus, NotificationDestination, NotificationDestinationId,
+        NotificationDestinationKind, NotificationPayload, NotificationText, RuleName,
+        SealedWebhookSecret, SmtpDestination, SmtpSecurity, TelegramApiBase, TelegramChatKind,
+        TelegramDestination, WebhookEndpoint,
     },
 };
 use metric_ports::{NotificationStore, NotificationStoreError, PortFuture};
@@ -997,6 +998,31 @@ fn encode_destination(destination: &NotificationDestination) -> Document {
             },
         );
     }
+    if let Some(telegram) = &destination.telegram {
+        let mut value = doc! { "h": telegram.api_base.as_str() };
+        if let Some(thread_id) = telegram.message_thread_id {
+            value.insert("t", thread_id);
+        }
+        if let Some(bot_id) = telegram.bot_id {
+            value.insert("b", bot_id);
+        }
+        if let Some(username) = &telegram.bot_username {
+            value.insert("u", username.as_str());
+        }
+        if let Some(display_name) = &telegram.bot_display_name {
+            value.insert("n", display_name.as_str());
+        }
+        if let Some(kind) = telegram.chat_kind {
+            value.insert("y", telegram_chat_kind_name(kind));
+        }
+        if let Some(username) = &telegram.chat_username {
+            value.insert("a", username.as_str());
+        }
+        if let Some(display_name) = &telegram.chat_display_name {
+            value.insert("d", display_name.as_str());
+        }
+        document.insert("g", value);
+    }
     document
 }
 
@@ -1055,6 +1081,57 @@ fn decode_destination(
             })
         })
         .transpose()?;
+    let telegram = document
+        .get_document("g")
+        .ok()
+        .map(|telegram| {
+            Ok::<_, NotificationStoreError>(TelegramDestination {
+                api_base: TelegramApiBase::new(
+                    telegram
+                        .get_str("h")
+                        .map_err(|_| NotificationStoreError::InvalidData)?,
+                )
+                .map_err(|_| NotificationStoreError::InvalidData)?,
+                message_thread_id: telegram.get_i64("t").ok(),
+                bot_id: telegram.get_i64("b").ok(),
+                bot_username: telegram
+                    .get_str("u")
+                    .ok()
+                    .map(|value| NotificationText::new(value, MAX_TELEGRAM_USERNAME_BYTES))
+                    .transpose()
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+                bot_display_name: telegram
+                    .get_str("n")
+                    .ok()
+                    .map(|value| NotificationText::new(value, MAX_TELEGRAM_DISPLAY_NAME_BYTES))
+                    .transpose()
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+                chat_kind: telegram
+                    .get_str("y")
+                    .ok()
+                    .map(|value| match value {
+                        "private" => Ok(TelegramChatKind::Private),
+                        "group" => Ok(TelegramChatKind::Group),
+                        "supergroup" => Ok(TelegramChatKind::Supergroup),
+                        "channel" => Ok(TelegramChatKind::Channel),
+                        _ => Err(NotificationStoreError::InvalidData),
+                    })
+                    .transpose()?,
+                chat_username: telegram
+                    .get_str("a")
+                    .ok()
+                    .map(|value| NotificationText::new(value, MAX_TELEGRAM_USERNAME_BYTES))
+                    .transpose()
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+                chat_display_name: telegram
+                    .get_str("d")
+                    .ok()
+                    .map(|value| NotificationText::new(value, MAX_TELEGRAM_DISPLAY_NAME_BYTES))
+                    .transpose()
+                    .map_err(|_| NotificationStoreError::InvalidData)?,
+            })
+        })
+        .transpose()?;
     let destination = NotificationDestination {
         id: NotificationDestinationId::from_bytes(id16(document, "_id")?),
         project_id: ProjectId::new(
@@ -1078,6 +1155,7 @@ fn decode_destination(
                 .to_vec(),
         )
         .map_err(|_| NotificationStoreError::InvalidData)?,
+        telegram,
         enabled: document
             .get_bool("e")
             .map_err(|_| NotificationStoreError::InvalidData)?,
@@ -1227,6 +1305,15 @@ fn smtp_security_name(security: SmtpSecurity) -> &'static str {
     }
 }
 
+fn telegram_chat_kind_name(kind: TelegramChatKind) -> &'static str {
+    match kind {
+        TelegramChatKind::Private => "private",
+        TelegramChatKind::Group => "group",
+        TelegramChatKind::Supergroup => "supergroup",
+        TelegramChatKind::Channel => "channel",
+    }
+}
+
 fn id16(document: &Document, field: &str) -> Result<[u8; 16], NotificationStoreError> {
     document
         .get_binary_generic(field)
@@ -1271,7 +1358,7 @@ fn date(timestamp: Timestamp) -> DateTime {
     DateTime::from_millis(timestamp.unix_millis())
 }
 
-pub(crate) fn destination_validator() -> Document {
+pub(crate) fn destination_validator_v19() -> Document {
     doc! { "$jsonSchema": {
         "bsonType": "object",
         "required": ["_id", "p", "k", "u", "s", "e", "c", "m"],
@@ -1299,6 +1386,65 @@ pub(crate) fn destination_validator() -> Document {
             },
         },
     }}
+}
+
+pub(crate) fn destination_expand_validator_v20() -> Document {
+    let mut validator = destination_validator_v19();
+    validator
+        .get_document_mut("$jsonSchema")
+        .expect("destination schema")
+        .get_document_mut("properties")
+        .expect("destination properties")
+        .insert("g", telegram_destination_schema());
+    validator
+}
+
+pub(crate) fn destination_validator() -> Document {
+    let mut validator = destination_expand_validator_v20();
+    validator
+        .get_document_mut("$jsonSchema")
+        .expect("destination schema")
+        .insert(
+            "oneOf",
+            vec![
+                doc! {
+                    "properties": { "k": { "enum": ["webhook"] } },
+                    "not": { "anyOf": [
+                        { "required": ["g"] },
+                        { "required": ["o"] },
+                    ] },
+                },
+                doc! {
+                    "required": ["g"],
+                    "properties": { "k": { "enum": ["telegram"] } },
+                    "not": { "required": ["o"] },
+                },
+                doc! {
+                    "required": ["o"],
+                    "properties": { "k": { "enum": ["smtp_email"] } },
+                    "not": { "required": ["g"] },
+                },
+            ],
+        );
+    validator
+}
+
+fn telegram_destination_schema() -> Document {
+    doc! {
+        "bsonType": "object",
+        "required": ["h"],
+        "additionalProperties": false,
+        "properties": {
+            "h": { "bsonType": "string", "maxLength": 2048 },
+            "t": { "bsonType": "long", "minimum": 1_i64 },
+            "b": { "bsonType": "long", "minimum": 1_i64 },
+            "u": { "bsonType": "string", "maxLength": 64 },
+            "n": { "bsonType": "string", "maxLength": 512 },
+            "y": { "enum": ["private", "group", "supergroup", "channel"] },
+            "a": { "bsonType": "string", "maxLength": 64 },
+            "d": { "bsonType": "string", "maxLength": 512 },
+        },
+    }
 }
 
 pub(crate) fn rule_validator() -> Document {
@@ -1451,5 +1597,46 @@ mod tests {
                 .0,
             [1; 16]
         );
+    }
+
+    #[test]
+    fn telegram_destination_codec_preserves_api_base_and_thread() {
+        let destination = NotificationDestination {
+            id: NotificationDestinationId::from_bytes([3; 16]),
+            project_id: ProjectId::new(7).unwrap(),
+            kind: NotificationDestinationKind::Telegram,
+            endpoint: WebhookEndpoint::new("-1001234567890").unwrap(),
+            sealed_secret: SealedWebhookSecret::new(vec![9; 48]).unwrap(),
+            telegram: Some(TelegramDestination {
+                api_base: TelegramApiBase::new("http://telegram.internal:8081/proxy/").unwrap(),
+                message_thread_id: Some(73),
+                bot_id: Some(123_456),
+                bot_username: Some(NotificationText::new("metric_bot", 64).unwrap()),
+                bot_display_name: Some(NotificationText::new("Metric Bot", 512).unwrap()),
+                chat_kind: Some(TelegramChatKind::Supergroup),
+                chat_username: Some(NotificationText::new("metric_alerts", 64).unwrap()),
+                chat_display_name: Some(NotificationText::new("Metric Alerts", 512).unwrap()),
+            }),
+            smtp: None,
+            enabled: true,
+            created_at: Timestamp::from_unix_millis(1_000).unwrap(),
+            updated_at: Timestamp::from_unix_millis(2_000).unwrap(),
+        };
+
+        let encoded = encode_destination(&destination);
+        assert_eq!(
+            encoded.get_document("g").unwrap(),
+            &doc! {
+                "h": "http://telegram.internal:8081/proxy",
+                "t": 73_i64,
+                "b": 123_456_i64,
+                "u": "metric_bot",
+                "n": "Metric Bot",
+                "y": "supergroup",
+                "a": "metric_alerts",
+                "d": "Metric Alerts",
+            }
+        );
+        assert_eq!(decode_destination(&encoded).unwrap(), destination);
     }
 }

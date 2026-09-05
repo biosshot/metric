@@ -195,6 +195,7 @@ pub struct NotificationSettings {
     pub maximum_retry_after: SchedulerInterval,
     pub allow_http: bool,
     pub allow_private_networks: bool,
+    pub telegram_allow_private_networks: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -768,6 +769,7 @@ struct RawNotificationSettings {
     retry: RawNotificationRetrySettings,
     retention: RawNotificationRetentionSettings,
     webhook: RawNotificationWebhookSettings,
+    telegram: RawNotificationTelegramSettings,
     transition_batch_size: usize,
     due_scan_limit: usize,
     poll_interval: String,
@@ -780,6 +782,7 @@ impl Default for RawNotificationSettings {
             retry: RawNotificationRetrySettings::default(),
             retention: RawNotificationRetentionSettings::default(),
             webhook: RawNotificationWebhookSettings::default(),
+            telegram: RawNotificationTelegramSettings::default(),
             transition_batch_size: 100,
             due_scan_limit: 100,
             poll_interval: "250ms".to_owned(),
@@ -848,6 +851,20 @@ struct RawNotificationWebhookSettings {
     maximum_retry_after: String,
     allow_http: bool,
     allow_private_networks: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNotificationTelegramSettings {
+    allow_private_networks: bool,
+}
+
+impl Default for RawNotificationTelegramSettings {
+    fn default() -> Self {
+        Self {
+            allow_private_networks: true,
+        }
+    }
 }
 
 impl Default for RawNotificationWebhookSettings {
@@ -2253,7 +2270,7 @@ impl AppConfig {
             self.incident_capsule.stream_buffer_chunks,
         );
         let rendered_notifications = format!(
-            "{rendered_extensions}\n[notifications]\ntransition_batch_size = {}\ndue_scan_limit = {}\npoll_interval = \"{}\"\n\n[notifications.queue]\ncapacity = {}\nworker_concurrency = {}\n\n[notifications.retry]\nmax_attempts = {}\ninitial_delay = \"{}\"\nmax_delay = \"{}\"\ntimeout = \"{}\"\nattempt_lease = \"{}\"\n\n[notifications.retention]\ndelivered_days = {}\ndead_days = {}\n\n[notifications.webhook]\nmaximum_response_bytes = {}\nmaximum_retry_after = \"{}\"\nallow_http = {}\nallow_private_networks = {}\n",
+            "{rendered_extensions}\n[notifications]\ntransition_batch_size = {}\ndue_scan_limit = {}\npoll_interval = \"{}\"\n\n[notifications.queue]\ncapacity = {}\nworker_concurrency = {}\n\n[notifications.retry]\nmax_attempts = {}\ninitial_delay = \"{}\"\nmax_delay = \"{}\"\ntimeout = \"{}\"\nattempt_lease = \"{}\"\n\n[notifications.retention]\ndelivered_days = {}\ndead_days = {}\n\n[notifications.webhook]\nmaximum_response_bytes = {}\nmaximum_retry_after = \"{}\"\nallow_http = {}\nallow_private_networks = {}\n\n[notifications.telegram]\nallow_private_networks = {}\n",
             self.notifications.transition_batch_size,
             self.notifications.due_scan_limit,
             humantime::format_duration(self.notifications.poll_interval.get()),
@@ -2270,6 +2287,7 @@ impl AppConfig {
             humantime::format_duration(self.notifications.maximum_retry_after.get()),
             self.notifications.allow_http,
             self.notifications.allow_private_networks,
+            self.notifications.telegram_allow_private_networks,
         );
         let access_key = self
             .blob
@@ -2393,6 +2411,7 @@ impl TryFrom<RawNotificationSettings> for NotificationSettings {
             maximum_retry_after,
             allow_http: raw.webhook.allow_http,
             allow_private_networks: raw.webhook.allow_private_networks,
+            telegram_allow_private_networks: raw.telegram.allow_private_networks,
         })
     }
 }
@@ -2868,6 +2887,7 @@ mod tests {
         assert_eq!(config.notifications.queue_capacity, 1_000);
         assert_eq!(config.notifications.max_attempts, 8);
         assert!(!config.notifications.allow_private_networks);
+        assert!(config.notifications.telegram_allow_private_networks);
         assert_eq!(config.blob.backend, BlobBackend::Local);
         assert!(!config.archive.enabled);
         assert_eq!(

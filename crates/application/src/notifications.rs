@@ -456,6 +456,23 @@ impl NotificationDispatcher {
     ) -> Result<(), NotificationError> {
         let delivery_id = claim.delivery.id;
         let attempt = claim.attempt;
+        if !claim.destination.enabled {
+            let now = self.clock.now();
+            self.store
+                .mark_dead(
+                    delivery_id,
+                    now,
+                    add_duration(now, self.config.dead_retention)?,
+                    "destination_disabled",
+                )
+                .await?;
+            metrics::counter!(
+                "metric_notification_delivery_attempts_total",
+                "outcome" => "destination_disabled"
+            )
+            .increment(1);
+            return Ok(());
+        }
         if attempt > self.config.max_attempts {
             let now = self.clock.now();
             self.store
@@ -1217,6 +1234,7 @@ mod tests {
                 kind: metric_domain::notifications::NotificationDestinationKind::Webhook,
                 endpoint: WebhookEndpoint::new("https://example.com/hook").unwrap(),
                 sealed_secret: SealedWebhookSecret::new(vec![1; 32]).unwrap(),
+                telegram: None,
                 smtp: None,
                 enabled: true,
                 created_at: Timestamp::from_unix_millis(1).unwrap(),

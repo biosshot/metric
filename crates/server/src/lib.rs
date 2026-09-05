@@ -6,7 +6,9 @@ pub mod http;
 pub mod ingest_http;
 pub mod native_http;
 pub mod notification_delivery;
+mod outbound_network;
 pub mod release_http;
+pub mod telegram;
 pub mod uptime;
 pub mod web_http;
 pub mod webhook;
@@ -189,6 +191,7 @@ struct RuntimeModules {
     notification_admin_service:
         Option<std::sync::Arc<metric_application::notifications::NotificationAdminService>>,
     notification_secret_box: Option<webhook::WebhookSecretBox>,
+    telegram_api: Option<std::sync::Arc<telegram::TelegramApiClient>>,
     notification_task: Option<NotificationTask>,
     aggregate_alert_task: Option<tokio::task::JoinHandle<()>>,
     monitor_alert_task: Option<tokio::task::JoinHandle<()>>,
@@ -325,6 +328,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         incident_capsule_service,
         notification_admin_service,
         notification_secret_box,
+        telegram_api,
         notification_task,
         aggregate_alert_task,
         monitor_alert_task,
@@ -410,17 +414,25 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             },
         )
         .map_err(|_| NotificationError::InvalidConfiguration)?;
+        let telegram_api = std::sync::Arc::new(
+            telegram::TelegramApiClient::new(telegram::TelegramApiConfig {
+                timeout: config.notifications.timeout.get(),
+                maximum_response_bytes: config.notifications.maximum_response_bytes,
+                allow_private_networks: config.notifications.telegram_allow_private_networks,
+            })
+            .map_err(|_| NotificationError::InvalidConfiguration)?,
+        );
         let notification_adapter: std::sync::Arc<dyn metric_ports::NotificationDeliveryAdapter> =
             std::sync::Arc::new(
                 notification_delivery::ProviderDeliveryAdapter::new(
                     webhook_adapter,
                     webhook_secret_box.clone(),
+                    std::sync::Arc::clone(&telegram_api),
                     notification_delivery::ProviderAdapterConfig {
                         timeout: config.notifications.timeout.get(),
                         max_response_bytes: config.notifications.maximum_response_bytes,
                         max_retry_after: config.notifications.maximum_retry_after.get(),
                         allow_private_networks: config.notifications.allow_private_networks,
-                        telegram_api_base: "https://api.telegram.org".into(),
                     },
                 )
                 .map_err(|_| NotificationError::InvalidConfiguration)?,
@@ -1004,6 +1016,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             incident_capsule_service: Some(incident_capsule_service),
             notification_admin_service: Some(notification_admin_service),
             notification_secret_box: Some(notification_secret_box),
+            telegram_api: Some(telegram_api),
             notification_task: Some(notification_task),
             aggregate_alert_task,
             monitor_alert_task,
@@ -1047,6 +1060,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             incident_capsule_service: None,
             notification_admin_service: None,
             notification_secret_box: None,
+            telegram_api: None,
             notification_task: None,
             aggregate_alert_task: None,
             monitor_alert_task: None,
@@ -1236,6 +1250,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
                 notifications: notification_task.is_some(),
                 notification_admin: notification_admin_service,
                 notification_secret_box,
+                telegram_api,
             },
         ))
         .merge(debug_http::router(

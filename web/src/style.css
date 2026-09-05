@@ -925,14 +925,61 @@ label small,
   gap: 0.75rem;
 }
 
-.telegram-pairing__identity > span:last-child {
+.telegram-pairing__identity > span {
   display: grid;
   min-width: 0;
   gap: 0.2rem;
 }
 
+.telegram-pairing__identity > .button-row {
+  margin-left: auto;
+}
+
 .telegram-pairing__identity small {
   color: var(--text-muted);
+}
+
+.telegram-bot-list {
+  display: grid;
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.telegram-bot-list article {
+  display: grid;
+  align-items: center;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.telegram-bot-list article > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.telegram-bot-list small {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.telegram-discovery {
+  display: grid;
+  gap: 0.8rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.telegram-discovery > .button {
+  width: auto;
+  justify-self: start;
 }
 
 .button-row {
@@ -1010,7 +1057,11 @@ label small,
   border-radius: var(--radius);
   background: var(--surface-subtle);
   gap: 0.75rem;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.channel-test-list .notification-destination--disabled {
+  opacity: 0.7;
 }
 
 .channel-test-list span {

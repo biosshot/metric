@@ -18,13 +18,11 @@ use metric_domain::{
 use metric_ports::{
     NotificationDeliveryAdapter, NotificationDeliveryError, NotificationDeliveryReceipt, PortFuture,
 };
-use reqwest::{
-    Client,
-    header::{HeaderMap, HeaderName, HeaderValue},
-    redirect::Policy,
-};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sha2::{Digest, Sha256};
 use url::Url;
+
+use crate::outbound_network::{OutboundNetworkError, forbidden_ip, pinned_http_client};
 
 const SECRET_VERSION: u8 = 1;
 const SECRET_NONCE_BYTES: usize = 12;
@@ -190,30 +188,20 @@ impl ReqwestWebhookAdapter {
         let endpoint = Url::parse(claim.destination.endpoint.as_str())
             .map_err(|_| NotificationDeliveryError::Rejected)?;
         validate_url(&endpoint, self.config)?;
-        let host = endpoint
-            .host_str()
-            .ok_or(NotificationDeliveryError::Rejected)?
-            .to_owned();
-        let port = endpoint
-            .port_or_known_default()
-            .ok_or(NotificationDeliveryError::Rejected)?;
-        let addresses = tokio::net::lookup_host((host.as_str(), port))
-            .await
-            .map_err(|_| NotificationDeliveryError::Retryable)?
-            .collect::<Vec<_>>();
-        if addresses.is_empty()
-            || (!self.config.allow_private_networks
-                && addresses.iter().any(|address| forbidden_ip(address.ip())))
-        {
-            return Err(NotificationDeliveryError::Rejected);
-        }
-        let pinned = addresses[0];
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(self.config.timeout)
-            .resolve(&host, pinned)
-            .build()
-            .map_err(|_| NotificationDeliveryError::Retryable)?;
+        let client = pinned_http_client(
+            &endpoint,
+            self.config.allow_private_networks,
+            Some(self.config.timeout),
+        )
+        .await
+        .map_err(|error| match error {
+            OutboundNetworkError::InvalidHost | OutboundNetworkError::ForbiddenAddress => {
+                NotificationDeliveryError::Rejected
+            }
+            OutboundNetworkError::Dns | OutboundNetworkError::Client => {
+                NotificationDeliveryError::Retryable
+            }
+        })?;
         let secret = self.secret_box.open(&claim.destination.sealed_secret)?;
         let timestamp = claim.attempted_at.unix_millis().to_string();
         let delivery_id = hex::encode(claim.delivery.id.as_bytes());
@@ -309,35 +297,6 @@ fn validate_url(
         return Err(NotificationDeliveryError::Rejected);
     }
     Ok(())
-}
-
-pub(crate) fn forbidden_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_multicast()
-                || ip.is_unspecified()
-                || ip.octets()[0] == 0
-                || ip.octets()[0] >= 240
-                || matches!(ip.octets(), [100, 64..=127, _, _])
-                || matches!(ip.octets(), [198, 18..=19, _, _])
-                || matches!(ip.octets(), [169, 254, 169, 254])
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-                || ip
-                    .to_ipv4_mapped()
-                    .is_some_and(|ipv4| forbidden_ip(IpAddr::V4(ipv4)))
-        }
-    }
 }
 
 fn signature(secret: &[u8], delivery_id: &str, timestamp: &str, body: &[u8]) -> String {

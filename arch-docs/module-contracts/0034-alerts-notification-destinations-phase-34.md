@@ -47,8 +47,17 @@ Phase 34 exposes only Telegram and SMTP Email configuration. Phase 20 webhook
 records remain readable/deliverable for backward compatibility but are not exposed
 as a new Phase 34 destination.
 
-Telegram always uses the fixed Bot API base in production, HTML-escapes dynamic
-content, bounds response bytes and honors bounded `retry_after`. SMTP permits only
+Telegram destinations own a bounded Bot API base and optional forum-topic id as
+specified by ADR-0050. Public `@username` input is resolved once to a canonical
+numeric chat id, while private users must first pair by sending the displayed start
+command. One bot may back many independently selectable destinations. Bot/chat name
+snapshots support readable labels after reload, and a source destination permits
+server-side credential reuse without exposing the sealed token. The Bot API base is
+stored per destination and inherited from the selected saved bot. Recipient removal
+is a reversible disable operation; the delivery worker terminally rejects any claim
+whose destination has since been disabled. Telegram HTML-escapes dynamic content,
+bounds response bytes and honors bounded
+`retry_after`. SMTP permits only
 implicit TLS or STARTTLS, resolves and rejects forbidden addresses under the shared
 private-network policy, bounds recipients to 16 and classifies permanent,
 retryable and timeout failures.
@@ -60,10 +69,12 @@ data and never credentials.
 ## Storage and schema
 
 Phase 34 reuses `alert_rules`, `notification_destinations` and
-`notification_deliveries`. Schema generation 15 is an intentional breaking
-empty-schema generation; no migration framework is introduced.
+`notification_deliveries`. Its original schema generation 15 was an intentional
+breaking empty-schema generation. ADR-0050 later advances generation 19 to 20 through
+the migration framework in ADR-0049.
 
 ## Explicit exclusions
 
 Web Push, new webhook configuration, provider-specific chat/issue trackers, MCP,
-NATS, migrations, sharding and disk spool remain deferred. Phase 35 is not started.
+NATS, further schema migrations, sharding and disk spool remain deferred. Phase 35
+is not started.

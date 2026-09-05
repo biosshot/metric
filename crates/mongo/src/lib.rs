@@ -79,9 +79,10 @@ use mongodb::{
 };
 use thiserror::Error;
 
-static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 0] = [];
+static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 1] =
+    [&migrations::TELEGRAM_CONFIGURATION_MIGRATION];
 
-pub const SCHEMA_GENERATION: i32 = 19;
+pub const SCHEMA_GENERATION: i32 = 20;
 const SCHEMA_ID: &str = "metric.schema";
 const SCHEMA_MODULES: [&str; 22] = [
     "project_identity_v1",

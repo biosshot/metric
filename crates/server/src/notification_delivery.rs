@@ -2,7 +2,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use futures_util::StreamExt;
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     message::Mailbox,
@@ -17,10 +16,13 @@ use metric_domain::notifications::{
 use metric_ports::{
     NotificationDeliveryAdapter, NotificationDeliveryError, NotificationDeliveryReceipt, PortFuture,
 };
-use reqwest::{Client, redirect::Policy};
 use serde_json::{Value, json};
 
-use crate::webhook::{ReqwestWebhookAdapter, WebhookSecretBox, forbidden_ip};
+use crate::{
+    outbound_network::{OutboundNetworkError, resolve_socket},
+    telegram::{TelegramApiClient, TelegramApiError, valid_telegram_token},
+    webhook::{ReqwestWebhookAdapter, WebhookSecretBox},
+};
 
 #[derive(Debug, Clone)]
 pub struct ProviderAdapterConfig {
@@ -28,13 +30,12 @@ pub struct ProviderAdapterConfig {
     pub max_response_bytes: usize,
     pub max_retry_after: Duration,
     pub allow_private_networks: bool,
-    pub telegram_api_base: Box<str>,
 }
 
 pub struct ProviderDeliveryAdapter {
     webhook: Arc<ReqwestWebhookAdapter>,
     secret_box: WebhookSecretBox,
-    http: Client,
+    telegram_api: Arc<TelegramApiClient>,
     config: ProviderAdapterConfig,
 }
 
@@ -42,24 +43,19 @@ impl ProviderDeliveryAdapter {
     pub fn new(
         webhook: ReqwestWebhookAdapter,
         secret_box: WebhookSecretBox,
+        telegram_api: Arc<TelegramApiClient>,
         config: ProviderAdapterConfig,
     ) -> Result<Self, NotificationDeliveryError> {
         if config.timeout.is_zero()
             || config.max_retry_after.is_zero()
             || !(1..=1024 * 1024).contains(&config.max_response_bytes)
-            || config.telegram_api_base.is_empty()
         {
             return Err(NotificationDeliveryError::Rejected);
         }
-        let http = Client::builder()
-            .redirect(Policy::none())
-            .timeout(config.timeout)
-            .build()
-            .map_err(|_| NotificationDeliveryError::Retryable)?;
         Ok(Self {
             webhook: Arc::new(webhook),
             secret_box,
-            http,
+            telegram_api,
             config,
         })
     }
@@ -98,25 +94,28 @@ impl ProviderDeliveryAdapter {
             escape_html(&summary.title),
             claim.delivery.project_id.get(),
         );
+        let telegram = claim
+            .destination
+            .telegram
+            .as_ref()
+            .ok_or(NotificationDeliveryError::Rejected)?;
+        let mut body = json!({
+            "chat_id": claim.destination.endpoint.as_str(),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": true,
+        });
+        if let Some(thread_id) = telegram.message_thread_id {
+            body["message_thread_id"] = json!(thread_id);
+        }
         let response = self
-            .http
-            .post(format!(
-                "{}/bot{token}/sendMessage",
-                self.config.telegram_api_base.trim_end_matches('/')
-            ))
-            .json(&json!({
-                "chat_id": claim.destination.endpoint.as_str(),
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": true,
-            }))
-            .send()
+            .telegram_api
+            .call(&telegram.api_base, token, "sendMessage", body)
             .await
-            .map_err(classify_reqwest)?;
-        let status = response.status().as_u16();
-        let body = bounded_body(response, self.config.max_response_bytes).await?;
+            .map_err(map_telegram_error)?;
+        let status = response.status;
         let retry_after = if status == 429 {
-            serde_json::from_slice::<Value>(&body)
+            serde_json::from_slice::<Value>(&response.body)
                 .ok()
                 .and_then(|value| value.pointer("/parameters/retry_after")?.as_u64())
                 .map(Duration::from_secs)
@@ -233,18 +232,6 @@ fn escape_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-pub(crate) fn valid_telegram_token(value: &str) -> bool {
-    let Some((bot_id, secret)) = value.split_once(':') else {
-        return false;
-    };
-    !bot_id.is_empty()
-        && bot_id.bytes().all(|byte| byte.is_ascii_digit())
-        && secret.len() >= 20
-        && secret
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
 async fn resolve_smtp_host(
     host: &str,
     port: u16,
@@ -257,20 +244,16 @@ async fn resolve_smtp_host(
     {
         return Err(NotificationDeliveryError::Rejected);
     }
-    let addresses = tokio::net::lookup_host((host, port))
+    resolve_socket(host, port, allow_private_networks)
         .await
-        .map_err(|_| NotificationDeliveryError::Retryable)?
-        .collect::<Vec<_>>();
-    if addresses.is_empty() {
-        return Err(NotificationDeliveryError::Rejected);
-    }
-    if !allow_private_networks && addresses.iter().any(|address| forbidden_ip(address.ip())) {
-        return Err(NotificationDeliveryError::Rejected);
-    }
-    addresses
-        .into_iter()
-        .next()
-        .ok_or(NotificationDeliveryError::Rejected)
+        .map_err(|error| match error {
+            OutboundNetworkError::InvalidHost | OutboundNetworkError::ForbiddenAddress => {
+                NotificationDeliveryError::Rejected
+            }
+            OutboundNetworkError::Dns | OutboundNetworkError::Client => {
+                NotificationDeliveryError::Retryable
+            }
+        })
 }
 
 fn parse_mailbox(value: &str) -> Result<Mailbox, NotificationDeliveryError> {
@@ -279,27 +262,15 @@ fn parse_mailbox(value: &str) -> Result<Mailbox, NotificationDeliveryError> {
         .map_err(|_| NotificationDeliveryError::Rejected)
 }
 
-async fn bounded_body(
-    response: reqwest::Response,
-    maximum: usize,
-) -> Result<Vec<u8>, NotificationDeliveryError> {
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(classify_reqwest)?;
-        if body.len().saturating_add(chunk.len()) > maximum {
-            return Err(NotificationDeliveryError::ResponseTooLarge);
+fn map_telegram_error(error: TelegramApiError) -> NotificationDeliveryError {
+    match error {
+        TelegramApiError::InvalidRequest => NotificationDeliveryError::InvalidSecret,
+        TelegramApiError::ForbiddenEndpoint | TelegramApiError::Rejected(_) => {
+            NotificationDeliveryError::Rejected
         }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
-fn classify_reqwest(error: reqwest::Error) -> NotificationDeliveryError {
-    if error.is_timeout() {
-        NotificationDeliveryError::Timeout
-    } else {
-        NotificationDeliveryError::Retryable
+        TelegramApiError::Timeout => NotificationDeliveryError::Timeout,
+        TelegramApiError::Unavailable => NotificationDeliveryError::Retryable,
+        TelegramApiError::ResponseTooLarge => NotificationDeliveryError::ResponseTooLarge,
     }
 }
 
@@ -340,16 +311,21 @@ mod tests {
     async fn telegram_429_retry_after_is_preserved() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (body_tx, mut body_rx) = tokio::sync::mpsc::unbounded_channel();
         let server = tokio::spawn(async move {
             axum::serve(
                 listener,
                 Router::new().route(
-                    "/bot123456789:ABCdef_012345678901234567890/sendMessage",
-                    post(|| async {
-                        (
-                            StatusCode::TOO_MANY_REQUESTS,
-                            Json(json!({"ok": false, "parameters": {"retry_after": 17}})),
-                        )
+                    "/proxy/telegram/bot123456789:ABCdef_012345678901234567890/sendMessage",
+                    post(move |Json(body): Json<Value>| {
+                        let body_tx = body_tx.clone();
+                        async move {
+                            let _ = body_tx.send(body);
+                            (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                Json(json!({"ok": false, "parameters": {"retry_after": 17}})),
+                            )
+                        }
                     }),
                 ),
             )
@@ -357,17 +333,22 @@ mod tests {
             .unwrap();
         });
         let secret_box = WebhookSecretBox::new(&SecretBytes::new([9; 32]));
-        let adapter = provider(secret_box.clone(), format!("http://{address}").into(), true);
+        let adapter = provider(secret_box.clone(), true);
         let receipt = adapter
             .deliver(telegram_claim(
                 secret_box
                     .seal(b"123456789:ABCdef_012345678901234567890")
                     .unwrap(),
+                &format!("http://{address}/proxy/telegram"),
+                Some(73),
             ))
             .await
             .unwrap();
         assert_eq!(receipt.status, 429);
         assert_eq!(receipt.retry_after, Some(Duration::from_secs(17)));
+        let body = body_rx.recv().await.unwrap();
+        assert_eq!(body["chat_id"], "-1001234567890");
+        assert_eq!(body["message_thread_id"], 73);
         server.abort();
         let _ = server.await;
     }
@@ -382,7 +363,7 @@ mod tests {
             }
         });
         let secret_box = WebhookSecretBox::new(&SecretBytes::new([8; 32]));
-        let adapter = provider(secret_box.clone(), "https://api.telegram.org".into(), true);
+        let adapter = provider(secret_box.clone(), true);
         let result = adapter
             .deliver(smtp_claim(secret_box.seal(b"app-password").unwrap(), port))
             .await;
@@ -395,7 +376,6 @@ mod tests {
 
     fn provider(
         secret_box: WebhookSecretBox,
-        telegram_api_base: Box<str>,
         allow_private_networks: bool,
     ) -> ProviderDeliveryAdapter {
         let webhook = ReqwestWebhookAdapter::new(
@@ -410,12 +390,19 @@ mod tests {
         ProviderDeliveryAdapter::new(
             webhook,
             secret_box,
+            Arc::new(
+                TelegramApiClient::new(crate::telegram::TelegramApiConfig {
+                    timeout: Duration::from_secs(2),
+                    maximum_response_bytes: 16 * 1024,
+                    allow_private_networks,
+                })
+                .unwrap(),
+            ),
             ProviderAdapterConfig {
                 timeout: Duration::from_secs(2),
                 max_response_bytes: 16 * 1024,
                 max_retry_after: Duration::from_secs(60),
                 allow_private_networks,
-                telegram_api_base,
             },
         )
         .unwrap()
@@ -423,13 +410,26 @@ mod tests {
 
     fn telegram_claim(
         secret: metric_domain::notifications::SealedWebhookSecret,
+        api_base: &str,
+        message_thread_id: Option<i64>,
     ) -> ClaimedNotificationDelivery {
-        claim(
+        let mut claim = claim(
             NotificationDestinationKind::Telegram,
             WebhookEndpoint::new("-1001234567890").unwrap(),
             secret,
             None,
-        )
+        );
+        claim.destination.telegram = Some(metric_domain::notifications::TelegramDestination {
+            api_base: metric_domain::notifications::TelegramApiBase::new(api_base).unwrap(),
+            message_thread_id,
+            bot_id: None,
+            bot_username: None,
+            bot_display_name: None,
+            chat_kind: None,
+            chat_username: None,
+            chat_display_name: None,
+        });
+        claim
     }
 
     fn smtp_claim(
@@ -486,6 +486,18 @@ mod tests {
                 kind,
                 endpoint,
                 sealed_secret,
+                telegram: (kind == NotificationDestinationKind::Telegram).then(|| {
+                    metric_domain::notifications::TelegramDestination {
+                        api_base: metric_domain::notifications::TelegramApiBase::telegram_cloud(),
+                        message_thread_id: None,
+                        bot_id: None,
+                        bot_username: None,
+                        bot_display_name: None,
+                        chat_kind: None,
+                        chat_username: None,
+                        chat_display_name: None,
+                    }
+                }),
                 smtp,
                 enabled: true,
                 created_at: Timestamp::from_unix_millis(1).unwrap(),

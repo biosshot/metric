@@ -79,9 +79,10 @@ use metric_domain::{
     },
     notifications::{
         AggregateAlert, AlertRule, AlertRuleId, MAX_EMAIL_ADDRESS_BYTES, MAX_SMTP_HOST_BYTES,
-        MonitorAlert, NotificationDestination, NotificationDestinationId,
-        NotificationDestinationKind, NotificationText, RuleName, SmtpDestination, SmtpSecurity,
-        WebhookEndpoint,
+        MAX_TELEGRAM_DISPLAY_NAME_BYTES, MAX_TELEGRAM_USERNAME_BYTES, MonitorAlert,
+        NotificationDestination, NotificationDestinationId, NotificationDestinationKind,
+        NotificationText, RuleName, SmtpDestination, SmtpSecurity, TelegramApiBase,
+        TelegramChatKind, TelegramDestination, WebhookEndpoint,
     },
     signals::{LogId, LogRecord, SpanRecord, TraceId},
 };
@@ -97,8 +98,6 @@ const ORGANIZATION_HEADER: &str = "x-metric-organization-id";
 const CSRF_HEADER: &str = "x-csrf-token";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const MAX_BODY_BYTES: usize = 64 * 1024;
-const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
-const MAX_TELEGRAM_RESPONSE_BYTES: u64 = 256 * 1024;
 const MAX_EXPORT_ROWS: usize = 10_000;
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EXPORT_DURATION: Duration = Duration::from_secs(15);
@@ -117,6 +116,7 @@ struct NativeHttpState {
     notifications: bool,
     notification_admin: Option<Arc<NotificationAdminService>>,
     notification_secret_box: Option<crate::webhook::WebhookSecretBox>,
+    telegram_api: Option<Arc<crate::telegram::TelegramApiClient>>,
     trusted_proxies: Arc<[TrustedProxy]>,
     export_permits: Arc<Semaphore>,
 }
@@ -185,6 +185,7 @@ pub struct NativeHttpModules {
     pub notifications: bool,
     pub notification_admin: Option<Arc<NotificationAdminService>>,
     pub notification_secret_box: Option<crate::webhook::WebhookSecretBox>,
+    pub telegram_api: Option<Arc<crate::telegram::TelegramApiClient>>,
 }
 
 #[derive(Debug)]
@@ -196,6 +197,11 @@ enum HttpApiError {
     InvalidCredentials,
     CsrfFailed,
     Unavailable,
+    Telegram {
+        status: StatusCode,
+        code: &'static str,
+        message: &'static str,
+    },
 }
 
 impl IntoResponse for HttpApiError {
@@ -221,6 +227,11 @@ impl IntoResponse for HttpApiError {
                 "temporarily_unavailable",
                 "service is temporarily unavailable",
             ),
+            Self::Telegram {
+                status,
+                code,
+                message,
+            } => (*status, *code, *message),
             Self::Api(error) => {
                 let status = match error {
                     NativeApiError::InvalidRequest | NativeApiError::InvalidCursor => {
@@ -463,6 +474,7 @@ pub fn router_with_limits(
         notifications: modules.notifications,
         notification_admin: modules.notification_admin,
         notification_secret_box: modules.notification_secret_box,
+        telegram_api: modules.telegram_api,
         trusted_proxies: limits.trusted_proxies.into(),
         export_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_EXPORTS)),
     };
@@ -607,6 +619,14 @@ pub fn router_with_limits(
         .route(
             "/api/v1/projects/{project_id}/notification-destinations",
             get(list_notification_destinations).post(put_notification_destination),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-destinations/{destination_id}",
+            delete(disable_notification_destination),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/notification-destinations/{destination_id}/restore",
+            post(restore_notification_destination),
         )
         .route(
             "/api/v1/projects/{project_id}/notification-destinations/{destination_id}/test",
@@ -2133,8 +2153,11 @@ struct NotificationDestinationBody {
     id: Option<String>,
     kind: String,
     endpoint: String,
-    secret: String,
+    secret: Option<String>,
     enabled: bool,
+    telegram_api_base: Option<String>,
+    telegram_message_thread_id: Option<i64>,
+    telegram_source_destination_id: Option<String>,
     smtp_port: Option<u16>,
     smtp_security: Option<String>,
     smtp_username: Option<String>,
@@ -2145,14 +2168,19 @@ struct NotificationDestinationBody {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TelegramBotBody {
-    token: String,
+    token: Option<String>,
+    api_base: Option<String>,
+    source_destination_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TelegramSubscriberSyncBody {
-    token: String,
+    token: Option<String>,
+    api_base: Option<String>,
+    source_destination_id: Option<String>,
     pairing_code: String,
+    offset: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2202,32 +2230,103 @@ async fn put_notification_destination(
     let context = authenticate(&state, &headers, true).await?;
     let body = json_body(body)?;
     let project_id = project_id_from(&project_id)?;
-    let id = body
+    let requested_id = body
         .id
         .as_deref()
         .map(hex_16)
         .transpose()?
-        .map(NotificationDestinationId::from_bytes)
-        .unwrap_or_else(|| NotificationDestinationId::from_bytes(*uuid::Uuid::new_v4().as_bytes()));
+        .map(NotificationDestinationId::from_bytes);
     let kind = match body.kind.as_str() {
         "telegram" => NotificationDestinationKind::Telegram,
         "smtp_email" => NotificationDestinationKind::SmtpEmail,
         _ => return Err(HttpApiError::InvalidRequest),
     };
-    let endpoint_limit = match kind {
-        NotificationDestinationKind::SmtpEmail => MAX_SMTP_HOST_BYTES,
-        NotificationDestinationKind::Telegram => 128,
-        NotificationDestinationKind::Webhook => unreachable!(),
+    let existing = if kind == NotificationDestinationKind::Telegram {
+        notification_admin(&state)?
+            .destinations(&context, project_id)
+            .await
+            .map_err(HttpApiError::Notification)?
+    } else {
+        Vec::new()
     };
-    let endpoint = WebhookEndpoint::new(body.endpoint).map_err(|_| HttpApiError::InvalidRequest)?;
-    if endpoint.as_str().len() > endpoint_limit {
-        return Err(HttpApiError::InvalidRequest);
-    }
+    let mut telegram_token = None::<String>;
+    let (id, endpoint, telegram) = if kind == NotificationDestinationKind::Telegram {
+        let credentials = resolve_telegram_credentials(
+            &state,
+            &existing,
+            body.secret.as_deref(),
+            body.telegram_api_base.as_deref(),
+            body.telegram_source_destination_id.as_deref(),
+        )?;
+        let selector = body.endpoint.trim();
+        validate_telegram_chat_selector(selector)?;
+        let bot_response = telegram_api(
+            &state,
+            &credentials.api_base,
+            &credentials.token,
+            "getMe",
+            json!({}),
+        )
+        .await?;
+        let bot = telegram_bot_identity(telegram_result(&bot_response)?)?;
+        let chat_response = telegram_api(
+            &state,
+            &credentials.api_base,
+            &credentials.token,
+            "getChat",
+            json!({ "chat_id": selector }),
+        )
+        .await?;
+        let chat = telegram_chat_identity(telegram_result(&chat_response)?)?;
+        let thread_id = body.telegram_message_thread_id;
+        if thread_id.is_some_and(|value| value <= 0) {
+            return Err(HttpApiError::InvalidRequest);
+        }
+        telegram_token = Some(credentials.token);
+        (
+            requested_id
+                .unwrap_or_else(|| telegram_destination_id(project_id, bot.id, chat.id, thread_id)),
+            WebhookEndpoint::new(chat.id.to_string()).map_err(|_| HttpApiError::InvalidRequest)?,
+            Some(TelegramDestination {
+                api_base: credentials.api_base,
+                message_thread_id: thread_id,
+                bot_id: Some(bot.id),
+                bot_username: Some(bot.username),
+                bot_display_name: Some(bot.display_name),
+                chat_kind: Some(chat.kind),
+                chat_username: chat.username,
+                chat_display_name: Some(chat.display_name),
+            }),
+        )
+    } else {
+        if body.telegram_api_base.is_some()
+            || body.telegram_message_thread_id.is_some()
+            || body.telegram_source_destination_id.is_some()
+        {
+            return Err(HttpApiError::InvalidRequest);
+        }
+        let endpoint =
+            WebhookEndpoint::new(body.endpoint.trim()).map_err(|_| HttpApiError::InvalidRequest)?;
+        if endpoint.as_str().len() > MAX_SMTP_HOST_BYTES {
+            return Err(HttpApiError::InvalidRequest);
+        }
+        (
+            requested_id.unwrap_or_else(|| {
+                NotificationDestinationId::from_bytes(*uuid::Uuid::new_v4().as_bytes())
+            }),
+            endpoint,
+            None,
+        )
+    };
+    let plaintext_secret = telegram_token
+        .as_deref()
+        .or(body.secret.as_deref())
+        .ok_or(HttpApiError::InvalidRequest)?;
     let sealed_secret = state
         .notification_secret_box
         .as_ref()
         .ok_or(HttpApiError::Unavailable)?
-        .seal(body.secret.as_bytes())
+        .seal(plaintext_secret.as_bytes())
         .map_err(|_| HttpApiError::InvalidRequest)?;
     let smtp = if kind == NotificationDestinationKind::SmtpEmail {
         let recipients = body
@@ -2262,15 +2361,20 @@ async fn put_notification_destination(
         None
     };
     let now = current_timestamp()?;
+    let created_at = existing
+        .iter()
+        .find(|value| value.id == id)
+        .map_or(now, |value| value.created_at);
     let destination = NotificationDestination {
         id,
         project_id,
         kind,
         endpoint,
         sealed_secret,
+        telegram,
         smtp,
         enabled: body.enabled,
-        created_at: now,
+        created_at,
         updated_at: now,
     };
     destination
@@ -2295,29 +2399,95 @@ async fn check_telegram_bot(
     let context = authenticate(&state, &headers, true).await?;
     let body = json_body(body)?;
     let project_id = project_id_from(&project_id)?;
-    notification_admin(&state)?
+    let existing = notification_admin(&state)?
         .destinations(&context, project_id)
         .await
         .map_err(HttpApiError::Notification)?;
-    validate_telegram_token(&body.token)?;
-    let response = telegram_api(&body.token, "getMe", json!({})).await?;
-    let bot = response
-        .get("result")
-        .and_then(Value::as_object)
-        .ok_or(HttpApiError::InvalidRequest)?;
-    let id = bot
-        .get("id")
-        .and_then(Value::as_i64)
-        .ok_or(HttpApiError::InvalidRequest)?;
-    let username = bot
-        .get("username")
-        .and_then(Value::as_str)
-        .ok_or(HttpApiError::InvalidRequest)?;
+    let credentials = resolve_telegram_credentials(
+        &state,
+        &existing,
+        body.token.as_deref(),
+        body.api_base.as_deref(),
+        body.source_destination_id.as_deref(),
+    )?;
+    let response = telegram_api(
+        &state,
+        &credentials.api_base,
+        &credentials.token,
+        "getMe",
+        json!({}),
+    )
+    .await?;
+    let bot = telegram_bot_identity(telegram_result(&response)?)?;
     Ok(Json(json!({
-        "id": id.to_string(),
-        "username": username,
-        "display_name": telegram_display_name(bot),
+        "id": bot.id.to_string(),
+        "username": bot.username.as_str(),
+        "display_name": bot.display_name.as_str(),
+        "api_base": credentials.api_base.as_str(),
     })))
+}
+
+async fn disable_notification_destination(
+    State(state): State<NativeHttpState>,
+    Path((project_id, destination_id)): Path<(String, String)>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpApiError> {
+    set_notification_destination_enabled(
+        &state,
+        &headers,
+        &project_id,
+        &destination_id,
+        request_id,
+        false,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn restore_notification_destination(
+    State(state): State<NativeHttpState>,
+    Path((project_id, destination_id)): Path<(String, String)>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpApiError> {
+    let destination = set_notification_destination_enabled(
+        &state,
+        &headers,
+        &project_id,
+        &destination_id,
+        request_id,
+        true,
+    )
+    .await?;
+    Ok(Json(notification_destination_value(&destination)))
+}
+
+async fn set_notification_destination_enabled(
+    state: &NativeHttpState,
+    headers: &HeaderMap,
+    project_id: &str,
+    destination_id: &str,
+    request_id: RequestId,
+    enabled: bool,
+) -> Result<NotificationDestination, HttpApiError> {
+    let context = authenticate(state, headers, true).await?;
+    let project_id = project_id_from(project_id)?;
+    let destination_id = NotificationDestinationId::from_bytes(hex_16(destination_id)?);
+    let mut destination = notification_admin(state)?
+        .destinations(&context, project_id)
+        .await
+        .map_err(HttpApiError::Notification)?
+        .into_iter()
+        .find(|destination| destination.id == destination_id)
+        .ok_or(HttpApiError::Api(NativeApiError::NotFound))?;
+    destination.enabled = enabled;
+    destination.updated_at = current_timestamp()?;
+    notification_admin(state)?
+        .put_destination(&context, correlation_id(request_id)?, destination.clone())
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok(destination)
 }
 
 async fn sync_telegram_subscribers(
@@ -2329,7 +2499,6 @@ async fn sync_telegram_subscribers(
 ) -> Result<Json<Value>, HttpApiError> {
     let context = authenticate(&state, &headers, true).await?;
     let body = json_body(body)?;
-    validate_telegram_token(&body.token)?;
     if !(16..=64).contains(&body.pairing_code.len())
         || !body
             .pairing_code
@@ -2338,41 +2507,62 @@ async fn sync_telegram_subscribers(
     {
         return Err(HttpApiError::InvalidRequest);
     }
+    if body.offset.is_some_and(|offset| offset < 0) {
+        return Err(HttpApiError::InvalidRequest);
+    }
     let project_id = project_id_from(&project_id)?;
     let existing = notification_admin(&state)?
         .destinations(&context, project_id)
         .await
         .map_err(HttpApiError::Notification)?;
-    let bot_response = telegram_api(&body.token, "getMe", json!({})).await?;
-    let bot = bot_response
-        .get("result")
-        .and_then(Value::as_object)
-        .ok_or(HttpApiError::InvalidRequest)?;
-    let bot_id = bot
-        .get("id")
-        .and_then(Value::as_i64)
-        .ok_or(HttpApiError::InvalidRequest)?;
-    let username = bot
-        .get("username")
-        .and_then(Value::as_str)
-        .ok_or(HttpApiError::InvalidRequest)?;
-    let updates = telegram_api(
-        &body.token,
-        "getUpdates",
-        json!({
-            "allowed_updates": ["message"],
-            "limit": 100,
-            "timeout": 0,
-        }),
+    let credentials = resolve_telegram_credentials(
+        &state,
+        &existing,
+        body.token.as_deref(),
+        body.api_base.as_deref(),
+        body.source_destination_id.as_deref(),
+    )?;
+    let bot_response = telegram_api(
+        &state,
+        &credentials.api_base,
+        &credentials.token,
+        "getMe",
+        json!({}),
     )
     .await?;
-    let mut chats = BTreeMap::<i64, String>::new();
+    let bot = telegram_bot_identity(telegram_result(&bot_response)?)?;
+    let mut updates_body = json!({
+        "allowed_updates": ["message", "channel_post"],
+        "limit": 100,
+        "timeout": 5,
+    });
+    if let Some(offset) = body.offset {
+        updates_body["offset"] = json!(offset);
+    }
+    let updates = telegram_api(
+        &state,
+        &credentials.api_base,
+        &credentials.token,
+        "getUpdates",
+        updates_body,
+    )
+    .await?;
+    let mut chats = BTreeMap::<(i64, Option<i64>), TelegramChatIdentity>::new();
+    let mut maximum_update_id = None::<i64>;
     for update in updates
         .get("result")
         .and_then(Value::as_array)
         .ok_or(HttpApiError::InvalidRequest)?
     {
-        let Some(message) = update.get("message").and_then(Value::as_object) else {
+        if let Some(update_id) = update.get("update_id").and_then(Value::as_i64) {
+            maximum_update_id =
+                Some(maximum_update_id.map_or(update_id, |current| current.max(update_id)));
+        }
+        let Some(message) = update
+            .get("message")
+            .or_else(|| update.get("channel_post"))
+            .and_then(Value::as_object)
+        else {
             continue;
         };
         let Some(text) = message.get("text").and_then(Value::as_str) else {
@@ -2384,18 +2574,28 @@ async fn sync_telegram_subscribers(
         let Some(chat) = message.get("chat").and_then(Value::as_object) else {
             continue;
         };
-        let Some(chat_id) = chat.get("id").and_then(Value::as_i64) else {
+        let Ok(chat) = telegram_chat_identity(chat) else {
             continue;
         };
-        chats
-            .entry(chat_id)
-            .or_insert_with(|| telegram_display_name(chat));
+        let thread_id = message
+            .get("message_thread_id")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0);
+        chats.entry((chat.id, thread_id)).or_insert(chat);
     }
     let now = current_timestamp()?;
     let mut subscribers = Vec::new();
-    for (chat_id, display_name) in chats.into_iter().take(32) {
-        let id = telegram_destination_id(project_id, bot_id, chat_id);
-        if !existing.iter().any(|destination| destination.id == id) {
+    for ((chat_id, thread_id), chat) in chats.into_iter().take(32) {
+        let id = telegram_destination_id(project_id, bot.id, chat_id, thread_id);
+        let previous = existing.iter().find(|destination| destination.id == id);
+        if previous.is_none_or(|destination| {
+            !destination.enabled
+                || destination.telegram.as_ref().is_none_or(|telegram| {
+                    telegram.bot_id != Some(bot.id)
+                        || telegram.chat_display_name.as_ref() != Some(&chat.display_name)
+                        || telegram.chat_username != chat.username
+                })
+        }) {
             let destination = NotificationDestination {
                 id,
                 project_id,
@@ -2406,11 +2606,21 @@ async fn sync_telegram_subscribers(
                     .notification_secret_box
                     .as_ref()
                     .ok_or(HttpApiError::Unavailable)?
-                    .seal(body.token.as_bytes())
+                    .seal(credentials.token.as_bytes())
                     .map_err(|_| HttpApiError::InvalidRequest)?,
+                telegram: Some(TelegramDestination {
+                    api_base: credentials.api_base.clone(),
+                    message_thread_id: thread_id,
+                    bot_id: Some(bot.id),
+                    bot_username: Some(bot.username.clone()),
+                    bot_display_name: Some(bot.display_name.clone()),
+                    chat_kind: Some(chat.kind),
+                    chat_username: chat.username.clone(),
+                    chat_display_name: Some(chat.display_name.clone()),
+                }),
                 smtp: None,
                 enabled: true,
-                created_at: now,
+                created_at: previous.map_or(now, |destination| destination.created_at),
                 updated_at: now,
             };
             notification_admin(&state)?
@@ -2420,70 +2630,315 @@ async fn sync_telegram_subscribers(
         }
         subscribers.push(json!({
             "destination_id": hex::encode(id.as_bytes()),
-            "display_name": display_name,
+            "display_name": chat.display_name.as_str(),
+            "chat_id": chat_id.to_string(),
+            "message_thread_id": thread_id,
         }));
     }
     Ok(Json(json!({
         "bot": {
-            "id": bot_id.to_string(),
-            "username": username,
-            "display_name": telegram_display_name(bot),
+            "id": bot.id.to_string(),
+            "username": bot.username.as_str(),
+            "display_name": bot.display_name.as_str(),
+            "api_base": credentials.api_base.as_str(),
         },
         "subscribers": subscribers,
+        "next_offset": maximum_update_id
+            .map(|update_id| update_id.checked_add(1).ok_or(HttpApiError::InvalidRequest))
+            .transpose()?,
     })))
 }
 
+struct ResolvedTelegramCredentials {
+    token: String,
+    api_base: TelegramApiBase,
+}
+
+#[derive(Clone)]
+struct TelegramBotIdentity {
+    id: i64,
+    username: NotificationText,
+    display_name: NotificationText,
+}
+
+#[derive(Clone)]
+struct TelegramChatIdentity {
+    id: i64,
+    kind: TelegramChatKind,
+    username: Option<NotificationText>,
+    display_name: NotificationText,
+}
+
+fn resolve_telegram_credentials(
+    state: &NativeHttpState,
+    existing: &[NotificationDestination],
+    token: Option<&str>,
+    api_base: Option<&str>,
+    source_destination_id: Option<&str>,
+) -> Result<ResolvedTelegramCredentials, HttpApiError> {
+    match (token, source_destination_id) {
+        (Some(token), None) => {
+            validate_telegram_token(token)?;
+            Ok(ResolvedTelegramCredentials {
+                token: token.to_owned(),
+                api_base: telegram_api_base(api_base)?,
+            })
+        }
+        (None, Some(source_destination_id)) if api_base.is_none() => {
+            let source_id = NotificationDestinationId::from_bytes(hex_16(source_destination_id)?);
+            let source = existing
+                .iter()
+                .find(|destination| {
+                    destination.id == source_id
+                        && destination.kind == NotificationDestinationKind::Telegram
+                })
+                .ok_or(HttpApiError::InvalidRequest)?;
+            let api_base = source
+                .telegram
+                .as_ref()
+                .ok_or(HttpApiError::InvalidRequest)?
+                .api_base
+                .clone();
+            let token = state
+                .notification_secret_box
+                .as_ref()
+                .ok_or(HttpApiError::Unavailable)?
+                .open(&source.sealed_secret)
+                .map_err(|_| HttpApiError::Telegram {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    code: "telegram_credentials_unavailable",
+                    message: "the saved Telegram bot credentials could not be opened",
+                })?;
+            let token = String::from_utf8(token).map_err(|_| HttpApiError::Telegram {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "telegram_credentials_unavailable",
+                message: "the saved Telegram bot credentials could not be opened",
+            })?;
+            validate_telegram_token(&token)?;
+            Ok(ResolvedTelegramCredentials { token, api_base })
+        }
+        _ => Err(HttpApiError::InvalidRequest),
+    }
+}
+
 fn validate_telegram_token(token: &str) -> Result<(), HttpApiError> {
-    if token.len() > 4_096 || !crate::notification_delivery::valid_telegram_token(token) {
+    if token.len() > 4_096 || !crate::telegram::valid_telegram_token(token) {
+        return Err(HttpApiError::Telegram {
+            status: StatusCode::BAD_REQUEST,
+            code: "telegram_invalid_token",
+            message: "the Telegram bot token is invalid",
+        });
+    }
+    Ok(())
+}
+
+fn telegram_api_base(value: Option<&str>) -> Result<TelegramApiBase, HttpApiError> {
+    value.map_or_else(
+        || Ok(TelegramApiBase::telegram_cloud()),
+        |value| TelegramApiBase::new(value.trim()).map_err(|_| HttpApiError::InvalidRequest),
+    )
+}
+
+fn validate_telegram_chat_selector(value: &str) -> Result<(), HttpApiError> {
+    let numeric = value.parse::<i64>().is_ok_and(|id| id != 0);
+    let username = value.strip_prefix('@').is_some_and(|username| {
+        (1..=64).contains(&username.len())
+            && username
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    });
+    if value.len() > 128 || (!numeric && !username) {
         return Err(HttpApiError::InvalidRequest);
     }
     Ok(())
 }
 
-async fn telegram_api(token: &str, method: &str, body: Value) -> Result<Value, HttpApiError> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|_| HttpApiError::Unavailable)?;
-    let response = client
-        .post(format!(
-            "{}/bot{token}/{method}",
-            TELEGRAM_API_BASE.trim_end_matches('/')
-        ))
-        .json(&body)
-        .send()
+async fn telegram_api(
+    state: &NativeHttpState,
+    api_base: &TelegramApiBase,
+    token: &str,
+    method: &'static str,
+    body: Value,
+) -> Result<Value, HttpApiError> {
+    state
+        .telegram_api
+        .as_ref()
+        .ok_or(HttpApiError::Unavailable)?
+        .call(api_base, token, method, body)
         .await
-        .map_err(|_| HttpApiError::Unavailable)?;
-    if response
-        .content_length()
-        .is_some_and(|size| size > MAX_TELEGRAM_RESPONSE_BYTES)
-    {
-        return Err(HttpApiError::Unavailable);
-    }
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| HttpApiError::Unavailable)?;
-    if bytes.len() as u64 > MAX_TELEGRAM_RESPONSE_BYTES {
-        return Err(HttpApiError::Unavailable);
-    }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| HttpApiError::InvalidRequest)?;
-    if !status.is_success() || value.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(HttpApiError::InvalidRequest);
-    }
-    Ok(value)
+        .map_err(|error| match error {
+            crate::telegram::TelegramApiError::InvalidRequest => HttpApiError::InvalidRequest,
+            crate::telegram::TelegramApiError::ForbiddenEndpoint => HttpApiError::Telegram {
+                status: StatusCode::BAD_REQUEST,
+                code: "telegram_endpoint_forbidden",
+                message: "the Telegram Bot API address is forbidden by the server policy",
+            },
+            crate::telegram::TelegramApiError::Timeout => HttpApiError::Telegram {
+                status: StatusCode::GATEWAY_TIMEOUT,
+                code: "telegram_timeout",
+                message: "the Telegram Bot API request timed out",
+            },
+            crate::telegram::TelegramApiError::Unavailable
+            | crate::telegram::TelegramApiError::ResponseTooLarge => HttpApiError::Telegram {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "telegram_unavailable",
+                message: "the Telegram Bot API is temporarily unavailable",
+            },
+            crate::telegram::TelegramApiError::Rejected(rejection) => {
+                map_telegram_rejection(method, &rejection)
+            }
+        })?
+        .successful_json()
+        .map_err(|error| match error {
+            crate::telegram::TelegramApiError::Rejected(rejection) => {
+                map_telegram_rejection(method, &rejection)
+            }
+            _ => HttpApiError::Telegram {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "telegram_unavailable",
+                message: "the Telegram Bot API is temporarily unavailable",
+            },
+        })
 }
 
-fn telegram_display_name(value: &serde_json::Map<String, Value>) -> String {
-    ["title", "first_name", "username"]
+fn map_telegram_rejection(
+    method: &str,
+    rejection: &crate::telegram::TelegramApiRejection,
+) -> HttpApiError {
+    match (rejection.http_status, rejection.error_code) {
+        (401, _) | (_, Some(401)) => HttpApiError::Telegram {
+            status: StatusCode::BAD_REQUEST,
+            code: "telegram_invalid_token",
+            message: "Telegram rejected the bot token",
+        },
+        (403, _) | (_, Some(403)) => HttpApiError::Telegram {
+            status: StatusCode::FORBIDDEN,
+            code: "telegram_bot_has_no_access",
+            message: "the Telegram bot does not have access to this chat",
+        },
+        (409, _) | (_, Some(409)) => HttpApiError::Telegram {
+            status: StatusCode::CONFLICT,
+            code: "telegram_webhook_conflict",
+            message: "Telegram updates are already consumed by a webhook or another client",
+        },
+        (429, _) | (_, Some(429)) => HttpApiError::Telegram {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "telegram_rate_limited",
+            message: "Telegram rate limited this request; wait briefly and retry",
+        },
+        (400, _) | (_, Some(400)) if method == "getChat" => HttpApiError::Telegram {
+            status: StatusCode::BAD_REQUEST,
+            code: "telegram_chat_not_found",
+            message: "the chat was not found or is inaccessible; private users must start the bot first",
+        },
+        (status, _) if status >= 500 => HttpApiError::Telegram {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "telegram_unavailable",
+            message: "the Telegram Bot API is temporarily unavailable",
+        },
+        _ => HttpApiError::Telegram {
+            status: StatusCode::BAD_REQUEST,
+            code: "telegram_request_rejected",
+            message: "Telegram rejected the request",
+        },
+    }
+}
+
+fn telegram_result(value: &Value) -> Result<&serde_json::Map<String, Value>, HttpApiError> {
+    value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(HttpApiError::InvalidRequest)
+}
+
+fn telegram_bot_identity(
+    value: &serde_json::Map<String, Value>,
+) -> Result<TelegramBotIdentity, HttpApiError> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let username = telegram_username(value.get("username").and_then(Value::as_str))?
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let display_name = telegram_display_name(value, username.as_str())?;
+    Ok(TelegramBotIdentity {
+        id,
+        username,
+        display_name,
+    })
+}
+
+fn telegram_chat_identity(
+    value: &serde_json::Map<String, Value>,
+) -> Result<TelegramChatIdentity, HttpApiError> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_i64)
+        .filter(|value| *value != 0)
+        .ok_or(HttpApiError::InvalidRequest)?;
+    let kind = match value.get("type").and_then(Value::as_str) {
+        Some("private") => TelegramChatKind::Private,
+        Some("group") => TelegramChatKind::Group,
+        Some("supergroup") => TelegramChatKind::Supergroup,
+        Some("channel") => TelegramChatKind::Channel,
+        _ => return Err(HttpApiError::InvalidRequest),
+    };
+    let username = telegram_username(value.get("username").and_then(Value::as_str))?;
+    let fallback = username
+        .as_ref()
+        .map_or_else(|| id.to_string(), |value| value.as_str().to_owned());
+    let display_name = telegram_display_name(value, &fallback)?;
+    Ok(TelegramChatIdentity {
+        id,
+        kind,
+        username,
+        display_name,
+    })
+}
+
+fn telegram_username(value: Option<&str>) -> Result<Option<NotificationText>, HttpApiError> {
+    value
+        .map(|value| {
+            if value.is_empty()
+                || value.len() > MAX_TELEGRAM_USERNAME_BYTES
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                return Err(HttpApiError::InvalidRequest);
+            }
+            NotificationText::new(value, MAX_TELEGRAM_USERNAME_BYTES)
+                .map_err(|_| HttpApiError::InvalidRequest)
+        })
+        .transpose()
+}
+
+fn telegram_display_name(
+    value: &serde_json::Map<String, Value>,
+    fallback: &str,
+) -> Result<NotificationText, HttpApiError> {
+    let personal_name = ["first_name", "last_name"]
         .into_iter()
-        .find_map(|field| value.get(field).and_then(Value::as_str))
-        .unwrap_or("Telegram subscriber")
-        .chars()
-        .take(120)
-        .collect()
+        .filter_map(|field| value.get(field).and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let candidate = value
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| (!personal_name.is_empty()).then_some(personal_name.as_str()))
+        .or_else(|| value.get("username").and_then(Value::as_str))
+        .unwrap_or(fallback);
+    let mut bounded = String::new();
+    for character in candidate.chars() {
+        if bounded.len().saturating_add(character.len_utf8()) > MAX_TELEGRAM_DISPLAY_NAME_BYTES {
+            break;
+        }
+        bounded.push(character);
+    }
+    NotificationText::new(bounded, MAX_TELEGRAM_DISPLAY_NAME_BYTES)
+        .map_err(|_| HttpApiError::InvalidRequest)
 }
 
 fn telegram_start_matches(text: &str, pairing_code: &str) -> bool {
@@ -2499,12 +2954,20 @@ fn telegram_destination_id(
     project_id: ProjectId,
     bot_id: i64,
     chat_id: i64,
+    message_thread_id: Option<i64>,
 ) -> NotificationDestinationId {
     let mut hasher = Sha256::new();
-    hasher.update(b"metric/telegram-subscriber/v1");
+    hasher.update(if message_thread_id.is_some() {
+        b"metric/telegram-subscriber/v2".as_slice()
+    } else {
+        b"metric/telegram-subscriber/v1".as_slice()
+    });
     hasher.update(project_id.get().to_be_bytes());
     hasher.update(bot_id.to_be_bytes());
     hasher.update(chat_id.to_be_bytes());
+    if let Some(message_thread_id) = message_thread_id {
+        hasher.update(message_thread_id.to_be_bytes());
+    }
     let digest = hasher.finalize();
     let mut bytes = [0; 16];
     bytes.copy_from_slice(&digest[..16]);
@@ -2679,11 +3142,32 @@ async fn put_alert_rule(
 }
 
 fn notification_destination_value(destination: &NotificationDestination) -> Value {
-    let (kind, smtp) = match destination.kind {
-        NotificationDestinationKind::Webhook => ("webhook", None),
-        NotificationDestinationKind::Telegram => ("telegram", None),
+    let (kind, telegram, smtp) = match destination.kind {
+        NotificationDestinationKind::Webhook => ("webhook", None, None),
+        NotificationDestinationKind::Telegram => (
+            "telegram",
+            destination.telegram.as_ref().map(|telegram| {
+                json!({
+                    "api_base": telegram.api_base.as_str(),
+                    "message_thread_id": telegram.message_thread_id,
+                    "bot_id": telegram.bot_id.map(|value| value.to_string()),
+                    "bot_username": telegram.bot_username.as_ref().map(NotificationText::as_str),
+                    "bot_display_name": telegram.bot_display_name.as_ref().map(NotificationText::as_str),
+                    "chat_type": telegram.chat_kind.map(|kind| match kind {
+                        TelegramChatKind::Private => "private",
+                        TelegramChatKind::Group => "group",
+                        TelegramChatKind::Supergroup => "supergroup",
+                        TelegramChatKind::Channel => "channel",
+                    }),
+                    "chat_username": telegram.chat_username.as_ref().map(NotificationText::as_str),
+                    "chat_display_name": telegram.chat_display_name.as_ref().map(NotificationText::as_str),
+                })
+            }),
+            None,
+        ),
         NotificationDestinationKind::SmtpEmail => (
             "smtp_email",
+            None,
             destination.smtp.as_ref().map(|smtp| {
                 json!({
                     "port": smtp.port,
@@ -2704,6 +3188,7 @@ fn notification_destination_value(destination: &NotificationDestination) -> Valu
         "kind": kind,
         "endpoint": destination.endpoint.as_str(),
         "has_secret": true,
+        "telegram": telegram,
         "smtp": smtp,
         "enabled": destination.enabled,
         "created_at": destination.created_at.unix_millis(),
@@ -5695,13 +6180,75 @@ mod tests {
         ));
         let project = ProjectId::new(7).unwrap();
         assert_eq!(
-            telegram_destination_id(project, 42, 99),
-            telegram_destination_id(project, 42, 99)
+            telegram_destination_id(project, 42, 99, None),
+            telegram_destination_id(project, 42, 99, None)
         );
         assert_ne!(
-            telegram_destination_id(project, 42, 99),
-            telegram_destination_id(project, 42, 100)
+            telegram_destination_id(project, 42, 99, None),
+            telegram_destination_id(project, 42, 100, None)
         );
+        assert_ne!(
+            telegram_destination_id(project, 42, 99, Some(41)),
+            telegram_destination_id(project, 42, 99, Some(73))
+        );
+        assert!(validate_telegram_chat_selector("-1001234567890").is_ok());
+        assert!(validate_telegram_chat_selector("@metric_alerts").is_ok());
+        assert!(validate_telegram_chat_selector("metric_alerts").is_err());
+        assert!(validate_telegram_chat_selector("@invalid-name").is_err());
+        assert_eq!(
+            telegram_api_base(None).unwrap().as_str(),
+            metric_domain::notifications::DEFAULT_TELEGRAM_API_BASE
+        );
+        assert_eq!(
+            telegram_api_base(Some("http://telegram.internal:8081/proxy/"))
+                .unwrap()
+                .as_str(),
+            "http://telegram.internal:8081/proxy"
+        );
+    }
+
+    #[test]
+    fn telegram_identity_keeps_names_and_rejections_are_actionable() {
+        let bot_value = json!({
+            "id": 123,
+            "username": "metric_alerts_bot",
+            "first_name": "Metric",
+            "last_name": "Alerts"
+        });
+        let bot = telegram_bot_identity(bot_value.as_object().unwrap()).unwrap();
+        assert_eq!(bot.id, 123);
+        assert_eq!(bot.username.as_str(), "metric_alerts_bot");
+        assert_eq!(bot.display_name.as_str(), "Metric Alerts");
+
+        let chat_value = json!({
+            "id": 5663,
+            "type": "private",
+            "username": "kirill_kosenko",
+            "first_name": "Kirill",
+            "last_name": "Kosenko"
+        });
+        let chat = telegram_chat_identity(chat_value.as_object().unwrap()).unwrap();
+        assert_eq!(chat.id, 5663);
+        assert_eq!(chat.kind, TelegramChatKind::Private);
+        assert_eq!(chat.username.unwrap().as_str(), "kirill_kosenko");
+        assert_eq!(chat.display_name.as_str(), "Kirill Kosenko");
+
+        let error = map_telegram_rejection(
+            "getChat",
+            &crate::telegram::TelegramApiRejection {
+                http_status: 400,
+                error_code: Some(400),
+                description: Some("Bad Request: chat not found".into()),
+            },
+        );
+        assert!(matches!(
+            error,
+            HttpApiError::Telegram {
+                status: StatusCode::BAD_REQUEST,
+                code: "telegram_chat_not_found",
+                ..
+            }
+        ));
     }
 
     #[test]

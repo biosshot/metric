@@ -82,6 +82,18 @@ const messages: Record<string, string> = {
   dashboard_cost_exceeded: 'This dashboard exceeds its total query-cost budget.',
   dashboard_capacity: 'Dashboard refresh capacity is busy. Wait briefly and retry.',
   dashboard_unavailable: 'Dashboard storage is temporarily unavailable.',
+  telegram_invalid_token: 'Telegram rejected this bot token.',
+  telegram_chat_not_found:
+    'The chat was not found or the bot cannot access it. Private users must start the bot first.',
+  telegram_bot_has_no_access: 'The Telegram bot does not have access to this chat.',
+  telegram_webhook_conflict:
+    'Telegram updates are already consumed by a webhook or another client.',
+  telegram_rate_limited: 'Telegram rate limited this request. Wait briefly and retry.',
+  telegram_endpoint_forbidden: 'The Telegram Bot API address is forbidden by server policy.',
+  telegram_credentials_unavailable: 'The saved Telegram bot credentials cannot be used.',
+  telegram_timeout: 'The Telegram Bot API request timed out.',
+  telegram_unavailable: 'The Telegram Bot API is temporarily unavailable.',
+  telegram_request_rejected: 'Telegram rejected the request.',
 };
 
 export class ApiError extends Error {
@@ -601,18 +613,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  checkTelegramBot: (projectId: string, token: string) =>
+  checkTelegramBot: (
+    projectId: string,
+    token: string | null,
+    apiBase: string | null,
+    sourceDestinationId: string | null = null,
+  ) =>
     request<TelegramBot>(`/api/v1/projects/${projectId}/notification-destinations/telegram/check`, {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({
+        token,
+        api_base: apiBase,
+        source_destination_id: sourceDestinationId,
+      }),
     }),
-  syncTelegramSubscribers: (projectId: string, token: string, pairingCode: string) =>
+  syncTelegramSubscribers: (
+    projectId: string,
+    token: string | null,
+    apiBase: string | null,
+    pairingCode: string,
+    offset: number | null,
+    sourceDestinationId: string | null = null,
+  ) =>
     request<TelegramSubscriberSync>(
       `/api/v1/projects/${projectId}/notification-destinations/telegram/sync`,
       {
         method: 'POST',
-        body: JSON.stringify({ token, pairing_code: pairingCode }),
+        body: JSON.stringify({
+          token,
+          api_base: apiBase,
+          source_destination_id: sourceDestinationId,
+          pairing_code: pairingCode,
+          offset,
+        }),
       },
+    ),
+  disableNotificationDestination: (projectId: string, destinationId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/notification-destinations/${destinationId}`, {
+      method: 'DELETE',
+    }),
+  restoreNotificationDestination: (projectId: string, destinationId: string) =>
+    request<NotificationDestination>(
+      `/api/v1/projects/${projectId}/notification-destinations/${destinationId}/restore`,
+      { method: 'POST' },
     ),
   testNotificationDestination: (projectId: string, destinationId: string) =>
     request<NotificationDelivery>(

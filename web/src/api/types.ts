@@ -419,6 +419,16 @@ export interface NotificationDestination {
   kind: NotificationDestinationKind;
   endpoint: string;
   has_secret: true;
+  telegram: {
+    api_base: string;
+    message_thread_id: number | null;
+    bot_id: string | null;
+    bot_username: string | null;
+    bot_display_name: string | null;
+    chat_type: 'private' | 'group' | 'supergroup' | 'channel' | null;
+    chat_username: string | null;
+    chat_display_name: string | null;
+  } | null;
   smtp: {
     port: number;
     security: 'starttls' | 'tls';
@@ -435,13 +445,17 @@ export interface TelegramBot {
   id: string;
   username: string;
   display_name: string;
+  api_base: string;
 }
 
 export interface TelegramSubscriberSync {
   bot: TelegramBot;
+  next_offset: number | null;
   subscribers: Array<{
     destination_id: string;
     display_name: string;
+    chat_id: string;
+    message_thread_id: number | null;
   }>;
 }
 

@@ -234,3 +234,6 @@ maximum_response_bytes = "64 KiB"
 maximum_retry_after = "1h"
 allow_http = false
 allow_private_networks = false
+
+[notifications.telegram]
+allow_private_networks = true

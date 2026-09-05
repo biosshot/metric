@@ -138,6 +138,7 @@ fn claim(
             kind: NotificationDestinationKind::Webhook,
             endpoint: WebhookEndpoint::new(endpoint).unwrap(),
             sealed_secret: secret,
+            telegram: None,
             smtp: None,
             enabled: true,
             created_at: Timestamp::from_unix_millis(1).unwrap(),

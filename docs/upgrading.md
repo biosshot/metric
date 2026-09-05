@@ -11,9 +11,8 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
-The current Metric binary targets MongoDB schema generation **19**. It contains
-the automatic migration runner, but this release does not publish a production
-transition from an older generation.
+The current Metric binary targets MongoDB schema generation **20**. It automatically
+migrates a complete generation-19 database to generation 20 before ordinary startup.
 
 ::: danger Protect existing data
 You must never drop or recreate a data-bearing MongoDB database to make another
@@ -54,8 +53,9 @@ High as part of an ordinary version update.
 
 | Database state | What Metric does | What you should do |
 | --- | --- | --- |
-| Empty | Creates schema generation 19 | Wait for `/ready` |
-| Complete generation 19 | Starts normally | No schema action |
+| Empty | Creates schema generation 20 | Wait for `/ready` |
+| Complete generation 20 | Starts normally | No schema action |
+| Complete generation 19 | Migrates automatically to generation 20, then starts | Keep the browser or logs open and wait for `/ready` |
 | Older generation with a complete transition chain in the new image | Migrates automatically, then starts | Keep the browser or logs open and wait for `/ready` |
 | Older generation without a complete transition chain | Exits with a stable error | Stop and keep the data unchanged |
 | Newer or different generation | Refuses to start | Use the matching Metric version |
@@ -72,8 +72,10 @@ database failures are retried inside the process. A missing transition, newer
 schema, ambiguous transformation or failed required invariant stops startup with a
 nonzero exit instead of guessing or deleting data.
 
-Metric 0.1.5 has no older-to-19 production transition, so an older database still
-fails closed in this release. An empty-database setup is not a migration.
+Generation 19 to 20 is the only published transition in this binary. It adds the
+default Telegram Bot API configuration in bounded, resumable batches and does not
+delete or decrypt data. A generation older than 19 still fails closed because the
+required earlier link is absent. An empty-database setup is not a migration.
 
 Migrations are forward-only. Changing back to an older image is safe only when that
 image supports the resulting schema generation. Do not assume that changing the

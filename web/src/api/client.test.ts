@@ -260,7 +260,7 @@ describe('native API client', () => {
     });
   });
 
-  it('connects Telegram subscribers without exposing chat IDs in the form', async () => {
+  it('uses the selected Telegram API for bot checks and subscriber discovery', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -273,6 +273,7 @@ describe('native API client', () => {
         new Response(
           JSON.stringify({
             bot: { id: '123', username: 'metric_alerts_bot', display_name: 'Metric' },
+            next_offset: 124,
             subscribers: [{ destination_id: 'd'.repeat(32), display_name: 'On-call' }],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -280,19 +281,76 @@ describe('native API client', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
 
-    await api.checkTelegramBot('42', '123:bot-token');
-    await api.syncTelegramSubscribers('42', '123:bot-token', 'pairing-code-1234');
+    await api.checkTelegramBot('42', '123:bot-token', 'http://telegram.test/proxy');
+    await api.syncTelegramSubscribers(
+      '42',
+      '123:bot-token',
+      'http://telegram.test/proxy',
+      'pairing-code-1234',
+      null,
+    );
 
     const [checkPath, checkInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     const [syncPath, syncInit] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(checkPath).toBe('/api/v1/projects/42/notification-destinations/telegram/check');
     expect(syncPath).toBe('/api/v1/projects/42/notification-destinations/telegram/sync');
     expect((checkInit.headers as Headers).get('x-csrf-token')).toBe('a'.repeat(64));
-    expect(JSON.parse(String(checkInit.body))).toEqual({ token: '123:bot-token' });
+    expect(JSON.parse(String(checkInit.body))).toEqual({
+      token: '123:bot-token',
+      api_base: 'http://telegram.test/proxy',
+      source_destination_id: null,
+    });
     expect(JSON.parse(String(syncInit.body))).toEqual({
       token: '123:bot-token',
+      api_base: 'http://telegram.test/proxy',
+      source_destination_id: null,
       pairing_code: 'pairing-code-1234',
+      offset: null,
     });
+  });
+
+  it('reuses stored Telegram credentials and changes recipient state', async () => {
+    const destinationId = 'd'.repeat(32);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: '123',
+            username: 'metric_alerts_bot',
+            display_name: 'Metric',
+            api_base: 'https://api.telegram.org',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: destinationId }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.checkTelegramBot('42', null, null, destinationId);
+    await api.disableNotificationDestination('42', destinationId);
+    await api.restoreNotificationDestination('42', destinationId);
+
+    const [, checkInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(checkInit.body))).toEqual({
+      token: null,
+      api_base: null,
+      source_destination_id: destinationId,
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `/api/v1/projects/42/notification-destinations/${destinationId}`,
+    );
+    expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('DELETE');
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      `/api/v1/projects/42/notification-destinations/${destinationId}/restore`,
+    );
+    expect((fetchMock.mock.calls[2][1] as RequestInit).method).toBe('POST');
   });
 
   it('scopes monitor history by time and protects monitor deletion with CSRF', async () => {

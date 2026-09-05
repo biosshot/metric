@@ -3,6 +3,7 @@
 use std::fmt;
 
 use thiserror::Error;
+use url::Url;
 
 use crate::monitors::{MonitorId, MonitorRunStatus};
 use crate::{
@@ -21,6 +22,10 @@ pub const MAX_DIAGNOSTIC_BYTES: usize = 512;
 pub const MAX_EMAIL_RECIPIENTS: usize = 16;
 pub const MAX_SMTP_HOST_BYTES: usize = 253;
 pub const MAX_EMAIL_ADDRESS_BYTES: usize = 320;
+pub const MAX_TELEGRAM_API_BASE_BYTES: usize = 2_048;
+pub const MAX_TELEGRAM_USERNAME_BYTES: usize = 64;
+pub const MAX_TELEGRAM_DISPLAY_NAME_BYTES: usize = 512;
+pub const DEFAULT_TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NotificationValueError {
@@ -108,6 +113,109 @@ pub struct SmtpDestination {
     pub username: NotificationText,
     pub from: NotificationText,
     pub recipients: Box<[NotificationText]>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct TelegramApiBase(Box<str>);
+
+impl TelegramApiBase {
+    pub fn new(value: impl AsRef<str>) -> Result<Self, NotificationValueError> {
+        let value = value.as_ref();
+        validate_text(value, MAX_TELEGRAM_API_BASE_BYTES)?;
+        let parsed = Url::parse(value).map_err(|_| NotificationValueError::Empty)?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.cannot_be_a_base()
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(NotificationValueError::Empty);
+        }
+        let normalized = parsed.as_str().trim_end_matches('/');
+        if normalized.is_empty() {
+            return Err(NotificationValueError::Empty);
+        }
+        Ok(Self(normalized.into()))
+    }
+
+    #[must_use]
+    pub fn telegram_cloud() -> Self {
+        Self::new(DEFAULT_TELEGRAM_API_BASE).expect("the Telegram cloud API base is valid")
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for TelegramApiBase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("TelegramApiBase")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramDestination {
+    pub api_base: TelegramApiBase,
+    pub message_thread_id: Option<i64>,
+    pub bot_id: Option<i64>,
+    pub bot_username: Option<NotificationText>,
+    pub bot_display_name: Option<NotificationText>,
+    pub chat_kind: Option<TelegramChatKind>,
+    pub chat_username: Option<NotificationText>,
+    pub chat_display_name: Option<NotificationText>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelegramChatKind {
+    Private,
+    Group,
+    Supergroup,
+    Channel,
+}
+
+impl TelegramDestination {
+    pub fn validate(&self) -> Result<(), NotificationValueError> {
+        let bot_metadata = self.bot_username.is_some() || self.bot_display_name.is_some();
+        let chat_metadata = self.chat_username.is_some() || self.chat_display_name.is_some();
+        if self.message_thread_id.is_some_and(|value| value <= 0)
+            || self.bot_id.is_some_and(|value| value <= 0)
+            || (bot_metadata && self.bot_id.is_none())
+            || (chat_metadata && self.chat_kind.is_none())
+            || self
+                .bot_username
+                .as_ref()
+                .is_some_and(|value| !valid_telegram_username(value.as_str()))
+            || self
+                .chat_username
+                .as_ref()
+                .is_some_and(|value| !valid_telegram_username(value.as_str()))
+            || self
+                .bot_display_name
+                .as_ref()
+                .is_some_and(|value| value.as_str().len() > MAX_TELEGRAM_DISPLAY_NAME_BYTES)
+            || self
+                .chat_display_name
+                .as_ref()
+                .is_some_and(|value| value.as_str().len() > MAX_TELEGRAM_DISPLAY_NAME_BYTES)
+        {
+            return Err(NotificationValueError::Empty);
+        }
+        Ok(())
+    }
+}
+
+fn valid_telegram_username(value: &str) -> bool {
+    (1..=MAX_TELEGRAM_USERNAME_BYTES).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 impl SmtpDestination {
@@ -205,6 +313,7 @@ pub struct NotificationDestination {
     pub kind: NotificationDestinationKind,
     pub endpoint: WebhookEndpoint,
     pub sealed_secret: SealedWebhookSecret,
+    pub telegram: Option<TelegramDestination>,
     pub smtp: Option<SmtpDestination>,
     pub enabled: bool,
     pub created_at: Timestamp,
@@ -214,16 +323,28 @@ pub struct NotificationDestination {
 impl NotificationDestination {
     pub fn validate(&self) -> Result<(), NotificationValueError> {
         match self.kind {
-            NotificationDestinationKind::Webhook | NotificationDestinationKind::Telegram
-                if self.smtp.is_none() =>
+            NotificationDestinationKind::Webhook
+                if self.telegram.is_none() && self.smtp.is_none() =>
             {
                 Ok(())
             }
+            NotificationDestinationKind::Telegram if self.smtp.is_none() => self
+                .telegram
+                .as_ref()
+                .ok_or(NotificationValueError::Empty)?
+                .validate(),
             NotificationDestinationKind::SmtpEmail => self
                 .smtp
                 .as_ref()
                 .ok_or(NotificationValueError::Empty)?
-                .validate(),
+                .validate()
+                .and_then(|()| {
+                    if self.telegram.is_none() {
+                        Ok(())
+                    } else {
+                        Err(NotificationValueError::Empty)
+                    }
+                }),
             _ => Err(NotificationValueError::Empty),
         }
     }
@@ -475,6 +596,57 @@ mod tests {
         let secret = SealedWebhookSecret::new(vec![7; 32]).unwrap();
         assert!(!format!("{endpoint:?}").contains("secret.example"));
         assert!(!format!("{secret:?}").contains('7'));
+    }
+
+    #[test]
+    fn telegram_api_base_is_normalized_and_bounded() {
+        assert_eq!(
+            TelegramApiBase::new("HTTP://Example.COM:8080/proxy/tg///")
+                .unwrap()
+                .as_str(),
+            "http://example.com:8080/proxy/tg"
+        );
+        for invalid in [
+            "ftp://example.com",
+            "https://user@example.com",
+            "https://example.com/path?token=value",
+            "https://example.com/path#fragment",
+            "not a URL",
+        ] {
+            assert!(TelegramApiBase::new(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn telegram_thread_id_must_be_positive() {
+        assert!(
+            TelegramDestination {
+                api_base: TelegramApiBase::telegram_cloud(),
+                message_thread_id: Some(1),
+                bot_id: None,
+                bot_username: None,
+                bot_display_name: None,
+                chat_kind: None,
+                chat_username: None,
+                chat_display_name: None,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            TelegramDestination {
+                api_base: TelegramApiBase::telegram_cloud(),
+                message_thread_id: Some(0),
+                bot_id: None,
+                bot_username: None,
+                bot_display_name: None,
+                chat_kind: None,
+                chat_username: None,
+                chat_display_name: None,
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

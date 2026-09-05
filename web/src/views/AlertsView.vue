@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api/client';
@@ -10,8 +10,20 @@ import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
-import type { TelegramBot } from '../api/types';
+import type { NotificationDestination, TelegramBot } from '../api/types';
 import { useSessionStore } from '../stores/session';
+
+interface AvailableTelegramBot {
+  key: string;
+  source_destination_id: string;
+  id: string | null;
+  username: string | null;
+  display_name: string;
+  api_base: string;
+  active_destinations: number;
+  total_destinations: number;
+  updated_at: number;
+}
 
 const session = useSessionStore();
 const queryClient = useQueryClient();
@@ -25,8 +37,14 @@ const selectedDestinations = ref<string[]>([]);
 const selectedMemberIds = ref<string[]>([]);
 const memberSelectionTouched = ref(false);
 const telegramBot = ref<TelegramBot | null>(null);
+const telegramSourceDestinationId = ref('');
 const telegramPairingCode = ref(createPairingCode());
 const telegramSyncNotice = ref('');
+const telegramDiscoveryActive = ref(false);
+const telegramDiscoveryOffset = ref<number | null>(null);
+let telegramDiscoveryDeadline = 0;
+let telegramDiscoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let telegramDiscoveryGeneration = 0;
 const triggers = reactive({ new_issue: true, regression: true, resolved: false });
 const monitorRule = reactive({
   monitor_id: '',
@@ -50,6 +68,9 @@ const destination = reactive({
   endpoint: '',
   secret: '',
   enabled: true,
+  telegram_api_base: 'https://api.telegram.org',
+  telegram_chat_id: '',
+  telegram_message_thread_id: '' as string | number,
   smtp_port: 587,
   smtp_security: 'starttls',
   smtp_username: '',
@@ -92,6 +113,41 @@ const destinations = useQuery({
   queryFn: () => api.notificationDestinations(projectId.value),
   enabled: computed(() => canAdminister.value && Boolean(projectId.value)),
 });
+const availableTelegramBots = computed<AvailableTelegramBot[]>(() => {
+  const bots = new Map<string, AvailableTelegramBot>();
+  for (const item of destinations.data.value?.items ?? []) {
+    if (item.kind !== 'telegram' || !item.telegram) continue;
+    const key = item.telegram.bot_id
+      ? `${item.telegram.bot_id}\u0000${item.telegram.api_base}`
+      : `legacy:${item.id}`;
+    const current = bots.get(key);
+    const candidate: AvailableTelegramBot = current ?? {
+      key,
+      source_destination_id: item.id,
+      id: item.telegram.bot_id,
+      username: item.telegram.bot_username,
+      display_name:
+        item.telegram.bot_display_name ??
+        item.telegram.bot_username ??
+        t('alerts.savedTelegramBot'),
+      api_base: item.telegram.api_base,
+      active_destinations: 0,
+      total_destinations: 0,
+      updated_at: item.updated_at,
+    };
+    candidate.total_destinations += 1;
+    if (item.enabled) candidate.active_destinations += 1;
+    if (item.updated_at > candidate.updated_at) {
+      candidate.source_destination_id = item.id;
+      candidate.updated_at = item.updated_at;
+    }
+    bots.set(key, candidate);
+  }
+  return [...bots.values()].sort((left, right) => right.updated_at - left.updated_at);
+});
+const activeNotificationDestinations = computed(
+  () => destinations.data.value?.items.filter((item) => item.enabled) ?? [],
+);
 const rules = useQuery({
   queryKey: computed(() => ['alert-rules', projectId.value]),
   queryFn: () => api.alertRules(projectId.value),
@@ -145,6 +201,10 @@ const telegramStartUrl = computed(() =>
     ? `https://t.me/${telegramBot.value.username}?start=${telegramPairingCode.value}`
     : '',
 );
+const telegramPairingCommand = computed(() => `/start ${telegramPairingCode.value}`);
+const telegramUsesHttp = computed(() =>
+  destination.telegram_api_base.trim().toLowerCase().startsWith('http://'),
+);
 watch(
   activeMembers,
   (members) => {
@@ -183,49 +243,110 @@ const saveDestination = useMutation({
   },
 });
 const connectTelegram = useMutation({
-  mutationFn: () => api.checkTelegramBot(projectId.value, destination.secret),
+  mutationFn: () =>
+    api.checkTelegramBot(
+      projectId.value,
+      telegramSourceDestinationId.value ? null : destination.secret,
+      telegramSourceDestinationId.value ? null : destination.telegram_api_base.trim(),
+      telegramSourceDestinationId.value || null,
+    ),
   onSuccess: (bot) => {
     telegramBot.value = bot;
+    destination.telegram_api_base = bot.api_base;
     telegramSyncNotice.value = '';
   },
 });
-const syncTelegram = useMutation({
+const saveTelegramDestination = useMutation({
   mutationFn: () =>
-    api.syncTelegramSubscribers(projectId.value, destination.secret, telegramPairingCode.value),
+    api.putNotificationDestination(projectId.value, {
+      kind: 'telegram',
+      endpoint: destination.telegram_chat_id.trim(),
+      secret: telegramSourceDestinationId.value ? null : destination.secret,
+      enabled: destination.enabled,
+      telegram_api_base: telegramSourceDestinationId.value
+        ? null
+        : destination.telegram_api_base.trim(),
+      telegram_source_destination_id: telegramSourceDestinationId.value || null,
+      telegram_message_thread_id:
+        String(destination.telegram_message_thread_id).trim() === ''
+          ? null
+          : Number(destination.telegram_message_thread_id),
+    }),
   onSuccess: async (value) => {
-    telegramBot.value = value.bot;
-    selectedDestinations.value = [
-      ...new Set([
-        ...selectedDestinations.value,
-        ...value.subscribers.map((subscriber) => subscriber.destination_id),
-      ]),
-    ];
-    telegramSyncNotice.value = value.subscribers.length
-      ? t('alerts.subscribersConnected', value.subscribers.length)
-      : t('alerts.noSubscribers');
+    destination.telegram_chat_id = '';
+    destination.telegram_message_thread_id = '';
+    selectedDestinations.value = [...new Set([...selectedDestinations.value, value.id])];
+    telegramSyncNotice.value = t('alerts.telegramDestinationSaved');
     await queryClient.invalidateQueries({
       queryKey: ['notification-destinations', projectId.value],
     });
   },
 });
+const syncTelegram = useMutation({
+  mutationFn: (generation: number) => {
+    // The generation is carried through Vue Query so stale polling responses
+    // can be ignored without sending this client-only value to the server.
+    void generation;
+    return api.syncTelegramSubscribers(
+      projectId.value,
+      telegramSourceDestinationId.value ? null : destination.secret,
+      telegramSourceDestinationId.value ? null : destination.telegram_api_base.trim(),
+      telegramPairingCode.value,
+      telegramDiscoveryOffset.value,
+      telegramSourceDestinationId.value || null,
+    );
+  },
+  onSuccess: async (value, generation) => {
+    if (!telegramDiscoveryActive.value || generation !== telegramDiscoveryGeneration) {
+      return;
+    }
+    telegramBot.value = value.bot;
+    telegramDiscoveryOffset.value = value.next_offset;
+    if (value.subscribers.length) {
+      stopTelegramDiscovery();
+      selectedDestinations.value = [
+        ...new Set([
+          ...selectedDestinations.value,
+          ...value.subscribers.map((subscriber) => subscriber.destination_id),
+        ]),
+      ];
+      telegramSyncNotice.value = t('alerts.subscribersConnected', value.subscribers.length);
+      await queryClient.invalidateQueries({
+        queryKey: ['notification-destinations', projectId.value],
+      });
+    } else if (telegramDiscoveryActive.value && Date.now() < telegramDiscoveryDeadline) {
+      telegramSyncNotice.value = t('alerts.waitingForTelegram');
+      telegramDiscoveryTimer = setTimeout(() => syncTelegram.mutate(generation), 500);
+    } else {
+      stopTelegramDiscovery();
+      telegramSyncNotice.value = t('alerts.discoveryTimedOut');
+    }
+  },
+  onError: (_error, generation) => {
+    if (generation === telegramDiscoveryGeneration) {
+      stopTelegramDiscovery();
+    }
+  },
+});
 watch(kind, () => {
+  stopTelegramDiscovery();
   destination.secret = '';
+  telegramSourceDestinationId.value = '';
   telegramBot.value = null;
   telegramSyncNotice.value = '';
   saveDestination.reset();
+  saveTelegramDestination.reset();
   connectTelegram.reset();
   syncTelegram.reset();
 });
-watch(
-  () => destination.secret,
-  () => {
-    if (kind.value === 'telegram' && telegramBot.value) {
-      telegramBot.value = null;
-      telegramSyncNotice.value = '';
-      syncTelegram.reset();
-    }
-  },
-);
+watch([() => destination.secret, () => destination.telegram_api_base], () => {
+  if (kind.value === 'telegram' && telegramBot.value && !telegramSourceDestinationId.value) {
+    stopTelegramDiscovery();
+    telegramBot.value = null;
+    telegramSyncNotice.value = '';
+    syncTelegram.reset();
+  }
+});
 
 const saveRule = useMutation({
   mutationFn: () =>
@@ -283,6 +404,23 @@ const testDestination = useMutation({
     });
   },
 });
+const setDestinationEnabled = useMutation({
+  mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+    if (enabled) {
+      await api.restoreNotificationDestination(projectId.value, id);
+      return;
+    }
+    await api.disableNotificationDestination(projectId.value, id);
+  },
+  onSuccess: async (_value, input) => {
+    if (!input.enabled) {
+      selectedDestinations.value = selectedDestinations.value.filter((id) => id !== input.id);
+    }
+    await queryClient.invalidateQueries({
+      queryKey: ['notification-destinations', projectId.value],
+    });
+  },
+});
 
 function toggleDestination(id: string): void {
   selectedDestinations.value = selectedDestinations.value.includes(id)
@@ -304,15 +442,98 @@ function createPairingCode(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function renewTelegramLink(): void {
-  telegramPairingCode.value = createPairingCode();
+function useTelegramBot(bot: AvailableTelegramBot): void {
+  stopTelegramDiscovery();
+  telegramSourceDestinationId.value = bot.source_destination_id;
+  destination.secret = '';
+  destination.telegram_api_base = bot.api_base;
   telegramSyncNotice.value = '';
+  connectTelegram.reset();
+  if (bot.id && bot.username) {
+    telegramBot.value = {
+      id: bot.id,
+      username: bot.username,
+      display_name: bot.display_name,
+      api_base: bot.api_base,
+    };
+  } else {
+    telegramBot.value = null;
+    connectTelegram.mutate();
+  }
 }
 
-function maskedDestinationEndpoint(endpoint: string): string {
-  return endpoint.length > 4
-    ? t('alerts.subscriberMasked', { suffix: endpoint.slice(-4) })
-    : t('alerts.telegramSubscriber');
+function useNewTelegramBot(): void {
+  stopTelegramDiscovery();
+  telegramSourceDestinationId.value = '';
+  telegramBot.value = null;
+  destination.secret = '';
+  destination.telegram_api_base = 'https://api.telegram.org';
+  telegramSyncNotice.value = '';
+  connectTelegram.reset();
+  syncTelegram.reset();
+}
+
+watch(
+  [availableTelegramBots, kind],
+  ([bots, selectedKind]) => {
+    if (
+      selectedKind === 'telegram' &&
+      bots.length === 1 &&
+      !telegramSourceDestinationId.value &&
+      !destination.secret &&
+      !telegramBot.value
+    ) {
+      useTelegramBot(bots[0]);
+    }
+  },
+  { immediate: true },
+);
+
+function startTelegramDiscovery(): void {
+  stopTelegramDiscovery();
+  telegramPairingCode.value = createPairingCode();
+  telegramDiscoveryOffset.value = null;
+  telegramDiscoveryDeadline = Date.now() + 90_000;
+  telegramDiscoveryActive.value = true;
+  telegramSyncNotice.value = t('alerts.waitingForTelegram');
+  syncTelegram.reset();
+  syncTelegram.mutate(telegramDiscoveryGeneration);
+}
+
+function stopTelegramDiscovery(): void {
+  telegramDiscoveryActive.value = false;
+  telegramDiscoveryGeneration += 1;
+  if (telegramDiscoveryTimer !== undefined) {
+    clearTimeout(telegramDiscoveryTimer);
+    telegramDiscoveryTimer = undefined;
+  }
+}
+
+onBeforeUnmount(stopTelegramDiscovery);
+
+function destinationDisplayName(item: NotificationDestination): string {
+  if (item.kind !== 'telegram' || !item.telegram) return t('alerts.smtpEmail');
+  if (item.telegram.chat_type === 'private' && item.telegram.chat_username) {
+    return `@${item.telegram.chat_username}`;
+  }
+  return (
+    item.telegram.chat_display_name ??
+    (item.telegram.chat_username ? `@${item.telegram.chat_username}` : item.endpoint)
+  );
+}
+
+function destinationEndpointLabel(item: NotificationDestination): string {
+  if (item.kind !== 'telegram') {
+    return item.endpoint;
+  }
+  const parts = [
+    item.telegram?.chat_type ? t(`alerts.telegramChatType.${item.telegram.chat_type}`) : null,
+    t('alerts.telegramChatIdValue', { id: item.endpoint }),
+    item.telegram?.message_thread_id
+      ? t('alerts.telegramTopic', { id: item.telegram.message_thread_id })
+      : null,
+  ];
+  return parts.filter(Boolean).join(' · ');
 }
 
 function triggerLabel(value: string): string {
@@ -383,17 +604,25 @@ function datasetLabel(value: string): string {
 
       <ApiErrorPanel
         v-if="
-          saveDestination.error.value || connectTelegram.error.value || syncTelegram.error.value
+          saveDestination.error.value ||
+          saveTelegramDestination.error.value ||
+          connectTelegram.error.value ||
+          syncTelegram.error.value
         "
         :error="
-          saveDestination.error.value || connectTelegram.error.value || syncTelegram.error.value
+          saveDestination.error.value ||
+          saveTelegramDestination.error.value ||
+          connectTelegram.error.value ||
+          syncTelegram.error.value
         "
         :title="
           kind !== 'telegram'
             ? $t('alerts.emailSaveFailed')
-            : syncTelegram.error.value
-              ? $t('alerts.subscribersSyncFailed')
-              : $t('alerts.botConnectFailed')
+            : saveTelegramDestination.error.value
+              ? $t('alerts.telegramSaveFailed')
+              : syncTelegram.error.value
+                ? $t('alerts.discoveryFailed')
+                : $t('alerts.botConnectFailed')
         "
       />
       <form
@@ -407,27 +636,79 @@ function datasetLabel(value: string): string {
           @update:model-value="kind = $event"
         />
         <template v-if="kind === 'telegram'">
-          <label>
-            {{ $t('alerts.botToken') }}
-            <input
-              v-model="destination.secret"
-              required
-              type="password"
-              autocomplete="new-password"
-              placeholder="123456:bot-token"
-            />
-            <small>{{ $t('alerts.botTokenHelp') }}</small>
-          </label>
-          <button
-            class="button button--primary"
-            type="submit"
-            :disabled="connectTelegram.isPending.value"
-          >
-            <AppIcon name="connect" :size="16" />
-            {{
-              connectTelegram.isPending.value ? $t('alerts.checkingBot') : $t('alerts.connectBot')
-            }}
-          </button>
+          <section v-if="availableTelegramBots.length" class="telegram-bot-list">
+            <div>
+              <p class="eyebrow">{{ $t('alerts.availableTelegramBots') }}</p>
+              <h3>{{ $t('alerts.useSavedTelegramBot') }}</h3>
+              <p>{{ $t('alerts.useSavedTelegramBotHelp') }}</p>
+            </div>
+            <article v-for="bot in availableTelegramBots" :key="bot.key">
+              <span class="section-icon section-icon--success">
+                <AppIcon name="telegram" />
+              </span>
+              <span>
+                <strong>{{ bot.username ? `@${bot.username}` : bot.display_name }}</strong>
+                <small>
+                  {{ bot.api_base }} ·
+                  {{
+                    $t('alerts.telegramRecipientCount', {
+                      count: bot.active_destinations,
+                    })
+                  }}
+                </small>
+              </span>
+              <button
+                class="button button--secondary"
+                type="button"
+                :disabled="telegramSourceDestinationId === bot.source_destination_id"
+                @click="useTelegramBot(bot)"
+              >
+                <AppIcon name="connect" :size="15" />
+                {{
+                  telegramSourceDestinationId === bot.source_destination_id
+                    ? $t('alerts.telegramBotSelected')
+                    : $t('alerts.useTelegramBot')
+                }}
+              </button>
+            </article>
+          </section>
+          <template v-if="!telegramSourceDestinationId">
+            <label>
+              {{ $t('alerts.telegramApiBase') }}
+              <input
+                v-model="destination.telegram_api_base"
+                required
+                type="url"
+                placeholder="https://api.telegram.org"
+              />
+              <small>{{ $t('alerts.telegramApiBaseHelp') }}</small>
+            </label>
+            <p v-if="telegramUsesHttp" class="permission-note" role="status">
+              <AppIcon name="info" :size="16" />
+              {{ $t('alerts.telegramHttpWarning') }}
+            </p>
+            <label>
+              {{ $t('alerts.botToken') }}
+              <input
+                v-model="destination.secret"
+                required
+                type="password"
+                autocomplete="new-password"
+                placeholder="123456:bot-token"
+              />
+              <small>{{ $t('alerts.botTokenHelp') }}</small>
+            </label>
+            <button
+              class="button button--primary"
+              type="submit"
+              :disabled="connectTelegram.isPending.value"
+            >
+              <AppIcon name="connect" :size="16" />
+              {{
+                connectTelegram.isPending.value ? $t('alerts.checkingBot') : $t('alerts.connectBot')
+              }}
+            </button>
+          </template>
           <section v-if="telegramBot" class="telegram-pairing">
             <div class="telegram-pairing__identity">
               <span class="section-icon section-icon--success">
@@ -437,42 +718,104 @@ function datasetLabel(value: string): string {
                 <strong>{{ telegramBot.display_name }}</strong>
                 <small>{{ $t('alerts.botReady', { username: telegramBot.username }) }}</small>
               </span>
+              <div v-if="telegramSourceDestinationId" class="button-row">
+                <button
+                  class="button button--secondary"
+                  type="button"
+                  :disabled="connectTelegram.isPending.value"
+                  @click="connectTelegram.mutate()"
+                >
+                  <AppIcon name="refresh" :size="15" />
+                  {{ $t('alerts.checkTelegramBot') }}
+                </button>
+                <button class="button button--secondary" type="button" @click="useNewTelegramBot">
+                  <AppIcon name="plus" :size="15" />
+                  {{ $t('alerts.connectAnotherTelegramBot') }}
+                </button>
+              </div>
             </div>
             <div>
-              <p class="eyebrow">{{ $t('alerts.subscriberLink') }}</p>
-              <h3>{{ $t('alerts.noChatId') }}</h3>
-              <p>{{ $t('alerts.subscriberHelp') }}</p>
+              <p class="eyebrow">{{ $t('alerts.telegramTarget') }}</p>
+              <h3>{{ $t('alerts.addTelegramTarget') }}</h3>
+              <p>{{ $t('alerts.oneBotManyTargets') }}</p>
             </div>
-            <CodeBlock
-              :code="telegramStartUrl"
-              language="text"
-              :title="$t('alerts.telegramLink')"
-            />
-            <div class="button-row">
-              <a
-                class="button button--primary"
-                :href="telegramStartUrl"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <AppIcon name="telegram" :size="16" />
-                {{ $t('alerts.openTelegram') }}
-              </a>
-              <button class="button button--secondary" type="button" @click="renewTelegramLink">
-                <AppIcon name="refresh" :size="16" />
-                {{ $t('alerts.newLink') }}
-              </button>
+            <div class="form-grid">
+              <label>
+                {{ $t('alerts.telegramChatId') }}
+                <input
+                  v-model="destination.telegram_chat_id"
+                  placeholder="-1001234567890 or @channel"
+                />
+                <small>{{ $t('alerts.telegramChatIdHelp') }}</small>
+              </label>
+              <label>
+                {{ $t('alerts.telegramThreadId') }}
+                <input
+                  v-model="destination.telegram_message_thread_id"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="42"
+                />
+                <small>{{ $t('alerts.telegramThreadIdHelp') }}</small>
+              </label>
+            </div>
+            <button
+              class="button button--primary"
+              type="button"
+              :disabled="
+                saveTelegramDestination.isPending.value || !destination.telegram_chat_id.trim()
+              "
+              @click="saveTelegramDestination.mutate()"
+            >
+              <AppIcon name="telegram" :size="16" />
+              {{
+                saveTelegramDestination.isPending.value
+                  ? $t('alerts.saving')
+                  : $t('alerts.saveTelegramTarget')
+              }}
+            </button>
+            <div class="telegram-discovery">
+              <div>
+                <p class="eyebrow">{{ $t('alerts.telegramDiscovery') }}</p>
+                <h3>{{ $t('alerts.findTelegramTarget') }}</h3>
+                <p>{{ $t('alerts.telegramDiscoveryHelp') }}</p>
+              </div>
               <button
+                v-if="!telegramDiscoveryActive"
                 class="button button--secondary"
                 type="button"
-                :disabled="syncTelegram.isPending.value"
-                @click="syncTelegram.mutate()"
+                @click="startTelegramDiscovery"
               >
                 <AppIcon name="users" :size="16" />
-                {{
-                  syncTelegram.isPending.value ? $t('alerts.syncing') : $t('alerts.syncSubscribers')
-                }}
+                {{ $t('alerts.findAutomatically') }}
               </button>
+              <template v-else>
+                <CodeBlock
+                  :code="telegramPairingCommand"
+                  language="text"
+                  :title="$t('alerts.telegramPairingCommand')"
+                />
+                <p class="field-help">{{ $t('alerts.telegramGroupTopicHelp') }}</p>
+                <div class="button-row">
+                  <a
+                    class="button button--primary"
+                    :href="telegramStartUrl"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <AppIcon name="telegram" :size="16" />
+                    {{ $t('alerts.openTelegram') }}
+                  </a>
+                  <button
+                    class="button button--secondary"
+                    type="button"
+                    @click="stopTelegramDiscovery"
+                  >
+                    {{ $t('common.cancel') }}
+                  </button>
+                </div>
+              </template>
             </div>
             <p v-if="telegramSyncNotice" class="success-notice" role="status">
               <AppIcon name="info" :size="16" />
@@ -593,19 +936,18 @@ function datasetLabel(value: string): string {
         </template>
       </form>
       <div v-if="destinations.data.value?.items.length" class="channel-test-list">
-        <article v-for="item in destinations.data.value.items" :key="item.id">
+        <article
+          v-for="item in destinations.data.value.items"
+          :key="item.id"
+          :class="{ 'notification-destination--disabled': !item.enabled }"
+        >
           <AppIcon :name="item.kind === 'telegram' ? 'telegram' : 'email'" />
           <span>
-            <strong>{{
-              item.kind === 'telegram' ? $t('alerts.telegram') : $t('alerts.smtpEmail')
-            }}</strong>
-            <small>
-              {{
-                item.kind === 'telegram' ? maskedDestinationEndpoint(item.endpoint) : item.endpoint
-              }}
-            </small>
+            <strong>{{ destinationDisplayName(item) }}</strong>
+            <small>{{ destinationEndpointLabel(item) }}</small>
           </span>
           <button
+            v-if="item.enabled"
             class="button button--secondary"
             type="button"
             :disabled="testDestination.isPending.value"
@@ -614,12 +956,36 @@ function datasetLabel(value: string): string {
             <AppIcon name="telegram" :size="15" />
             {{ $t('alerts.sendTest') }}
           </button>
+          <button
+            v-if="item.enabled"
+            class="button button--danger"
+            type="button"
+            :disabled="setDestinationEnabled.isPending.value"
+            @click="setDestinationEnabled.mutate({ id: item.id, enabled: false })"
+          >
+            <AppIcon name="delete" :size="15" />
+            {{ $t('alerts.disableRecipient') }}
+          </button>
+          <button
+            v-else
+            class="button button--secondary"
+            type="button"
+            :disabled="setDestinationEnabled.isPending.value"
+            @click="setDestinationEnabled.mutate({ id: item.id, enabled: true })"
+          >
+            <AppIcon name="refresh" :size="15" />
+            {{ $t('alerts.restoreRecipient') }}
+          </button>
         </article>
       </div>
       <ApiErrorPanel
-        v-if="testDestination.error.value"
-        :error="testDestination.error.value"
-        :title="$t('alerts.testFailed')"
+        v-if="testDestination.error.value || setDestinationEnabled.error.value"
+        :error="testDestination.error.value || setDestinationEnabled.error.value"
+        :title="
+          setDestinationEnabled.error.value
+            ? $t('alerts.recipientStateFailed')
+            : $t('alerts.testFailed')
+        "
       />
     </section>
 
@@ -637,7 +1003,7 @@ function datasetLabel(value: string): string {
         :title="$t('alerts.ruleSaveFailed')"
       />
       <EmptyState
-        v-if="!destinations.data.value?.items.length"
+        v-if="!activeNotificationDestinations.length"
         icon="alerts"
         :title="$t('alerts.addDestination')"
         :description="$t('alerts.addDestinationHelp')"
@@ -800,7 +1166,7 @@ function datasetLabel(value: string): string {
         </div>
         <div class="destination-choice-list">
           <button
-            v-for="item in destinations.data.value?.items"
+            v-for="item in activeNotificationDestinations"
             :key="item.id"
             class="destination-choice"
             :class="{ 'destination-choice--selected': selectedDestinations.includes(item.id) }"
@@ -809,10 +1175,8 @@ function datasetLabel(value: string): string {
           >
             <AppIcon :name="item.kind === 'telegram' ? 'telegram' : 'email'" />
             <span>
-              <strong>{{
-                item.kind === 'telegram' ? $t('alerts.telegram') : $t('alerts.smtpEmail')
-              }}</strong>
-              <small>{{ item.endpoint }}</small>
+              <strong>{{ destinationDisplayName(item) }}</strong>
+              <small>{{ destinationEndpointLabel(item) }}</small>
             </span>
             <AppIcon v-if="selectedDestinations.includes(item.id)" name="check" />
           </button>

@@ -381,6 +381,7 @@ These defaults are used when an `[artifacts]` section is not present.
 | `notifications.webhook.maximum_retry_after` | `1h` | Maximum server-requested retry delay. |
 | `notifications.webhook.allow_http` | `false` | Allows unencrypted HTTP webhook targets. |
 | `notifications.webhook.allow_private_networks` | `false` | Allows webhook targets on private network addresses. |
+| `notifications.telegram.allow_private_networks` | `true` | Allows custom Telegram Bot API URLs on private, loopback or link-local addresses. Set to `false` to restrict project-admin configured hosts to public addresses. Both HTTP and HTTPS API URLs are accepted. |
 
 ## Print the effective configuration
 

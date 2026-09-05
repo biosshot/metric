@@ -5,15 +5,14 @@ use std::{net::IpAddr, time::Instant};
 use futures_util::StreamExt;
 use metric_domain::monitors::{MonitorDefinition, UptimeFailure, UptimeHeader, UptimeMethod};
 use metric_ports::{PortFuture, SignalStoreError, UptimeCheckExecutor, UptimeCheckResult};
-use reqwest::{
-    Client,
-    header::{HeaderMap, HeaderName, HeaderValue, LOCATION},
-    redirect::Policy,
-};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, LOCATION};
 use tokio::time::{Duration, timeout};
 use url::Url;
 
-use crate::webhook::{WebhookSecretBox, forbidden_ip};
+use crate::{
+    outbound_network::{OutboundNetworkError, forbidden_ip, pinned_http_client},
+    webhook::WebhookSecretBox,
+};
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
@@ -42,28 +41,14 @@ impl ReqwestUptimeExecutor {
             let mut redirects = 0_u8;
             loop {
                 validate_endpoint(&endpoint)?;
-                let host = endpoint
-                    .host_str()
-                    .ok_or(UptimeFailure::ForbiddenAddress)?
-                    .to_owned();
-                let port = endpoint
-                    .port_or_known_default()
-                    .ok_or(UptimeFailure::ForbiddenAddress)?;
-                let addresses = tokio::net::lookup_host((host.as_str(), port))
+                let client = pinned_http_client(&endpoint, false, None)
                     .await
-                    .map_err(|_| UptimeFailure::Dns)?
-                    .collect::<Vec<_>>();
-                if addresses.is_empty() {
-                    return Err(UptimeFailure::Dns);
-                }
-                if addresses.iter().any(|address| forbidden_ip(address.ip())) {
-                    return Err(UptimeFailure::ForbiddenAddress);
-                }
-                let client = Client::builder()
-                    .redirect(Policy::none())
-                    .resolve(&host, addresses[0])
-                    .build()
-                    .map_err(|_| UptimeFailure::Connect)?;
+                    .map_err(|error| match error {
+                        OutboundNetworkError::Dns => UptimeFailure::Dns,
+                        OutboundNetworkError::InvalidHost
+                        | OutboundNetworkError::ForbiddenAddress => UptimeFailure::ForbiddenAddress,
+                        OutboundNetworkError::Client => UptimeFailure::Connect,
+                    })?;
                 let same_origin =
                     redirects == 0 || origin(&endpoint).as_ref() == Some(&original_origin);
                 let headers = self.headers(&config.headers, same_origin, redirects == 0)?;

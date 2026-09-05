@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-09-04:
+Status as of 2026-09-05:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ Status as of 2026-09-04:
 | Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
-| Automatic schema-migration framework | Complete; production registry remains empty at generation 19 | ADR-0049 |
+| Automatic schema-migration framework | Complete; generation 19 to 20 Telegram transition registered | ADR-0049/0050 |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
@@ -61,20 +61,20 @@ current roadmap.
 
 ## Schema-generation safety
 
-The current binary requires schema generation **19 exactly**. The runtime constant
+The current binary requires schema generation **20**. The runtime constant
 [`SCHEMA_GENERATION`](../crates/mongo/src/lib.rs) is the implementation source of
 truth. Generation numbers in older ADR amendments, module contracts and phase
 reports describe the schema those phases tested; they are historical evidence, not
 current upgrade targets.
 
 ADR-0049 accepts an automatic, forward-only and crash-resumable MongoDB migration
-framework, but this framework release deliberately keeps generation 19 and registers
-no production transition. There is still no supported data-preserving
-generation-18-to-19 conversion. Operators must not edit `schema_meta`, delete a
+framework. ADR-0050 registers its first production transition, generation 19 to 20,
+which adds Telegram destination configuration without deleting data. There is still
+no supported data-preserving generation-18-to-19 conversion. Operators must not edit
+`schema_meta`, delete a
 data-bearing database or recreate it after an incompatibility error. The current
 upgrade decision table and backup warning, including MongoDB/BlobStore consistency
-for Session Replay, are in [`docs/upgrading.md`](../docs/upgrading.md). The first real
-production transition will receive its own schema amendment and tests.
+for Session Replay, are in [`docs/upgrading.md`](../docs/upgrading.md).
 
 ## Current signal durability
 
@@ -99,7 +99,7 @@ duplicate because its ID contains the server receive time.
 
 ## Current physical storage names
 
-The active schema generation is 19. The Error occurrence collection is
+The active schema generation is 20. The Error occurrence collection is
 `error_events`; `events` is only a legacy generation-7 physical name. Native HTTP
 routes may still contain `/events` because route names are product concepts, not
 MongoDB collection selectors.
@@ -160,6 +160,9 @@ current production declaration gate. Current limits are stated directly in
   shared Web query language and explicit generation-19 no-migration invariant.
 - `0049-automatic-crash-resumable-schema-migrations.md`: accepted automatic MongoDB
   generation chains, bounded forward recovery and maintenance-mode startup behavior.
+- `0050-telegram-destinations-and-schema-generation-20.md`: accepted multi-target
+  Telegram configuration, automatic chat/topic discovery, shared outbound-network
+  policy and the first production migration from generation 19 to 20.
 - `phase-reports/0041-web-localization.md`: Phase 41 implementation evidence.
 - `module-contracts/0037-application-metrics-phase-37.md`: Phase 37 implementation
   boundary and exit gate.

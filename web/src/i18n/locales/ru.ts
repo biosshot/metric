@@ -944,13 +944,53 @@ export default {
     emailSaveFailed: 'Не удалось сохранить почтовое назначение',
     subscribersSyncFailed: 'Не удалось синхронизировать подписчиков Telegram',
     botConnectFailed: 'Не удалось подключить Telegram-бота',
+    telegramSaveFailed: 'Не удалось сохранить назначение Telegram',
+    discoveryFailed: 'Не удалось автоматически найти чат Telegram',
     provider: 'Провайдер',
+    telegramApiBase: 'URL Telegram Bot API',
+    telegramApiBaseHelp:
+      'Оставьте значение по умолчанию для Telegram Cloud или укажите HTTP/HTTPS base URL совместимого собственного API.',
+    telegramHttpWarning:
+      'При HTTP токен бота и сообщения передаются без транспортного шифрования. Используйте его только в доверенной сети.',
     botToken: 'Токен бота',
     botTokenHelp:
       "Создайте бота через {'@'}BotFather и вставьте его токен. API никогда не возвращает токен.",
     checkingBot: 'Проверяем бота…',
     connectBot: 'Подключить бота',
     botReady: "{'@'}{username} готов принимать подписчиков.",
+    availableTelegramBots: 'Доступные боты',
+    useSavedTelegramBot: 'Использовать сохранённого Telegram-бота',
+    useSavedTelegramBotHelp:
+      'Выберите бота, который уже используется проектом. Его зашифрованный токен и API URL останутся на сервере.',
+    savedTelegramBot: 'Сохранённый Telegram-бот',
+    telegramRecipientCount:
+      'нет активных получателей | {count} активный получатель | {count} активных получателя | {count} активных получателей',
+    telegramBotSelected: 'Выбран',
+    useTelegramBot: 'Использовать',
+    checkTelegramBot: 'Проверить сейчас',
+    connectAnotherTelegramBot: 'Подключить другого бота',
+    telegramTarget: 'Назначение Telegram',
+    addTelegramTarget: 'Добавить чат или тему',
+    oneBotManyTargets:
+      'Один бот может обслуживать сколько угодно назначений. Добавляйте каждый чат или тему отдельно.',
+    telegramChatId: 'ID чата или публичное имя',
+    telegramChatIdHelp:
+      "Введите числовой ID чата либо {'@'}username публичного канала или супергруппы. Приватный пользователь должен запустить бота через автоматический поиск.",
+    telegramThreadId: 'Message thread ID',
+    telegramThreadIdHelp: 'Необязательно. Укажите ID темы в форумной супергруппе.',
+    saveTelegramTarget: 'Сохранить назначение Telegram',
+    telegramDestinationSaved: 'Назначение Telegram сохранено и выбрано для следующего правила.',
+    telegramDiscovery: 'Автоматический поиск',
+    findTelegramTarget: 'Найти чат или тему автоматически',
+    telegramDiscoveryHelp:
+      'Metric 90 секунд ждёт одноразовую команду, а затем сохраняет чат и тему, где её отправили.',
+    findAutomatically: 'Найти автоматически',
+    telegramPairingCommand: 'Одноразовая команда',
+    telegramGroupTopicHelp:
+      'Для группы, канала или форумной темы добавьте туда бота и отправьте эту команду именно в нужном чате или теме. Ссылка ниже открывает только личный чат.',
+    waitingForTelegram: 'Ждём одноразовую команду в Telegram…',
+    discoveryTimedOut:
+      'За 90 секунд ничего не найдено. Запустите поиск снова, чтобы получить новую команду.',
     subscriberLink: 'Ссылка подписчика',
     noChatId: 'ID чата не требуется',
     subscriberHelp:
@@ -986,8 +1026,19 @@ export default {
     smtpEmail: 'Почта SMTP',
     sendTest: 'Отправить тест',
     testFailed: 'Не удалось поставить тестовое уведомление в очередь',
+    disableRecipient: 'Отключить',
+    restoreRecipient: 'Восстановить',
+    recipientStateFailed: 'Не удалось изменить состояние получателя',
     subscriberMasked: 'Подписчик ••••{suffix}',
     telegramSubscriber: 'Подписчик Telegram',
+    telegramTopic: 'тема {id}',
+    telegramChatIdValue: 'ID {id}',
+    telegramChatType: {
+      private: 'Личный чат',
+      group: 'Группа',
+      supergroup: 'Супергруппа',
+      channel: 'Канал',
+    },
     issueRule: 'Правило проблемы',
     chooseWhen: 'Выберите, когда уведомлять',
     ruleHelp:

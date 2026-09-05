@@ -941,13 +941,53 @@ export default {
     emailSaveFailed: 'Email destination was not saved',
     subscribersSyncFailed: 'Telegram subscribers were not synced',
     botConnectFailed: 'Telegram bot could not be connected',
+    telegramSaveFailed: 'Telegram destination was not saved',
+    discoveryFailed: 'Telegram chat discovery failed',
     provider: 'Provider',
+    telegramApiBase: 'Telegram Bot API URL',
+    telegramApiBaseHelp:
+      'Keep the default for Telegram Cloud, or enter the HTTP/HTTPS base URL of a compatible self-hosted API.',
+    telegramHttpWarning:
+      'HTTP sends the bot token and messages without transport encryption. Use it only on a trusted network.',
     botToken: 'Bot token',
     botTokenHelp:
       "Create a bot with {'@'}BotFather and paste its token. The token is never returned by the API.",
     checkingBot: 'Checking bot…',
     connectBot: 'Connect bot',
     botReady: "{'@'}{username} is ready to accept subscribers.",
+    availableTelegramBots: 'Available bots',
+    useSavedTelegramBot: 'Use a saved Telegram bot',
+    useSavedTelegramBotHelp:
+      'Choose a bot already used by this project. Its encrypted token and API URL stay on the server.',
+    savedTelegramBot: 'Saved Telegram bot',
+    telegramRecipientCount:
+      'no active recipients | {count} active recipient | {count} active recipients',
+    telegramBotSelected: 'Selected',
+    useTelegramBot: 'Use bot',
+    checkTelegramBot: 'Check now',
+    connectAnotherTelegramBot: 'Connect another bot',
+    telegramTarget: 'Telegram destination',
+    addTelegramTarget: 'Add a chat or topic',
+    oneBotManyTargets:
+      'The same bot can serve any number of destinations. Add each chat or topic separately.',
+    telegramChatId: 'Chat ID or public username',
+    telegramChatIdHelp:
+      "Enter a numeric chat ID or the {'@'}username of a public channel or supergroup. A private user must start the bot through automatic discovery.",
+    telegramThreadId: 'Message thread ID',
+    telegramThreadIdHelp: 'Optional. Use the topic ID for a forum supergroup.',
+    saveTelegramTarget: 'Save Telegram destination',
+    telegramDestinationSaved: 'Telegram destination saved and selected for the next rule.',
+    telegramDiscovery: 'Automatic discovery',
+    findTelegramTarget: 'Find a chat or topic automatically',
+    telegramDiscoveryHelp:
+      'Metric waits for this one-time command for 90 seconds and saves the chat and topic where it was sent.',
+    findAutomatically: 'Find automatically',
+    telegramPairingCommand: 'One-time command',
+    telegramGroupTopicHelp:
+      'For a group, channel, or forum topic, add the bot there and send this exact command in the target chat or topic. The link below opens a private chat only.',
+    waitingForTelegram: 'Waiting for the one-time command in Telegram…',
+    discoveryTimedOut:
+      'Nothing was found in 90 seconds. Start discovery again to get a new command.',
     subscriberLink: 'Subscriber link',
     noChatId: 'No chat ID required',
     subscriberHelp:
@@ -983,8 +1023,19 @@ export default {
     smtpEmail: 'SMTP Email',
     sendTest: 'Send test',
     testFailed: 'Test notification was not queued',
+    disableRecipient: 'Disable',
+    restoreRecipient: 'Restore',
+    recipientStateFailed: 'Recipient state was not changed',
     subscriberMasked: 'Subscriber ••••{suffix}',
     telegramSubscriber: 'Telegram subscriber',
+    telegramTopic: 'topic {id}',
+    telegramChatIdValue: 'ID {id}',
+    telegramChatType: {
+      private: 'Private chat',
+      group: 'Group',
+      supergroup: 'Supergroup',
+      channel: 'Channel',
+    },
     issueRule: 'Issue rule',
     chooseWhen: 'Choose when to notify',
     ruleHelp: 'One rule can fan out to several provider types without duplicate Issue logic.',

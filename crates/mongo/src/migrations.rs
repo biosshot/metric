@@ -23,6 +23,10 @@ use tokio::{
     time::{sleep, timeout},
 };
 
+mod telegram_configuration;
+
+pub(crate) use telegram_configuration::TELEGRAM_CONFIGURATION_MIGRATION;
+
 const SCHEMA_ID: &str = "metric.schema";
 const MAX_CHECKPOINT_BYTES: usize = 4 * 1024;
 const MAX_WARNING_CODES: usize = 16;
