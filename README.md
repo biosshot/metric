@@ -252,6 +252,9 @@ The complete current list is maintained in
 
 ## Documentation
 
+For Kubernetes deployments, see [Kubernetes and Helm](docs/kubernetes.md). The Helm
+chart always has the same version as Metric and its Docker image.
+
 - [Install Metric](https://biosshot.github.io/metric/getting-started)
 - [First setup](https://biosshot.github.io/metric/first-setup)
 - [Connect an SDK](https://biosshot.github.io/metric/sdk-setup)

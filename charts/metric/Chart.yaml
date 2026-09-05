@@ -1,0 +1,12 @@
+apiVersion: v2
+name: metric
+description: Sentry-compatible error tracking and observability for Kubernetes
+type: application
+version: 0.1.5
+appVersion: "0.1.5"
+kubeVersion: ">=1.32.0-0"
+home: https://github.com/biosshot/metric
+sources:
+  - https://github.com/biosshot/metric
+annotations:
+  org.opencontainers.image.source: https://github.com/biosshot/metric

@@ -1,0 +1,113 @@
+# Chart version, appVersion and the Metric image tag always match.
+image:
+  repository: ghcr.io/biosshot/metric
+  # Empty means Chart.version. An explicit tag must equal Chart.version.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+fullnameOverride: ""
+
+# Multiple Metric replicas and rolling upgrades are not supported.
+replicaCount: 1
+profile: min
+
+# Pre-create this Secret. The chart never generates or rotates credentials.
+# Required keys: scrub-hmac-key, plus mongo-password (bundled MongoDB)
+# or mongodb-uri (external MongoDB). mongo-password must be URL-safe.
+secrets:
+  existingSecret: metric-secrets
+
+service:
+  type: ClusterIP
+  port: 4001
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []
+
+http:
+  # Enable after configuring HTTPS at your existing proxy/Ingress controller.
+  secureCookies: false
+  trustedProxies: []
+
+persistence:
+  # Existing claims are never adopted or deleted by Helm.
+  existingClaim: ""
+  # Empty uses the profile's BlobStore capacity (5/10/33/83 GiB).
+  size: ""
+  # null uses the cluster default; "" explicitly disables dynamic provisioning.
+  storageClass: null
+  accessModes: [ReadWriteOnce]
+  annotations: {}
+
+blob:
+  backend: local
+  s3:
+    endpoint: ""
+    region: us-east-1
+    bucket: ""
+    forcePathStyle: true
+    # Required keys: s3-access-key-id, s3-secret-access-key.
+    existingSecret: metric-secrets
+    # If true, also read s3-session-token from the same Secret.
+    sessionToken: false
+
+mongodb:
+  enabled: true
+  image:
+    repository: mongo
+    tag: "8.0.12"
+    pullPolicy: IfNotPresent
+  database: metric
+  # null inherits the selected Compose profile's WiredTiger limit.
+  cacheSizeGB: null
+  resources: {}
+  persistence:
+    existingClaim: ""
+    size: 10Gi
+    storageClass: null
+    annotations: {}
+
+symbolicator:
+  # null follows the profile: enabled for Medium/High, disabled for Min/Low.
+  enabled: null
+  # An external endpoint replaces the bundled Symbolicator and cleanup containers.
+  externalEndpoint: ""
+  image:
+    repository: ghcr.io/getsentry/symbolicator
+    tag: "26.6.0"
+    pullPolicy: IfNotPresent
+  resources: {}
+  cleanupResources: {}
+  # Cache is rebuildable and is not part of a backup.
+  cacheSize: 5Gi
+
+# Merge with the selected profile's requests/limits.
+resources: {}
+terminationGracePeriodSeconds: 40
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+# Application settings merged over the selected profile, e.g.:
+# config:
+#   retention:
+#     events_days: 60
+# Wiring fields (role/listener/credentials/backends) use the settings above.
+config: {}
+# Additional environment variables, usually valueFrom.secretKeyRef references
+# for a { env = "NAME" } application secret. Reserved wiring variables are rejected.
+extraEnv: []

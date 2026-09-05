@@ -181,6 +181,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag metric:ci .
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+      - run: python -m pip install -r scripts/helm-requirements.txt
+      - name: Validate Helm configurations with the built binary
+        run: python scripts/validate-helm-chart.py --image metric:ci
+      - name: Verify immutable Helm publication gates
+        run: python scripts/test-helm-publish.py
+      - name: Exercise packaging and retry in an isolated local registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry_id="$(docker run --detach --rm --publish 127.0.0.1::5000 registry:2.8.3)"
+          trap 'docker stop "$registry_id" >/dev/null' EXIT
+          registry="oci://$(docker port "$registry_id" 5000/tcp)/charts"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          python scripts/publish-helm-chart.py --registry "$registry" --release-tag "v${version}"
+          python scripts/publish-helm-chart.py --registry "$registry" --release-tag "v${version}"
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          version: v0.27.0
+          kubectl_version: v1.32.2
+          node_image: kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f
+          cluster_name: metric-helm-ci
+      - name: Exercise Helm install, upgrade and persistent reinstall
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          docker tag metric:ci "metric-helm-test:${version}"
+          docker pull mongo:8.0.12
+          docker pull ghcr.io/getsentry/symbolicator:26.6.0
+          kind load docker-image "metric-helm-test:${version}" mongo:8.0.12 ghcr.io/getsentry/symbolicator:26.6.0 --name metric-helm-ci
+          python scripts/test-helm-cluster.py \
+            --context kind-metric-helm-ci --image-repository metric-helm-test --with-symbolicator
+      - name: Remove isolated Helm cluster
+        if: always()
+        run: kind delete cluster --name metric-helm-ci
       - name: Validate Docker Compose
         shell: bash
         run: |

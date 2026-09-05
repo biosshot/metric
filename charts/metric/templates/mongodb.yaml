@@ -1,0 +1,141 @@
+{{- if .Values.mongodb.enabled -}}
+{{- $profile := include "metric.profile" . | fromYaml -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "metric.name" . }}-mongodb
+  labels:
+    {{- include "metric.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+  selector:
+    {{- include "metric.selector" (dict "Release" .Release "component" "mongodb") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "metric.name" . }}-mongodb
+  labels:
+    {{- include "metric.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "metric.name" . }}-mongodb
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "metric.selector" (dict "Release" .Release "component" "mongodb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "metric.selector" (dict "Release" .Release "component" "mongodb") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mongodb
+          image: {{ printf "%s:%s" .Values.mongodb.image.repository .Values.mongodb.image.tag | quote }}
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy }}
+          args:
+            - mongod
+            - --bind_ip_all
+            - --wiredTigerCacheSizeGB
+            - {{ default $profile.mongoCacheSizeGB .Values.mongodb.cacheSizeGB | quote }}
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          env:
+            - name: HOME
+              value: /tmp
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: metric
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: mongo-password
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- mergeOverwrite (deepCopy $profile.mongoResources) .Values.mongodb.resources | toYaml | nindent 12 }}
+          startupProbe:
+            tcpSocket: {port: mongodb}
+            periodSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            tcpSocket: {port: mongodb}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 12
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - >-
+                  const c = new Mongo('mongodb://127.0.0.1:27017');
+                  const a = c.getDB('admin');
+                  a.auth(process.env.MONGO_INITDB_ROOT_USERNAME, process.env.MONGO_INITDB_ROOT_PASSWORD);
+                  if (a.runCommand({connectionStatus:1}).authInfo.authenticatedUsers.length !== 1) quit(1);
+                  quit(a.runCommand({ping:1}).ok === 1 ? 0 : 1);
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: configdb
+              mountPath: /data/configdb
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "metric.mongoClaim" . }}
+        - name: configdb
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+{{- if not .Values.mongodb.persistence.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "metric.mongoClaim" . }}
+  labels:
+    {{- include "metric.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.mongodb.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if kindIs "string" .Values.mongodb.persistence.storageClass }}
+  storageClassName: {{ .Values.mongodb.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mongodb.persistence.size | quote }}
+{{- end }}
+{{- end }}

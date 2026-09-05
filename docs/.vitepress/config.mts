@@ -30,6 +30,7 @@ export default defineConfig({
         text: 'Run Metric',
         items: [
           { text: 'Docker', link: '/docker' },
+          { text: 'Kubernetes and Helm', link: '/kubernetes' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Running Metric', link: '/operations' },
           { text: 'Update Metric', link: '/upgrading' },

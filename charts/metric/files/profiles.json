@@ -1,0 +1,1028 @@
+{
+  "high": {
+    "cleanupResources": {
+      "limits": {
+        "memory": "256Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "128Mi"
+      }
+    },
+    "config": {
+      "archive": {
+        "cleanup_max_pages": 16,
+        "enabled": false,
+        "hot_copy_delay": "0s",
+        "maximum_events": 2000,
+        "orphan_grace": "24h",
+        "poll_interval": "30s",
+        "target_uncompressed_bytes": "256 MiB",
+        "write_chunk_bytes": "512 KiB"
+      },
+      "artifacts": {
+        "blob_operation_timeout": "30s",
+        "claim_lease": "5m",
+        "gc_batch_size": 100,
+        "gc_interval": "10m",
+        "gc_max_concurrency": 4,
+        "maximum_bundle_bytes": "512 MiB",
+        "maximum_bundles_per_organization": 25000,
+        "maximum_bytes_per_organization": "40 GiB",
+        "maximum_concurrent_assemblies": 4,
+        "maximum_entries": 100000,
+        "maximum_entry_bytes": "128 MiB",
+        "maximum_logical_bytes": "4 GiB",
+        "orphan_grace": "24h",
+        "parse_timeout": "30s",
+        "tombstone_retention": "24h"
+      },
+      "auth": {
+        "login": {
+          "capacity": 100000,
+          "max_attempts": 5,
+          "window": "1m"
+        },
+        "password": {
+          "iterations": 2,
+          "max_concurrency": 4,
+          "memory_kib": 19456,
+          "parallelism": 1
+        },
+        "secure_cookie": false
+      },
+      "blob": {
+        "backend": "local",
+        "capacity": "83 GiB",
+        "max_object_bytes": "512 MiB",
+        "reserve": "4 GiB",
+        "root": "/var/lib/metric/blobs"
+      },
+      "development": {
+        "allow_insecure_cookies": true
+      },
+      "dispatcher": {
+        "low_watermark": 3072,
+        "metrics_interval": "5s",
+        "poll_interval": "50ms",
+        "queue_capacity": 12288,
+        "refill_batch_size": 1536,
+        "refill_target": 9216,
+        "source_timeout": "5s",
+        "worker_concurrency": 64
+      },
+      "incident_capsule": {
+        "generation_timeout": "30s",
+        "max_activities": 100,
+        "max_concurrency": 4,
+        "max_entry_bytes": "16 MiB",
+        "max_events": 10,
+        "max_total_uncompressed_bytes": "100 MiB",
+        "stream_buffer_chunks": 8,
+        "stream_chunk_bytes": "128 KiB"
+      },
+      "ingest": {
+        "attachments": {
+          "chunk_bytes": "256 KiB",
+          "cleanup_batch_size": 1000,
+          "cleanup_interval": "10m",
+          "cleanup_max_pages": 64,
+          "enabled": true,
+          "max_count": 25,
+          "max_item_bytes": "25 MiB",
+          "max_total_bytes": "80 MiB",
+          "orphan_grace": "24h"
+        },
+        "backlog": {
+          "max_oldest_pending_age": "2h",
+          "max_pending_events": 10000000
+        },
+        "batch": {
+          "max_bytes": "64 MiB",
+          "max_documents": 500,
+          "max_wait": "10ms"
+        },
+        "max_active_requests": 4096,
+        "max_compressed_request_bytes": "96 MiB",
+        "max_decompressed_request_bytes": "256 MiB",
+        "max_envelope_items": 500,
+        "max_event_bytes": "4 MiB",
+        "max_parsing_tasks": 16,
+        "max_waiting_for_storage": 8192,
+        "project_cache": {
+          "capacity": 200000,
+          "max_inflight": 1536,
+          "negative_ttl": "5s",
+          "positive_ttl": "60s"
+        },
+        "replay": {
+          "cleanup_batch_size": 500,
+          "cleanup_interval": "5m",
+          "max_decompressed_segment_bytes": "128 MiB",
+          "max_events_per_segment": 500000,
+          "max_queued_bytes": "256 MiB",
+          "max_segment_bytes": "20 MiB",
+          "orphan_grace": "1h",
+          "queue_capacity": 128
+        },
+        "request_timeout": "10s",
+        "unsupported_backoff_seconds": 3600
+      },
+      "mongodb": {
+        "bootstrap_timeout": "30s",
+        "database": "metric",
+        "uri": {
+          "env": "MONGODB_URI"
+        }
+      },
+      "native_crash": {
+        "minidump": {
+          "chunk_bytes": "256 KiB",
+          "enabled": false,
+          "max_bytes": "256 MiB"
+        }
+      },
+      "notifications": {
+        "due_scan_limit": 500,
+        "poll_interval": "100ms",
+        "queue": {
+          "capacity": 10000,
+          "worker_concurrency": 16
+        },
+        "retention": {
+          "dead_days": 730,
+          "delivered_days": 180
+        },
+        "transition_batch_size": 500
+      },
+      "processor": {
+        "max_attempts": 5,
+        "max_concurrency": 64,
+        "retry_base": "1s",
+        "retry_max": "5m",
+        "stage_timeout": "15s",
+        "state_timeout": "5s",
+        "total_timeout": "1m"
+      },
+      "project_deletion": {
+        "completed_job_retention": "90d",
+        "delete_batch_documents": 10000,
+        "drain_timeout": "10s",
+        "grace_period": "24h",
+        "operation_timeout": "10s",
+        "poll_interval": "1s",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "slug_reservation": "90d"
+      },
+      "projects": {
+        "identity_collision_retries": 32,
+        "max_keys_per_project": 64,
+        "scrub_hmac_key": {
+          "env": "SCRUB_HMAC_KEY"
+        }
+      },
+      "retention": {
+        "events_days": 180,
+        "feedback_days": 730,
+        "issue_stats_hourly_days": 1825,
+        "logs_days": 90,
+        "metric_archive": false,
+        "metric_max_series_per_project": 50000,
+        "metrics_days": 365,
+        "monitor_runs_days": 730,
+        "replay_archive": false,
+        "replays_days": 90,
+        "session_active_max_hours": 24,
+        "session_stats_hourly_days": 1825,
+        "sessions_days": 90,
+        "span_stats_hourly_days": 1095,
+        "spans_days": 90
+      },
+      "role": "all",
+      "scheduler": {
+        "backlog_interval": "2s",
+        "batch_size": 3000,
+        "maintenance_interval": "1m",
+        "poll_interval": "500ms",
+        "reconciliation_interval": "5m",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "task_timeout": "10s"
+      },
+      "server": {
+        "http_address": "0.0.0.0:4001",
+        "max_active_requests": 1536,
+        "request_timeout": "30s",
+        "shutdown_grace": "45s"
+      },
+      "symbolicator": {
+        "callback_base_url": "http://metric:4001/",
+        "circuit_cooldown": "30s",
+        "circuit_failure_threshold": 8,
+        "endpoint": "http://symbolicator:3021/symbolicate",
+        "maximum_concurrency": 8,
+        "maximum_response_bytes": "8 MiB",
+        "request_timeout": "30s"
+      }
+    },
+    "mongoCacheSizeGB": "5",
+    "mongoResources": {
+      "limits": {
+        "memory": "6144Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "3072Mi"
+      }
+    },
+    "resources": {
+      "limits": {
+        "memory": "3072Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "1536Mi"
+      }
+    },
+    "symbolicatorEnabled": true,
+    "symbolicatorResources": {
+      "limits": {
+        "memory": "4096Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "2048Mi"
+      }
+    }
+  },
+  "low": {
+    "cleanupResources": {
+      "limits": {
+        "memory": "128Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "64Mi"
+      }
+    },
+    "config": {
+      "archive": {
+        "cleanup_max_pages": 2,
+        "enabled": false,
+        "hot_copy_delay": "0s",
+        "maximum_events": 100,
+        "orphan_grace": "24h",
+        "poll_interval": "2m",
+        "target_uncompressed_bytes": "32 MiB",
+        "write_chunk_bytes": "128 KiB"
+      },
+      "artifacts": {
+        "blob_operation_timeout": "30s",
+        "claim_lease": "5m",
+        "gc_batch_size": 25,
+        "gc_interval": "30m",
+        "gc_max_concurrency": 1,
+        "maximum_bundle_bytes": "64 MiB",
+        "maximum_bundles_per_organization": 500,
+        "maximum_bytes_per_organization": "4 GiB",
+        "maximum_concurrent_assemblies": 1,
+        "maximum_entries": 5000,
+        "maximum_entry_bytes": "16 MiB",
+        "maximum_logical_bytes": "256 MiB",
+        "orphan_grace": "24h",
+        "parse_timeout": "30s",
+        "tombstone_retention": "24h"
+      },
+      "auth": {
+        "login": {
+          "capacity": 5000,
+          "max_attempts": 5,
+          "window": "1m"
+        },
+        "password": {
+          "iterations": 2,
+          "max_concurrency": 1,
+          "memory_kib": 19456,
+          "parallelism": 1
+        },
+        "secure_cookie": false
+      },
+      "blob": {
+        "backend": "local",
+        "capacity": "10 GiB",
+        "max_object_bytes": "128 MiB",
+        "reserve": "512 MiB",
+        "root": "/var/lib/metric/blobs"
+      },
+      "development": {
+        "allow_insecure_cookies": true
+      },
+      "dispatcher": {
+        "low_watermark": 256,
+        "metrics_interval": "10s",
+        "poll_interval": "150ms",
+        "queue_capacity": 1024,
+        "refill_batch_size": 128,
+        "refill_target": 768,
+        "source_timeout": "5s",
+        "worker_concurrency": 4
+      },
+      "incident_capsule": {
+        "generation_timeout": "30s",
+        "max_activities": 100,
+        "max_concurrency": 1,
+        "max_entry_bytes": "16 MiB",
+        "max_events": 10,
+        "max_total_uncompressed_bytes": "64 MiB",
+        "stream_buffer_chunks": 2,
+        "stream_chunk_bytes": "32 KiB"
+      },
+      "ingest": {
+        "attachments": {
+          "chunk_bytes": "32 KiB",
+          "cleanup_batch_size": 64,
+          "cleanup_interval": "30m",
+          "cleanup_max_pages": 4,
+          "enabled": true,
+          "max_count": 5,
+          "max_item_bytes": "4 MiB",
+          "max_total_bytes": "8 MiB",
+          "orphan_grace": "24h"
+        },
+        "backlog": {
+          "max_oldest_pending_age": "1h",
+          "max_pending_events": 250000
+        },
+        "batch": {
+          "max_bytes": "8 MiB",
+          "max_documents": 250,
+          "max_wait": "30ms"
+        },
+        "max_active_requests": 256,
+        "max_compressed_request_bytes": "10 MiB",
+        "max_decompressed_request_bytes": "48 MiB",
+        "max_envelope_items": 100,
+        "max_event_bytes": "2 MiB",
+        "max_parsing_tasks": 4,
+        "max_waiting_for_storage": 512,
+        "project_cache": {
+          "capacity": 10000,
+          "max_inflight": 128,
+          "negative_ttl": "5s",
+          "positive_ttl": "60s"
+        },
+        "replay": {
+          "cleanup_batch_size": 50,
+          "cleanup_interval": "10m",
+          "max_decompressed_segment_bytes": "16 MiB",
+          "max_events_per_segment": 100000,
+          "max_queued_bytes": "16 MiB",
+          "max_segment_bytes": "5 MiB",
+          "orphan_grace": "1h",
+          "queue_capacity": 8
+        },
+        "request_timeout": "10s",
+        "unsupported_backoff_seconds": 3600
+      },
+      "mongodb": {
+        "bootstrap_timeout": "30s",
+        "database": "metric",
+        "uri": {
+          "env": "MONGODB_URI"
+        }
+      },
+      "native_crash": {
+        "minidump": {
+          "chunk_bytes": "32 KiB",
+          "enabled": false,
+          "max_bytes": "64 MiB"
+        }
+      },
+      "notifications": {
+        "due_scan_limit": 50,
+        "poll_interval": "500ms",
+        "queue": {
+          "capacity": 256,
+          "worker_concurrency": 2
+        },
+        "retention": {
+          "dead_days": 180,
+          "delivered_days": 60
+        },
+        "transition_batch_size": 50
+      },
+      "processor": {
+        "max_attempts": 5,
+        "max_concurrency": 4,
+        "retry_base": "1s",
+        "retry_max": "5m",
+        "stage_timeout": "15s",
+        "state_timeout": "5s",
+        "total_timeout": "1m"
+      },
+      "project_deletion": {
+        "completed_job_retention": "14d",
+        "delete_batch_documents": 250,
+        "drain_timeout": "10s",
+        "grace_period": "24h",
+        "operation_timeout": "10s",
+        "poll_interval": "2s",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "slug_reservation": "30d"
+      },
+      "projects": {
+        "identity_collision_retries": 8,
+        "max_keys_per_project": 16,
+        "scrub_hmac_key": {
+          "env": "SCRUB_HMAC_KEY"
+        }
+      },
+      "retention": {
+        "events_days": 60,
+        "feedback_days": 180,
+        "issue_stats_hourly_days": 730,
+        "logs_days": 14,
+        "metric_archive": false,
+        "metric_max_series_per_project": 2500,
+        "metrics_days": 120,
+        "monitor_runs_days": 180,
+        "replay_archive": false,
+        "replays_days": 14,
+        "session_active_max_hours": 24,
+        "session_stats_hourly_days": 730,
+        "sessions_days": 30,
+        "span_stats_hourly_days": 365,
+        "spans_days": 14
+      },
+      "role": "all",
+      "scheduler": {
+        "backlog_interval": "10s",
+        "batch_size": 250,
+        "maintenance_interval": "2m",
+        "poll_interval": "2s",
+        "reconciliation_interval": "10m",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "task_timeout": "10s"
+      },
+      "server": {
+        "http_address": "0.0.0.0:4001",
+        "max_active_requests": 128,
+        "request_timeout": "30s",
+        "shutdown_grace": "30s"
+      },
+      "symbolicator": {
+        "callback_base_url": "http://metric:4001/",
+        "circuit_cooldown": "30s",
+        "circuit_failure_threshold": 3,
+        "maximum_concurrency": 1,
+        "maximum_response_bytes": "2 MiB",
+        "request_timeout": "15s"
+      }
+    },
+    "mongoCacheSizeGB": "0.5",
+    "mongoResources": {
+      "limits": {
+        "memory": "768Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "384Mi"
+      }
+    },
+    "resources": {
+      "limits": {
+        "memory": "768Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "384Mi"
+      }
+    },
+    "symbolicatorEnabled": false,
+    "symbolicatorResources": {
+      "limits": {
+        "memory": "1024Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "512Mi"
+      }
+    }
+  },
+  "medium": {
+    "cleanupResources": {
+      "limits": {
+        "memory": "128Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "64Mi"
+      }
+    },
+    "config": {
+      "archive": {
+        "cleanup_max_pages": 4,
+        "enabled": false,
+        "hot_copy_delay": "0s",
+        "maximum_events": 500,
+        "orphan_grace": "24h",
+        "poll_interval": "30s",
+        "target_uncompressed_bytes": "64 MiB",
+        "write_chunk_bytes": "256 KiB"
+      },
+      "artifacts": {
+        "blob_operation_timeout": "30s",
+        "claim_lease": "5m",
+        "gc_batch_size": 100,
+        "gc_interval": "15m",
+        "gc_max_concurrency": 2,
+        "maximum_bundle_bytes": "128 MiB",
+        "maximum_bundles_per_organization": 2500,
+        "maximum_bytes_per_organization": "12 GiB",
+        "maximum_concurrent_assemblies": 2,
+        "maximum_entries": 20000,
+        "maximum_entry_bytes": "32 MiB",
+        "maximum_logical_bytes": "1 GiB",
+        "orphan_grace": "24h",
+        "parse_timeout": "30s",
+        "tombstone_retention": "24h"
+      },
+      "auth": {
+        "login": {
+          "capacity": 20000,
+          "max_attempts": 5,
+          "window": "1m"
+        },
+        "password": {
+          "iterations": 2,
+          "max_concurrency": 2,
+          "memory_kib": 19456,
+          "parallelism": 1
+        },
+        "secure_cookie": false
+      },
+      "blob": {
+        "backend": "local",
+        "capacity": "33 GiB",
+        "max_object_bytes": "256 MiB",
+        "reserve": "2 GiB",
+        "root": "/var/lib/metric/blobs"
+      },
+      "development": {
+        "allow_insecure_cookies": true
+      },
+      "dispatcher": {
+        "low_watermark": 1024,
+        "metrics_interval": "5s",
+        "poll_interval": "100ms",
+        "queue_capacity": 4096,
+        "refill_batch_size": 512,
+        "refill_target": 3072,
+        "source_timeout": "5s",
+        "worker_concurrency": 16
+      },
+      "incident_capsule": {
+        "generation_timeout": "30s",
+        "max_activities": 100,
+        "max_concurrency": 2,
+        "max_entry_bytes": "16 MiB",
+        "max_events": 10,
+        "max_total_uncompressed_bytes": "100 MiB",
+        "stream_buffer_chunks": 4,
+        "stream_chunk_bytes": "64 KiB"
+      },
+      "ingest": {
+        "attachments": {
+          "chunk_bytes": "64 KiB",
+          "cleanup_batch_size": 256,
+          "cleanup_interval": "15m",
+          "cleanup_max_pages": 16,
+          "enabled": true,
+          "max_count": 10,
+          "max_item_bytes": "15 MiB",
+          "max_total_bytes": "30 MiB",
+          "orphan_grace": "24h"
+        },
+        "backlog": {
+          "max_oldest_pending_age": "1h",
+          "max_pending_events": 2000000
+        },
+        "batch": {
+          "max_bytes": "32 MiB",
+          "max_documents": 500,
+          "max_wait": "20ms"
+        },
+        "max_active_requests": 1024,
+        "max_compressed_request_bytes": "32 MiB",
+        "max_decompressed_request_bytes": "128 MiB",
+        "max_envelope_items": 250,
+        "max_event_bytes": "2 MiB",
+        "max_parsing_tasks": 8,
+        "max_waiting_for_storage": 2048,
+        "project_cache": {
+          "capacity": 50000,
+          "max_inflight": 512,
+          "negative_ttl": "5s",
+          "positive_ttl": "60s"
+        },
+        "replay": {
+          "cleanup_batch_size": 100,
+          "cleanup_interval": "5m",
+          "max_decompressed_segment_bytes": "40 MiB",
+          "max_events_per_segment": 250000,
+          "max_queued_bytes": "64 MiB",
+          "max_segment_bytes": "10 MiB",
+          "orphan_grace": "1h",
+          "queue_capacity": 32
+        },
+        "request_timeout": "10s",
+        "unsupported_backoff_seconds": 3600
+      },
+      "mongodb": {
+        "bootstrap_timeout": "30s",
+        "database": "metric",
+        "uri": {
+          "env": "MONGODB_URI"
+        }
+      },
+      "native_crash": {
+        "minidump": {
+          "chunk_bytes": "64 KiB",
+          "enabled": false,
+          "max_bytes": "100 MiB"
+        }
+      },
+      "notifications": {
+        "due_scan_limit": 100,
+        "poll_interval": "250ms",
+        "queue": {
+          "capacity": 2000,
+          "worker_concurrency": 8
+        },
+        "retention": {
+          "dead_days": 365,
+          "delivered_days": 90
+        },
+        "transition_batch_size": 100
+      },
+      "processor": {
+        "max_attempts": 5,
+        "max_concurrency": 16,
+        "retry_base": "1s",
+        "retry_max": "5m",
+        "stage_timeout": "15s",
+        "state_timeout": "5s",
+        "total_timeout": "1m"
+      },
+      "project_deletion": {
+        "completed_job_retention": "30d",
+        "delete_batch_documents": 5000,
+        "drain_timeout": "10s",
+        "grace_period": "24h",
+        "operation_timeout": "10s",
+        "poll_interval": "1s",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "slug_reservation": "30d"
+      },
+      "projects": {
+        "identity_collision_retries": 16,
+        "max_keys_per_project": 32,
+        "scrub_hmac_key": {
+          "env": "SCRUB_HMAC_KEY"
+        }
+      },
+      "retention": {
+        "events_days": 90,
+        "feedback_days": 365,
+        "issue_stats_hourly_days": 1095,
+        "logs_days": 30,
+        "metric_archive": false,
+        "metric_max_series_per_project": 10000,
+        "metrics_days": 180,
+        "monitor_runs_days": 365,
+        "replay_archive": false,
+        "replays_days": 30,
+        "session_active_max_hours": 24,
+        "session_stats_hourly_days": 1095,
+        "sessions_days": 60,
+        "span_stats_hourly_days": 730,
+        "spans_days": 30
+      },
+      "role": "all",
+      "scheduler": {
+        "backlog_interval": "5s",
+        "batch_size": 1000,
+        "maintenance_interval": "1m",
+        "poll_interval": "1s",
+        "reconciliation_interval": "5m",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "task_timeout": "10s"
+      },
+      "server": {
+        "http_address": "0.0.0.0:4001",
+        "max_active_requests": 512,
+        "request_timeout": "30s",
+        "shutdown_grace": "30s"
+      },
+      "symbolicator": {
+        "callback_base_url": "http://metric:4001/",
+        "circuit_cooldown": "30s",
+        "circuit_failure_threshold": 5,
+        "endpoint": "http://symbolicator:3021/symbolicate",
+        "maximum_concurrency": 4,
+        "maximum_response_bytes": "4 MiB",
+        "request_timeout": "20s"
+      }
+    },
+    "mongoCacheSizeGB": "2",
+    "mongoResources": {
+      "limits": {
+        "memory": "3072Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "1536Mi"
+      }
+    },
+    "resources": {
+      "limits": {
+        "memory": "1536Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "768Mi"
+      }
+    },
+    "symbolicatorEnabled": true,
+    "symbolicatorResources": {
+      "limits": {
+        "memory": "2048Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "1024Mi"
+      }
+    }
+  },
+  "min": {
+    "cleanupResources": {
+      "limits": {
+        "memory": "128Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "64Mi"
+      }
+    },
+    "config": {
+      "archive": {
+        "cleanup_max_pages": 1,
+        "enabled": false,
+        "hot_copy_delay": "0s",
+        "maximum_events": 50,
+        "orphan_grace": "24h",
+        "poll_interval": "5m",
+        "target_uncompressed_bytes": "16 MiB",
+        "write_chunk_bytes": "64 KiB"
+      },
+      "artifacts": {
+        "blob_operation_timeout": "20s",
+        "claim_lease": "5m",
+        "gc_batch_size": 10,
+        "gc_interval": "30m",
+        "gc_max_concurrency": 1,
+        "maximum_bundle_bytes": "16 MiB",
+        "maximum_bundles_per_organization": 100,
+        "maximum_bytes_per_organization": "512 MiB",
+        "maximum_concurrent_assemblies": 1,
+        "maximum_entries": 2500,
+        "maximum_entry_bytes": "8 MiB",
+        "maximum_logical_bytes": "64 MiB",
+        "orphan_grace": "24h",
+        "parse_timeout": "20s",
+        "tombstone_retention": "24h"
+      },
+      "auth": {
+        "login": {
+          "capacity": 2000,
+          "max_attempts": 5,
+          "window": "1m"
+        },
+        "password": {
+          "iterations": 2,
+          "max_concurrency": 1,
+          "memory_kib": 19456,
+          "parallelism": 1
+        },
+        "secure_cookie": false
+      },
+      "blob": {
+        "backend": "local",
+        "capacity": "5 GiB",
+        "max_object_bytes": "64 MiB",
+        "reserve": "256 MiB",
+        "root": "/var/lib/metric/blobs"
+      },
+      "development": {
+        "allow_insecure_cookies": true
+      },
+      "dispatcher": {
+        "low_watermark": 64,
+        "metrics_interval": "10s",
+        "poll_interval": "250ms",
+        "queue_capacity": 256,
+        "refill_batch_size": 64,
+        "refill_target": 192,
+        "source_timeout": "5s",
+        "worker_concurrency": 1
+      },
+      "incident_capsule": {
+        "generation_timeout": "20s",
+        "max_activities": 50,
+        "max_concurrency": 1,
+        "max_entry_bytes": "8 MiB",
+        "max_events": 10,
+        "max_total_uncompressed_bytes": "32 MiB",
+        "stream_buffer_chunks": 1,
+        "stream_chunk_bytes": "16 KiB"
+      },
+      "ingest": {
+        "attachments": {
+          "chunk_bytes": "16 KiB",
+          "cleanup_batch_size": 32,
+          "cleanup_interval": "30m",
+          "cleanup_max_pages": 2,
+          "enabled": false,
+          "max_count": 3,
+          "max_item_bytes": "1 MiB",
+          "max_total_bytes": "4 MiB",
+          "orphan_grace": "24h"
+        },
+        "backlog": {
+          "max_oldest_pending_age": "1h",
+          "max_pending_events": 25000
+        },
+        "batch": {
+          "max_bytes": "2 MiB",
+          "max_documents": 128,
+          "max_wait": "50ms"
+        },
+        "max_active_requests": 64,
+        "max_compressed_request_bytes": "4 MiB",
+        "max_decompressed_request_bytes": "16 MiB",
+        "max_envelope_items": 50,
+        "max_event_bytes": "1 MiB",
+        "max_parsing_tasks": 2,
+        "max_waiting_for_storage": 128,
+        "project_cache": {
+          "capacity": 2000,
+          "max_inflight": 32,
+          "negative_ttl": "5s",
+          "positive_ttl": "60s"
+        },
+        "replay": {
+          "cleanup_batch_size": 20,
+          "cleanup_interval": "15m",
+          "max_decompressed_segment_bytes": "8 MiB",
+          "max_events_per_segment": 50000,
+          "max_queued_bytes": "4 MiB",
+          "max_segment_bytes": "2 MiB",
+          "orphan_grace": "1h",
+          "queue_capacity": 2
+        },
+        "request_timeout": "10s",
+        "unsupported_backoff_seconds": 3600
+      },
+      "mongodb": {
+        "bootstrap_timeout": "30s",
+        "database": "metric",
+        "uri": {
+          "env": "MONGODB_URI"
+        }
+      },
+      "native_crash": {
+        "minidump": {
+          "chunk_bytes": "16 KiB",
+          "enabled": false,
+          "max_bytes": "16 MiB"
+        }
+      },
+      "notifications": {
+        "due_scan_limit": 20,
+        "poll_interval": "1s",
+        "queue": {
+          "capacity": 64,
+          "worker_concurrency": 1
+        },
+        "retention": {
+          "dead_days": 90,
+          "delivered_days": 30
+        },
+        "transition_batch_size": 20
+      },
+      "processor": {
+        "max_attempts": 5,
+        "max_concurrency": 1,
+        "retry_base": "1s",
+        "retry_max": "5m",
+        "stage_timeout": "15s",
+        "state_timeout": "5s",
+        "total_timeout": "1m"
+      },
+      "project_deletion": {
+        "completed_job_retention": "7d",
+        "delete_batch_documents": 100,
+        "drain_timeout": "10s",
+        "grace_period": "24h",
+        "operation_timeout": "10s",
+        "poll_interval": "2s",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "slug_reservation": "30d"
+      },
+      "projects": {
+        "identity_collision_retries": 8,
+        "max_keys_per_project": 8,
+        "scrub_hmac_key": {
+          "env": "SCRUB_HMAC_KEY"
+        }
+      },
+      "retention": {
+        "events_days": 30,
+        "feedback_days": 90,
+        "issue_stats_hourly_days": 365,
+        "logs_days": 7,
+        "metric_archive": false,
+        "metric_max_series_per_project": 1000,
+        "metrics_days": 60,
+        "monitor_runs_days": 90,
+        "replay_archive": false,
+        "replays_days": 7,
+        "session_active_max_hours": 24,
+        "session_stats_hourly_days": 365,
+        "sessions_days": 14,
+        "span_stats_hourly_days": 180,
+        "spans_days": 7
+      },
+      "role": "all",
+      "scheduler": {
+        "backlog_interval": "10s",
+        "batch_size": 100,
+        "maintenance_interval": "5m",
+        "poll_interval": "2s",
+        "reconciliation_interval": "15m",
+        "retry_base": "1s",
+        "retry_max": "1m",
+        "task_timeout": "10s"
+      },
+      "server": {
+        "http_address": "0.0.0.0:4001",
+        "max_active_requests": 32,
+        "request_timeout": "20s",
+        "shutdown_grace": "30s"
+      },
+      "symbolicator": {
+        "callback_base_url": "http://metric:4001/",
+        "circuit_cooldown": "30s",
+        "circuit_failure_threshold": 3,
+        "maximum_concurrency": 1,
+        "maximum_response_bytes": "1 MiB",
+        "request_timeout": "10s"
+      }
+    },
+    "mongoCacheSizeGB": "0.256",
+    "mongoResources": {
+      "limits": {
+        "memory": "512Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "256Mi"
+      }
+    },
+    "resources": {
+      "limits": {
+        "memory": "320Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "160Mi"
+      }
+    },
+    "symbolicatorEnabled": false,
+    "symbolicatorResources": {
+      "limits": {
+        "memory": "1024Mi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "512Mi"
+      }
+    }
+  }
+}

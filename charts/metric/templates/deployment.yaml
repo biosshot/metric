@@ -1,0 +1,139 @@
+{{- include "metric.validateEnv" . -}}
+{{- $profile := include "metric.profile" . | fromYaml -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "metric.name" . }}
+  labels:
+    {{- include "metric.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  # Long schema migrations do not represent a failed deployment after ten minutes.
+  progressDeadlineSeconds: 86400
+  selector:
+    matchLabels:
+      {{- include "metric.selector" (dict "Release" .Release "component" "server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "metric.selector" (dict "Release" .Release "component" "server") | nindent 8 }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/config: {{ include "metric.config" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: metric
+          image: {{ include "metric.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/metric/metric.toml"]
+          ports:
+            - name: http
+              containerPort: 4001
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- mergeOverwrite (deepCopy $profile.resources) .Values.resources | toYaml | nindent 12 }}
+          env:
+            {{- if .Values.mongodb.enabled }}
+            - name: METRIC_MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: mongo-password
+            - name: MONGODB_URI
+              value: {{ printf "mongodb://metric:$(METRIC_MONGO_PASSWORD)@%s-mongodb:27017/?authSource=admin" (include "metric.name" .) | quote }}
+            {{- else }}
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: mongodb-uri
+            {{- end }}
+            - name: SCRUB_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: scrub-hmac-key
+            {{- if eq .Values.blob.backend "s3" }}
+            {{- range $env, $key := dict "S3_ACCESS_KEY_ID" "s3-access-key-id" "S3_SECRET_ACCESS_KEY" "s3-secret-access-key" }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.blob.s3.existingSecret }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- if .Values.blob.s3.sessionToken }}
+            - name: S3_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.blob.s3.existingSecret }}
+                  key: s3-session-token
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /live, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /live, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          volumeMounts:
+            - name: config
+              mountPath: /etc/metric
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- if eq .Values.blob.backend "local" }}
+            - name: blobs
+              mountPath: /var/lib/metric/blobs
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "metric.name" . }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- if eq .Values.blob.backend "local" }}
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: {{ include "metric.blobClaim" . }}
+        {{- end }}

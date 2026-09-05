@@ -1,4 +1,4 @@
-# Publishes a versioned container image and creates a GitHub Release.
+# Publishes the matching container image and Helm chart, then a GitHub Release.
 name: Release
 
 on:
@@ -19,6 +19,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+      - run: python -m pip install -r scripts/helm-requirements.txt
+      - name: Match Cargo, image and Helm chart versions and validate manifests
+        run: python scripts/validate-helm-chart.py --release-tag "${{ github.ref_name }}"
+      - name: Verify immutable Helm publication gates
+        run: python scripts/test-helm-publish.py
 
       - name: Match Git tag and Cargo version
         shell: bash
@@ -63,9 +75,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+  helm-chart:
+    name: Publish matching Helm chart
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+      - run: python -m pip install -r scripts/helm-requirements.txt
+      - name: Sign in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin
+      - name: Publish chart for every Metric release
+        env:
+          REGISTRY_OWNER: ${{ github.repository_owner }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          python scripts/publish-helm-chart.py \
+            --registry "oci://ghcr.io/${REGISTRY_OWNER,,}/charts" \
+            --release-tag "$RELEASE_TAG"
+
   github-release:
     name: Publish GitHub Release
-    needs: image
+    needs: [image, helm-chart]
     runs-on: ubuntu-latest
     permissions:
       contents: write

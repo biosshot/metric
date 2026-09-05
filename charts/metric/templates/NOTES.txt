@@ -1,0 +1,16 @@
+Metric {{ .Chart.Version }} is installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+The chart version and Metric image version are identical.
+
+Access the UI locally:
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "metric.name" . }} 4001:{{ .Values.service.port }}
+  Open http://localhost:4001 and follow the first-setup guide.
+
+Check readiness:
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+Updates use one replica and Recreate; downtime includes automatic migrations.
+During migration /live is 200 and /ready is 503. Follow logs or port-forward
+directly to the Metric pod to see its maintenance page; the Service excludes it.
+Helm rollback does not undo database migrations. Retain the matching image.
+PVCs and the operator-owned Secret survive helm uninstall. Keep them together.
+See https://biosshot.github.io/metric/kubernetes for installation and update details.

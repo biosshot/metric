@@ -63,6 +63,8 @@ def main() -> int:
         "docs/docker.md",
         "docs/getting-started.md",
         "docs/known-limits.md",
+        "docs/kubernetes.md",
+        "charts/metric/README.md",
     )
     for relative in version_documents:
         if version not in read(relative):
@@ -76,6 +78,7 @@ def main() -> int:
         "deploy/profiles/high.env.example",
         "deploy/compose.yml",
         "docs/docker.md",
+        "docs/kubernetes.md",
         "THIRD_PARTY_NOTICES.md",
     )
     for relative in symbolicator_image_documents:
