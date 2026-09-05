@@ -41,7 +41,7 @@ async fn real_sentry_cli_release_finalize_and_idempotent_deploy() {
 }
 
 async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let now = Timestamp::from_unix_millis(1_800_000_000_000)?;
+    let now = Timestamp::from_unix_millis(mongodb::bson::DateTime::now().timestamp_millis())?;
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(now));
     let random: Arc<dyn RandomSource> = Arc::new(CounterRandom(AtomicU64::new(1)));
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);

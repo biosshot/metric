@@ -294,7 +294,8 @@ async fn exercise_queries(database: &Database) -> Result<(), Box<dyn Error>> {
 async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Error>> {
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;
-    let now = Timestamp::from_unix_millis(2_000)?;
+    // Keep bootstrap/session/API credentials valid for MongoDB's TTL monitor.
+    let now = Timestamp::from_unix_millis(mongodb::bson::DateTime::now().timestamp_millis())?;
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(now));
     let random: Arc<dyn RandomSource> = Arc::new(CounterRandom(AtomicU64::new(0)));
     let blob_directory =

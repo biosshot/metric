@@ -27,6 +27,17 @@ This is not a claim of a formal security review or a new capacity certification.
   in this test sender. Python and Go emit SDK diagnostics to stderr on failed gates.
 - Compatible transitive dependency fixes were applied to npm lockfiles, without
   changing pinned SDK versions or forcing major upgrades.
+- RustSec found the HTTP/2 empty-frame memory-exhaustion advisory
+  [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258.html).
+  Both Rust lockfiles now use the patched h2 0.4.16. The main workspace also replaces
+  yanked chacha20 0.10.1 with compatible 0.10.2.
+- The first expanded Linux CI run exposed Windows-only Sentry CLI executable paths
+  in the retained debug-file/sourcemap test. The test now resolves the correct
+  native executable through each pinned npm package's `getPath()` API, with a
+  bounded resolver process and the existing native-process timeout preserved.
+  Its cleanup fixture now checks that fresh blobs survive, then advances only the
+  cleanup clock beyond the grace period instead of relying on a hard-coded future
+  date. Other auth-bearing integration fixtures also use wall-relative timestamps.
 - CI previously skipped the real MongoDB/migration gates. A dedicated integration
   job now runs them and the real-server scenarios sequentially; this also avoids
   interference from the intentionally injected MongoDB connection failure.
@@ -70,5 +81,13 @@ Rust 1.88, container builds, deployment health checks and documentation publishi
   fixtures retain the Svelte advisory group (moderate severity). npm proposes a
   Svelte 4-to-5 major upgrade; it was not forced into the rrweb playback stack.
   Compatibility and applicability of those advisories need a separate review.
+- After patch updates, cargo-audit 0.22.2 reports zero entries in its vulnerability
+  list. It still reports `paste` as unmaintained and the
+  [lru panic-safety advisory](https://rustsec.org/advisories/RUSTSEC-2026-0253.html)
+  as an informational `unsound` warning through pinned aws-sdk-s3 1.120.0. The
+  reviewed S3 Express cache uses a String-backed key without a custom Drop and does
+  not call the affected `pop()` method; the documented panic-on-key-drop trigger was
+  not identified in that use. This is not a blanket safety guarantee for lru.
+  Replacing the pinned AWS dependency stack was not forced into this regression fix.
 - A passing test suite is evidence for covered behavior, not proof that every
   possible production input, migration interruption or deployment is fault-free.

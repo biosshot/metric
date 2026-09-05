@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc,
@@ -57,7 +57,7 @@ async fn real_pinned_sentry_cli_upload_private_isolation_and_exact_delete() {
 }
 
 async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let now = Timestamp::from_unix_millis(1_800_000_000_000)?;
+    let now = Timestamp::from_unix_millis(mongodb::bson::DateTime::now().timestamp_millis())?;
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(now));
     let random: Arc<dyn RandomSource> = Arc::new(CounterRandom(AtomicU64::new(10)));
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
@@ -228,33 +228,15 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
 
     let cli_root = repository_root().join("sdk-tests").join("sentry-cli");
     let fixture = cli_root.join("fixtures").join("metric.sym");
-    for (package, executable) in [
-        (
-            "@sentry/cli",
-            cli_root
-                .join("node_modules")
-                .join("@sentry")
-                .join("cli-win32-x64")
-                .join("bin")
-                .join("sentry-cli.exe"),
-        ),
-        (
-            "sentry-cli-v2",
-            cli_root
-                .join("node_modules")
-                .join("sentry-cli-v2")
-                .join("node_modules")
-                .join("@sentry")
-                .join("cli-win32-x64")
-                .join("bin")
-                .join("sentry-cli.exe"),
-        ),
-    ] {
+    for package in ["@sentry/cli", "sentry-cli-v2"] {
+        let cli_root = cli_root.clone();
         let fixture = fixture.clone();
         let url = format!("http://{address}/");
         let secret = token.secret.encode_hex();
-        let output = tokio::task::spawn_blocking(move || run_cli(executable, fixture, url, secret))
-            .await??;
+        let output = tokio::task::spawn_blocking(move || {
+            run_cli(cli_executable(&cli_root, package)?, fixture, url, secret)
+        })
+        .await??;
         assert!(
             output.status.success(),
             "real {package} failed:\nstdout={}\nstderr={}",
@@ -264,33 +246,13 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
     }
 
     let sourcemap_fixture = cli_root.join("fixtures").join("sourcemaps");
-    for (package, executable) in [
-        (
-            "@sentry/cli",
-            cli_root
-                .join("node_modules")
-                .join("@sentry")
-                .join("cli-win32-x64")
-                .join("bin")
-                .join("sentry-cli.exe"),
-        ),
-        (
-            "sentry-cli-v2",
-            cli_root
-                .join("node_modules")
-                .join("sentry-cli-v2")
-                .join("node_modules")
-                .join("@sentry")
-                .join("cli-win32-x64")
-                .join("bin")
-                .join("sentry-cli.exe"),
-        ),
-    ] {
+    for package in ["@sentry/cli", "sentry-cli-v2"] {
+        let cli_root = cli_root.clone();
         let fixture = sourcemap_fixture.clone();
         let url = format!("http://{address}/");
         let secret = token.secret.encode_hex();
         let output = tokio::task::spawn_blocking(move || {
-            run_sourcemaps_cli(executable, fixture, url, secret)
+            run_sourcemaps_cli(cli_executable(&cli_root, package)?, fixture, url, secret)
         })
         .await??;
         assert!(
@@ -808,7 +770,18 @@ async fn exercise_recovery_and_cleanup(
     writer
         .commit(BlobKey::debug_file(project_id, orphan_id))
         .await?;
-    let (expired_chunks, orphan_files) = service.cleanup_once().await?;
+    assert_eq!(service.cleanup_once().await?, (0, 0));
+    // Advance only cleanup time beyond the 24-hour grace period. Credentials keep
+    // their current-wall-time clock, and fresh blobs must not be collected early.
+    let cleanup_service = DebugFileService::new(
+        Arc::clone(metadata),
+        Arc::clone(blobs),
+        Arc::new(FixedClock(Timestamp::from_unix_millis(
+            now.unix_millis() + 2 * 24 * 60 * 60 * 1_000,
+        )?)),
+        DebugFileConfig::default(),
+    )?;
+    let (expired_chunks, orphan_files) = cleanup_service.cleanup_once().await?;
     assert!(expired_chunks >= 1);
     assert!(orphan_files >= 1);
     assert!(matches!(
@@ -870,6 +843,42 @@ fn upload_id(project_id: ProjectId, sha1: [u8; 20]) -> [u8; 16] {
     let mut id = [0_u8; 16];
     id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
     id
+}
+
+fn cli_executable(root: &Path, package: &str) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
+    // Let the pinned npm package select its native binary for the current OS/arch.
+    let mut child = Command::new("node")
+        .current_dir(root)
+        .args([
+            "-e",
+            "const cli = require(process.argv[1]); process.stdout.write((cli.SentryCli ?? cli).getPath())",
+            package,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if child.wait_timeout(Duration::from_secs(20))?.is_none() {
+        child.kill()?;
+        child.wait()?;
+        return Err(format!("timed out resolving the native binary for {package}").into());
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "could not resolve {package}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    let executable = PathBuf::from(String::from_utf8(output.stdout)?);
+    if !executable.is_file() {
+        return Err(format!(
+            "resolved {package} binary does not exist: {}",
+            executable.display()
+        )
+        .into());
+    }
+    Ok(executable)
 }
 
 fn run_cli(

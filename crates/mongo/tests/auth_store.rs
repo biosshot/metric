@@ -29,8 +29,9 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;
     let store = control.auth_store();
-    let now = timestamp(1_750_000_000_000);
-    let later = timestamp(1_750_000_060_000);
+    // TTL expiration is based on MongoDB wall time, not the fixture's logical clock.
+    let now = timestamp(mongodb::bson::DateTime::now().timestamp_millis());
+    let later = timestamp(now.unix_millis() + 60_000);
     let owner_id = UserId::new(11)?;
     let organization_id = OrganizationId::new(22)?;
     let setup = setup_token(1, [1; 32], SetupPurpose::Bootstrap, None, now);
