@@ -68,6 +68,14 @@ jobs:
           npm run build
           npx playwright install --with-deps chromium firefox
           npm run test:e2e
+      - name: Retain failed Web traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-test-traces
+          path: web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify real Node SDK
         working-directory: sdk-tests/node
         run: |
@@ -120,6 +128,52 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Run Browser SDK gates
         run: cargo test -p metric-server --test sdk_compatibility_e2e real_browser_sdk_ -- --ignored --nocapture
+
+  mongodb:
+    name: MongoDB integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      METRIC_TEST_MONGODB_URI: mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk-tests/sentry-cli/package-lock.json
+      - name: Prepare real browser and CLI fixtures
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          cd web
+          npx playwright install --with-deps chromium
+          cd ..
+          npm ci --prefix sdk-tests/sentry-cli
+          echo "$GITHUB_WORKSPACE/sdk-tests/sentry-cli/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Start isolated MongoDB
+        run: docker compose -f deploy/compose.dev.yml up -d --wait mongodb
+      - name: Run storage and crash-resumable migration gates
+        run: >-
+          cargo test -p metric-mongo --all-targets --all-features --locked --no-fail-fast
+          -- --ignored --skip performance_ --skip reports_rps --test-threads=1
+      - name: Run real server integration gates
+        run: >-
+          cargo test -p metric-server --all-features --locked --no-fail-fast
+          --test archive_e2e --test auth_e2e --test durable_ingest_e2e
+          --test native_api_e2e --test notifications_e2e --test project_identity_e2e
+          --test web_e2e --test releases_e2e --test debug_files_e2e
+          -- --ignored --skip performance_ --test-threads=1
+      - name: Inspect MongoDB after failure
+        if: failure()
+        run: docker compose -f deploy/compose.dev.yml logs mongodb
+      - name: Stop isolated MongoDB
+        if: always()
+        run: docker compose -f deploy/compose.dev.yml down
 
   container:
     name: Container build

@@ -7,9 +7,9 @@ use metric_domain::{
         Dashboard, DashboardId, DashboardRefreshInterval, DashboardWidget, DashboardWidgetId,
         SavedQuery, SavedQueryId, WidgetShape,
     },
-    explore::{ExploreDataset, ExploreQuery},
+    explore::{ExploreDataset, ExploreExpression, ExploreQuery},
 };
-use metric_mongo::MongoProjectStore;
+use metric_mongo::{MongoProjectStore, SCHEMA_GENERATION};
 use metric_ports::{DashboardStore, DashboardStoreError};
 use mongodb::{Client, Database, bson::doc};
 
@@ -53,9 +53,12 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         updated_at: now,
     };
     store.insert_saved_query(saved.clone()).await?;
+    // The adapter normalizes retained v1 predicates into the v2 expression tree.
+    let mut normalized = saved.clone();
+    normalized.query.expression = Some(ExploreExpression::And(Vec::new()));
     assert_eq!(
         store.list_saved_queries(project, 10).await?,
-        vec![saved.clone()]
+        vec![normalized]
     );
     assert!(store.list_saved_queries(other, 10).await?.is_empty());
 
@@ -107,7 +110,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .find_one(doc! { "_id": "metric.schema" })
         .await?
         .unwrap();
-    assert_eq!(marker.get_i32("generation")?, 14);
+    assert_eq!(marker.get_i32("generation")?, SCHEMA_GENERATION);
     Ok(())
 }
 

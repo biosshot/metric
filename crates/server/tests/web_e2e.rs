@@ -10,6 +10,8 @@ use std::{
 
 use metric_application::{
     auth::{AuthConfig, BootstrapRequest, IdentityService, PasswordConfig, PasswordInput},
+    dashboards::{DashboardConfig, DashboardService},
+    explore::{ExploreConfig, ExploreService},
     native_api::NativeApiService,
     projects::{ProjectCacheConfig, ProjectService},
     search::{SearchConfig, SearchService},
@@ -46,7 +48,10 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     }
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;
-    let clock: Arc<dyn Clock> = Arc::new(FixedClock(Timestamp::from_unix_millis(2_000)?));
+    // Keep test sessions ahead of MongoDB's wall-clock TTL expiration.
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock(Timestamp::from_unix_millis(
+        mongodb::bson::DateTime::now().timestamp_millis(),
+    )?));
     let random: Arc<dyn RandomSource> = Arc::new(CounterRandom(AtomicU64::new(0)));
     let identity = Arc::new(IdentityService::new(
         Arc::new(control.auth_store()),
@@ -96,16 +101,31 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         Arc::clone(&clock),
         SearchConfig::default(),
     )?);
-    let native = Arc::new(NativeApiService::new(
-        Arc::clone(&identity),
-        Arc::clone(&projects),
-        Arc::new(metric_application::issues::IssueService::new(Arc::new(
-            control.issue_store(IssueCodecConfig::default()),
-        ))),
-        investigation,
-        search,
+    let explore = Arc::new(ExploreService::new(
+        Arc::new(control.explore_store()),
+        ExploreConfig::default(),
+    )?);
+    let dashboards = Arc::new(DashboardService::new(
+        Arc::new(control.dashboard_store()),
+        Arc::clone(&explore),
         Arc::clone(&clock),
-    ));
+        Arc::clone(&random),
+        DashboardConfig::default(),
+    )?);
+    let native = Arc::new(
+        NativeApiService::new(
+            Arc::clone(&identity),
+            Arc::clone(&projects),
+            Arc::new(metric_application::issues::IssueService::new(Arc::new(
+                control.issue_store(IssueCodecConfig::default()),
+            ))),
+            investigation,
+            search,
+            Arc::clone(&clock),
+        )
+        .with_explore(explore)
+        .with_dashboards(dashboards),
+    );
     let root = ShutdownRoot::new();
     let app = http::router(
         root.signal(),

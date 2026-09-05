@@ -161,6 +161,51 @@ describe('AlertsView', () => {
     expect(sourceDestinationId).toBeNull();
   });
 
+  it.each([
+    { label: 'missing configuration', telegram: undefined },
+    { label: 'null configuration', telegram: null },
+    {
+      label: 'migrated configuration without identity snapshots',
+      telegram: {
+        api_base: 'https://api.telegram.org',
+        message_thread_id: null,
+        bot_id: null,
+        bot_username: null,
+        bot_display_name: null,
+        chat_type: null,
+        chat_username: null,
+        chat_display_name: null,
+      },
+    },
+  ])('labels a Telegram recipient by chat ID with $label', async ({ telegram }) => {
+    session.canAdminister = true;
+    api.notificationDestinations.mockResolvedValue({
+      items: [
+        {
+          id: 'd'.repeat(32),
+          project_id: '42',
+          kind: 'telegram',
+          endpoint: '-1001234567890',
+          has_secret: true,
+          telegram,
+          smtp: null,
+          enabled: true,
+          created_at: 1,
+          updated_at: 1,
+        },
+      ],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(AlertsView, {
+      global: { plugins: [[VueQueryPlugin, { queryClient }]] },
+    });
+
+    expect(await screen.findByRole('button', { name: /^-1001234567890/ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /SMTP/ })).not.toBeInTheDocument();
+  });
+
   it('restores a saved bot after reload and lets an operator disable its recipient', async () => {
     session.canAdminister = true;
     const destinationId = 'd'.repeat(32);

@@ -28,6 +28,10 @@ watchdog.start()
 try:
     sentry_sdk.init(
         dsn=sys.argv[1],
+        debug=True,
+        # This fixture always talks to the loopback test server, never a system proxy.
+        http_proxy="",
+        https_proxy="",
         environment="sdk-compatibility",
         release="metric-python-sdk-test@1.0.0",
         traces_sample_rate=0,

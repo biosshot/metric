@@ -23,6 +23,8 @@ func main() {
 
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:              os.Args[1],
+		Debug:            true,
+		DebugWriter:      os.Stderr,
 		Environment:      "sdk-compatibility",
 		Release:          "metric-go-sdk-test@1.0.0",
 		EnableTracing:    false,

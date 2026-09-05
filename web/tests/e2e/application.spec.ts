@@ -2,6 +2,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import type { NotificationDestination } from '../../src/api/types';
 
 const project = {
   id: '42',
@@ -828,12 +829,23 @@ async function handleApi(route: Route, state: ApiState): Promise<void> {
           id: '39'.repeat(16),
           project_id: '42',
           kind: 'telegram',
-          endpoint: 'metric-alerts',
+          endpoint: '-1001234567890',
+          has_secret: true,
+          telegram: {
+            api_base: 'https://api.telegram.org',
+            message_thread_id: null,
+            bot_id: '123',
+            bot_username: 'metric_alerts_bot',
+            bot_display_name: 'Metric Alerts',
+            chat_type: 'channel',
+            chat_username: 'metric_alerts',
+            chat_display_name: 'Metric alerts channel',
+          },
           enabled: true,
           smtp: null,
           created_at: Date.now(),
           updated_at: Date.now(),
-        },
+        } satisfies NotificationDestination,
       ],
     });
   }
@@ -1029,10 +1041,11 @@ test('uptime monitor lifecycle shows history and configures recovery alerts', as
   await page.getByLabel('Rule name').fill('Public API availability');
   await page.getByRole('combobox', { name: 'Monitor' }).click();
   await page.getByRole('option', { name: /^Public API/ }).click();
-  await page.getByRole('button', { name: /Telegram/ }).click();
+  await page.getByRole('button', { name: /^Metric alerts channel/ }).click();
   await page.getByRole('button', { name: 'Create rule' }).click();
   await expect(page.getByText('Public API availability')).toBeVisible();
   expect(state.alertRules?.[0]?.monitor.notify_resolved).toBe(true);
+  expect(state.alertRules?.[0]?.destination_ids).toEqual(['39'.repeat(16)]);
 
   await page.goto('/monitors');
   await page.getByRole('button', { name: 'Manage monitors' }).click();

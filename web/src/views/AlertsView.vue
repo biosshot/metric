@@ -512,7 +512,8 @@ function stopTelegramDiscovery(): void {
 onBeforeUnmount(stopTelegramDiscovery);
 
 function destinationDisplayName(item: NotificationDestination): string {
-  if (item.kind !== 'telegram' || !item.telegram) return t('alerts.smtpEmail');
+  if (item.kind !== 'telegram') return t('alerts.smtpEmail');
+  if (!item.telegram) return item.endpoint;
   if (item.telegram.chat_type === 'private' && item.telegram.chat_username) {
     return `@${item.telegram.chat_username}`;
   }

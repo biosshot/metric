@@ -9,7 +9,8 @@ if (!baseUrl || !email || !password) {
 
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({ locale: 'en-US' });
+  page.on('pageerror', (error) => logError(`Metric page error: ${error.message}`));
   page.on('response', async (response) => {
     if (response.url().includes('/api/v1/') && response.status() >= 400) {
       const body = await response.text().catch(() => '<unreadable response>');
@@ -35,9 +36,10 @@ try {
   await page.getByRole('heading', { name: 'Connect an SDK' }).waitFor();
   await page.getByText('Available DSNs').waitFor();
 
-  await page.getByRole('link', { name: /Project settings/ }).click();
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await page.getByText(/Raw Events are retained for/).waitFor();
-  await page.getByLabel('IP address handling').selectOption('remove');
+  await page.getByRole('combobox', { name: 'IP address handling' }).click();
+  await page.getByRole('option', { name: /^Remove/ }).click();
   await page.getByRole('button', { name: 'Save policy' }).click();
   await Promise.race([
     page.getByText('Project policy saved.').waitFor(),
