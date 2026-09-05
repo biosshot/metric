@@ -75,27 +75,16 @@ docker compose up -d --wait --wait-timeout 120
 
 ## Backups
 
-Metric does not include its own backup command. MongoDB and file storage
-contain different parts of the same data, so back them up together and test the
-restore on a separate installation.
+Metric does not include its own backup command. Follow [Manual backup and
+restore](backup-restore.md) for a database-scoped MongoDB dump and either local
+BlobStore or metadata-preserving S3 copies. The procedure stops Metric, does not
+lock the whole MongoDB server, and explains the remaining TTL consistency limit.
 
-Session Replay especially depends on both: MongoDB stores the replay description
-and file storage contains the recording segments.
-
-Stop the Compose services while taking volume snapshots so that no new
-application data is written:
-
-```bash
-docker compose stop
-# Copy or snapshot the two data volumes with your host or backup tool.
-docker compose up -d --wait --wait-timeout 120
-```
-
-The volumes are named `metric_mongo-data` and `metric_blob-data` in the supplied
-Compose setup. The exact copy and restore command depends on your Docker host or
-storage provider. Medium and High also use the rebuildable
-`metric_symbolicator-cache` volume; it does not need to be included in the
-backup.
+Keep MongoDB, BlobStore, configuration and installation secrets together. Session
+Replay especially depends on both database descriptions and recording segments.
+Test restoration into an empty, separate installation; readiness alone does not
+prove that every file survived. The Symbolicator cache is rebuildable and can be
+omitted from backups.
 
 ## Symbolicator
 

@@ -89,6 +89,9 @@ scrub_hmac_key = { file = "/run/secrets/scrub-hmac-key" }
 `SCRUB_HMAC_KEY` must contain exactly 32 random bytes written as 64 lowercase
 hexadecimal characters. Changing it changes IP-address pseudonyms, so keep the
 same value while the installation contains data.
+It also derives encryption keys for notification credentials and uptime headers.
+Preserve it with your [backup](backup-restore.md); a new key cannot decrypt the
+previously stored secrets.
 
 ## Value formats
 

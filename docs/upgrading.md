@@ -7,7 +7,7 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 
 1. Read the release notes for the new version.
 2. Check which MongoDB schema generation it requires.
-3. Back up MongoDB and file storage together.
+3. [Back up MongoDB, file storage and secrets together](backup-restore.md).
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
@@ -87,6 +87,10 @@ image tag is always a valid rollback.
 Treat MongoDB and the configured BlobStore as one operational unit. A MongoDB
 copy and a file-storage copy made at different times may not match each other.
 Keep and restore both together.
+
+The [manual backup procedure](backup-restore.md) includes a database-only dump,
+local/S3 storage copies and an empty-target restore drill. Its no-global-lock
+variant has an explicit TTL consistency caveat; it is not an atomic snapshot.
 
 Until a tested migration is published for the exact old and new schema
 generations, keep the old version and do not modify the existing data.

@@ -33,6 +33,7 @@ export default defineConfig({
           { text: 'Kubernetes and Helm', link: '/kubernetes' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Running Metric', link: '/operations' },
+          { text: 'Backup and restore', link: '/backup-restore' },
           { text: 'Update Metric', link: '/upgrading' },
           { text: 'Troubleshooting', link: '/troubleshooting' },
         ],

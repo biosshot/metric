@@ -34,7 +34,10 @@ There are no reverse migrations or mixed-version rolling upgrades. Read
 ## Backup and archive
 
 - Metric does not provide its own backup and restore command; use external tooling.
-- MongoDB and file storage must be retained together.
+- [Manual backup and restore](backup-restore.md) covers a database-scoped dump and
+  local/S3 copies without a global MongoDB lock. TTL cleanup continues; this is not
+  a point-in-time snapshot.
+- MongoDB, file storage and installation secrets must be retained together.
 - Cold archives cannot be searched or restored through Metric.
 
 ## Features

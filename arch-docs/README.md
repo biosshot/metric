@@ -168,6 +168,9 @@ current production declaration gate. Current limits are stated directly in
   persistent storage and exact agreement between Metric, image and chart versions.
 - `phase-reports/0051-helm-chart.md`: Helm implementation and verification evidence;
   public release publication remains pending.
+- `verification/2026-09-05-manual-backup-restore.md`: database-scoped manual MongoDB
+  backup/restore and local/S3 verification, with no global MongoDB lock and explicit
+  TTL limits; no built-in backup subsystem.
 - `phase-reports/0041-web-localization.md`: Phase 41 implementation evidence.
 - `module-contracts/0037-application-metrics-phase-37.md`: Phase 37 implementation
   boundary and exit gate.

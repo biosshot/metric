@@ -88,7 +88,8 @@ retention period, so never size a disk with zero free space.
 The Min Compose profile:
 
 - does not start Symbolicator or its cleanup process;
-- gives MongoDB a 256 MiB WiredTiger cache and a 512 MiB container limit;
+- explicitly sets MongoDB `wiredTigerCacheSizeGB` to `0.256` and gives its container
+  a 512 MiB memory limit;
 - limits Metric to 320 MiB;
 - batches bursts while keeping active requests and background workers bounded;
 - disables attachments and limits Replay buffering to 4 MiB;
@@ -105,10 +106,12 @@ spikes:
 | High | 6 GiB | 3 GiB | 4 GiB + 256 MiB cleanup | 2.75 GiB |
 
 These are container ceilings, not expected idle use. Docker may use less.
+On a shared VPS, budget separately for PostgreSQL, your application, MinIO and other
+services; the 1 GiB recommendation is not a budget for an arbitrary combined stack.
 
 [MongoDB documents](https://www.mongodb.com/docs/manual/core/wiredtiger/#memory-use)
-a minimum WiredTiger cache of 256 MiB. Metric uses that lower bound explicitly
-rather than letting MongoDB compete for the entire host.
+a minimum WiredTiger cache of 256 MiB. Min explicitly sets a small cache instead
+of relying on MongoDB's default cache sizing for the host.
 
 One GiB is still a tight machine. Use a minimal 64-bit Linux installation, keep
 swap available, avoid unrelated services and watch for container restarts. The
@@ -127,6 +130,8 @@ Metric stores data in:
 The SSD recommendation includes the operating system, container images, swap and
 working space. Backups must be stored on another disk or machine and are not
 included in the table.
+See [Manual backup and restore](backup-restore.md) for a database-scoped dump and
+local/S3 storage copies without locking the entire MongoDB server.
 
 Each supplied profile gives BlobStore about one third of the recommended disk.
 Its internal reserve keeps 256 MiB, 512 MiB, 2 GiB or 4 GiB of that allocation
