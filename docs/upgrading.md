@@ -11,8 +11,9 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
-The current Metric binary targets MongoDB schema generation **20**. It automatically
-migrates a complete generation-19 database to generation 20 before ordinary startup.
+The current Metric binary requires MongoDB schema generation **20 exactly** before
+starting application workers. It automatically migrates a complete generation-19
+database to generation 20 before ordinary startup.
 
 ::: danger Protect existing data
 You must never drop or recreate a data-bearing MongoDB database to make another

@@ -236,9 +236,10 @@ The supplied deployment is deliberately single-node:
   converter from a pre-19 schema;
 - cold archives cannot yet be searched or restored through Metric.
 
-The current binary targets MongoDB schema generation **19** and contains an
-automatic forward migration runner, but this release has no production transition
-from an older generation. Never delete the database, Docker volumes or the
+The current binary requires MongoDB schema generation **20 exactly** before
+starting application workers. It automatically migrates a complete generation-19
+database to generation 20; earlier generations have no supported transition chain.
+Never delete the database, Docker volumes or the
 `schema_meta` record to fix a version mismatch. Follow the
 [update guide](https://biosshot.github.io/metric/upgrading).
 

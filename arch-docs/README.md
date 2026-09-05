@@ -61,7 +61,8 @@ current roadmap.
 
 ## Schema-generation safety
 
-The current binary requires schema generation **20**. The runtime constant
+The current binary requires schema generation **20 exactly** before starting
+application workers. The runtime constant
 [`SCHEMA_GENERATION`](../crates/mongo/src/lib.rs) is the implementation source of
 truth. Generation numbers in older ADR amendments, module contracts and phase
 reports describe the schema those phases tested; they are historical evidence, not
