@@ -21,7 +21,7 @@ PUBLISH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PUBLISH)
 
 
-def package(path: Path, content: bytes = b"version: 0.1.5\n", timestamp: int = 0) -> None:
+def package(path: Path, content: bytes = b"version: 0.1.6\n", timestamp: int = 0) -> None:
     with tarfile.open(path, "w:gz") as archive:
         entry = tarfile.TarInfo("metric/Chart.yaml")
         entry.size = len(content)
@@ -34,7 +34,7 @@ class PublicationTests(unittest.TestCase):
         calls = []
         with tempfile.TemporaryDirectory(prefix="metric-publish-test-") as temp:
             folder = Path(temp)
-            archive = folder / "metric-0.1.5.tgz"
+            archive = folder / "metric-0.1.6.tgz"
             package(archive)
 
             def registry(command, **kwargs):
@@ -44,10 +44,10 @@ class PublicationTests(unittest.TestCase):
                 destination = Path(command[command.index("--destination") + 1])
                 if destination.name == "prior":
                     if prior in ("same", "different"):
-                        package(destination / archive.name, b"changed" if prior == "different" else b"version: 0.1.5\n", timestamp=99)
+                        package(destination / archive.name, b"changed" if prior == "different" else b"version: 0.1.6\n", timestamp=99)
                         return subprocess.CompletedProcess(command, 0, "", "")
                     error = {
-                        "missing": "Error: registry.invalid/charts/metric:0.1.5: not found",
+                        "missing": "Error: registry.invalid/charts/metric:0.1.6: not found",
                         "denied": "403 denied",
                         "network": "connection refused",
                         "broken-blob": "GET registry.invalid/v2/charts/metric/blobs/sha256:abc: 404 not found",
@@ -68,7 +68,7 @@ class PublicationTests(unittest.TestCase):
 
             self.calls = calls
             with patch.object(PUBLISH.subprocess, "run", side_effect=registry):
-                PUBLISH.publish(archive, "oci://registry.invalid/charts", "0.1.5", folder)
+                PUBLISH.publish(archive, "oci://registry.invalid/charts", "0.1.6", folder)
         return calls
 
     def test_first_publish(self):

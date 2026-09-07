@@ -6,7 +6,7 @@ Ingress can be selected. The chart uses the same Min, Low, Medium and High
 application profiles as Docker Compose; Min is the chart default.
 
 The chart version, application version and exact Docker image tag are always the
-same: chart **0.1.5** selects Metric **0.1.5**. There is no separate chart release
+same: chart **0.1.6** selects Metric **0.1.6**. There is no separate chart release
 sequence. If Metric jumps to 2.0.0, its chart also becomes 2.0.0.
 
 ## Prerequisites
@@ -45,7 +45,7 @@ After the matching release has published the public OCI package:
 
 ```bash
 helm install metric oci://ghcr.io/biosshot/charts/metric \
-  --version 0.1.5 --namespace metric \
+  --version 0.1.6 --namespace metric \
   --set mongodb.enabled=true \
   --wait --timeout 10m
 ```
@@ -54,9 +54,8 @@ The chart is included in source before its first registry publication. To test a
 checkout before that publication, replace the OCI URL with `./charts/metric` and
 omit `--version`. Build and load the checkout's image into the test cluster, then
 select it with `--set image.repository=metric-helm-test --set image.pullPolicy=Never`
-(see chart development below). Unreleased source may differ from an already
-published image carrying the current Cargo version. Do not infer package availability
-from a merged source change; the first public chart ships with the next Metric release.
+(see chart development below). Do not infer package availability from a merged
+source change; the first public chart ships with Metric 0.1.6.
 
 Open the UI through a local tunnel:
 
@@ -96,7 +95,7 @@ config:
 
 ```bash
 helm install metric oci://ghcr.io/biosshot/charts/metric \
-  --version 0.1.5 --namespace metric -f my-values.yaml \
+  --version 0.1.6 --namespace metric -f my-values.yaml \
   --wait --timeout 10m
 ```
 
@@ -283,8 +282,8 @@ generated files remain identical to their source configurations and resource lim
 python -m pip install -r scripts/helm-requirements.txt
 python scripts/validate-helm-chart.py
 python scripts/test-helm-publish.py
-docker build -t metric-helm-test:0.1.5 .
-python scripts/validate-helm-chart.py --image metric-helm-test:0.1.5
+docker build -t metric-helm-test:0.1.6 .
+python scripts/validate-helm-chart.py --image metric-helm-test:0.1.6
 ```
 
 `scripts/test-helm-cluster.py` requires an explicitly selected disposable `kind-`
@@ -314,9 +313,9 @@ owner can confirm that `charts/metric` does not exist, validate the exact releas
 checkout, and bootstrap the package using an authenticated Helm client:
 
 ```bash
-python scripts/validate-helm-chart.py --release-tag v0.1.5
+python scripts/validate-helm-chart.py --release-tag v0.1.6
 helm package charts/metric --destination target/helm-package
-helm push target/helm-package/metric-0.1.5.tgz oci://ghcr.io/biosshot/charts
+helm push target/helm-package/metric-0.1.6.tgz oci://ghcr.io/biosshot/charts
 ```
 
 Then link the package, make it public and rerun the release job. Never use this

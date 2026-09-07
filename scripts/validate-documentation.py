@@ -21,6 +21,29 @@ def main() -> int:
     errors: list[str] = []
     cargo = tomllib.loads(read("Cargo.toml"))
     version = cargo["workspace"]["package"]["version"]
+    cargo_lock = tomllib.loads(read("Cargo.lock"))
+    workspace_names = {
+        tomllib.loads(read(f"{member}/Cargo.toml"))["package"]["name"]
+        for member in cargo["workspace"]["members"]
+    }
+    for package in cargo_lock["package"]:
+        if package["name"] in workspace_names and "source" not in package:
+            if package["version"] != version:
+                errors.append(f"Cargo.lock: {package['name']} must use version {version}")
+    web = json.loads(read("web/package.json"))
+    web_lock = json.loads(read("web/package-lock.json"))
+    if any(
+        item["version"] != version
+        for item in (web, web_lock, web_lock["packages"][""])
+    ):
+        errors.append(f"Web package and lockfile must use version {version}")
+
+    release_notes = f"docs/releases/{version}.md"
+    if not (ROOT / release_notes).is_file():
+        errors.append(f"Missing release notes: {release_notes}")
+    elif not read(release_notes).startswith(f"# Metric {version}\n"):
+        errors.append(f"{release_notes}: must start with the matching release heading")
+
     symbolicator_contract = json.loads(
         read("sdk-tests/symbolicator/26.6.0-native-contract.json")
     )
@@ -61,14 +84,31 @@ def main() -> int:
         "deploy/install.ps1",
         "deploy/install.sh",
         "docs/docker.md",
+        "docs/configuration.md",
         "docs/getting-started.md",
+        "docs/index.md",
         "docs/known-limits.md",
         "docs/kubernetes.md",
+        "docs/upgrading.md",
         "charts/metric/README.md",
     )
+    release_reference = re.compile(
+        r"(?:ghcr\.io/biosshot/metric:|"
+        r"(?:raw\.githubusercontent\.com|github\.com)/biosshot/metric/(?:blob/)?v)"
+        r"(\d+\.\d+\.\d+)"
+    )
     for relative in version_documents:
-        if version not in read(relative):
+        contents = read(relative)
+        if version not in contents:
             errors.append(f"{relative}: must name the current release version {version}")
+        for referenced in release_reference.findall(contents):
+            if referenced != version:
+                errors.append(
+                    f"{relative}: installation reference uses {referenced}, expected {version}"
+                )
+
+    if f"/releases/{version}" not in read("docs/.vitepress/config.mts"):
+        errors.append("Documentation navigation must link to the current release notes")
 
     symbolicator_image_documents = (
         "deploy/.env.example",

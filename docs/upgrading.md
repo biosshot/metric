@@ -1,11 +1,11 @@
 # Update Metric
 
 Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
-`0.1.5`.
+`0.1.6`.
 
 ## Before updating
 
-1. Read the release notes for the new version.
+1. Read the [0.1.6 release notes](releases/0.1.6.md), including the 19 → 20 migration.
 2. Check which MongoDB schema generation it requires.
 3. [Back up MongoDB, file storage and secrets together](backup-restore.md).
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.

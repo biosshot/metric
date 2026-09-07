@@ -31,6 +31,8 @@ jobs:
         run: python scripts/validate-helm-chart.py --release-tag "${{ github.ref_name }}"
       - name: Verify immutable Helm publication gates
         run: python scripts/test-helm-publish.py
+      - name: Verify release documentation and notes
+        run: python scripts/validate-documentation.py
 
       - name: Match Git tag and Cargo version
         shell: bash
@@ -113,6 +115,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - name: Create release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -121,5 +124,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
-            --generate-notes \
+            --notes-file "docs/releases/${GITHUB_REF_NAME#v}.md" \
             --title "Metric ${GITHUB_REF_NAME#v}"

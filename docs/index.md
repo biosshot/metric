@@ -30,8 +30,11 @@ errors into issues and shows the result in a web interface.
 Use Metric when you want the Sentry workflow without running the full self-hosted
 Sentry stack.
 
-Metric 0.1.5 is an early release. Review the [known limits](known-limits.md)
+Metric 0.1.6 is an early release. Review the [known limits](known-limits.md)
 before using it for important production data.
+
+[What's new in 0.1.6](releases/0.1.6.md): expanded Telegram configuration, a Helm
+chart, automatic schema migrations and a tested manual backup/restore guide.
 
 ## What you need
 
