@@ -161,6 +161,7 @@ export interface CreateProjectResponse {
 }
 
 export interface ProjectKey {
+  existing_dsn?: string | null;
   dsn_key: string;
   project_id: string;
   state: 'active' | 'disabled' | 'suspended_by_deletion';

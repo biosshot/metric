@@ -348,6 +348,63 @@ pub type ProjectKeyLabel = BoundedId<64>;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DsnKey([u8; 16]);
 
+/// An existing SDK destination. Its host is display metadata, never an outbound URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExistingDsn {
+    pub key: DsnKey,
+    pub project_id: u64,
+    pub public_dsn: String,
+}
+
+impl ExistingDsn {
+    pub fn parse(value: &str) -> Result<Self, PrimitiveError> {
+        if value.len() > 2048 {
+            return Err(PrimitiveError::InvalidDsnKey);
+        }
+        let mut url = url::Url::parse(value).map_err(|_| PrimitiveError::InvalidDsnKey)?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(PrimitiveError::InvalidDsnKey);
+        }
+        let key = DsnKey::parse(url.username())?;
+        let project = url
+            .path_segments()
+            .and_then(Iterator::last)
+            .ok_or(PrimitiveError::InvalidProjectId)?;
+        let project_id = parse_ingest_project_id(project)?;
+        url.set_password(None)
+            .map_err(|_| PrimitiveError::InvalidDsnKey)?;
+        url.set_username(&key.to_string())
+            .map_err(|_| PrimitiveError::InvalidDsnKey)?;
+        Ok(Self {
+            key,
+            project_id,
+            public_dsn: url.to_string(),
+        })
+    }
+}
+
+/// Sentry wire IDs may exceed the compact internal ProjectId range.
+pub fn parse_ingest_project_id(value: &str) -> Result<u64, PrimitiveError> {
+    if value.is_empty() || value.len() > 20 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(PrimitiveError::InvalidProjectId);
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or(PrimitiveError::InvalidProjectId)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DsnMapping {
+    pub source: ExistingDsn,
+    pub target_key: DsnKey,
+}
+
 impl DsnKey {
     pub fn parse(value: &str) -> Result<Self, PrimitiveError> {
         parse_hex_identifier(value)
@@ -701,5 +758,34 @@ mod tests {
         }
         assert!(Slug::new("a".repeat(63)).is_ok());
         assert!(Slug::new("a".repeat(64)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod existing_dsn_tests {
+    use super::*;
+    #[test]
+    fn existing_dsn_keeps_public_endpoint_and_large_id_but_drops_password() {
+        let dsn = ExistingDsn::parse("https://0123456789ABCDEF0123456789ABCDEF:discard-me@sentry.example:8443/prefix/4500000000000001").unwrap();
+        assert_eq!(dsn.project_id, 4500000000000001);
+        assert_eq!(
+            dsn.public_dsn,
+            "https://0123456789abcdef0123456789abcdef@sentry.example:8443/prefix/4500000000000001"
+        );
+        for invalid in ["0", "-1", "+1", "1x", "", "18446744073709551616"] {
+            assert!(
+                ExistingDsn::parse(&format!(
+                    "https://0123456789abcdef0123456789abcdef@sentry.example/{invalid}"
+                ))
+                .is_err()
+            );
+        }
+        for invalid in [
+            "ftp://0123456789abcdef0123456789abcdef@sentry.example/1",
+            "https://bad@sentry.example/1",
+            "https://0123456789abcdef0123456789abcdef@sentry.example/1?x=1",
+        ] {
+            assert!(ExistingDsn::parse(invalid).is_err());
+        }
     }
 }

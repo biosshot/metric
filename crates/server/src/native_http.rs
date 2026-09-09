@@ -4269,6 +4269,7 @@ async fn list_project_keys(
 #[serde(deny_unknown_fields)]
 struct KeyBody {
     label: String,
+    existing_dsn: Option<String>,
 }
 
 async fn create_project_key(
@@ -4281,10 +4282,15 @@ async fn create_project_key(
     let context = authenticate(&state, &headers, true).await?;
     let body = json_body(body)?;
     let key = api(&state)?
-        .create_project_key(
+        .create_project_key_with_dsn(
             &context,
             project_id_from(&project_id)?,
             ProjectKeyLabel::new(body.label).map_err(|_| HttpApiError::InvalidRequest)?,
+            body.existing_dsn
+                .as_deref()
+                .map(metric_domain::ExistingDsn::parse)
+                .transpose()
+                .map_err(|_| HttpApiError::InvalidRequest)?,
             correlation_id(request_id)?,
         )
         .await
@@ -5714,6 +5720,7 @@ fn policy_value(project: &ProjectView) -> Value {
 fn project_key_value(key: &ProjectKeyView) -> Result<Value, HttpApiError> {
     Ok(json!({
         "dsn_key": key.key.to_string(),
+        "existing_dsn": key.existing_dsn,
         "project_id": key.project_id.get().to_string(),
         "state": match key.state {
             metric_domain::ProjectKeyState::Active => "active",

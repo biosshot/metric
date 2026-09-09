@@ -3,6 +3,9 @@
 Metric works with official Sentry SDKs. You normally only need to replace the
 Sentry DSN with the DSN shown by Metric.
 
+To keep installed applications' existing DSNs, follow
+[Move from Sentry without changing client DSNs](migrate-from-sentry.md).
+
 ## Get the DSN
 
 1. Sign in to Metric.

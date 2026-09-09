@@ -125,9 +125,9 @@ complete target profile in [Configuration](configuration.md#supplied-profiles).
 
 ## Updates
 
-The current binary requires schema generation **20 exactly** before starting
-application workers. Metric automatically migrates a complete generation-19 database
-to generation 20. Earlier generations have no supported transition chain.
+The current binary requires schema generation **21 exactly** before starting
+application workers. Metric automatically migrates complete generation-19 and generation-20 databases
+to generation 21. Earlier generations have no supported transition chain.
 
 Do not edit `schema_meta`, delete MongoDB collections or remove Docker volumes
 after a schema error. Follow [Update Metric](upgrading.md).

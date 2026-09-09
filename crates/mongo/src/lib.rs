@@ -9,6 +9,7 @@ mod auth;
 mod dashboards;
 mod debug_files;
 mod deletion;
+mod dsn_maps;
 mod event;
 mod explore;
 mod feedback;
@@ -79,10 +80,12 @@ use mongodb::{
 };
 use thiserror::Error;
 
-static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 1] =
-    [&migrations::TELEGRAM_CONFIGURATION_MIGRATION];
+static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 2] = [
+    &migrations::TELEGRAM_CONFIGURATION_MIGRATION,
+    &migrations::DSN_MAPS_MIGRATION,
+];
 
-pub const SCHEMA_GENERATION: i32 = 20;
+pub const SCHEMA_GENERATION: i32 = 21;
 const SCHEMA_ID: &str = "metric.schema";
 const SCHEMA_MODULES: [&str; 22] = [
     "project_identity_v1",
@@ -108,7 +111,7 @@ const SCHEMA_MODULES: [&str; 22] = [
     "application_metrics_v1",
     "session_replay_v1",
 ];
-const REQUIRED_COLLECTIONS: [&str; 38] = [
+const REQUIRED_COLLECTIONS: [&str; 39] = [
     "api_tokens",
     "alert_rules",
     "audit_log",
@@ -136,6 +139,7 @@ const REQUIRED_COLLECTIONS: [&str; 38] = [
     "password_setup_tokens",
     "project_deletions",
     "project_keys",
+    "dsn_maps",
     "projects",
     "releases",
     "replays",
@@ -395,6 +399,8 @@ impl MongoProjectStore {
     }
 
     async fn create_collections(&self) -> Result<(), MongoBootstrapError> {
+        self.create_validated_collection("dsn_maps", dsn_maps::validator())
+            .await?;
         self.create_validated_collection("organizations", organization_validator())
             .await?;
         self.create_validated_collection("projects", project_validator())
@@ -495,6 +501,7 @@ impl MongoProjectStore {
     }
 
     async fn create_indexes(&self) -> Result<(), MongoBootstrapError> {
+        dsn_maps::create_index(&self.database).await?;
         self.database
             .collection::<Document>("organizations")
             .create_index(index(doc! { "slug": 1 }, "organization_slug_unique", true))
@@ -678,6 +685,7 @@ impl MongoProjectStore {
                 "project_keys",
                 BTreeSet::from(["_id_", "project_key_administration"]),
             ),
+            ("dsn_maps", BTreeSet::from(["_id_", "dsn_map_project"])),
             ("project_deletions", deletion::deletion_index_names()),
             ("error_events", event::event_index_names()),
             ("feedback", feedback::feedback_index_names()),
@@ -762,6 +770,7 @@ impl MongoProjectStore {
             ("organizations", organization_validator()),
             ("projects", project_validator()),
             ("project_keys", project_key_validator()),
+            ("dsn_maps", dsn_maps::validator()),
             ("project_deletions", deletion::deletion_validator()),
             ("debug_uploads", debug_files::debug_upload_validator()),
             ("debug_files", debug_files::debug_file_validator()),
@@ -910,6 +919,16 @@ impl MongoProjectStore {
         &self,
         key: ProjectKeyIdentity,
     ) -> Result<(), ProjectStoreError> {
+        if self
+            .database
+            .collection::<Document>("dsn_maps")
+            .find_one(doc! { "_id": key_binary(key.key) })
+            .await
+            .map_err(|_| ProjectStoreError::Unavailable)?
+            .is_some()
+        {
+            return Err(ProjectStoreError::KeyCollision);
+        }
         let project_exists = self
             .database
             .collection::<Document>("projects")
@@ -958,7 +977,7 @@ impl MongoProjectStore {
             .find_one(doc! { "_id": key_binary(key) })
             .await
             .map_err(|_| ProjectStoreError::Unavailable)?
-            .ok_or(ProjectStoreError::NotFound)?;
+            .ok_or(ProjectStoreError::UnknownKey)?;
         let key_state = parse_key_state(
             key_document
                 .get_str("status")
@@ -1170,6 +1189,7 @@ impl MongoProjectStore {
         if keys.len() > self.max_keys_per_project {
             return Err(ProjectStoreError::TooManyKeys);
         }
+        self.attach_existing_dsns(project_id, &mut keys).await?;
         Ok(keys)
     }
 
@@ -1250,6 +1270,20 @@ impl MongoProjectStore {
 }
 
 impl ProjectStore for MongoProjectStore {
+    fn load_dsn_mapping(
+        &self,
+        key: DsnKey,
+    ) -> PortFuture<'_, Result<metric_domain::DsnMapping, ProjectStoreError>> {
+        Box::pin(self.load_dsn_mapping_inner(key))
+    }
+    fn insert_dsn_mapping(
+        &self,
+        project_id: ProjectId,
+        mapping: metric_domain::DsnMapping,
+    ) -> PortFuture<'_, Result<(), ProjectStoreError>> {
+        Box::pin(self.insert_dsn_mapping_inner(project_id, mapping))
+    }
+
     fn insert_organization(
         &self,
         organization: OrganizationIdentity,
@@ -1609,6 +1643,7 @@ pub(crate) fn decode_project_view(document: &Document) -> Result<ProjectView, Pr
 
 fn decode_project_key_view(document: &Document) -> Result<ProjectKeyView, ProjectStoreError> {
     Ok(ProjectKeyView {
+        existing_dsn: None,
         key: dsn_key_from_slice(
             document
                 .get_binary_generic("_id")

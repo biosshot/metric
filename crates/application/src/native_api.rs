@@ -1968,13 +1968,29 @@ impl NativeApiService {
         label: ProjectKeyLabel,
         request_id: RequestCorrelationId,
     ) -> Result<DsnKey, NativeApiError> {
+        self.create_project_key_with_dsn(context, project_id, label, None, request_id)
+            .await
+    }
+
+    pub async fn create_project_key_with_dsn(
+        &self,
+        context: &AuthContext,
+        project_id: ProjectId,
+        label: ProjectKeyLabel,
+        existing_dsn: Option<metric_domain::ExistingDsn>,
+        request_id: RequestCorrelationId,
+    ) -> Result<DsnKey, NativeApiError> {
         self.authorize_mutation(context, project_id, Permission::ProjectAdmin)
             .await?;
-        let key = self
-            .projects
-            .create_project_key(project_id, label)
-            .await
-            .map_err(map_project_error)?;
+        let key = match existing_dsn {
+            Some(source) => {
+                self.projects
+                    .import_project_key(project_id, label, source)
+                    .await
+            }
+            None => self.projects.create_project_key(project_id, label).await,
+        }
+        .map_err(map_project_error)?;
         self.identity
             .record_project_audit(
                 context,

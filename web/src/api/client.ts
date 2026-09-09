@@ -412,10 +412,10 @@ export const api = {
   project: (projectId: string) => request<Project>(`/api/v1/projects/${projectId}`),
   keys: (projectId: string) =>
     request<{ items: ProjectKey[] }>(`/api/v1/projects/${projectId}/keys`),
-  createKey: (projectId: string, label: string) =>
+  createKey: (projectId: string, label: string, existingDsn?: string) =>
     request<{ dsn_key: string }>(`/api/v1/projects/${projectId}/keys`, {
       method: 'POST',
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, existing_dsn: existingDsn }),
     }),
   disableKey: (projectId: string, key: string) =>
     request<void>(`/api/v1/projects/${projectId}/keys/${key}`, { method: 'DELETE' }),

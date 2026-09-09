@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use metric_domain::{DsnKey, EventId, ProjectId};
+use metric_domain::{DsnKey, EventId, parse_ingest_project_id};
 use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
@@ -29,7 +29,7 @@ pub struct AttachmentLimits {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DsnAuth {
     pub key: DsnKey,
-    pub project_id: ProjectId,
+    pub project_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -618,11 +618,9 @@ fn parse_dsn(value: &str) -> Result<DsnAuth, ProtocolError> {
     let project = dsn
         .path_segments()
         .and_then(Iterator::last)
-        .ok_or_else(|| ProtocolError::invalid("missing_dsn_project"))?
-        .parse::<i32>()
+        .ok_or_else(|| ProtocolError::invalid("missing_dsn_project"))?;
+    let project_id = parse_ingest_project_id(project)
         .map_err(|_| ProtocolError::invalid("invalid_dsn_project"))?;
-    let project_id =
-        ProjectId::new(project).map_err(|_| ProtocolError::invalid("invalid_dsn_project"))?;
     Ok(DsnAuth { key, project_id })
 }
 
@@ -1124,7 +1122,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(parsed.dsn.unwrap().project_id.get(), 42);
+        assert_eq!(parsed.dsn.unwrap().project_id, 42);
     }
 
     #[test]

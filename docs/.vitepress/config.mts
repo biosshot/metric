@@ -24,6 +24,7 @@ export default defineConfig({
           { text: 'Install Metric', link: '/getting-started' },
           { text: 'First setup', link: '/first-setup' },
           { text: 'Connect an SDK', link: '/sdk-setup' },
+          { text: 'Move from Sentry', link: '/migrate-from-sentry' },
         ],
       },
       {

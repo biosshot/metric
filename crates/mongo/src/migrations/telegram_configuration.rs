@@ -355,7 +355,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(marker.get_i32("generation"), Ok(20));
+        assert_eq!(marker.get_i32("generation"), Ok(crate::SCHEMA_GENERATION));
         assert_eq!(marker.get_str("state"), Ok("complete"));
         assert!(
             reports

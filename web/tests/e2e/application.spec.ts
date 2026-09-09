@@ -910,6 +910,71 @@ async function login(page: Page, email = 'owner@example.com'): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 }
 
+test('existing Sentry DSN can be imported, displayed and disabled', async ({ page }, testInfo) => {
+  await installApi(page, {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  });
+  const dsn = `https://${'a'.repeat(32)}@sentry.example.com:8443/prefix/4500000000000001`;
+  let imported = false;
+  let disabled = false;
+  let submitted: unknown;
+  await page.route('**/api/v1/projects/42/keys', async (route) => {
+    if (route.request().method() === 'POST') {
+      submitted = route.request().postDataJSON();
+      imported = true;
+      await route.fulfill({ status: 201, json: { dsn_key: 'b'.repeat(32) } });
+    } else {
+      await route.fulfill({
+        json: {
+          items: imported
+            ? [
+                {
+                  dsn_key: 'b'.repeat(32),
+                  project_id: '42',
+                  label: 'Old clients',
+                  state: disabled ? 'disabled' : 'active',
+                  existing_dsn: dsn,
+                  created_at: project.created_at,
+                },
+              ]
+            : [],
+        },
+      });
+    }
+  });
+  await page.route('**/api/v1/projects/42/keys/*', async (route) => {
+    expect(route.request().method()).toBe('DELETE');
+    expect(route.request().url()).toContain('b'.repeat(32));
+    disabled = true;
+    await route.fulfill({ status: 204 });
+  });
+  await login(page);
+  await page.goto('/settings/project#dsn-keys');
+  await page.getByRole('checkbox', { name: 'Use an existing DSN' }).check();
+  await page.getByLabel('New key label').fill('Old clients');
+  await page.getByLabel('Existing Sentry DSN').fill(dsn);
+  await page.getByRole('button', { name: 'Use DSN', exact: true }).click();
+  await expect(page.locator('#dsn-keys code')).toHaveText(dsn);
+  expect(submitted).toEqual({ label: 'Old clients', existing_dsn: dsn });
+  await page
+    .locator('#dsn-keys')
+    .screenshot({ path: testInfo.outputPath('existing-dsn-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#dsn-keys').scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page
+    .locator('#dsn-keys')
+    .screenshot({ path: testInfo.outputPath('existing-dsn-mobile.png') });
+  await page.goto('/project/setup');
+  await expect(page.locator('.dsn-list code')).toHaveText(dsn);
+  await page.goto('/settings/project#dsn-keys');
+  await page.getByRole('button', { name: 'Disable', exact: true }).click();
+  await expect(page.locator('#dsn-keys .status-badge')).toContainText('disabled');
+});
+
 test('login session, investigation and CSRF lifecycle are coherent', async ({ page }) => {
   const state: ApiState = {
     role: 'owner',

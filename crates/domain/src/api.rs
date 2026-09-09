@@ -33,6 +33,7 @@ pub struct ProjectView {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectKeyView {
+    pub existing_dsn: Option<String>,
     pub key: DsnKey,
     pub project_id: ProjectId,
     pub state: ProjectKeyState,

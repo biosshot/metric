@@ -74,6 +74,104 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let mismatch = app.clone().oneshot(request(43)).await?;
     assert_eq!(mismatch.status(), StatusCode::UNAUTHORIZED);
 
+    let old_key = DsnKey::from_bytes([8; 16]);
+    let old_id = 4500000000000001_u64;
+    let old_dsn = metric_domain::ExistingDsn::parse(&format!(
+        "https://{old_key}@sentry.example:8443/{old_id}"
+    ))?;
+    let imported_request = |path: u64, dsn_id: u64| {
+        Request::post(format!("/api/{path}/envelope/"))
+            .body(Body::from(format!("{{\"dsn\":\"https://{old_key}@sentry.example/{dsn_id}\"}}\n{{\"type\":\"event\",\"length\":{}}}\n{}", EVENT.len(), EVENT))).unwrap()
+    };
+    // Populate both negative caches before importing.
+    assert_eq!(
+        app.clone()
+            .oneshot(imported_request(old_id, old_id))
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let target = projects
+        .import_project_key(
+            ProjectId::new(42)?,
+            ProjectKeyLabel::new("old clients")?,
+            old_dsn,
+        )
+        .await?;
+    for _ in 0..2 {
+        assert_eq!(
+            app.clone()
+                .oneshot(imported_request(old_id, old_id))
+                .await?
+                .status(),
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        sink.events().last().unwrap().project_id,
+        ProjectId::new(42)?
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(imported_request(42, old_id))
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(imported_request(old_id, 42))
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let store_request = Request::post(format!("/api/{old_id}/store/?sentry_key={old_key}"))
+        .body(Body::from(EVENT))?;
+    assert_eq!(
+        app.clone().oneshot(store_request).await?.status(),
+        StatusCode::OK
+    );
+    let listed = projects.list_project_keys(ProjectId::new(42)?).await?;
+    assert!(
+        listed
+            .iter()
+            .any(|key| key.key == target && key.existing_dsn.is_some())
+    );
+    projects
+        .set_project_acceptance(ProjectId::new(42)?, ProjectAcceptanceState::Disabled)
+        .await?;
+    assert_eq!(
+        app.clone()
+            .oneshot(imported_request(old_id, old_id))
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    projects
+        .set_project_acceptance(ProjectId::new(42)?, ProjectAcceptanceState::Active)
+        .await?;
+    assert_eq!(
+        app.clone()
+            .oneshot(imported_request(old_id, old_id))
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    projects
+        .set_project_key_state(ProjectId::new(42)?, target, ProjectKeyState::Disabled)
+        .await?;
+    assert_eq!(
+        app.clone()
+            .oneshot(imported_request(old_id, old_id))
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.clone().oneshot(request(42)).await?.status(),
+        StatusCode::OK
+    );
+
     projects
         .set_key_state(KEY, ProjectKeyState::Disabled)
         .await?;

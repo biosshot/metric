@@ -48,9 +48,9 @@ docker compose run --rm --no-deps metric \
 
 Unknown names and invalid values stop startup instead of being ignored.
 
-The current Metric version requires MongoDB schema generation **20 exactly** before
+The current Metric version requires MongoDB schema generation **21 exactly** before
 starting application workers. An empty database is prepared automatically at
-generation 20, and a complete generation-19 database is migrated automatically.
+generation 21, and complete generation-19 and generation-20 databases are migrated automatically.
 Earlier generations have no supported transition chain. Follow
 [Update Metric](upgrading.md) and do not delete data to bypass a compatibility error.
 

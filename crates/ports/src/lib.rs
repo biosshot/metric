@@ -407,6 +407,8 @@ pub trait ArtifactStore: Send + Sync + 'static {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProjectResolveError {
+    #[error("project key does not exist")]
+    UnknownKey,
     #[error("project credential is unauthorized")]
     Unauthorized,
     #[error("project resolution is temporarily unavailable")]
@@ -415,10 +417,23 @@ pub enum ProjectResolveError {
 
 pub trait ProjectResolver: Send + Sync + 'static {
     fn resolve(&self, key: DsnKey) -> PortFuture<'_, Result<ProjectSnapshot, ProjectResolveError>>;
+
+    fn resolve_ingest(
+        &self,
+        key: DsnKey,
+    ) -> PortFuture<'_, Result<(ProjectSnapshot, u64), ProjectResolveError>> {
+        Box::pin(async move {
+            let snapshot = self.resolve(key).await?;
+            let wire_id = snapshot.project_id.get() as u64;
+            Ok((snapshot, wire_id))
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProjectStoreError {
+    #[error("project key does not exist")]
+    UnknownKey,
     #[error("generated identity collides with an existing record")]
     IdentityCollision,
     #[error("generated DSN key collides with an existing record")]
@@ -441,6 +456,21 @@ pub enum ProjectStoreError {
 
 /// Capability-specific control storage used by ProjectService and cache misses.
 pub trait ProjectStore: Send + Sync + 'static {
+    fn load_dsn_mapping(
+        &self,
+        _key: DsnKey,
+    ) -> PortFuture<'_, Result<metric_domain::DsnMapping, ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::NotFound) })
+    }
+
+    fn insert_dsn_mapping(
+        &self,
+        _project_id: ProjectId,
+        _mapping: metric_domain::DsnMapping,
+    ) -> PortFuture<'_, Result<(), ProjectStoreError>> {
+        Box::pin(async { Err(ProjectStoreError::Unavailable) })
+    }
+
     fn insert_organization(
         &self,
         organization: OrganizationIdentity,

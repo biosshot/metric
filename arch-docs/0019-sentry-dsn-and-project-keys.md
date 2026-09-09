@@ -3,6 +3,15 @@
 - Status: Accepted
 - Date: 2026-07-21
 
+> Extension (2026-09-09): existing Sentry DSNs may be registered in `dsn_maps`.
+> Only an absent native key permits fallback; disabled keys, project mismatches
+> and storage failures never do. The bounded mapping cache stores the external
+> numeric ID and a dedicated native target key, whose existing cache still owns
+> project policy and revocation. Wire IDs are positive `u64` values; internal IDs
+> remain positive `i32`. The mapping's public DSN is display metadata and never
+> drives outbound requests. Generation 21 adds the collection without rewriting
+> existing documents. See `docs/migrate-from-sentry.md` for setup and cutover.
+
 ## Context
 
 Official Sentry SDKs identify an ingest destination through a DSN containing a
