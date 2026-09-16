@@ -66,7 +66,10 @@ const customPermissionGroups: PermissionGroup[] = [
     label: 'Debug files',
     scopes: ['debug_file:read', 'debug_file:write', 'debug_file:delete'],
   },
-  { label: 'Artifacts', scopes: ['artifact:read', 'artifact:write', 'artifact:delete'] },
+  {
+    label: 'Artifacts',
+    scopes: ['artifact:read', 'artifact:write', 'artifact:delete'],
+  },
   { label: 'Incident exports', scopes: ['incident:export'] },
   { label: 'Organization', scopes: ['organization:admin'] },
 ];
@@ -87,7 +90,12 @@ const tokenProfiles = computed<TokenProfile[]>(() => [
     icon: 'fileCode',
     title: 'Create Sentry CLI upload token',
     defaultName: 'sentry-cli uploads',
-    scopes: ['debug_file:read', 'debug_file:write', 'artifact:read', 'artifact:write'],
+    scopes: [
+      'debug_file:read',
+      'debug_file:write',
+      'artifact:read',
+      'artifact:write',
+    ],
   },
   {
     value: 'debug-files',
@@ -133,12 +141,16 @@ const tokenProfiles = computed<TokenProfile[]>(() => [
 
 const availableProfiles = computed(() =>
   tokenProfiles.value.filter(
-    (profile) => profile.custom || profile.scopes.every((scope) => session.has(scope)),
+    (profile) =>
+      profile.custom || profile.scopes.every((scope) => session.has(scope)),
   ),
 );
 const availableCustomPermissionGroups = computed(() =>
   customPermissionGroups
-    .map((group) => ({ ...group, scopes: group.scopes.filter((scope) => session.has(scope)) }))
+    .map((group) => ({
+      ...group,
+      scopes: group.scopes.filter((scope) => session.has(scope)),
+    }))
     .filter((group) => group.scopes.length > 0),
 );
 const profileOptions = computed<SelectOption[]>(() =>
@@ -174,8 +186,15 @@ watch(tokenProfile, (value, previous) => {
   const profile = availableProfiles.value.find((candidate) => candidate.value === value);
   if (!profile) return;
 
-  if (profile.custom && !customTouched.value && customScopes.value.length === 0 && previous) {
-    const previousProfile = tokenProfiles.value.find((candidate) => candidate.value === previous);
+  if (
+    profile.custom &&
+    !customTouched.value &&
+    customScopes.value.length === 0 &&
+    previous
+  ) {
+    const previousProfile = tokenProfiles.value.find(
+      (candidate) => candidate.value === previous,
+    );
     if (previousProfile && !previousProfile.custom) {
       customScopes.value = customScopeOrder.filter(
         (scope) => previousProfile.scopes.includes(scope) && session.has(scope),
