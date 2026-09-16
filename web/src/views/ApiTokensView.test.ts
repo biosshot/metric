@@ -122,6 +122,12 @@ describe('ApiTokensView role-scoped profiles', () => {
     expect(screen.queryByText('organization:owner')).not.toBeInTheDocument();
     expect(screen.queryByText('organization:delete')).not.toBeInTheDocument();
 
+    const artifactWrite = screen.getByText('artifact:write').closest('label');
+    expect(artifactWrite).toHaveAttribute(
+      'title',
+      'Upload and assemble source maps and artifact bundles.',
+    );
+
     await fireEvent.click(screen.getByRole('checkbox', { name: /artifact:write/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
 
