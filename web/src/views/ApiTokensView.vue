@@ -22,6 +22,25 @@ const tokenName = ref('');
 const expiresOn = ref(new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10));
 const createdToken = ref<CreatedApiToken | null>(null);
 const revokingTokenId = ref<string | null>(null);
+const customScopes = ref<TokenScope[]>([]);
+const customTouched = ref(false);
+
+type TokenScope =
+  | 'event:read'
+  | 'issue:read'
+  | 'issue:write'
+  | 'project:read'
+  | 'project:admin'
+  | 'debug_file:read'
+  | 'debug_file:write'
+  | 'debug_file:delete'
+  | 'artifact:read'
+  | 'artifact:write'
+  | 'artifact:delete'
+  | 'release:read'
+  | 'release:write'
+  | 'incident:export'
+  | 'organization:admin';
 
 interface TokenProfile {
   value: string;
@@ -29,8 +48,29 @@ interface TokenProfile {
   icon: SelectOption['icon'];
   title: string;
   defaultName: string;
-  scopes: string[];
+  scopes: TokenScope[];
+  custom?: boolean;
 }
+
+interface PermissionGroup {
+  label: string;
+  scopes: TokenScope[];
+}
+
+const customPermissionGroups: PermissionGroup[] = [
+  { label: 'Events', scopes: ['event:read'] },
+  { label: 'Issues', scopes: ['issue:read', 'issue:write'] },
+  { label: 'Projects', scopes: ['project:read', 'project:admin'] },
+  { label: 'Releases', scopes: ['release:read', 'release:write'] },
+  {
+    label: 'Debug files',
+    scopes: ['debug_file:read', 'debug_file:write', 'debug_file:delete'],
+  },
+  { label: 'Artifacts', scopes: ['artifact:read', 'artifact:write', 'artifact:delete'] },
+  { label: 'Incident exports', scopes: ['incident:export'] },
+  { label: 'Organization', scopes: ['organization:admin'] },
+];
+const customScopeOrder = customPermissionGroups.flatMap((group) => group.scopes);
 
 const tokenProfiles = computed<TokenProfile[]>(() => [
   {
@@ -40,6 +80,14 @@ const tokenProfiles = computed<TokenProfile[]>(() => [
     title: t('apiTokens.releaseTitle'),
     defaultName: 'sentry-cli releases',
     scopes: ['release:read', 'release:write'],
+  },
+  {
+    value: 'sentry-cli-uploads',
+    label: 'Sentry CLI uploads',
+    icon: 'fileCode',
+    title: 'Create Sentry CLI upload token',
+    defaultName: 'sentry-cli uploads',
+    scopes: ['debug_file:read', 'debug_file:write', 'artifact:read', 'artifact:write'],
   },
   {
     value: 'debug-files',
@@ -72,10 +120,26 @@ const tokenProfiles = computed<TokenProfile[]>(() => [
       'release:read',
     ],
   },
+  {
+    value: 'custom',
+    label: 'Custom / Advanced',
+    icon: 'key',
+    title: t('apiTokens.createTitle'),
+    defaultName: 'custom API token',
+    scopes: [],
+    custom: true,
+  },
 ]);
 
 const availableProfiles = computed(() =>
-  tokenProfiles.value.filter((profile) => profile.scopes.every((scope) => session.has(scope))),
+  tokenProfiles.value.filter(
+    (profile) => profile.custom || profile.scopes.every((scope) => session.has(scope)),
+  ),
+);
+const availableCustomPermissionGroups = computed(() =>
+  customPermissionGroups
+    .map((group) => ({ ...group, scopes: group.scopes.filter((scope) => session.has(scope)) }))
+    .filter((group) => group.scopes.length > 0),
 );
 const profileOptions = computed<SelectOption[]>(() =>
   availableProfiles.value.map(({ value, label, icon }) => ({ value, label, icon })),
@@ -83,7 +147,12 @@ const profileOptions = computed<SelectOption[]>(() =>
 const selectedProfile = computed(() =>
   availableProfiles.value.find((profile) => profile.value === tokenProfile.value),
 );
-const tokenScopes = computed(() => selectedProfile.value?.scopes ?? []);
+const tokenScopes = computed<TokenScope[]>(() => {
+  if (selectedProfile.value?.custom) {
+    return customScopeOrder.filter((scope) => customScopes.value.includes(scope));
+  }
+  return selectedProfile.value?.scopes ?? [];
+});
 const profileTitle = computed(() => selectedProfile.value?.title ?? t('apiTokens.createTitle'));
 
 watch(
@@ -103,7 +172,18 @@ watch(
 watch(tokenProfile, (value, previous) => {
   if (!value || value === previous) return;
   const profile = availableProfiles.value.find((candidate) => candidate.value === value);
-  if (profile) tokenName.value = profile.defaultName;
+  if (!profile) return;
+
+  if (profile.custom && !customTouched.value && customScopes.value.length === 0 && previous) {
+    const previousProfile = tokenProfiles.value.find((candidate) => candidate.value === previous);
+    if (previousProfile && !previousProfile.custom) {
+      customScopes.value = customScopeOrder.filter(
+        (scope) => previousProfile.scopes.includes(scope) && session.has(scope),
+      );
+    }
+  }
+
+  tokenName.value = profile.defaultName;
 });
 
 const tokens = useQuery({
@@ -132,6 +212,11 @@ const revokeToken = useMutation({
     revokingTokenId.value = null;
   },
 });
+
+function permissionAction(scope: TokenScope): string {
+  const action = scope.split(':')[1] ?? scope;
+  return action.charAt(0).toUpperCase() + action.slice(1);
+}
 
 function formatTimestamp(value: string | null): string {
   if (!value) return t('apiTokens.never');
@@ -183,7 +268,7 @@ function formatTimestamp(value: string | null): string {
           <p class="eyebrow">sentry-cli</p>
           <h2>{{ profileTitle }}</h2>
           <p class="muted">
-            {{ $t('apiTokens.grants') }} <code>{{ tokenScopes.join(', ') }}</code
+            {{ $t('apiTokens.grants') }} <code>{{ tokenScopes.join(', ') || '—' }}</code
             >.
           </p>
           <p v-if="!session.has('release:write') || !session.has('debug_file:write')" class="muted">
@@ -205,6 +290,23 @@ function formatTimestamp(value: string | null): string {
           {{ $t('apiTokens.expiresOn') }}
           <input v-model="expiresOn" required type="date" />
         </label>
+      </div>
+      <div v-if="selectedProfile?.custom" class="form-grid">
+        <div v-for="group in availableCustomPermissionGroups" :key="group.label">
+          <span class="field-label">{{ group.label }}</span>
+          <label v-for="scope in group.scopes" :key="scope" class="check-control">
+            <input
+              v-model="customScopes"
+              type="checkbox"
+              :value="scope"
+              @change="customTouched = true"
+            />
+            <span class="check-control__copy">
+              <strong>{{ permissionAction(scope) }}</strong>
+              <small><code>{{ scope }}</code></small>
+            </span>
+          </label>
+        </div>
       </div>
       <button
         class="button button--primary"
