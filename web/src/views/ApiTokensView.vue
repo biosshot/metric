@@ -75,6 +75,24 @@ const customPermissionGroups: PermissionGroup[] = [
 ];
 const customScopeOrder = customPermissionGroups.flatMap((group) => group.scopes);
 
+const permissionDescriptions: Record<TokenScope, string> = {
+  'event:read': 'Read stored events and event details.',
+  'issue:read': 'Read issues, issue details, and issue activity.',
+  'issue:write': 'Update issue state and other mutable issue data.',
+  'project:read': 'Read project metadata and project-scoped configuration.',
+  'project:admin': 'Manage project settings and administrative project operations.',
+  'debug_file:read': 'List and inspect uploaded debug information files.',
+  'debug_file:write': 'Upload and assemble debug information files.',
+  'debug_file:delete': 'Delete uploaded debug information files.',
+  'artifact:read': 'Read uploaded artifact and source-map metadata.',
+  'artifact:write': 'Upload and assemble source maps and artifact bundles.',
+  'artifact:delete': 'Delete uploaded artifacts and artifact bundles.',
+  'release:read': 'Read releases, deploys, and release metadata.',
+  'release:write': 'Create and update releases and deploys.',
+  'incident:export': 'Export Incident Capsules for authorized issue and event data.',
+  'organization:admin': 'Perform organization administration allowed to organization admins.',
+};
+
 const tokenProfiles = computed<TokenProfile[]>(() => [
   {
     value: 'releases',
@@ -224,6 +242,10 @@ function permissionAction(scope: TokenScope): string {
   return action.charAt(0).toUpperCase() + action.slice(1);
 }
 
+function permissionDescription(scope: TokenScope): string {
+  return permissionDescriptions[scope];
+}
+
 function formatTimestamp(value: string | null): string {
   if (!value) return t('apiTokens.never');
   return new Intl.DateTimeFormat(locale.value, {
@@ -298,9 +320,18 @@ function formatTimestamp(value: string | null): string {
         </label>
       </div>
       <div v-if="selectedProfile?.custom" class="form-grid">
-        <div v-for="group in availableCustomPermissionGroups" :key="group.label">
+        <div
+          v-for="group in availableCustomPermissionGroups"
+          :key="group.label"
+          class="permission-group"
+        >
           <span class="field-label">{{ group.label }}</span>
-          <label v-for="scope in group.scopes" :key="scope" class="check-control">
+          <label
+            v-for="scope in group.scopes"
+            :key="scope"
+            class="check-control"
+            :title="permissionDescription(scope)"
+          >
             <input
               v-model="customScopes"
               type="checkbox"
@@ -377,3 +408,10 @@ function formatTimestamp(value: string | null): string {
     </section>
   </section>
 </template>
+
+<style scoped>
+.permission-group {
+  display: grid;
+  gap: 0.625rem;
+}
+</style>
