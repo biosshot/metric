@@ -90,12 +90,7 @@ const tokenProfiles = computed<TokenProfile[]>(() => [
     icon: 'fileCode',
     title: 'Create Sentry CLI upload token',
     defaultName: 'sentry-cli uploads',
-    scopes: [
-      'debug_file:read',
-      'debug_file:write',
-      'artifact:read',
-      'artifact:write',
-    ],
+    scopes: ['debug_file:read', 'debug_file:write', 'artifact:read', 'artifact:write'],
   },
   {
     value: 'debug-files',
@@ -141,8 +136,7 @@ const tokenProfiles = computed<TokenProfile[]>(() => [
 
 const availableProfiles = computed(() =>
   tokenProfiles.value.filter(
-    (profile) =>
-      profile.custom || profile.scopes.every((scope) => session.has(scope)),
+    (profile) => profile.custom || profile.scopes.every((scope) => session.has(scope)),
   ),
 );
 const availableCustomPermissionGroups = computed(() =>
@@ -186,15 +180,8 @@ watch(tokenProfile, (value, previous) => {
   const profile = availableProfiles.value.find((candidate) => candidate.value === value);
   if (!profile) return;
 
-  if (
-    profile.custom &&
-    !customTouched.value &&
-    customScopes.value.length === 0 &&
-    previous
-  ) {
-    const previousProfile = tokenProfiles.value.find(
-      (candidate) => candidate.value === previous,
-    );
+  if (profile.custom && !customTouched.value && customScopes.value.length === 0 && previous) {
+    const previousProfile = tokenProfiles.value.find((candidate) => candidate.value === previous);
     if (previousProfile && !previousProfile.custom) {
       customScopes.value = customScopeOrder.filter(
         (scope) => previousProfile.scopes.includes(scope) && session.has(scope),
@@ -322,7 +309,9 @@ function formatTimestamp(value: string | null): string {
             />
             <span class="check-control__copy">
               <strong>{{ permissionAction(scope) }}</strong>
-              <small><code>{{ scope }}</code></small>
+              <small
+                ><code>{{ scope }}</code></small
+              >
             </span>
           </label>
         </div>
