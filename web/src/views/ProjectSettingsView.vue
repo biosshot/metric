@@ -27,6 +27,8 @@ const { locale, t } = useI18n();
 const projectId = computed(() => session.selectedProjectId ?? '');
 const canAdministerProject = computed(() => session.has('project:admin'));
 const newKeyLabel = ref('');
+const useExistingDsn = ref(false);
+const existingDsn = ref('');
 const notice = ref('');
 const deleteConfirmation = ref('');
 const ipPolicyOptions = computed<SelectOption[]>(() => [
@@ -206,9 +208,15 @@ const savePolicy = useMutation({
   },
 });
 const createKey = useMutation({
-  mutationFn: () => api.createKey(projectId.value, newKeyLabel.value),
+  mutationFn: () =>
+    api.createKey(
+      projectId.value,
+      newKeyLabel.value,
+      useExistingDsn.value ? existingDsn.value : undefined,
+    ),
   onSuccess: async () => {
     newKeyLabel.value = '';
+    existingDsn.value = '';
     notice.value = t('projectSettings.keyCreated');
     await queryClient.invalidateQueries({ queryKey: ['project-keys', projectId.value] });
   },
@@ -559,7 +567,7 @@ const cancelDeletion = useMutation({
           <article v-for="key in keys.data.value?.items" :key="key.dsn_key">
             <div>
               <strong>{{ key.label }}</strong>
-              <code>{{ key.dsn_key }}</code>
+              <code>{{ key.existing_dsn || key.dsn_key }}</code>
             </div>
             <StatusBadge :status="key.state" />
             <button
@@ -574,6 +582,10 @@ const cancelDeletion = useMutation({
             </button>
           </article>
         </div>
+        <label class="check-control existing-dsn-toggle">
+          <input v-model="useExistingDsn" type="checkbox" />
+          <span>{{ $t('projectSettings.useExistingDsn') }}</span>
+        </label>
         <form
           v-if="session.has('project:admin')"
           class="inline-form"
@@ -583,13 +595,25 @@ const cancelDeletion = useMutation({
             {{ $t('projectSettings.newKeyLabel') }}
             <input v-model.trim="newKeyLabel" maxlength="64" required />
           </label>
+          <label v-if="useExistingDsn">
+            {{ $t('projectSettings.existingDsn') }}
+            <input
+              v-model.trim="existingDsn"
+              type="url"
+              maxlength="2048"
+              placeholder="https://public_key@sentry.example.com/123"
+              required
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
           <button
             class="button button--secondary"
             type="submit"
             :disabled="createKey.isPending.value"
           >
             <AppIcon name="plus" :size="16" />
-            {{ $t('projectSettings.createKey') }}
+            {{ $t(useExistingDsn ? 'projectSettings.importDsn' : 'projectSettings.createKey') }}
           </button>
         </form>
         <ApiErrorPanel

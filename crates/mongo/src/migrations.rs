@@ -23,7 +23,9 @@ use tokio::{
     time::{sleep, timeout},
 };
 
+mod dsn_maps;
 mod telegram_configuration;
+pub(crate) use dsn_maps::DSN_MAPS_MIGRATION;
 
 pub(crate) use telegram_configuration::TELEGRAM_CONFIGURATION_MIGRATION;
 

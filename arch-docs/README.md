@@ -32,7 +32,7 @@ Status as of 2026-09-05:
 | Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
-| Automatic schema-migration framework | Complete; generation 19 to 20 Telegram transition registered | ADR-0049/0050 |
+| Automatic schema-migration framework | Complete; generation 19 to 20 Telegram and 20 to 21 DSN-map transitions registered | ADR-0049/0050 |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
@@ -59,9 +59,12 @@ Phase reports and module contracts are intentionally historical. Statements such
 "the next phase has not started" describe the boundary at the report date, not the
 current roadmap.
 
+Existing Sentry DSNs are supported through an additive mapping collection; see
+[the migration guide](../docs/migrate-from-sentry.md) and the ADR-0019 extension.
+
 ## Schema-generation safety
 
-The current binary requires schema generation **20 exactly** before starting
+The current binary requires schema generation **21 exactly** before starting
 application workers. The runtime constant
 [`SCHEMA_GENERATION`](../crates/mongo/src/lib.rs) is the implementation source of
 truth. Generation numbers in older ADR amendments, module contracts and phase
@@ -100,7 +103,7 @@ duplicate because its ID contains the server receive time.
 
 ## Current physical storage names
 
-The active schema generation is 20. The Error occurrence collection is
+The active schema generation is 21. The Error occurrence collection is
 `error_events`; `events` is only a legacy generation-7 physical name. Native HTTP
 routes may still contain `/events` because route names are product concepts, not
 MongoDB collection selectors.

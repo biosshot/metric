@@ -128,6 +128,18 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         .insert_project_key(project_key(42, disabled, ProjectKeyState::Disabled))
         .await?;
 
+    store
+        .insert_dsn_mapping(
+            ProjectId::new(42)?,
+            metric_domain::DsnMapping {
+                source: metric_domain::ExistingDsn::parse(
+                    "https://abababababababababababababababab@sentry.example/4500000000000001",
+                )?,
+                target_key: active,
+            },
+        )
+        .await?;
+
     let first = ProjectDeletionOperationId::from_bytes([1; 16]);
     let request = deletion_request(first, 2_000, 20_000);
     let accepted = store.request_deletion(request).await?;
@@ -234,7 +246,8 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 
     // A new adapter instance simulates process restart while the durable job remains.
     let mut late_inflight_inserted = false;
-    for _ in 0..64 {
+    // Both passes visit every dataset, plus one-record batches in populated ones.
+    for _ in 0..(2 * metric_mongo::DATASET_REGISTRY.len() + 16) {
         // Recreate the adapter before every bounded step: every persisted phase/cursor
         // must be sufficient to resume after a process crash.
         let restarted =
@@ -319,6 +332,13 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     assert_eq!(
         database
             .collection::<mongodb::bson::Document>("project_keys")
+            .count_documents(doc! { "project_id": 42 })
+            .await?,
+        0
+    );
+    assert_eq!(
+        database
+            .collection::<mongodb::bson::Document>("dsn_maps")
             .count_documents(doc! { "project_id": 42 })
             .await?,
         0

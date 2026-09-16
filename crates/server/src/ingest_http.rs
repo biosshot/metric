@@ -26,7 +26,7 @@ use metric_application::{
     observability::{Metric, Metrics, Outcome, RequestId},
     shutdown::ShutdownSignal,
 };
-use metric_domain::{DsnKey, EventId, ProjectId};
+use metric_domain::{DsnKey, EventId, parse_ingest_project_id};
 use metric_ports::{BlobChunkSource, BlobStoreError, IngestOutcome, IngestOutcomeKind, PortFuture};
 use metric_sentry_protocol::{
     AttachmentLimits, EnvelopeLimits, ParsedEnvelope, ProtocolError, ProtocolErrorKind,
@@ -103,7 +103,7 @@ pub fn router(
 
 async fn minidump_handler(
     State(state): State<IngestHttpState>,
-    Path(project_id): Path<i32>,
+    Path(project_id): Path<String>,
     Extension(request_id): Extension<RequestId>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -134,7 +134,7 @@ async fn minidump_handler(
 
 async fn process_minidump(
     state: &IngestHttpState,
-    project_id: i32,
+    project_id: String,
     query: Option<&str>,
     headers: &HeaderMap,
     body: Body,
@@ -144,8 +144,8 @@ async fn process_minidump(
         .clone()
         .try_acquire_owned()
         .map_err(|_| HttpIngestError::RateLimited)?;
-    let path_project_id =
-        ProjectId::new(project_id).map_err(|_| HttpIngestError::Protocol("invalid_project_id"))?;
+    let path_project_id = parse_ingest_project_id(&project_id)
+        .map_err(|_| HttpIngestError::Protocol("invalid_project_id"))?;
     let mut auth_keys = Vec::with_capacity(2);
     if let Some(value) = headers.get("x-sentry-auth") {
         auth_keys.push(parse_x_sentry_auth(
@@ -227,7 +227,7 @@ fn parse_minidump_event_id(
 
 async fn envelope_handler(
     State(state): State<IngestHttpState>,
-    Path(project_id): Path<i32>,
+    Path(project_id): Path<String>,
     Extension(request_id): Extension<RequestId>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -247,7 +247,7 @@ async fn envelope_handler(
 
 async fn store_handler(
     State(state): State<IngestHttpState>,
-    Path(project_id): Path<i32>,
+    Path(project_id): Path<String>,
     Extension(request_id): Extension<RequestId>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -267,7 +267,7 @@ async fn store_handler(
 
 async fn execute_request(
     state: IngestHttpState,
-    project_id: i32,
+    project_id: String,
     request_id: RequestId,
     query: Option<&str>,
     headers: HeaderMap,
@@ -344,14 +344,14 @@ async fn execute_request(
 
 async fn process_request(
     state: &IngestHttpState,
-    project_id: i32,
+    project_id: String,
     query: Option<&str>,
     headers: &HeaderMap,
     body: Body,
     is_envelope: bool,
 ) -> Result<IngestResult, HttpIngestError> {
-    let path_project_id =
-        ProjectId::new(project_id).map_err(|_| HttpIngestError::Protocol("invalid_project_id"))?;
+    let path_project_id = parse_ingest_project_id(&project_id)
+        .map_err(|_| HttpIngestError::Protocol("invalid_project_id"))?;
     let decoded = decode_body(body, headers, &state.config).await?;
     let parsing = state
         .parsing
@@ -409,7 +409,7 @@ async fn process_request(
 }
 
 fn map_request(
-    path_project_id: ProjectId,
+    path_project_id: u64,
     auth_keys: Vec<DsnKey>,
     parsed: ParsedEnvelope,
 ) -> IngestRequest {

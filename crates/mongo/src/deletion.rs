@@ -41,7 +41,7 @@ pub struct DatasetRegistration {
 }
 
 /// Numeric codes are append-only. Existing codes must never be renamed or reused.
-pub const DATASET_REGISTRY: [DatasetRegistration; 38] = [
+pub const DATASET_REGISTRY: [DatasetRegistration; 39] = [
     DatasetRegistration {
         code: 0,
         name: "api_tokens",
@@ -203,6 +203,11 @@ pub const DATASET_REGISTRY: [DatasetRegistration; 38] = [
         ownership: DatasetOwnership::ControlPlane,
     },
     DatasetRegistration {
+        code: 69,
+        name: "dsn_maps",
+        ownership: DatasetOwnership::ProjectOwned,
+    },
+    DatasetRegistration {
         code: 70,
         name: "project_keys",
         ownership: DatasetOwnership::ProjectOwned,
@@ -288,9 +293,9 @@ pub const FILESYSTEM_NAMESPACE_REGISTRY: [DatasetRegistration; 10] = [
     },
 ];
 
-const PURGE_CODES: [u16; 28] = [
+const PURGE_CODES: [u16; 29] = [
     10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 30, 40, 50, 52, 54, 56, 58, 59, 60, 62,
-    64, 66, 68, 70,
+    64, 66, 68, 69, 70,
 ];
 
 impl MongoProjectStore {
@@ -717,6 +722,10 @@ impl MongoProjectStore {
                     batch_size,
                 )
                 .await
+            }
+            69 => {
+                self.delete_owned_batch("dsn_maps", "project_id", project_id, cursor, batch_size)
+                    .await
             }
             70 => {
                 self.delete_owned_batch(

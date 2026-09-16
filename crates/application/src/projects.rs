@@ -10,9 +10,9 @@ use std::{
 };
 
 use metric_domain::{
-    DisplayName, DsnKey, IpScrubPolicy, ItemCapabilities, OrganizationId, OrganizationIdentity,
-    ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits, ProjectKeyIdentity,
-    ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, Slug,
+    DisplayName, DsnKey, DsnMapping, ExistingDsn, IpScrubPolicy, ItemCapabilities, OrganizationId,
+    OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
+    ProjectKeyIdentity, ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, Slug,
     api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
 };
 use metric_ports::{
@@ -88,14 +88,15 @@ impl ProjectServiceError {
 }
 
 type LookupResult = Result<ProjectSnapshot, ProjectResolveError>;
-type SharedLookup = Arc<OnceCell<LookupResult>>;
+type SharedLookup<T> = Arc<OnceCell<Result<T, ProjectResolveError>>>;
 
 pub struct ProjectService {
     store: Arc<dyn ProjectStore>,
     clock: Arc<dyn Clock>,
     random: Arc<dyn RandomSource>,
     collision_retries: usize,
-    cache: Mutex<CacheState>,
+    cache: Mutex<CacheState<ProjectSnapshot>>,
+    mapping_cache: Mutex<CacheState<DsnMapping>>,
     cache_generation: AtomicU64,
     cache_config: ProjectCacheConfig,
 }
@@ -122,6 +123,7 @@ impl ProjectService {
             random,
             collision_retries,
             cache: Mutex::new(CacheState::new(cache_config.capacity)),
+            mapping_cache: Mutex::new(CacheState::new(cache_config.capacity)),
             cache_generation: AtomicU64::new(0),
             cache_config,
         })
@@ -207,6 +209,49 @@ impl ProjectService {
             }
         }
         Err(ProjectServiceError::CollisionExhausted)
+    }
+
+    pub async fn import_project_key(
+        &self,
+        project_id: ProjectId,
+        label: ProjectKeyLabel,
+        source: ExistingDsn,
+    ) -> Result<DsnKey, ProjectServiceError> {
+        // A native key, including a disabled tombstone, always owns its namespace.
+        match self.store.load_project(source.key).await {
+            Err(ProjectStoreError::UnknownKey) => {}
+            Ok(_) | Err(ProjectStoreError::NotFound) => {
+                return Err(ProjectServiceError::AlreadyExists);
+            }
+            Err(error) => return Err(map_command_store_error(error)),
+        }
+        match self.store.load_dsn_mapping(source.key).await {
+            Err(ProjectStoreError::NotFound) => {}
+            Err(error) => return Err(map_command_store_error(error)),
+            Ok(_) => return Err(ProjectServiceError::AlreadyExists),
+        }
+        let target_key = self.create_project_key(project_id, label).await?;
+        let source_key = source.key;
+        if let Err(error) = self
+            .store
+            .insert_dsn_mapping(project_id, DsnMapping { source, target_key })
+            .await
+        {
+            // Fail closed even if the insert outcome is uncertain.
+            self.set_project_key_state(project_id, target_key, ProjectKeyState::Disabled)
+                .await?;
+            return Err(if error == ProjectStoreError::KeyCollision {
+                ProjectServiceError::AlreadyExists
+            } else {
+                map_command_store_error(error)
+            });
+        }
+        self.cache_generation.fetch_add(1, Ordering::AcqRel);
+        self.mapping_cache
+            .lock()
+            .expect("mapping cache lock poisoned")
+            .invalidate(source_key);
+        Ok(target_key)
     }
 
     pub async fn list_projects(
@@ -395,9 +440,25 @@ impl ProjectService {
     }
 
     async fn resolve_cached(&self, key: DsnKey) -> LookupResult {
+        self.cached(&self.cache, key, async {
+            match self.store.load_project(key).await {
+                Ok(snapshot) if snapshot_is_active(&snapshot) => Ok(snapshot),
+                Err(ProjectStoreError::UnknownKey) => Err(ProjectResolveError::UnknownKey),
+                Ok(_) | Err(ProjectStoreError::NotFound) => Err(ProjectResolveError::Unauthorized),
+                Err(_) => Err(ProjectResolveError::Unavailable),
+            }
+        })
+        .await
+    }
+
+    async fn cached<T: Clone>(
+        &self,
+        cache_state: &Mutex<CacheState<T>>,
+        key: DsnKey,
+        load: impl std::future::Future<Output = Result<T, ProjectResolveError>>,
+    ) -> Result<T, ProjectResolveError> {
         let now = self.clock.now().unix_millis();
-        if let Some(result) = self
-            .cache
+        if let Some(result) = cache_state
             .lock()
             .expect("project cache lock poisoned")
             .get(key, now)
@@ -408,7 +469,7 @@ impl ProjectService {
 
         let generation = self.cache_generation.load(Ordering::Acquire);
         let (shared, cache_result) = {
-            let mut cache = self.cache.lock().expect("project cache lock poisoned");
+            let mut cache = cache_state.lock().expect("project cache lock poisoned");
             if let Some(existing) = cache.inflight.get(&key) {
                 (Arc::clone(existing), ProjectCacheResult::Coalesced)
             } else {
@@ -422,24 +483,16 @@ impl ProjectService {
             }
         };
         Metrics.project_cache(cache_result);
-        let result = shared
-            .get_or_init(|| async {
-                match self.store.load_project(key).await {
-                    Ok(snapshot) if snapshot_is_active(&snapshot) => Ok(snapshot),
-                    Ok(_) | Err(ProjectStoreError::NotFound) => {
-                        Err(ProjectResolveError::Unauthorized)
-                    }
-                    Err(_) => Err(ProjectResolveError::Unavailable),
-                }
-            })
-            .await
-            .clone();
+        let result = shared.get_or_init(|| load).await.clone();
 
-        let mut cache = self.cache.lock().expect("project cache lock poisoned");
+        let mut cache = cache_state.lock().expect("project cache lock poisoned");
         if self.cache_generation.load(Ordering::Acquire) == generation {
             let ttl = if result.is_ok() {
                 self.cache_config.positive_ttl
-            } else if result == Err(ProjectResolveError::Unauthorized) {
+            } else if matches!(
+                result,
+                Err(ProjectResolveError::Unauthorized | ProjectResolveError::UnknownKey)
+            ) {
                 self.cache_config.negative_ttl
             } else {
                 Duration::ZERO
@@ -463,6 +516,37 @@ impl ProjectResolver for ProjectService {
     fn resolve(&self, key: DsnKey) -> PortFuture<'_, LookupResult> {
         Box::pin(self.resolve_cached(key))
     }
+
+    fn resolve_ingest(
+        &self,
+        key: DsnKey,
+    ) -> PortFuture<'_, Result<(ProjectSnapshot, u64), ProjectResolveError>> {
+        Box::pin(async move {
+            match self.resolve_cached(key).await {
+                Ok(snapshot) => {
+                    let wire_id = snapshot.project_id.get() as u64;
+                    Ok((snapshot, wire_id))
+                }
+                Err(ProjectResolveError::UnknownKey) => {
+                    let mapping = self
+                        .cached(&self.mapping_cache, key, async {
+                            self.store
+                                .load_dsn_mapping(key)
+                                .await
+                                .map_err(|error| match error {
+                                    ProjectStoreError::NotFound => ProjectResolveError::UnknownKey,
+                                    _ => ProjectResolveError::Unavailable,
+                                })
+                        })
+                        .await?;
+                    // Resolve only a native target: no alias chains or duplicated policy snapshots.
+                    let snapshot = self.resolve_cached(mapping.target_key).await?;
+                    Ok((snapshot, mapping.source.project_id))
+                }
+                Err(error) => Err(error),
+            }
+        })
+    }
 }
 
 fn snapshot_is_active(snapshot: &ProjectSnapshot) -> bool {
@@ -480,7 +564,9 @@ fn map_command_store_error(error: ProjectStoreError) -> ProjectServiceError {
         ProjectStoreError::OrganizationSlugExists | ProjectStoreError::ProjectSlugExists => {
             ProjectServiceError::AlreadyExists
         }
-        ProjectStoreError::NotFound => ProjectServiceError::NotFound,
+        ProjectStoreError::NotFound | ProjectStoreError::UnknownKey => {
+            ProjectServiceError::NotFound
+        }
         ProjectStoreError::RevisionConflict => ProjectServiceError::AlreadyExists,
         ProjectStoreError::IdentityCollision | ProjectStoreError::KeyCollision => {
             ProjectServiceError::CollisionExhausted
@@ -492,21 +578,21 @@ fn map_command_store_error(error: ProjectStoreError) -> ProjectServiceError {
 }
 
 #[derive(Clone)]
-struct CacheEntry {
-    value: LookupResult,
+struct CacheEntry<T> {
+    value: Result<T, ProjectResolveError>,
     expires_at: i64,
     generation: u64,
 }
 
-struct CacheState {
-    entries: HashMap<DsnKey, CacheEntry>,
+struct CacheState<T> {
+    entries: HashMap<DsnKey, CacheEntry<T>>,
     order: VecDeque<(DsnKey, u64)>,
-    inflight: HashMap<DsnKey, SharedLookup>,
+    inflight: HashMap<DsnKey, SharedLookup<T>>,
     next_generation: u64,
     capacity: usize,
 }
 
-impl CacheState {
+impl<T: Clone> CacheState<T> {
     fn new(capacity: usize) -> Self {
         Self {
             entries: HashMap::with_capacity(capacity.min(4096)),
@@ -517,7 +603,7 @@ impl CacheState {
         }
     }
 
-    fn get(&mut self, key: DsnKey, now: i64) -> Option<LookupResult> {
+    fn get(&mut self, key: DsnKey, now: i64) -> Option<Result<T, ProjectResolveError>> {
         let entry = self.entries.get(&key)?.clone();
         if entry.expires_at <= now {
             self.entries.remove(&key);
@@ -532,7 +618,7 @@ impl CacheState {
         Some(entry.value)
     }
 
-    fn insert(&mut self, key: DsnKey, value: LookupResult, expires_at: i64) {
+    fn insert(&mut self, key: DsnKey, value: Result<T, ProjectResolveError>, expires_at: i64) {
         let generation = self.take_generation();
         self.entries.insert(
             key,
@@ -591,6 +677,8 @@ mod tests {
         key_collisions: AtomicUsize,
         result: Mutex<Result<ProjectSnapshot, ProjectStoreError>>,
         delay: Duration,
+        mapping: Option<DsnMapping>,
+        mapping_calls: AtomicUsize,
     }
 
     impl LookupStore {
@@ -602,6 +690,8 @@ mod tests {
                 key_collisions: AtomicUsize::new(0),
                 result: Mutex::new(Ok(snapshot(1))),
                 delay: Duration::ZERO,
+                mapping: None,
+                mapping_calls: AtomicUsize::new(0),
             }
         }
     }
@@ -648,14 +738,34 @@ mod tests {
 
         fn load_project(
             &self,
-            _key: DsnKey,
+            key: DsnKey,
         ) -> PortFuture<'_, Result<ProjectSnapshot, ProjectStoreError>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             Box::pin(async move {
                 if !self.delay.is_zero() {
                     tokio::time::sleep(self.delay).await;
                 }
+                if self
+                    .mapping
+                    .as_ref()
+                    .is_some_and(|mapping| key != mapping.target_key)
+                {
+                    return Err(ProjectStoreError::UnknownKey);
+                }
                 self.result.lock().unwrap().clone()
+            })
+        }
+
+        fn load_dsn_mapping(
+            &self,
+            key: DsnKey,
+        ) -> PortFuture<'_, Result<DsnMapping, ProjectStoreError>> {
+            self.mapping_calls.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                self.mapping
+                    .clone()
+                    .filter(|mapping| mapping.source.key == key)
+                    .ok_or(ProjectStoreError::NotFound)
             })
         }
 
@@ -757,6 +867,72 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn imported_dsn_caches_mapping_and_reuses_native_revocation() {
+        let source = ExistingDsn::parse(
+            "https://02020202020202020202020202020202@sentry.example/4500000000000001",
+        )
+        .unwrap();
+        let source_key = source.key;
+        let target_key = DsnKey::from_bytes([1; 16]);
+        let store = Arc::new(LookupStore {
+            mapping: Some(DsnMapping { source, target_key }),
+            ..LookupStore::active()
+        });
+        let service = service(store.clone(), Arc::new(TestClock(AtomicI64::new(0))), 16);
+        assert_eq!(service.resolve_ingest(target_key).await.unwrap().1, 1);
+        assert_eq!(store.mapping_calls.load(Ordering::Relaxed), 0);
+        for _ in 0..3 {
+            let (snapshot, wire_id) = service.resolve_ingest(source_key).await.unwrap();
+            assert_eq!(snapshot.project_id.get(), 1);
+            assert_eq!(wire_id, 4500000000000001);
+        }
+        assert_eq!(store.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(store.mapping_calls.load(Ordering::Relaxed), 1);
+        *store.result.lock().unwrap() = Err(ProjectStoreError::NotFound);
+        service.invalidate_key(target_key);
+        assert_eq!(
+            service.resolve_ingest(source_key).await,
+            Err(ProjectResolveError::Unauthorized)
+        );
+        assert_eq!(store.mapping_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn denied_native_keys_and_storage_errors_never_fall_back() {
+        for error in [ProjectStoreError::NotFound, ProjectStoreError::Unavailable] {
+            let store = Arc::new(LookupStore {
+                result: Mutex::new(Err(error)),
+                ..LookupStore::active()
+            });
+            let service = service(store.clone(), Arc::new(TestClock(AtomicI64::new(0))), 16);
+            assert!(
+                service
+                    .resolve_ingest(DsnKey::from_bytes([1; 16]))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(store.mapping_calls.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_native_keys_and_missing_maps_are_negatively_cached() {
+        let store = Arc::new(LookupStore {
+            result: Mutex::new(Err(ProjectStoreError::UnknownKey)),
+            ..LookupStore::active()
+        });
+        let service = service(store.clone(), Arc::new(TestClock(AtomicI64::new(0))), 16);
+        for _ in 0..3 {
+            assert_eq!(
+                service.resolve_ingest(DsnKey::from_bytes([1; 16])).await,
+                Err(ProjectResolveError::UnknownKey)
+            );
+        }
+        assert_eq!(store.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(store.mapping_calls.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

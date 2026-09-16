@@ -5,9 +5,9 @@ production data.
 
 ## Updates
 
-The current binary requires MongoDB schema generation **20 exactly** before
+The current binary requires MongoDB schema generation **21 exactly** before
 starting application workers. Its automatic, forward-only, crash-resumable migration
-runner supports generation 19 to 20. Earlier generations have no supported transition
+runner supports generation 19 to 20 to 21. Earlier generations have no supported transition
 chain, so those databases still fail closed.
 There are no reverse migrations or mixed-version rolling upgrades. Read
 [Update Metric](upgrading.md) before changing versions.

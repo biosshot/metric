@@ -53,6 +53,26 @@ describe('ProjectSetupView', () => {
     expect(container.textContent).not.toContain('@localhost');
   });
 
+  it('keeps the imported endpoint and external project ID in SDK examples', async () => {
+    permissions.add('project:admin');
+    const existingDsn =
+      'https://0123456789abcdef0123456789abcdef@sentry.example:8443/4500000000000001';
+    api.keys.mockResolvedValue({
+      items: [
+        {
+          dsn_key: 'internal-key',
+          label: 'Old clients',
+          state: 'active',
+          existing_dsn: existingDsn,
+        },
+      ],
+    });
+    const { container } = renderSetup();
+    await screen.findByText('Installation');
+    expect(container.textContent).toContain(existingDsn);
+    expect(container.textContent).not.toContain('internal-key@');
+  });
+
   it('shows all seven supported SDKs to a project administrator', async () => {
     permissions.add('project:admin');
     api.keys.mockResolvedValue({

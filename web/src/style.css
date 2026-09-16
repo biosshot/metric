@@ -3214,7 +3214,12 @@ label small,
   grid-column: 2;
 }
 
+.existing-dsn-toggle {
+  margin-top: 0.65rem;
+}
+
 .key-list article code {
+  overflow-wrap: anywhere;
   color: var(--text-muted);
   font-size: 0.72rem;
 }

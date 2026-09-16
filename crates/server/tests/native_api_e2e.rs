@@ -489,7 +489,8 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         ingest_http::router(ingest, ingest_config(), root.signal()),
     );
     assert_eq!(
-        app.oneshot(sdk_request(created.project_id, created.dsn_key))
+        app.clone()
+            .oneshot(sdk_request(created.project_id, created.dsn_key))
             .await?
             .status(),
         StatusCode::OK
@@ -619,6 +620,90 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
             },
         ),
     );
+    // Import through the authenticated Web API, then send the unchanged SDK body.
+    let old_key = metric_domain::DsnKey::from_bytes([0x31; 16]);
+    let old_id = 4500000000000001_u64;
+    let old_dsn = format!("https://{old_key}@sentry.example:8443/{old_id}");
+    let import_body =
+        serde_json::json!({ "label": "Existing clients", "existing_dsn": old_dsn }).to_string();
+    let key_uri = format!("/api/v1/projects/{}/keys", created.project_id.get());
+    let admin_token = identity
+        .create_api_token(
+            &web_owner,
+            CreateApiTokenRequest {
+                name: TokenName::new("dsn-import-e2e")?,
+                scopes: PermissionSet::from_permissions([Permission::ProjectAdmin]),
+                expires_at: Timestamp::from_unix_millis(now.unix_millis() + 60_000)?,
+                request_id: RequestCorrelationId::new("dsn-import-token")?,
+            },
+        )
+        .await?;
+    for (secret, status) in [
+        (limited_token.secret.encode_hex(), StatusCode::FORBIDDEN),
+        (admin_token.secret.encode_hex(), StatusCode::CREATED),
+    ] {
+        let response = capsule_app
+            .clone()
+            .oneshot(
+                Request::post(&key_uri)
+                    .header("authorization", format!("Bearer {secret}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(import_body.clone()))?,
+            )
+            .await?;
+        assert_eq!(response.status(), status);
+    }
+    let imported = native
+        .project_keys(&owner, created.project_id)
+        .await?
+        .into_iter()
+        .find(|key| key.existing_dsn.as_deref() == Some(&old_dsn))
+        .expect("import is listed");
+    let mut old_request = sdk_request(created.project_id, old_key);
+    *old_request.uri_mut() = format!("/api/{old_id}/envelope/").parse()?;
+    assert_eq!(
+        app.clone().oneshot(old_request).await?.status(),
+        StatusCode::OK
+    );
+    let disabled = capsule_app
+        .clone()
+        .oneshot(
+            Request::delete(format!("{key_uri}/{}", imported.key))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", admin_token.secret.encode_hex()),
+                )
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+    let mut old_request = sdk_request(created.project_id, old_key);
+    *old_request.uri_mut() = format!("/api/{old_id}/envelope/").parse()?;
+    assert_eq!(
+        app.clone().oneshot(old_request).await?.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(sdk_request(created.project_id, created.dsn_key))
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    let duplicate = capsule_app
+        .clone()
+        .oneshot(
+            Request::post(&key_uri)
+                .header(
+                    "authorization",
+                    format!("Bearer {}", admin_token.secret.encode_hex()),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(import_body))?,
+        )
+        .await?;
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
     let capsule_uri = format!(
         "/api/v1/projects/{}/issues/{issue_id}/capsule",
         created.project_id.get()

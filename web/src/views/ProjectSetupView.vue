@@ -145,6 +145,8 @@ const activeKeys = computed(
 );
 
 function dsn(key: string): string {
+  const existing = activeKeys.value.find((item) => item.dsn_key === key)?.existing_dsn;
+  if (existing) return existing;
   return `${window.location.protocol}//${key}@${window.location.host}/${projectId.value}`;
 }
 

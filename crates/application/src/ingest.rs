@@ -170,9 +170,9 @@ impl std::fmt::Debug for PrimaryEvent {
 
 #[derive(Debug, Clone)]
 pub struct IngestRequest {
-    pub path_project_id: ProjectId,
+    pub path_project_id: u64,
     pub auth_keys: Vec<DsnKey>,
-    pub dsn_project_id: Option<ProjectId>,
+    pub dsn_project_id: Option<u64>,
     pub envelope_event_id: Option<EventId>,
     /// Error dependency root for attachments; this is an Envelope role.
     pub primary: Option<PrimaryEvent>,
@@ -213,9 +213,9 @@ impl Default for MinidumpIngestConfig {
 
 #[derive(Debug, Clone)]
 pub struct MinidumpRequest {
-    pub path_project_id: ProjectId,
+    pub path_project_id: u64,
     pub auth_keys: Vec<DsnKey>,
-    pub dsn_project_id: Option<ProjectId>,
+    pub dsn_project_id: Option<u64>,
     pub supplied_event_id: Option<EventId>,
 }
 
@@ -532,15 +532,15 @@ impl IngestService {
             });
         }
         let key = one_auth_key(&request.auth_keys)?;
-        let snapshot = tokio::select! {
+        let (snapshot, wire_project_id) = tokio::select! {
             biased;
             () = self.shutdown.cancelled() => return Err(IngestError {
                 kind: IngestErrorKind::ShuttingDown,
                 code: "shutting_down",
             }),
-            resolved = self.resolver.resolve(key) => resolved.map_err(map_resolve_error)?,
+            resolved = self.resolver.resolve_ingest(key) => resolved.map_err(map_resolve_error)?,
         };
-        validate_project_consistency(&request, &snapshot)?;
+        validate_project_consistency(&request, &snapshot, wire_project_id)?;
 
         for item in &request.discarded {
             self.outcome_sink.record(IngestOutcome {
@@ -1153,17 +1153,17 @@ impl IngestService {
             });
         }
         let key = one_auth_key(&request.auth_keys)?;
-        let snapshot = self
+        let (snapshot, wire_project_id) = self
             .resolver
-            .resolve(key)
+            .resolve_ingest(key)
             .await
             .map_err(map_resolve_error)?;
-        if snapshot.project_id != request.path_project_id
+        if wire_project_id != request.path_project_id
             || snapshot.state != ProjectAcceptanceState::Active
             || snapshot.key_state != ProjectKeyState::Active
             || request
                 .dsn_project_id
-                .is_some_and(|project| project != snapshot.project_id)
+                .is_some_and(|project| project != wire_project_id)
         {
             return Err(IngestError {
                 kind: IngestErrorKind::Unauthorized,
@@ -2055,13 +2055,14 @@ fn one_auth_key(keys: &[DsnKey]) -> Result<DsnKey, IngestError> {
 fn validate_project_consistency(
     request: &IngestRequest,
     snapshot: &ProjectSnapshot,
+    wire_project_id: u64,
 ) -> Result<(), IngestError> {
-    if snapshot.project_id != request.path_project_id
+    if wire_project_id != request.path_project_id
         || snapshot.state != ProjectAcceptanceState::Active
         || snapshot.key_state != ProjectKeyState::Active
         || request
             .dsn_project_id
-            .is_some_and(|project| project != snapshot.project_id)
+            .is_some_and(|project| project != wire_project_id)
     {
         return Err(IngestError {
             kind: IngestErrorKind::Unauthorized,
@@ -3286,7 +3287,7 @@ fn truncate_text(value: &str, maximum: usize) -> &str {
 
 fn map_resolve_error(error: ProjectResolveError) -> IngestError {
     match error {
-        ProjectResolveError::Unauthorized => IngestError {
+        ProjectResolveError::Unauthorized | ProjectResolveError::UnknownKey => IngestError {
             kind: IngestErrorKind::Unauthorized,
             code: "unauthorized",
         },
