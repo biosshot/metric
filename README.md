@@ -21,15 +21,17 @@ same Rust binary.
 No SaaS account. No repository clone for Docker installation. No 65-service
 Compose stack. Your telemetry stays on infrastructure you control.
 
-> Metric 0.1.6 is an early release. Read the
+> Metric 0.1.7 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
 > for important production data.
 
-## New in 0.1.6
+## New in 0.1.7
 
-Expanded Telegram configuration, a Helm chart for Kubernetes, automatic database
-migrations (19 → 20), and a tested manual backup/restore guide. Read the
-[release notes](docs/releases/0.1.6.md) before updating an existing installation.
+Existing Sentry DSNs can now be mapped to Metric projects without changing deployed
+client configuration, and personal API tokens now support fine-grained scopes including
+`artifact:write` for Sentry CLI and build-tool uploads. Existing generation-20 databases
+migrate automatically to schema generation 21. Read the
+[release notes](docs/releases/0.1.7.md) before updating an existing installation.
 
 ## Why Metric exists
 
@@ -59,7 +61,7 @@ data-residency questions or the operational weight of self-hosted Sentry.
 
 ## Metric vs. self-hosted Sentry
 
-| | **Metric 0.1.6** | **Self-hosted Sentry 26.7.2** |
+| | **Metric 0.1.7** | **Self-hosted Sentry 26.7.2** |
 | --- | --- | --- |
 | Core stack | One Rust application serving the bundled Vue UI, plus MongoDB | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
 | Compose footprint | **2 services** in Min/Low; **4 services** in Medium/High with Symbolicator and its cleanup companion | **65 service definitions** in the official release Compose file¹ |
@@ -172,17 +174,17 @@ The exact supported, optional and unavailable capabilities are kept in
 Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.6/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.7/deploy/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.6/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.7/deploy/install.ps1 | iex
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
-`ghcr.io/biosshot/metric:0.1.6` and starts the recommended Medium profile.
+`ghcr.io/biosshot/metric:0.1.7` and starts the recommended Medium profile.
 Running the installer again reuses the existing `.env` and database password.
 You do not need to clone the repository.
 
@@ -213,7 +215,7 @@ storing important data.
 Install Min on a small Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.6/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.7/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
@@ -268,7 +270,7 @@ chart always has the same version as Metric and its Docker image.
 - [Configuration](https://biosshot.github.io/metric/configuration)
 - [Capacity and profiles](https://biosshot.github.io/metric/capacity)
 - [Updates and rollback](https://biosshot.github.io/metric/upgrading)
-- [0.1.6 release notes](docs/releases/0.1.6.md)
+- [0.1.7 release notes](docs/releases/0.1.7.md)
 - [Troubleshooting](https://biosshot.github.io/metric/troubleshooting)
 
 ## Support the project
