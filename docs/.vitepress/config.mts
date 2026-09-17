@@ -45,6 +45,7 @@ export default defineConfig({
         items: [
           { text: 'Supported features', link: '/supported-capabilities' },
           { text: 'SDK compatibility', link: '/compatibility' },
+          { text: 'API tokens and permissions', link: '/api-tokens' },
           { text: 'Known limits', link: '/known-limits' },
           { text: 'Capacity and profiles', link: '/capacity' },
         ],
