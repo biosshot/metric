@@ -557,6 +557,20 @@ function editEmail(item: NotificationDestination): void {
   emailAddress.value = '';
 }
 
+function emailMemberSelected(email: string): boolean {
+  return emailAddresses.value.some((address) => address.toLowerCase() === email.toLowerCase());
+}
+
+function toggleEmailMember(email: string): void {
+  if (emailMemberSelected(email)) {
+    emailAddresses.value = emailAddresses.value.filter(
+      (address) => address.toLowerCase() !== email.toLowerCase(),
+    );
+  } else if (emailAddresses.value.length < 16) {
+    emailAddresses.value.push(email);
+  }
+}
+
 function addEmailAddress(): void {
   const value = emailAddress.value.trim();
   if (
@@ -1126,42 +1140,42 @@ function datasetLabel(value: string): string {
           :class="{ 'notification-destination--disabled': !item.enabled }"
         >
           <AppIcon :name="item.kind === 'telegram' ? 'telegram' : 'email'" />
-          <span>
+          <span class="notification-destination__identity">
             <strong>{{ destinationDisplayName(item) }}</strong>
             <small>{{ destinationEndpointLabel(item) }}</small>
             <small v-if="item.smtp">{{ item.smtp.recipients.join(', ') }}</small>
           </span>
-          <button
-            v-if="item.enabled"
-            class="button button--secondary"
-            type="button"
-            :disabled="testDestination.isPending.value"
-            @click="testDestination.mutate(item.id)"
-          >
-            <AppIcon name="telegram" :size="15" />
-            {{ $t('alerts.sendTest') }}
-          </button>
-          <button
-            v-if="item.enabled"
-            class="button button--danger"
-            type="button"
-            :disabled="setDestinationEnabled.isPending.value"
-            @click="setDestinationEnabled.mutate({ id: item.id, enabled: false })"
-          >
-            <AppIcon name="delete" :size="15" />
-            {{ $t('alerts.disableRecipient') }}
-          </button>
-          <button
-            v-else
-            class="button button--secondary"
-            type="button"
-            :disabled="setDestinationEnabled.isPending.value"
-            @click="setDestinationEnabled.mutate({ id: item.id, enabled: true })"
-          >
-            <AppIcon name="refresh" :size="15" />
-            {{ $t('alerts.restoreRecipient') }}
-          </button>
-          <div class="button-row">
+          <div class="button-row notification-destination__actions">
+            <button
+              v-if="item.enabled"
+              class="button button--secondary"
+              type="button"
+              :disabled="testDestination.isPending.value"
+              @click="testDestination.mutate(item.id)"
+            >
+              <AppIcon name="telegram" :size="15" />
+              {{ $t('alerts.sendTest') }}
+            </button>
+            <button
+              v-if="item.enabled"
+              class="button button--secondary"
+              type="button"
+              :disabled="setDestinationEnabled.isPending.value"
+              @click="setDestinationEnabled.mutate({ id: item.id, enabled: false })"
+            >
+              <AppIcon name="blocked" :size="15" />
+              {{ $t('alerts.disableRecipient') }}
+            </button>
+            <button
+              v-else
+              class="button button--secondary"
+              type="button"
+              :disabled="setDestinationEnabled.isPending.value"
+              @click="setDestinationEnabled.mutate({ id: item.id, enabled: true })"
+            >
+              <AppIcon name="refresh" :size="15" />
+              {{ $t('alerts.restoreRecipient') }}
+            </button>
             <button
               v-if="item.smtp"
               class="button button--secondary"
@@ -1184,7 +1198,46 @@ function datasetLabel(value: string): string {
             class="settings-form email-recipient-editor"
             @submit.prevent="addEmailAddress"
           >
-            <div v-for="(address, index) in emailAddresses" :key="address" class="button-row">
+            <div class="notification-audience">
+              <div>
+                <h3>{{ $t('alerts.participants') }}</h3>
+                <p class="field-help">{{ $t('alerts.participantsHelp') }}</p>
+              </div>
+              <LoadingPanel
+                v-if="organizationMembers.isPending.value"
+                :label="$t('alerts.loadingMembers')"
+              />
+              <ApiErrorPanel
+                v-else-if="organizationMembers.error.value"
+                :error="organizationMembers.error.value"
+                :title="$t('alerts.membersFailed')"
+                @retry="organizationMembers.refetch()"
+              />
+              <div v-else class="notification-member-grid">
+                <label v-for="member in activeMembers" :key="member.user_id" class="choice-card">
+                  <input
+                    type="checkbox"
+                    :checked="emailMemberSelected(member.email)"
+                    :disabled="
+                      saveEmailAddresses.isPending.value ||
+                      (!emailMemberSelected(member.email) && emailAddresses.length >= 16)
+                    "
+                    @change="toggleEmailMember(member.email)"
+                  />
+                  <span
+                    ><strong>{{ member.display_name }}</strong>
+                    <small
+                      >{{ member.email }} · {{ $t(`organization.${member.role}`) }}</small
+                    ></span
+                  >
+                </label>
+              </div>
+            </div>
+            <div
+              v-for="(address, index) in emailAddresses"
+              :key="address"
+              class="email-recipient-row"
+            >
               <span>{{ address }}</span>
               <button
                 class="icon-button"
@@ -1423,6 +1476,8 @@ function datasetLabel(value: string): string {
             v-for="item in activeNotificationDestinations"
             :key="item.id"
             class="destination-choice"
+            :aria-pressed="selectedDestinations.includes(item.id)"
+            :title="`${destinationDisplayName(item)} — ${destinationEndpointLabel(item)}`"
             :class="{ 'destination-choice--selected': selectedDestinations.includes(item.id) }"
             type="button"
             @click="toggleDestination(item.id)"
@@ -1432,7 +1487,10 @@ function datasetLabel(value: string): string {
               <strong>{{ destinationDisplayName(item) }}</strong>
               <small>{{ destinationEndpointLabel(item) }}</small>
             </span>
-            <AppIcon v-if="selectedDestinations.includes(item.id)" name="check" />
+            <AppIcon
+              name="check"
+              :class="{ 'destination-choice__unchecked': !selectedDestinations.includes(item.id) }"
+            />
           </button>
         </div>
         <button
@@ -1575,22 +1633,75 @@ function datasetLabel(value: string): string {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
 }
 .channel-test-list article {
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
-.channel-test-list article > .button-row,
 .email-recipient-editor {
   grid-column: 2 / -1;
+  min-width: 0;
+}
+.email-recipient-editor .choice-card span {
+  overflow-wrap: anywhere;
+}
+.channel-test-list {
+  container-type: inline-size;
+}
+.notification-destination__identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.notification-destination__actions {
+  justify-content: flex-end;
+}
+.notification-destination__actions .button {
+  white-space: nowrap;
+}
+.email-recipient-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+.email-recipient-row > span {
+  overflow-wrap: anywhere;
+}
+.destination-choice-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.destination-choice {
+  width: max-content;
+  max-width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.destination-choice > span {
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.destination-choice__unchecked {
+  visibility: hidden;
+}
+@container (max-width: 700px) {
+  .email-recipient-editor .notification-member-grid {
+    grid-template-columns: 1fr;
+  }
+  .channel-test-list article {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .notification-destination__actions {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+  }
 }
 .alert-rule-card > .button-row {
   grid-column: 2 / -1;
 }
 @media (max-width: 700px) {
-  .telegram-bot-list article,
-  .channel-test-list article {
+  .telegram-bot-list article {
     grid-template-columns: auto minmax(0, 1fr);
   }
-  .telegram-bot-list article > button,
-  .channel-test-list article > button {
+  .telegram-bot-list article > button {
     grid-column: 2;
   }
 }

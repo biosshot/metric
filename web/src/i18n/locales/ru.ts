@@ -925,7 +925,7 @@ export default {
     deleteRule: 'Удалить правило',
     deleteRuleConfirm: 'Удалить правило «{name}»?',
     ruleRecipients: 'Получатели',
-    deleteRecipient: 'Удалить получателя',
+    deleteRecipient: 'Удалить',
     deleteRecipientConfirm:
       'Удалить получателя «{name}»? Он будет убран из правил. Правила без оставшихся получателей тоже будут удалены.',
     deleteBot: 'Удалить бота',
@@ -1046,7 +1046,7 @@ export default {
     saving: 'Сохраняем…',
     saveEmail: 'Сохранить почтовое назначение',
     smtpEmail: 'Почта SMTP',
-    sendTest: 'Отправить тест',
+    sendTest: 'Тест',
     testFailed: 'Не удалось поставить тестовое уведомление в очередь',
     disableRecipient: 'Отключить',
     restoreRecipient: 'Восстановить',

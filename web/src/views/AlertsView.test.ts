@@ -190,6 +190,58 @@ describe('AlertsView', () => {
     );
   });
 
+  it('selects saved email recipients by member and keeps checkboxes in sync with address removal', async () => {
+    const item = emailChannel();
+    api.notificationDestinations.mockResolvedValue({ items: [item] });
+    api.organizationMembers.mockResolvedValue({
+      items: [
+        {
+          user_id: '1',
+          display_name: 'First member',
+          email: 'FIRST@example.com',
+          role: 'member',
+          disabled_at: null,
+        },
+        {
+          user_id: '2',
+          display_name: 'New member',
+          email: 'new@example.com',
+          role: 'member',
+          disabled_at: null,
+        },
+        {
+          user_id: '3',
+          display_name: 'Disabled member',
+          email: 'disabled@example.com',
+          role: 'member',
+          disabled_at: '2026-01-01',
+        },
+      ],
+    });
+    renderAdmin();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit email addresses' }));
+    const first = screen.getByRole('checkbox', { name: /First member/ });
+    const next = screen.getByRole('checkbox', { name: /New member/ });
+    expect(first).toBeChecked();
+    expect(next).not.toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: /Disabled member/ })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove first@example.com' }));
+    expect(first).not.toBeChecked();
+    await fireEvent.click(next);
+    expect(next).toBeChecked();
+    await fireEvent.click(screen.getByRole('button', { name: 'Save addresses' }));
+    await waitFor(() =>
+      expect(api.putNotificationDestination).toHaveBeenCalledWith(
+        '42',
+        expect.objectContaining({
+          id: item.id,
+          smtp_recipients: ['second@example.com', 'new@example.com'],
+          secret: null,
+        }),
+      ),
+    );
+  });
+
   it('deletes all recipients of the selected bot, including disabled ones, and leaves other bots', async () => {
     const telegram = (id: string, botId: string, enabled: boolean): NotificationDestination => ({
       ...emailChannel(),

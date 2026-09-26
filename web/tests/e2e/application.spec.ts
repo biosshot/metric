@@ -935,6 +935,28 @@ test('notification rules and saved email recipients can be managed', async ({ pa
       recipients: ['first@example.com', 'second@example.com'],
     },
   };
+  const channels = [
+    channel,
+    ...['Alex', 'Operations team', 'Very long recipient display name', 'QA', 'On-call'].map(
+      (name, index) => ({
+        ...channel,
+        id: String(index + 1).repeat(32),
+        kind: 'telegram',
+        endpoint: String(index + 100),
+        smtp: null,
+        telegram: {
+          api_base: 'https://api.telegram.org',
+          message_thread_id: null,
+          bot_id: '123',
+          bot_username: 'metric_alerts_bot',
+          bot_display_name: 'Metric',
+          chat_type: 'group',
+          chat_username: null,
+          chat_display_name: name,
+        },
+      }),
+    ),
+  ];
   let rule: Record<string, any> | null = {
     id: 'b'.repeat(32),
     project_id: '42',
@@ -950,7 +972,26 @@ test('notification rules and saved email recipients can be managed', async ({ pa
     updated_at: 2,
   };
   await page.route('**/api/v1/organization/members', (route) =>
-    route.fulfill({ json: { items: [] } }),
+    route.fulfill({
+      json: {
+        items: [
+          {
+            user_id: '1',
+            display_name: 'First member',
+            email: 'first@example.com',
+            role: 'member',
+            disabled_at: null,
+          },
+          {
+            user_id: '2',
+            display_name: 'New member',
+            email: 'longer.member.address@example.com',
+            role: 'member',
+            disabled_at: null,
+          },
+        ],
+      },
+    }),
   );
   await page.route('**/api/v1/projects/42/notification-destinations', async (route) => {
     if (route.request().method() === 'POST') {
@@ -959,7 +1000,7 @@ test('notification rules and saved email recipients can be managed', async ({ pa
       expect(input.secret).toBeNull();
       channel.smtp.recipients = input.smtp_recipients;
       await route.fulfill({ status: 201, json: channel });
-    } else await route.fulfill({ json: { items: [channel] } });
+    } else await route.fulfill({ json: { items: channels } });
   });
   await page.route('**/api/v1/projects/42/alert-rules', async (route) => {
     if (route.request().method() === 'POST') {
@@ -975,10 +1016,20 @@ test('notification rules and saved email recipients can be managed', async ({ pa
   await login(page);
   await page.goto('/settings/notifications');
   await page.getByRole('button', { name: 'Edit email addresses' }).click();
+  await expect(page.getByRole('checkbox', { name: /First member/ })).toBeChecked();
   await page.getByRole('button', { name: 'Remove first@example.com' }).click();
+  await expect(page.getByRole('checkbox', { name: /First member/ })).not.toBeChecked();
+  await page.getByRole('checkbox', { name: /New member/ }).check();
+  const removeButtonEdges = await page
+    .locator('.email-recipient-row .icon-button')
+    .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
+  expect(Math.max(...removeButtonEdges) - Math.min(...removeButtonEdges)).toBeLessThan(1);
   await page.getByRole('button', { name: 'Save addresses' }).click();
   await expect(page.getByRole('button', { name: 'Save addresses' })).toHaveCount(0);
-  expect(channel.smtp.recipients).toEqual(['second@example.com']);
+  expect(channel.smtp.recipients).toEqual([
+    'second@example.com',
+    'longer.member.address@example.com',
+  ]);
   await page.getByRole('button', { name: 'Edit rule' }).click();
   await page.getByLabel('Rule name').fill('Updated email rule');
   await page.getByRole('button', { name: 'Save rule' }).click();
@@ -989,6 +1040,39 @@ test('notification rules and saved email recipients can be managed', async ({ pa
   await expect(page.getByRole('button', { name: 'Disable rule' })).toBeVisible();
   for (const width of [1587, 390]) {
     await page.setViewportSize({ width, height: 1000 });
+    const choices = await page.locator('.destination-choice').evaluateAll((cards) =>
+      cards.map((card) => {
+        const rect = card.getBoundingClientRect();
+        return {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          whiteSpace: getComputedStyle(card.querySelector('span')!).whiteSpace,
+        };
+      }),
+    );
+    expect(choices.every((card) => card.whiteSpace === 'nowrap')).toBe(true);
+    if (width === 1587) {
+      expect(new Set(choices.map((card) => Math.round(card.left))).size).toBeGreaterThan(1);
+      expect(new Set(choices.map((card) => Math.round(card.top))).size).toBeGreaterThan(1);
+      expect(new Set(choices.map((card) => Math.round(card.width))).size).toBeGreaterThan(1);
+      const actionRows = await page
+        .locator('.notification-destination__actions')
+        .evaluateAll((rows) =>
+          rows.map((row) =>
+            [...row.querySelectorAll('button')].map((button) => button.getBoundingClientRect().top),
+          ),
+        );
+      expect(actionRows.every((tops) => Math.max(...tops) - Math.min(...tops) < 1)).toBe(true);
+    }
+    if (width === 390) {
+      await page.getByRole('button', { name: 'Edit email addresses' }).click();
+      await expect(page.getByRole('checkbox', { name: /New member/ })).toBeChecked();
+      const edges = await page
+        .locator('.email-recipient-row .icon-button')
+        .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
+      expect(Math.max(...edges) - Math.min(...edges)).toBeLessThan(1);
+    }
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);

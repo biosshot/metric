@@ -922,7 +922,7 @@ export default {
     deleteRule: 'Delete rule',
     deleteRuleConfirm: 'Delete rule "{name}"?',
     ruleRecipients: 'Recipients',
-    deleteRecipient: 'Delete recipient',
+    deleteRecipient: 'Delete',
     deleteRecipientConfirm:
       'Delete recipient "{name}"? It will be removed from rules. Rules with no remaining recipients will also be deleted.',
     deleteBot: 'Delete bot',
@@ -1043,7 +1043,7 @@ export default {
     saving: 'Saving…',
     saveEmail: 'Save email destination',
     smtpEmail: 'SMTP Email',
-    sendTest: 'Send test',
+    sendTest: 'Test',
     testFailed: 'Test notification was not queued',
     disableRecipient: 'Disable',
     restoreRecipient: 'Restore',
