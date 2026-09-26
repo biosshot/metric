@@ -910,6 +910,161 @@ async function login(page: Page, email = 'owner@example.com'): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 }
 
+test('notification rules and saved email recipients can be managed', async ({ page }, testInfo) => {
+  await installApi(page, {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  });
+  const channel = {
+    id: 'a'.repeat(32),
+    project_id: '42',
+    kind: 'smtp_email',
+    endpoint: 'smtp.gmail.com',
+    has_secret: true,
+    enabled: true,
+    telegram: null,
+    created_at: 1,
+    updated_at: 2,
+    smtp: {
+      port: 587,
+      security: 'starttls',
+      username: 'sender@example.com',
+      from: 'sender@example.com',
+      recipients: ['first@example.com', 'second@example.com'],
+    },
+  };
+  let rule: Record<string, any> | null = {
+    id: 'b'.repeat(32),
+    project_id: '42',
+    name: 'Email on error',
+    enabled: true,
+    triggers: ['new_issue'],
+    destination_ids: [channel.id],
+    aggregate: null,
+    monitor: null,
+    cooldown_minutes: 5,
+    storm_limit_per_hour: 100,
+    created_at: 1,
+    updated_at: 2,
+  };
+  await page.route('**/api/v1/organization/members', (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route('**/api/v1/projects/42/notification-destinations', async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON();
+      expect(input.id).toBe(channel.id);
+      expect(input.secret).toBeNull();
+      channel.smtp.recipients = input.smtp_recipients;
+      await route.fulfill({ status: 201, json: channel });
+    } else await route.fulfill({ json: { items: [channel] } });
+  });
+  await page.route('**/api/v1/projects/42/alert-rules', async (route) => {
+    if (route.request().method() === 'POST') {
+      rule = { ...rule, ...route.request().postDataJSON() };
+      await route.fulfill({ status: 201, json: rule });
+    } else await route.fulfill({ json: { items: rule ? [rule] : [] } });
+  });
+  await page.route(`**/api/v1/projects/42/alert-rules/${'b'.repeat(32)}`, async (route) => {
+    expect(route.request().method()).toBe('DELETE');
+    rule = null;
+    await route.fulfill({ status: 204 });
+  });
+  await login(page);
+  await page.goto('/settings/notifications');
+  await page.getByRole('button', { name: 'Edit email addresses' }).click();
+  await page.getByRole('button', { name: 'Remove first@example.com' }).click();
+  await page.getByRole('button', { name: 'Save addresses' }).click();
+  await expect(page.getByRole('button', { name: 'Save addresses' })).toHaveCount(0);
+  expect(channel.smtp.recipients).toEqual(['second@example.com']);
+  await page.getByRole('button', { name: 'Edit rule' }).click();
+  await page.getByLabel('Rule name').fill('Updated email rule');
+  await page.getByRole('button', { name: 'Save rule' }).click();
+  await expect(page.getByText('Updated email rule', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Disable rule' }).click();
+  await expect(page.getByRole('button', { name: 'Enable rule' })).toBeVisible();
+  await page.getByRole('button', { name: 'Enable rule' }).click();
+  await expect(page.getByRole('button', { name: 'Disable rule' })).toBeVisible();
+  for (const width of [1587, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`notification-management-${width}.png`),
+      animations: 'disabled',
+      fullPage: true,
+    });
+  }
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Delete rule' }).click();
+  await expect(page.getByRole('heading', { name: 'No alert rules yet' })).toBeVisible();
+});
+
+test('custom API token permission cards align at desktop and narrow widths', async ({
+  page,
+}, testInfo) => {
+  await installApi(page, {
+    role: 'owner',
+    csrfSeen: false,
+    sessionCookieSeen: false,
+    failIssues: false,
+  });
+  await page.route('**/api/v1/organization', (route) =>
+    route.fulfill({
+      json: {
+        id: '7',
+        slug: 'acme',
+        display_name: 'Acme',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    }),
+  );
+  await page.route('**/api/v1/organization/members', (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route('**/api/v1/organization/audit', (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route('**/api/v1/auth/tokens', (route) => route.fulfill({ json: { items: [] } }));
+  await login(page);
+  await page.goto('/settings/organization');
+  await page.getByRole('combobox', { name: 'CLI capability' }).click();
+  await page.getByRole('option', { name: 'Custom / Advanced' }).click();
+  for (const width of [1587, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const cards = await page.locator('.permission-group').evaluateAll((groups) => {
+      const events = groups.find(
+        (group) => group.querySelector('.field-label')?.textContent === 'Events',
+      );
+      const issues = groups.find(
+        (group) => group.querySelector('.field-label')?.textContent === 'Issues',
+      );
+      const eventCard = events?.querySelector('label')?.getBoundingClientRect();
+      const issueCard = issues?.querySelector('label')?.getBoundingClientRect();
+      return {
+        eventHeight: eventCard?.height ?? 0,
+        issueHeight: issueCard?.height ?? 0,
+        eventTop: eventCard?.top ?? 0,
+        issueTop: issueCard?.top ?? 0,
+      };
+    });
+    expect(cards.eventHeight).toBeGreaterThan(0);
+    expect(Math.abs(cards.eventHeight - cards.issueHeight)).toBeLessThan(1);
+    if (width === 1587) expect(Math.abs(cards.eventTop - cards.issueTop)).toBeLessThan(1);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`token-permissions-${width}.png`),
+      animations: 'disabled',
+      fullPage: true,
+    });
+  }
+});
+
 test('existing Sentry DSN can be imported, displayed and disabled', async ({ page }, testInfo) => {
   await installApi(page, {
     role: 'owner',

@@ -647,6 +647,36 @@ impl NotificationStore for MongoNotificationStore {
         Box::pin(self.upsert_rule_inner(rule))
     }
 
+    fn delete_destination(
+        &self,
+        project_id: ProjectId,
+        id: NotificationDestinationId,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>> {
+        Box::pin(async move {
+            self.database
+                .collection::<Document>("notification_destinations")
+                .delete_one(doc! { "_id": binary(id.as_bytes()), "p": project_id.get() })
+                .await
+                .map_err(|_| NotificationStoreError::Unavailable)?;
+            Ok(())
+        })
+    }
+
+    fn delete_rule(
+        &self,
+        project_id: ProjectId,
+        id: AlertRuleId,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>> {
+        Box::pin(async move {
+            self.database
+                .collection::<Document>("alert_rules")
+                .delete_one(doc! { "_id": binary(id.as_bytes()), "p": project_id.get() })
+                .await
+                .map_err(|_| NotificationStoreError::Unavailable)?;
+            Ok(())
+        })
+    }
+
     fn list_destinations(
         &self,
         project_id: ProjectId,

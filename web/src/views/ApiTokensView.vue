@@ -412,6 +412,7 @@ function formatTimestamp(value: string | null): string {
 <style scoped>
 .permission-group {
   display: grid;
+  align-content: start;
   gap: 0.625rem;
 }
 </style>

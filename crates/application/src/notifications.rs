@@ -216,6 +216,66 @@ impl NotificationAdminService {
             .await
     }
 
+    pub async fn delete_rule(
+        &self,
+        context: &AuthContext,
+        request_id: RequestCorrelationId,
+        project_id: metric_domain::ProjectId,
+        id: metric_domain::notifications::AlertRuleId,
+    ) -> Result<(), NotificationError> {
+        self.access.authorize(context, project_id).await?;
+        self.store.delete_rule(project_id, id).await?;
+        self.access
+            .audit(
+                context,
+                request_id,
+                project_id,
+                AuditAction::AlertRuleDeleted,
+                hex::encode(id.as_bytes()),
+            )
+            .await
+    }
+
+    pub async fn delete_destination(
+        &self,
+        context: &AuthContext,
+        request_id: RequestCorrelationId,
+        project_id: metric_domain::ProjectId,
+        id: metric_domain::notifications::NotificationDestinationId,
+    ) -> Result<(), NotificationError> {
+        self.access.authorize(context, project_id).await?;
+        for mut rule in self
+            .store
+            .list_rules(project_id, EXPANSION_RULE_LIMIT)
+            .await?
+        {
+            if !rule.destination_ids.contains(&id) {
+                continue;
+            }
+            rule.destination_ids = rule
+                .destination_ids
+                .iter()
+                .copied()
+                .filter(|value| *value != id)
+                .collect();
+            if rule.destination_ids.is_empty() {
+                self.store.delete_rule(project_id, rule.id).await?;
+            } else {
+                self.store.upsert_rule(rule).await?;
+            }
+        }
+        self.store.delete_destination(project_id, id).await?;
+        self.access
+            .audit(
+                context,
+                request_id,
+                project_id,
+                AuditAction::NotificationDestinationDeleted,
+                hex::encode(id.as_bytes()),
+            )
+            .await
+    }
+
     pub async fn destinations(
         &self,
         context: &AuthContext,

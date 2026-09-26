@@ -2,6 +2,7 @@ import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AlertsView from './AlertsView.vue';
+import type { AlertRule, NotificationDestination } from '../api/types';
 
 const api = vi.hoisted(() => ({
   notificationDestinations: vi.fn(),
@@ -16,6 +17,8 @@ const api = vi.hoisted(() => ({
   restoreNotificationDestination: vi.fn(),
   putAlertRule: vi.fn(),
   testNotificationDestination: vi.fn(),
+  deleteNotificationDestination: vi.fn(),
+  deleteAlertRule: vi.fn(),
 }));
 const session = vi.hoisted(() => ({ canAdminister: false }));
 
@@ -30,6 +33,7 @@ vi.mock('../stores/session', () => ({
 
 describe('AlertsView', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     session.canAdminister = false;
     api.notificationDestinations.mockResolvedValue({ items: [] });
@@ -37,6 +41,191 @@ describe('AlertsView', () => {
     api.monitors.mockResolvedValue({ items: [] });
     api.notificationDeliveries.mockResolvedValue({ items: [] });
     api.organizationMembers.mockResolvedValue({ items: [] });
+    api.putAlertRule.mockResolvedValue({});
+    api.deleteAlertRule.mockResolvedValue(undefined);
+    api.deleteNotificationDestination.mockResolvedValue(undefined);
+    api.putNotificationDestination.mockResolvedValue({});
+  });
+
+  function renderAdmin(): void {
+    session.canAdminister = true;
+    render(AlertsView, {
+      global: {
+        plugins: [
+          [
+            VueQueryPlugin,
+            {
+              queryClient: new QueryClient({
+                defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+              }),
+            },
+          ],
+        ],
+      },
+    });
+  }
+
+  function emailChannel(): NotificationDestination {
+    return {
+      id: 'a'.repeat(32),
+      project_id: '42',
+      kind: 'smtp_email',
+      endpoint: 'smtp.gmail.com',
+      has_secret: true,
+      enabled: true,
+      telegram: null,
+      created_at: 1,
+      updated_at: 2,
+      smtp: {
+        port: 587,
+        security: 'starttls',
+        username: 'sender@example.com',
+        from: 'sender@example.com',
+        recipients: ['first@example.com', 'second@example.com'],
+      },
+    };
+  }
+
+  function savedRule(): AlertRule {
+    return {
+      id: 'b'.repeat(32),
+      project_id: '42',
+      name: 'Existing rule',
+      enabled: true,
+      triggers: ['new_issue'],
+      aggregate: null,
+      monitor: null,
+      destination_ids: ['a'.repeat(32)],
+      cooldown_minutes: 7,
+      storm_limit_per_hour: 23,
+      created_at: 1,
+      updated_at: 2,
+    };
+  }
+
+  it('edits the existing rule and keeps its id, state and delivery limits', async () => {
+    const rule = { ...savedRule(), enabled: false };
+    api.notificationDestinations.mockResolvedValue({ items: [emailChannel()] });
+    api.alertRules.mockResolvedValue({ items: [rule] });
+    renderAdmin();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit rule' }));
+    await fireEvent.update(screen.getByDisplayValue('Existing rule'), 'Updated rule');
+    await fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() =>
+      expect(api.putAlertRule).toHaveBeenCalledWith(
+        '42',
+        expect.objectContaining({
+          id: rule.id,
+          name: 'Updated rule',
+          enabled: false,
+          triggers: ['new_issue'],
+          destination_ids: rule.destination_ids,
+          cooldown_minutes: 7,
+          storm_limit_per_hour: 23,
+        }),
+      ),
+    );
+  });
+
+  it('toggles a rule without losing aggregate conditions and confirms deletion', async () => {
+    const rule: AlertRule = {
+      ...savedRule(),
+      triggers: [],
+      aggregate: {
+        dataset: 'logs',
+        lookback_minutes: 15,
+        evaluation_interval_minutes: 5,
+        threshold: 10,
+        environment: 'production',
+        release: 'v1',
+        notify_resolved: false,
+      },
+    };
+    api.notificationDestinations.mockResolvedValue({ items: [emailChannel()] });
+    api.alertRules.mockResolvedValue({ items: [rule] });
+    renderAdmin();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Disable rule' }));
+    await waitFor(() =>
+      expect(api.putAlertRule).toHaveBeenCalledWith(
+        '42',
+        expect.objectContaining({
+          id: rule.id,
+          enabled: false,
+          aggregate_dataset: 'logs',
+          environment: 'production',
+          release: 'v1',
+          notify_resolved: false,
+          threshold: 10,
+        }),
+      ),
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete rule' }));
+    expect(api.deleteAlertRule).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete rule' }));
+    await waitFor(() => expect(api.deleteAlertRule).toHaveBeenCalledWith('42', rule.id));
+  });
+
+  it('removes an email address and saves the same channel without its SMTP password', async () => {
+    const item = emailChannel();
+    api.notificationDestinations.mockResolvedValue({ items: [item] });
+    renderAdmin();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit email addresses' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove first@example.com' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save addresses' }));
+    await waitFor(() =>
+      expect(api.putNotificationDestination).toHaveBeenCalledWith('42', {
+        id: item.id,
+        kind: 'smtp_email',
+        endpoint: 'smtp.gmail.com',
+        enabled: true,
+        secret: null,
+        smtp_port: 587,
+        smtp_security: 'starttls',
+        smtp_username: 'sender@example.com',
+        smtp_from: 'sender@example.com',
+        smtp_recipients: ['second@example.com'],
+      }),
+    );
+  });
+
+  it('deletes all recipients of the selected bot, including disabled ones, and leaves other bots', async () => {
+    const telegram = (id: string, botId: string, enabled: boolean): NotificationDestination => ({
+      ...emailChannel(),
+      id,
+      kind: 'telegram',
+      enabled,
+      smtp: null,
+      endpoint: id,
+      telegram: {
+        api_base: 'https://api.telegram.org',
+        message_thread_id: null,
+        bot_id: botId,
+        bot_username: `bot_${botId}`,
+        bot_display_name: botId,
+        chat_type: 'private',
+        chat_username: null,
+        chat_display_name: id,
+      },
+    });
+    const items = [
+      telegram('1'.repeat(32), '123', true),
+      telegram('2'.repeat(32), '123', false),
+      telegram('3'.repeat(32), '456', true),
+    ];
+    api.notificationDestinations.mockResolvedValue({ items });
+    renderAdmin();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const botButton = (await screen.findAllByRole('button', { name: 'Delete bot' }))[0];
+    await fireEvent.click(botButton);
+    expect(api.deleteNotificationDestination).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    await fireEvent.click(botButton);
+    await waitFor(() => expect(api.deleteNotificationDestination).toHaveBeenCalledTimes(2));
+    expect(api.deleteNotificationDestination).toHaveBeenNthCalledWith(1, '42', items[0].id);
+    expect(api.deleteNotificationDestination).toHaveBeenNthCalledWith(2, '42', items[1].id);
+    expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining('2 recipients'));
   });
 
   it('does not request administrative notification data for a member', () => {

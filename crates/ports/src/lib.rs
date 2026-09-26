@@ -852,6 +852,18 @@ pub trait NotificationStore: Send + Sync + 'static {
 
     fn upsert_rule(&self, rule: AlertRule) -> PortFuture<'_, Result<(), NotificationStoreError>>;
 
+    fn delete_destination(
+        &self,
+        project_id: ProjectId,
+        id: metric_domain::notifications::NotificationDestinationId,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
+    fn delete_rule(
+        &self,
+        project_id: ProjectId,
+        id: metric_domain::notifications::AlertRuleId,
+    ) -> PortFuture<'_, Result<(), NotificationStoreError>>;
+
     fn list_destinations(
         &self,
         project_id: ProjectId,

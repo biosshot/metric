@@ -1162,8 +1162,9 @@ impl IdentityService {
         target_id: String,
     ) -> Result<(), AuthError> {
         let target_kind = match action {
-            AuditAction::NotificationDestinationUpserted => "notification_destination",
-            AuditAction::AlertRuleUpserted => "alert_rule",
+            AuditAction::NotificationDestinationUpserted
+            | AuditAction::NotificationDestinationDeleted => "notification_destination",
+            AuditAction::AlertRuleUpserted | AuditAction::AlertRuleDeleted => "alert_rule",
             _ => return Err(AuthError::Forbidden),
         };
         if !context.permissions.contains(Permission::ProjectAdmin) {
@@ -2748,6 +2749,46 @@ mod tests {
             AuditMetadataKey::ResultSizeClass,
             AuditMetadataValue::new("medium").unwrap()
         )));
+    }
+
+    #[tokio::test]
+    async fn notification_deletions_use_existing_audit_targets_and_require_admin() {
+        let (service, store, _clock, mut owner, _session) = bootstrapped().await;
+        for (action, target) in [
+            (AuditAction::AlertRuleDeleted, "alert_rule"),
+            (
+                AuditAction::NotificationDestinationDeleted,
+                "notification_destination",
+            ),
+        ] {
+            service
+                .record_notification_audit(
+                    &owner,
+                    BoundedId::new(target).unwrap(),
+                    ProjectId::new(42).unwrap(),
+                    action,
+                    "a".repeat(32),
+                )
+                .await
+                .unwrap();
+            let state = store.state.lock().unwrap();
+            let record = state.audits.last().unwrap();
+            assert_eq!(record.action, action);
+            assert_eq!(record.target_kind, target);
+        }
+        owner.permissions = PermissionSet::from_role(OrganizationRole::Member);
+        assert_eq!(
+            service
+                .record_notification_audit(
+                    &owner,
+                    BoundedId::new("denied-deletion").unwrap(),
+                    ProjectId::new(42).unwrap(),
+                    AuditAction::AlertRuleDeleted,
+                    "a".repeat(32),
+                )
+                .await,
+            Err(AuthError::Forbidden)
+        );
     }
 
     #[tokio::test]

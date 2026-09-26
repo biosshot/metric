@@ -629,6 +629,10 @@ pub fn router_with_limits(
             post(restore_notification_destination),
         )
         .route(
+            "/api/v1/projects/{project_id}/notification-destinations/{destination_id}/permanent",
+            delete(delete_notification_destination),
+        )
+        .route(
             "/api/v1/projects/{project_id}/notification-destinations/{destination_id}/test",
             post(test_notification_destination),
         )
@@ -647,6 +651,10 @@ pub fn router_with_limits(
         .route(
             "/api/v1/projects/{project_id}/alert-rules",
             get(list_alert_rules).post(put_alert_rule),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/alert-rules/{rule_id}",
+            delete(delete_alert_rule),
         )
         .route("/api/v1/projects/{project_id}/logs/{log_id}", get(get_log))
         .route(
@@ -2241,14 +2249,18 @@ async fn put_notification_destination(
         "smtp_email" => NotificationDestinationKind::SmtpEmail,
         _ => return Err(HttpApiError::InvalidRequest),
     };
-    let existing = if kind == NotificationDestinationKind::Telegram {
-        notification_admin(&state)?
-            .destinations(&context, project_id)
-            .await
-            .map_err(HttpApiError::Notification)?
-    } else {
-        Vec::new()
-    };
+    let existing = notification_admin(&state)?
+        .destinations(&context, project_id)
+        .await
+        .map_err(HttpApiError::Notification)?;
+    let saved = requested_id
+        .map(|id| {
+            existing
+                .iter()
+                .find(|value| value.id == id && value.kind == kind)
+                .ok_or(HttpApiError::Api(NativeApiError::NotFound))
+        })
+        .transpose()?;
     let mut telegram_token = None::<String>;
     let (id, endpoint, telegram) = if kind == NotificationDestinationKind::Telegram {
         let credentials = resolve_telegram_credentials(
@@ -2318,16 +2330,19 @@ async fn put_notification_destination(
             None,
         )
     };
-    let plaintext_secret = telegram_token
-        .as_deref()
-        .or(body.secret.as_deref())
-        .ok_or(HttpApiError::InvalidRequest)?;
-    let sealed_secret = state
-        .notification_secret_box
-        .as_ref()
-        .ok_or(HttpApiError::Unavailable)?
-        .seal(plaintext_secret.as_bytes())
-        .map_err(|_| HttpApiError::InvalidRequest)?;
+    let sealed_secret = if let Some(secret) = telegram_token.as_deref().or(body.secret.as_deref()) {
+        state
+            .notification_secret_box
+            .as_ref()
+            .ok_or(HttpApiError::Unavailable)?
+            .seal(secret.as_bytes())
+            .map_err(|_| HttpApiError::InvalidRequest)?
+    } else {
+        saved
+            .ok_or(HttpApiError::InvalidRequest)?
+            .sealed_secret
+            .clone()
+    };
     let smtp = if kind == NotificationDestinationKind::SmtpEmail {
         let recipients = body
             .smtp_recipients
@@ -2425,6 +2440,44 @@ async fn check_telegram_bot(
         "display_name": bot.display_name.as_str(),
         "api_base": credentials.api_base.as_str(),
     })))
+}
+
+async fn delete_notification_destination(
+    State(state): State<NativeHttpState>,
+    Path((project_id, destination_id)): Path<(String, String)>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    notification_admin(&state)?
+        .delete_destination(
+            &context,
+            correlation_id(request_id)?,
+            project_id_from(&project_id)?,
+            NotificationDestinationId::from_bytes(hex_16(&destination_id)?),
+        )
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_alert_rule(
+    State(state): State<NativeHttpState>,
+    Path((project_id, rule_id)): Path<(String, String)>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpApiError> {
+    let context = authenticate(&state, &headers, true).await?;
+    notification_admin(&state)?
+        .delete_rule(
+            &context,
+            correlation_id(request_id)?,
+            project_id_from(&project_id)?,
+            AlertRuleId::from_bytes(hex_16(&rule_id)?),
+        )
+        .await
+        .map_err(HttpApiError::Notification)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn disable_notification_destination(
@@ -3044,6 +3097,19 @@ async fn put_alert_rule(
         .transpose()?
         .map(AlertRuleId::from_bytes)
         .unwrap_or_else(|| AlertRuleId::from_bytes(*uuid::Uuid::new_v4().as_bytes()));
+    let existing = if body.id.is_some() {
+        Some(
+            notification_admin(&state)?
+                .rules(&context, project_id)
+                .await
+                .map_err(HttpApiError::Notification)?
+                .into_iter()
+                .find(|rule| rule.id == id)
+                .ok_or(HttpApiError::Api(NativeApiError::NotFound))?,
+        )
+    } else {
+        None
+    };
     let triggers = body
         .triggers
         .iter()
@@ -3114,7 +3180,7 @@ async fn put_alert_rule(
             })
         })
         .transpose()?;
-    let rule = AlertRule {
+    let mut rule = AlertRule {
         id,
         project_id,
         name: RuleName::new(body.name).map_err(|_| HttpApiError::InvalidRequest)?,
@@ -3133,6 +3199,16 @@ async fn put_alert_rule(
         created_at: now,
         updated_at: now,
     };
+    if let Some(saved) = existing {
+        rule.created_at = saved.created_at;
+        rule.last_triggered_at = saved.last_triggered_at;
+        rule.storm_window_started_at = saved.storm_window_started_at;
+        rule.storm_count = saved.storm_count;
+        if rule.aggregate == saved.aggregate {
+            rule.next_evaluation_at = saved.next_evaluation_at;
+            rule.threshold_met = saved.threshold_met;
+        }
+    }
     rule.validate().map_err(|_| HttpApiError::InvalidRequest)?;
     notification_admin(&state)?
         .put_rule(&context, correlation_id(request_id)?, rule.clone())
@@ -6654,13 +6730,21 @@ mod tests {
                 RouteAccess::Permission(Permission::ProjectAdmin),
             ),
             (
+                "DELETE /projects/:id/alert-rules/:rule",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
+                "DELETE /projects/:id/notification-destinations/:destination/permanent",
+                RouteAccess::Permission(Permission::ProjectAdmin),
+            ),
+            (
                 "GET /projects/:id/environments",
                 RouteAccess::Permission(Permission::ProjectRead),
             ),
             ("GET /capabilities", RouteAccess::Public),
             ("GET /status", RouteAccess::Authenticated),
         ];
-        assert_eq!(matrix.len(), 63);
+        assert_eq!(matrix.len(), 65);
         let unique = matrix
             .iter()
             .map(|(route, _)| *route)

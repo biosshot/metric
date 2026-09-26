@@ -455,6 +455,8 @@ pub enum AuditAction {
     IncidentCapsuleExported,
     NotificationDestinationUpserted,
     AlertRuleUpserted,
+    AlertRuleDeleted,
+    NotificationDestinationDeleted,
     ReplayAccessed,
     QueryExported,
 }
@@ -484,6 +486,8 @@ impl AuditAction {
             Self::IncidentCapsuleExported => "incident_capsule.exported",
             Self::NotificationDestinationUpserted => "notification_destination.upserted",
             Self::AlertRuleUpserted => "alert_rule.upserted",
+            Self::AlertRuleDeleted => "alert_rule.deleted",
+            Self::NotificationDestinationDeleted => "notification_destination.deleted",
             Self::ReplayAccessed => "replay.accessed",
             Self::QueryExported => "query.exported",
         }

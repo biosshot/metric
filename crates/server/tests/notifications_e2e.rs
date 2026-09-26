@@ -56,6 +56,148 @@ async fn performance_notification_transition_expansion_rps() {
     cleanup.unwrap();
 }
 
+#[tokio::test]
+#[ignore = "requires MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn deleting_recipient_prunes_shared_rules_and_preserves_other_projects() {
+    use metric_application::notifications::{
+        NotificationAccessFuture, NotificationAdminAccess, NotificationAdminService,
+        NotificationError,
+    };
+    use metric_domain::auth::{
+        Actor, AuditAction, AuthContext, CredentialId, OrganizationRole, Permission, PermissionSet,
+        RequestCorrelationId, UserId,
+    };
+
+    struct AdminAccess;
+    impl NotificationAdminAccess for AdminAccess {
+        fn authorize<'a>(
+            &'a self,
+            context: &'a AuthContext,
+            _: ProjectId,
+        ) -> NotificationAccessFuture<'a> {
+            Box::pin(async move {
+                if context.permissions.contains(Permission::ProjectAdmin) {
+                    Ok(())
+                } else {
+                    Err(NotificationError::Forbidden)
+                }
+            })
+        }
+        fn audit<'a>(
+            &'a self,
+            _: &'a AuthContext,
+            _: RequestCorrelationId,
+            _: ProjectId,
+            _: AuditAction,
+            _: String,
+        ) -> NotificationAccessFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    let database = test_database().await.unwrap();
+    let store = Arc::new(metric_mongo::MongoNotificationStore::from_database(
+        database.clone(),
+    ));
+    let service = NotificationAdminService::new(Arc::new(AdminAccess), store.clone());
+    let project = ProjectId::new(21).unwrap();
+    let other_project = ProjectId::new(22).unwrap();
+    let now = Timestamp::from_unix_millis(20_000).unwrap();
+    let first = NotificationDestinationId::from_bytes([1; 16]);
+    let second = NotificationDestinationId::from_bytes([2; 16]);
+    for id in [first, second] {
+        store
+            .upsert_destination(NotificationDestination {
+                id,
+                project_id: project,
+                kind: NotificationDestinationKind::Webhook,
+                endpoint: WebhookEndpoint::new("https://example.com/alerts").unwrap(),
+                sealed_secret: metric_domain::notifications::SealedWebhookSecret::new(vec![1; 32])
+                    .unwrap(),
+                telegram: None,
+                smtp: None,
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+    }
+    let rule = |id, project_id, destination_ids| AlertRule {
+        id: AlertRuleId::from_bytes([id; 16]),
+        project_id,
+        name: RuleName::new("alert").unwrap(),
+        enabled: true,
+        triggers: vec![IssueNotificationKind::NewIssue].into_boxed_slice(),
+        aggregate: None,
+        monitor: None,
+        destination_ids,
+        cooldown_minutes: 5,
+        storm_limit_per_hour: 100,
+        next_evaluation_at: None,
+        last_triggered_at: Some(now),
+        storm_window_started_at: Some(now),
+        storm_count: 3,
+        threshold_met: false,
+        created_at: now,
+        updated_at: now,
+    };
+    store
+        .upsert_rule(rule(3, project, vec![first].into_boxed_slice()))
+        .await
+        .unwrap();
+    store
+        .upsert_rule(rule(4, project, vec![first, second].into_boxed_slice()))
+        .await
+        .unwrap();
+    store
+        .upsert_rule(rule(5, other_project, vec![second].into_boxed_slice()))
+        .await
+        .unwrap();
+    let mut context = AuthContext {
+        actor: Actor::WebSession,
+        user_id: UserId::new(1).unwrap(),
+        organization_id: metric_domain::OrganizationId::new(1).unwrap(),
+        role: OrganizationRole::Member,
+        permissions: PermissionSet::from_role(OrganizationRole::Member),
+        credential_id: CredentialId::new(1).unwrap(),
+    };
+    let request = RequestCorrelationId::new("delete-recipient-test").unwrap();
+    assert_eq!(
+        service
+            .delete_destination(&context, request.clone(), project, first)
+            .await,
+        Err(NotificationError::Forbidden)
+    );
+    context.permissions = PermissionSet::from_role(OrganizationRole::Admin);
+    service
+        .delete_destination(&context, request.clone(), project, first)
+        .await
+        .unwrap();
+    let remaining = store.list_rules(project, 100).await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].destination_ids.as_ref(), &[second]);
+    assert_eq!(remaining[0].storm_count, 3);
+    assert_eq!(
+        store.list_destinations(project, 100).await.unwrap().len(),
+        1
+    );
+    store
+        .delete_destination(other_project, second)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.list_destinations(project, 100).await.unwrap().len(),
+        1
+    );
+    service
+        .delete_rule(&context, request, project, AlertRuleId::from_bytes([5; 16]))
+        .await
+        .unwrap();
+    assert_eq!(store.list_rules(other_project, 100).await.unwrap().len(), 1);
+    database.drop().await.unwrap();
+}
+
 async fn measure_expansion(database: &Database) -> Result<(), Box<dyn Error>> {
     const TRANSITIONS: usize = 300;
     let project_store =

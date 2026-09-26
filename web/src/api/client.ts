@@ -657,6 +657,15 @@ export const api = {
       `/api/v1/projects/${projectId}/notification-destinations/${destinationId}/restore`,
       { method: 'POST' },
     ),
+  deleteNotificationDestination: (projectId: string, destinationId: string) =>
+    request<void>(
+      `/api/v1/projects/${projectId}/notification-destinations/${destinationId}/permanent`,
+      {
+        method: 'DELETE',
+      },
+    ),
+  deleteAlertRule: (projectId: string, ruleId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/alert-rules/${ruleId}`, { method: 'DELETE' }),
   testNotificationDestination: (projectId: string, destinationId: string) =>
     request<NotificationDelivery>(
       `/api/v1/projects/${projectId}/notification-destinations/${destinationId}/test`,

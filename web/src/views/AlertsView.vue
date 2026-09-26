@@ -10,7 +10,7 @@ import CodeBlock from '../components/CodeBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LoadingPanel from '../components/LoadingPanel.vue';
 import StatusBadge from '../components/StatusBadge.vue';
-import type { NotificationDestination, TelegramBot } from '../api/types';
+import type { AlertRule, NotificationDestination, TelegramBot } from '../api/types';
 import { useSessionStore } from '../stores/session';
 
 interface AvailableTelegramBot {
@@ -33,6 +33,11 @@ const canAdminister = computed(() => session.has('project:admin'));
 const kind = ref('telegram');
 const ruleName = ref('');
 const ruleKind = ref('issue');
+const editingRuleId = ref('');
+const ruleEnabled = ref(true);
+const editingEmailId = ref('');
+const emailAddresses = ref<string[]>([]);
+const emailAddress = ref('');
 const selectedDestinations = ref<string[]>([]);
 const selectedMemberIds = ref<string[]>([]);
 const memberSelectionTouched = ref(false);
@@ -146,7 +151,11 @@ const availableTelegramBots = computed<AvailableTelegramBot[]>(() => {
   return [...bots.values()].sort((left, right) => right.updated_at - left.updated_at);
 });
 const activeNotificationDestinations = computed(
-  () => destinations.data.value?.items.filter((item) => item.enabled) ?? [],
+  () =>
+    destinations.data.value?.items.filter(
+      (item) =>
+        item.enabled || (editingRuleId.value && selectedDestinations.value.includes(item.id)),
+    ) ?? [],
 );
 const rules = useQuery({
   queryKey: computed(() => ['alert-rules', projectId.value]),
@@ -351,8 +360,9 @@ watch([() => destination.secret, () => destination.telegram_api_base], () => {
 const saveRule = useMutation({
   mutationFn: () =>
     api.putAlertRule(projectId.value, {
+      ...(editingRuleId.value ? { id: editingRuleId.value } : {}),
       name: ruleName.value.trim(),
-      enabled: true,
+      enabled: ruleEnabled.value,
       triggers: [
         ...(ruleKind.value === 'issue' && triggers.new_issue ? ['new_issue'] : []),
         ...(ruleKind.value === 'issue' && triggers.regression ? ['regression'] : []),
@@ -391,7 +401,7 @@ const saveRule = useMutation({
           : [],
     }),
   onSuccess: async () => {
-    ruleName.value = '';
+    cancelRuleEdit();
     await queryClient.invalidateQueries({ queryKey: ['alert-rules', projectId.value] });
   },
 });
@@ -421,6 +431,171 @@ const setDestinationEnabled = useMutation({
     });
   },
 });
+
+async function refreshConfiguration(): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['notification-destinations', projectId.value] }),
+    queryClient.invalidateQueries({ queryKey: ['alert-rules', projectId.value] }),
+  ]);
+}
+
+const removeDestinations = useMutation({
+  mutationFn: async (ids: string[]) => {
+    stopTelegramDiscovery();
+    for (const id of ids) await api.deleteNotificationDestination(projectId.value, id);
+  },
+  onSettled: async () => {
+    selectedDestinations.value = [];
+    useNewTelegramBot();
+    cancelRuleEdit();
+    editingEmailId.value = '';
+    await refreshConfiguration();
+  },
+});
+
+function removeDestination(item: NotificationDestination): void {
+  if (window.confirm(t('alerts.deleteRecipientConfirm', { name: destinationDisplayName(item) }))) {
+    removeDestinations.mutate([item.id]);
+  }
+}
+
+function removeBot(bot: AvailableTelegramBot): void {
+  const ids = (destinations.data.value?.items ?? [])
+    .filter(
+      (item) =>
+        item.kind === 'telegram' &&
+        (bot.id
+          ? item.telegram?.bot_id === bot.id && item.telegram.api_base === bot.api_base
+          : item.id === bot.source_destination_id),
+    )
+    .map((item) => item.id);
+  if (
+    window.confirm(
+      t('alerts.deleteBotConfirm', { name: bot.username ?? bot.display_name, count: ids.length }),
+    )
+  ) {
+    removeDestinations.mutate(ids);
+  }
+}
+
+function ruleInput(rule: AlertRule): Record<string, unknown> {
+  return {
+    id: rule.id,
+    name: rule.name,
+    enabled: rule.enabled,
+    triggers: rule.triggers,
+    destination_ids: rule.destination_ids,
+    aggregate_dataset: rule.aggregate?.dataset,
+    lookback_minutes: rule.aggregate?.lookback_minutes,
+    evaluation_interval_minutes: rule.aggregate?.evaluation_interval_minutes,
+    threshold: rule.aggregate?.threshold,
+    environment: rule.aggregate?.environment,
+    release: rule.aggregate?.release,
+    notify_resolved: rule.aggregate?.notify_resolved ?? rule.monitor?.notify_resolved,
+    cooldown_minutes: rule.cooldown_minutes,
+    storm_limit_per_hour: rule.storm_limit_per_hour,
+    monitor_id: rule.monitor?.monitor_id,
+    monitor_outcomes: rule.monitor?.outcomes ?? [],
+  };
+}
+
+const changeRule = useMutation({
+  mutationFn: (rule: AlertRule) =>
+    api.putAlertRule(projectId.value, { ...ruleInput(rule), enabled: !rule.enabled }),
+  onSuccess: refreshConfiguration,
+});
+const deleteRule = useMutation({
+  mutationFn: (id: string) => api.deleteAlertRule(projectId.value, id),
+  onSuccess: async (_value, id) => {
+    if (editingRuleId.value === id) cancelRuleEdit();
+    await refreshConfiguration();
+  },
+});
+
+function removeRule(rule: AlertRule): void {
+  if (window.confirm(t('alerts.deleteRuleConfirm', { name: rule.name })))
+    deleteRule.mutate(rule.id);
+}
+
+function cancelRuleEdit(): void {
+  editingRuleId.value = '';
+  ruleName.value = '';
+  ruleEnabled.value = true;
+  selectedDestinations.value = [];
+}
+
+function editRule(rule: AlertRule): void {
+  editingRuleId.value = rule.id;
+  ruleName.value = rule.name;
+  ruleEnabled.value = rule.enabled;
+  selectedDestinations.value = [...rule.destination_ids];
+  ruleKind.value = rule.aggregate ? 'aggregate' : rule.monitor ? 'monitor' : 'issue';
+  triggers.new_issue = rule.triggers.includes('new_issue');
+  triggers.regression = rule.triggers.includes('regression');
+  triggers.resolved = rule.triggers.includes('resolved');
+  aggregateRule.cooldown_minutes = rule.cooldown_minutes;
+  aggregateRule.storm_limit_per_hour = rule.storm_limit_per_hour;
+  if (rule.aggregate)
+    Object.assign(aggregateRule, rule.aggregate, {
+      environment: rule.aggregate.environment ?? '',
+      release: rule.aggregate.release ?? '',
+    });
+  if (rule.monitor)
+    Object.assign(monitorRule, {
+      monitor_id: rule.monitor.monitor_id,
+      notify_resolved: rule.monitor.notify_resolved,
+      error: rule.monitor.outcomes.includes('error'),
+      timeout: rule.monitor.outcomes.includes('timeout'),
+      missed: rule.monitor.outcomes.includes('missed'),
+    });
+  document.getElementById('notification-rule-editor')?.scrollIntoView?.({ block: 'start' });
+}
+
+function editEmail(item: NotificationDestination): void {
+  editingEmailId.value = item.id;
+  emailAddresses.value = [...(item.smtp?.recipients ?? [])];
+  emailAddress.value = '';
+}
+
+function addEmailAddress(): void {
+  const value = emailAddress.value.trim();
+  if (
+    value &&
+    !emailAddresses.value.some((address) => address.toLowerCase() === value.toLowerCase())
+  ) {
+    emailAddresses.value.push(value);
+  }
+  emailAddress.value = '';
+}
+
+const saveEmailAddresses = useMutation({
+  mutationFn: (item: NotificationDestination) =>
+    api.putNotificationDestination(projectId.value, {
+      id: item.id,
+      kind: item.kind,
+      endpoint: item.endpoint,
+      enabled: item.enabled,
+      secret: null,
+      smtp_port: item.smtp?.port,
+      smtp_security: item.smtp?.security,
+      smtp_username: item.smtp?.username,
+      smtp_from: item.smtp?.from,
+      smtp_recipients: [...emailAddresses.value],
+    }),
+  onSuccess: async () => {
+    editingEmailId.value = '';
+    await refreshConfiguration();
+  },
+});
+
+function ruleRecipients(rule: AlertRule): string {
+  return rule.destination_ids
+    .map((id) => {
+      const item = destinations.data.value?.items.find((value) => value.id === id);
+      return item ? `${destinationDisplayName(item)} (${destinationEndpointLabel(item)})` : id;
+    })
+    .join(' · ');
+}
 
 function toggleDestination(id: string): void {
   selectedDestinations.value = selectedDestinations.value.includes(id)
@@ -670,6 +845,14 @@ function datasetLabel(value: string): string {
                     ? $t('alerts.telegramBotSelected')
                     : $t('alerts.useTelegramBot')
                 }}
+              </button>
+              <button
+                class="button button--danger"
+                type="button"
+                :disabled="removeDestinations.isPending.value"
+                @click="removeBot(bot)"
+              >
+                <AppIcon name="delete" :size="15" />{{ $t('alerts.deleteBot') }}
               </button>
             </article>
           </section>
@@ -946,6 +1129,7 @@ function datasetLabel(value: string): string {
           <span>
             <strong>{{ destinationDisplayName(item) }}</strong>
             <small>{{ destinationEndpointLabel(item) }}</small>
+            <small v-if="item.smtp">{{ item.smtp.recipients.join(', ') }}</small>
           </span>
           <button
             v-if="item.enabled"
@@ -977,6 +1161,71 @@ function datasetLabel(value: string): string {
             <AppIcon name="refresh" :size="15" />
             {{ $t('alerts.restoreRecipient') }}
           </button>
+          <div class="button-row">
+            <button
+              v-if="item.smtp"
+              class="button button--secondary"
+              type="button"
+              @click="editEmail(item)"
+            >
+              {{ $t('alerts.editRecipients') }}
+            </button>
+            <button
+              class="button button--danger"
+              type="button"
+              :disabled="removeDestinations.isPending.value"
+              @click="removeDestination(item)"
+            >
+              <AppIcon name="delete" :size="15" />{{ $t('alerts.deleteRecipient') }}
+            </button>
+          </div>
+          <form
+            v-if="editingEmailId === item.id"
+            class="settings-form email-recipient-editor"
+            @submit.prevent="addEmailAddress"
+          >
+            <div v-for="(address, index) in emailAddresses" :key="address" class="button-row">
+              <span>{{ address }}</span>
+              <button
+                class="icon-button"
+                type="button"
+                :aria-label="$t('alerts.removeAddress', { address })"
+                @click="emailAddresses.splice(index, 1)"
+              >
+                <AppIcon name="delete" :size="15" />
+              </button>
+            </div>
+            <label
+              >{{ $t('alerts.emailAddress') }}<input v-model="emailAddress" type="email"
+            /></label>
+            <div class="button-row">
+              <button
+                class="button button--secondary"
+                type="submit"
+                :disabled="!emailAddress || emailAddresses.length >= 16"
+              >
+                {{ $t('alerts.addAddress') }}
+              </button>
+              <button
+                class="button button--primary"
+                type="button"
+                :disabled="
+                  saveEmailAddresses.isPending.value ||
+                  !emailAddresses.length ||
+                  Boolean(emailAddress.trim())
+                "
+                @click="saveEmailAddresses.mutate(item)"
+              >
+                {{ $t('alerts.saveRecipients') }}
+              </button>
+              <button class="button button--secondary" type="button" @click="editingEmailId = ''">
+                {{ $t('common.cancel') }}
+              </button>
+            </div>
+            <p v-if="!emailAddresses.length" class="field-help">
+              {{ $t('alerts.lastAddressHelp') }}
+            </p>
+          </form>
         </article>
       </div>
       <ApiErrorPanel
@@ -988,13 +1237,17 @@ function datasetLabel(value: string): string {
             : $t('alerts.testFailed')
         "
       />
+      <ApiErrorPanel
+        v-if="removeDestinations.error.value || saveEmailAddresses.error.value"
+        :error="removeDestinations.error.value || saveEmailAddresses.error.value"
+      />
     </section>
 
-    <section class="panel">
+    <section id="notification-rule-editor" class="panel">
       <div class="section-heading">
         <div>
           <p class="eyebrow">{{ $t('alerts.issueRule') }}</p>
-          <h2>{{ $t('alerts.chooseWhen') }}</h2>
+          <h2>{{ editingRuleId ? $t('alerts.editRule') : $t('alerts.chooseWhen') }}</h2>
           <p>{{ $t('alerts.ruleHelp') }}</p>
         </div>
       </div>
@@ -1198,7 +1451,21 @@ function datasetLabel(value: string): string {
           "
         >
           <AppIcon name="save" :size="16" />
-          {{ saveRule.isPending.value ? $t('alerts.saving') : $t('alerts.createRule') }}
+          {{
+            saveRule.isPending.value
+              ? $t('alerts.saving')
+              : editingRuleId
+                ? $t('alerts.saveRule')
+                : $t('alerts.createRule')
+          }}
+        </button>
+        <button
+          v-if="editingRuleId"
+          class="button button--secondary"
+          type="button"
+          @click="cancelRuleEdit"
+        >
+          {{ $t('common.cancel') }}
         </button>
       </form>
     </section>
@@ -1236,10 +1503,36 @@ function datasetLabel(value: string): string {
                     : rule.triggers.map(triggerLabel).join(' · ')
               }}
             </p>
+            <p class="muted">{{ $t('alerts.ruleRecipients') }}: {{ ruleRecipients(rule) }}</p>
           </div>
           <StatusBadge :status="rule.enabled ? 'active' : 'disabled'" />
+          <div class="button-row">
+            <button class="button button--secondary" type="button" @click="editRule(rule)">
+              {{ $t('alerts.editRule') }}
+            </button>
+            <button
+              class="button button--secondary"
+              type="button"
+              :disabled="changeRule.isPending.value || editingRuleId === rule.id"
+              @click="changeRule.mutate(rule)"
+            >
+              {{ rule.enabled ? $t('alerts.disableRule') : $t('alerts.enableRule') }}
+            </button>
+            <button
+              class="button button--danger"
+              type="button"
+              :disabled="deleteRule.isPending.value"
+              @click="removeRule(rule)"
+            >
+              {{ $t('alerts.deleteRule') }}
+            </button>
+          </div>
         </article>
       </div>
+      <ApiErrorPanel
+        v-if="changeRule.error.value || deleteRule.error.value"
+        :error="changeRule.error.value || deleteRule.error.value"
+      />
     </section>
 
     <section class="panel">
@@ -1276,3 +1569,29 @@ function datasetLabel(value: string): string {
     </section>
   </template>
 </template>
+
+<style scoped>
+.telegram-bot-list article {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+.channel-test-list article {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+.channel-test-list article > .button-row,
+.email-recipient-editor {
+  grid-column: 2 / -1;
+}
+.alert-rule-card > .button-row {
+  grid-column: 2 / -1;
+}
+@media (max-width: 700px) {
+  .telegram-bot-list article,
+  .channel-test-list article {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .telegram-bot-list article > button,
+  .channel-test-list article > button {
+    grid-column: 2;
+  }
+}
+</style>
