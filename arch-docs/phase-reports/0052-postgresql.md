@@ -8,24 +8,52 @@
 
 ## Environment and dependency decision
 
-Windows host, Rust/Cargo 1.88.0, workspace MSRV unchanged. Docker Desktop 4.44.2,
-Engine 28.3.2, Compose 2.39.1, `desktop-linux` context.
+Windows host. Initial baseline used Rust/Cargo 1.88.0; the user authorized raising
+workspace MSRV and the development/CI/Docker toolchains to Rust 1.94 on 2026-10-08
+to use upstream SQLx 0.9.0 without a local fork. Docker Desktop 4.44.2, Engine
+28.3.2, Compose 2.39.1, `desktop-linux` context.
 
 PostgreSQL image: `postgres:18.6-bookworm`, pinned to
 `sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c`.
 Task-owned fixture: project `metric-pg-dev`, `deploy/compose.postgres.dev.yml`,
 host port `127.0.0.1:54329`, synthetic credentials and a persistent Docker volume.
 
-SQLx is pinned to 0.8.6 with default features disabled; PostgreSQL, Tokio, Rustls
-ring/webpki, migrations, JSON, time and UUID enabled. An isolated dependency
-preflight and the actual crate both compile on Rust 1.88. Only the PostgreSQL
-driver is compiled. Optional MySQL/SQLite dependencies can appear in Cargo's lock
-resolution; this does not enable those backends.
+SQLx is pinned to 0.9.0 with default features disabled; PostgreSQL, Tokio, Rustls
+ring/webpki, migrations, JSON, time and UUID enabled. The initial 0.8.6 preflight
+compiled on Rust 1.88 but failed the Docker `verify-ca` hostname-mismatch test with
+Rustls 0.23.42. SQLx 0.9.0 includes upstream fix #3861 and requires Rust 1.94.
+Adapter all-target compilation and all 22 tests passed on the new compiler and
+SQLx version, including that regression. Only the PostgreSQL driver is compiled.
+Optional MySQL/SQLite dependencies can appear in Cargo's lock resolution; this
+does not enable those backends.
+
+SQLx 0.9's `SqlSafeStr` is used for embedded static migrations. Migration-table
+arguments are fixed to `metric._sqlx_migrations`, never operator-controlled SQL.
+The only `AssertSqlSafe` uses are test-database CREATE/DROP statements with
+internally generated and validated identifiers. User data remains bound.
 
 Applicable advisory review so far: SQLx's RUSTSEC-2024-0363 is fixed in the selected
 version (patch >=0.8.1). The existing locked time 0.3.54 is newer than the fix for
 RUSTSEC-2026-0009 (>=0.3.47). Full applicable dependency audit remains a delivery
 gate; this review is not a claim that every dependency has been audited.
+
+The follow-up [Rustls advisory RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)
+requires >=0.23.45. The lockfile now selects Rustls 0.23.45 and rustls-webpki
+0.103.15 (also above the fixes for RUSTSEC-2026-0049, -0099 and -0104).
+The final graph passed all 22 PostgreSQL tests, including verified TLS and
+corruption checks. On 2026-10-08 the user also authorized mechanical Clippy fixes
+for the compiler upgrade, including two nested-if expressions in Mongo artifact
+and session code. Those expressions now use equivalent let chains; strict lint
+settings remain enabled. Whole-workspace/all-target/all-feature Clippy passed with
+warnings denied. Ordinary workspace tests passed: 352 successful, 0 failures,
+100 infrastructure/SDK/performance cases ignored in that particular run.
+
+The full Docker image built with Rust 1.94 and the final lockfile. Its version
+command succeeded with Docker networking disabled. This proves the existing
+runtime image builds offline at startup; PostgreSQL server runtime selection is
+still pending and is not exercised by that image yet. Parallel Windows tests and
+the release image build exceeded available host memory on the first attempt;
+the serial `-j1` workspace test retry succeeded.
 
 ## Shared-code regression
 
@@ -60,7 +88,8 @@ cargo check -p metric-server --all-targets --locked
 cargo clippy -p metric-server --all-targets --locked -- -D warnings
 ```
 
-No files in `crates/mongo` have been changed. Mongo schema remains generation 21;
+Before the explicit active-owner exception, no files in `crates/mongo` were changed.
+Mongo schema remains generation 21;
 the PostgreSQL schema has its own generation, unrelated to Mongo's registry.
 
 ## PostgreSQL foundation evidence
@@ -122,3 +151,65 @@ and slugs, concurrent key limit/CAS enforcement, inbound filter persistence, ali
 target scope and concurrent alias/native reservation collisions. All-target adapter
 Clippy with warnings denied also passed. The earlier foundation tests were rerun
 against the enlarged registry; future synthetic upgrades use the next generation.
+
+## Authorized active-owner exception and authentication
+
+On 2026-10-08 the user authorized one Mongo behavior change: disabled users must
+not count toward the last-active-owner guard. Mongo changes are limited to
+`src/auth.rs`, regression wiring in `tests/auth_store.rs`, and a test-only
+`metric-testkit` dependency. Mongo schema, migrations, other stores and production
+composition remain unchanged.
+
+Under the existing Mongo organization auth lock, the guard now finds another owner
+joined to an enabled user, scoped to the same organization and excluding the target.
+The indexed user lookup stops after one qualifying owner. Removing/demoting or
+re-disabling an already-disabled owner does not reduce the active-owner count.
+Failed checks release acquired organization locks. PostgreSQL applies the same
+rule inside its existing identity transaction.
+
+One shared real-adapter conformance scenario covers sequential and concurrent
+disabling, wrong-organization owners, last-owner demotion/removal, repeated disabling,
+disabled-owner cleanup and restoration. It passed against both Docker databases.
+Mongo's original authentication integration and the new case both passed (2/2).
+
+`PostgresAuthStore` implements all 28 methods. Schema generation 3 adds users,
+memberships, setup-token digests, web sessions, personal API-token digests and audit
+records. Multi-record bootstrap, invitation/password setup and owner changes are
+transactional. Control-plane identity changes share a bounded transaction advisory
+lock; hot Event writes, reads and credential lookups do not take that lock.
+
+PostgreSQL adapter run: 20 passed, 0 failed/ignored (18 real database cases plus
+2 static policy checks). Authentication cases cover bootstrap competition/retry and
+rollback, canonical email, invitation reissue, one-use/expired setup credentials,
+password changes, owner concurrency, session/token round trips and revocation,
+organization/user scope, digest-only persistence contracts and idempotent audit.
+Capability signatures now stand at 41/164; remaining capabilities and full runtime
+integration are still pending.
+
+## SQLx 0.9 / Rust 1.94 follow-up verification
+
+After the dependency/security update and authorized compiler-style fixes, the
+real Docker PostgreSQL suite passed 22/22 with no skipped cases. That includes
+the two added TLS cases: verified local CA, actual hostname mismatch rejection,
+`verify-ca` hostname tolerance with CA validation, wrong/missing CA rejection,
+`require` with an explicit CA, and inherited native client certificate settings.
+The audit decoder also rejects unknown/duplicate metadata keys and overlong values.
+
+The Mongo Docker regression passed 20/20: three migration cases and seventeen
+store cases, with performance targets deliberately excluded. Schema generation
+remains 21. Server Docker and real Rust SDK reruns are tracked separately when
+they finish. A separate PostgreSQL integration/TLS CI job now invokes the actual
+ignored database tests with ephemeral local certificates and task-owned cleanup;
+the remote GitHub Actions job itself has not been executed in this local session.
+
+```text
+cargo test -p metric-postgres --all-targets --all-features --locked -j1 -- --include-ignored --test-threads=1
+cargo test -p metric-mongo --all-targets --all-features --locked --no-fail-fast -j1 -- --ignored --skip performance_ --skip reports_rps --test-threads=1
+cargo test --workspace --all-targets --all-features --locked -j1
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+python scripts/validate-documentation.py
+python scripts/validate-deployment-profiles.py
+python scripts/validate-compatibility.py
+docker build --tag metric:postgres-rust194 .
+docker run --rm --network none metric:postgres-rust194 --version
+```

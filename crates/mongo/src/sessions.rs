@@ -205,22 +205,22 @@ impl MongoSessionStore {
                 "o": exited,
             }
         };
-        if delta > 0 {
-            if let Some(user) = record.user_digest {
-                let bit_index =
-                    usize::from(u16::from_be_bytes([user[0], user[1]])) % (USER_SKETCH_BYTES * 8);
-                let word = bit_index / 64;
-                let mask = 1_u64 << (bit_index % 64);
-                let mut bits =
-                    doc! { format!("u{word}"): { "or": i64::from_le_bytes(mask.to_le_bytes()) } };
-                if record.state == SessionState::Crashed {
-                    bits.insert(
-                        format!("v{word}"),
-                        doc! { "or": i64::from_le_bytes(mask.to_le_bytes()) },
-                    );
-                }
-                update.insert("$bit", bits);
+        if delta > 0
+            && let Some(user) = record.user_digest
+        {
+            let bit_index =
+                usize::from(u16::from_be_bytes([user[0], user[1]])) % (USER_SKETCH_BYTES * 8);
+            let word = bit_index / 64;
+            let mask = 1_u64 << (bit_index % 64);
+            let mut bits =
+                doc! { format!("u{word}"): { "or": i64::from_le_bytes(mask.to_le_bytes()) } };
+            if record.state == SessionState::Crashed {
+                bits.insert(
+                    format!("v{word}"),
+                    doc! { "or": i64::from_le_bytes(mask.to_le_bytes()) },
+                );
             }
+            update.insert("$bit", bits);
         }
         self.database
             .collection::<Document>("session_stats_hourly")

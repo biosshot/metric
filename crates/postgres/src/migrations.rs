@@ -1,14 +1,16 @@
 //! One dedicated connection owns SQL, bounded data steps and final publication.
 use crate::{ConnectionPolicy, PostgresError};
 use sqlx::{
-    Connection, PgConnection, Postgres, Row, Transaction,
+    Connection, PgConnection, Postgres, Row, SqlSafeStr, Transaction,
     migrate::{Migrate, MigrateError, Migration, MigrationType, Migrator},
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 2;
+const SCHEMA_GENERATION: i64 = 3;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
+// This is application-owned static SQL, never configurable or derived from input.
+const MIGRATION_TABLE: &str = "metric._sqlx_migrations";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MigrationMode {
@@ -133,18 +135,26 @@ fn registry() -> Migrator {
                 1,
                 Cow::Borrowed("schema infrastructure"),
                 MigrationType::Simple,
-                Cow::Borrowed(include_str!("../migrations/0001_schema.sql")),
+                include_str!("../migrations/0001_schema.sql").into_sql_str(),
                 false,
             ),
             Migration::new(
                 2,
                 Cow::Borrowed("project identity"),
                 MigrationType::Simple,
-                Cow::Borrowed(include_str!("../migrations/0002_identity.sql")),
+                include_str!("../migrations/0002_identity.sql").into_sql_str(),
+                false,
+            ),
+            Migration::new(
+                3,
+                Cow::Borrowed("authentication and audit"),
+                MigrationType::Simple,
+                include_str!("../migrations/0003_auth.sql").into_sql_str(),
                 false,
             ),
         ]),
         locking: false, // The dedicated connection already owns MIGRATION_LOCK.
+        table_name: Cow::Borrowed(MIGRATION_TABLE),
         ..Migrator::DEFAULT
     }
 }
@@ -200,7 +210,7 @@ async fn ensure_owned(
             .execute(&mut *connection)
             .await?;
         connection
-            .ensure_migrations_table()
+            .ensure_migrations_table(MIGRATION_TABLE)
             .await
             .map_err(migration_error)?;
     }
@@ -222,7 +232,7 @@ async fn ensure_owned(
     }
     if mode == MigrationMode::Auto {
         migrator
-            .run_direct(&mut *connection)
+            .run(&mut *connection)
             .await
             .map_err(migration_error)?;
     }
@@ -257,7 +267,7 @@ async fn validate_sql_registry(
     mode: MigrationMode,
 ) -> Result<(), PostgresError> {
     if connection
-        .dirty_version()
+        .dirty_version(MIGRATION_TABLE)
         .await
         .map_err(migration_error)?
         .is_some()
@@ -265,7 +275,7 @@ async fn validate_sql_registry(
         return Err(PostgresError::MigrationMismatch);
     }
     let applied = connection
-        .list_applied_migrations()
+        .list_applied_migrations(MIGRATION_TABLE)
         .await
         .map_err(migration_error)?;
     for installed in &applied {
@@ -512,7 +522,7 @@ mod tests {
             SCHEMA_GENERATION + 1,
             Cow::Borrowed("synthetic future upgrade"),
             MigrationType::Simple,
-            Cow::Borrowed(sql),
+            sql.into_sql_str(),
             false,
         ));
         migrator

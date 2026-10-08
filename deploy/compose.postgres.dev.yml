@@ -17,5 +17,40 @@ services:
       retries: 30
     stop_grace_period: 30s
 
+  postgres-test-certs:
+    profiles: [tls]
+    image: postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+    user: root
+    entrypoint: [/bin/sh, /generate-certs.sh]
+    volumes:
+      - ./postgres-test-certs.sh:/generate-certs.sh:ro
+      - postgres-test-certs:/certs
+    network_mode: none
+
+  postgres-tls:
+    profiles: [tls]
+    image: postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+    environment:
+      POSTGRES_DB: metric_test
+      POSTGRES_USER: metric_test
+      POSTGRES_PASSWORD: metric-postgres-local-only
+    command: [postgres, -c, ssl=on, -c, ssl_cert_file=/run/metric-test-tls/server.crt, -c, ssl_key_file=/run/metric-test-tls/server.key]
+    ports:
+      - "127.0.0.1:54330:5432"
+    depends_on:
+      postgres-test-certs:
+        condition: service_completed_successfully
+    volumes:
+      - postgres-tls-data:/var/lib/postgresql
+      - postgres-test-certs:/run/metric-test-tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metric_test -d metric_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    stop_grace_period: 30s
+
 volumes:
   postgres-data:
+  postgres-tls-data:
+  postgres-test-certs:

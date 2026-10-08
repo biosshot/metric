@@ -1,5 +1,5 @@
 use crate::{ConnectionPolicy, SslMode};
-use sqlx::{ConnectOptions, Connection, PgConnection};
+use sqlx::{AssertSqlSafe, ConnectOptions, Connection, PgConnection};
 
 pub(crate) struct Fixture {
     pub(crate) uri: String,
@@ -24,7 +24,7 @@ impl Fixture {
         let mut admin = PgConnection::connect_with(&options).await.unwrap();
         // Identifier is generated internally, never interpolated from a user/test URI.
         let database = format!("metric_pg_{}", uuid::Uuid::new_v4().simple());
-        sqlx::query(&format!("CREATE DATABASE {database}"))
+        sqlx::query(AssertSqlSafe(format!("CREATE DATABASE {database}")))
             .execute(&mut admin)
             .await
             .unwrap();
@@ -56,10 +56,13 @@ impl Fixture {
             PgConnection::connect_with(&self.policy.connect_options(&self.admin_uri).unwrap())
                 .await
                 .unwrap();
-        sqlx::query(&format!("DROP DATABASE {} WITH (FORCE)", self.database))
-            .execute(&mut admin)
-            .await
-            .unwrap();
+        sqlx::query(AssertSqlSafe(format!(
+            "DROP DATABASE {} WITH (FORCE)",
+            self.database
+        )))
+        .execute(&mut admin)
+        .await
+        .unwrap();
         admin.close().await.unwrap();
     }
 }

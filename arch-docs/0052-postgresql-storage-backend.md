@@ -137,12 +137,13 @@ The first target server is PostgreSQL 18. Pin an actual patch image and preferab
 its digest when implementation starts; record the tested identity. Avoid floating
 `latest` images in CI. No mandatory database extensions or hosted service account.
 
-The workspace and Docker build currently target Rust 1.88. SQLx 0.8.6 is the initial
-compatibility candidate, not a claim that its entire newly resolved dependency graph
-has already passed that compiler. Verify the lockfile, TLS behavior and applicable
-security advisories before committing the dependency. A required compiler upgrade
-must be explicit, consistently applied and justified; never silently raise MSRV or
-ignore an applicable vulnerability just to keep the candidate version.
+SQLx 0.9.0 and Rust 1.94 are the selected dependency/compiler baseline. On
+2026-10-08 the user authorized raising MSRV rather than maintaining a local SQLx
+patch: the 0.8.6 candidate incorrectly rejects a valid CA with a mismatched server
+name in `verify-ca` with current Rustls. SQLx 0.9.0 includes upstream fix #3861 and
+requires Rust 1.94. Apply the compiler baseline consistently to workspace, toolchain,
+CI and Docker. Verify the locked graph, TLS behavior and applicable security
+advisories; no vendored fork, certificate-validation bypass or TLS downgrade.
 
 After provisioning dependencies/images, runtime startup, migrations and SQL
 execution require no HTTP/REST endpoint, API key, external certificate download or
@@ -363,10 +364,11 @@ arbitrary data transformations. `check` mode fails when an upgrade is needed.
 
 ## References
 
-- [SQLx 0.8.6 capabilities and offline query checking](https://docs.rs/crate/sqlx/0.8.6)
-- [SQLx query binding and raw-fragment warning](https://docs.rs/sqlx/0.8.6/sqlx/struct.QueryBuilder.html)
-- [SQLx migration runner](https://docs.rs/sqlx/0.8.6/sqlx/migrate/struct.Migrator.html)
-- [SQLx PostgreSQL TLS modes](https://docs.rs/sqlx/0.8.6/sqlx/postgres/enum.PgSslMode.html)
+- [SQLx 0.9.0 release and MSRV](https://github.com/transact-rs/sqlx/blob/v0.9.0/CHANGELOG.md)
+- [SQLx query binding and raw-fragment warning](https://docs.rs/sqlx/0.9.0/sqlx/struct.QueryBuilder.html)
+- [SQLx migration runner](https://docs.rs/sqlx/0.9.0/sqlx/migrate/struct.Migrator.html)
+- [SQLx PostgreSQL TLS modes](https://docs.rs/sqlx/0.9.0/sqlx/postgres/enum.PgSslMode.html)
+- [Upstream verify-ca Rustls fix](https://github.com/transact-rs/sqlx/pull/3861)
 - [PostgreSQL native connection options](https://www.postgresql.org/docs/18/libpq-connect.html)
 - [PostgreSQL schema/search-path security](https://www.postgresql.org/docs/18/ddl-schemas.html)
 

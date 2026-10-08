@@ -1,9 +1,11 @@
 //! Native PostgreSQL storage adapter. Driver types stay within this crate.
+mod auth;
 mod connection;
 mod error;
 mod migrations;
 mod projects;
 
+pub use auth::PostgresAuthStore;
 pub use connection::{ConnectionPolicy, PostgresDatabase, SslMode};
 pub use error::PostgresError;
 pub use migrations::{MigrationMode, MigrationPolicy, PostgresSchemaManager, SchemaStatus};

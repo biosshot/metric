@@ -625,10 +625,10 @@ impl WireSymbolicatedTrace {
         expected_origin: RawTraceOrigin,
         had_missing: &mut bool,
     ) -> Result<SymbolicatedStacktrace, SymbolicationBackendError> {
-        if let Some(origin) = &self.origin {
-            if parse_origin(origin)? != expected_origin {
-                return Err(SymbolicationBackendError::MalformedResponse);
-            }
+        if let Some(origin) = &self.origin
+            && parse_origin(origin)? != expected_origin
+        {
+            return Err(SymbolicationBackendError::MalformedResponse);
         }
         Ok(SymbolicatedStacktrace {
             origin: expected_origin,

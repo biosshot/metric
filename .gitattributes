@@ -1,0 +1,2 @@
+deploy/postgres-test-certs.sh text eol=lf
+crates/postgres/migrations/*.sql text eol=lf

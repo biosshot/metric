@@ -461,20 +461,19 @@ impl ArtifactService {
         &self,
         record: ArtifactUploadRecord,
     ) -> Result<AssembleArtifactState, ArtifactError> {
-        if record.state == ArtifactUploadState::Complete {
-            if let Some(mut bundle) = self
+        if record.state == ArtifactUploadState::Complete
+            && let Some(mut bundle) = self
                 .metadata
                 .load_by_sha1(record.upload.organization_id, record.upload.sha1)
                 .await
                 .map_err(map_store)?
-            {
-                bundle.bindings = record.upload.bindings.clone();
-                self.metadata
-                    .publish_bundle(record.upload.id, bundle.clone())
-                    .await
-                    .map_err(map_store)?;
-                return Ok(AssembleArtifactState::Ok { bundle });
-            }
+        {
+            bundle.bindings = record.upload.bindings.clone();
+            self.metadata
+                .publish_bundle(record.upload.id, bundle.clone())
+                .await
+                .map_err(map_store)?;
+            return Ok(AssembleArtifactState::Ok { bundle });
         }
         let _permit = self
             .assemblies

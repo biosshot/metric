@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/ ./
 RUN npm run build
 
-FROM rust:1.88-bookworm AS rust-builder
+FROM rust:1.94-bookworm AS rust-builder
 WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/

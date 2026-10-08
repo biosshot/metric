@@ -15,6 +15,9 @@ file edit needs a specific extraction/compatibility reason and regression covera
 One explicit exception was authorized on 2026-10-08: correct the final-owner guard
 in both adapters to count only enabled users. Keep Mongo edits limited to that
 guard and its shared regression-test wiring; no Mongo schema or migration changes.
+The user also authorized mechanical Clippy compatibility fixes after raising Rust
+to 1.94. Such syntax-only edits may include Mongo, but must preserve its behavior
+and keep all strict lint checks enabled. This does not authorize other Mongo changes.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 
@@ -60,7 +63,7 @@ Mongo. Do not enable a public mode that silently omits advertised functionality.
   snapshot is not permission to omit later-added methods.
 - Record current Mongo schema generation and migration registry, and establish a
   real Docker Mongo integration baseline before shared-code changes.
-- Verify the SQLx candidate, Rust 1.88 build, lockfile, selected TLS features and
+- Verify SQLx 0.9.0, Rust 1.94 build, lockfile, selected TLS features and
   applicable advisories. Record the exact PostgreSQL image tag/digest. Resolve
   dependency incompatibilities explicitly before implementation proceeds.
 - Inventory Mongo assumptions in server/SDK/browser harnesses, configuration,

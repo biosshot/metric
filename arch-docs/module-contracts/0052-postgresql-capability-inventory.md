@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 13/164. Delivery requires every row
+Implemented signatures: 41/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -28,34 +28,34 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ProjectDeletionStore::deletion_status` | Pending |
 | `ProjectDeletionStore::purge_next` | Pending |
 | `ProjectDeletionStore::request_deletion` | Pending |
-| `AuthStore::append_audit` | Pending |
-| `AuthStore::consume_bootstrap` | Pending |
-| `AuthStore::consume_password_setup` | Pending |
-| `AuthStore::create_api_token` | Pending |
-| `AuthStore::create_invited_user` | Pending |
-| `AuthStore::create_owned_organization` | Pending |
-| `AuthStore::create_password_setup_token` | Pending |
-| `AuthStore::create_session` | Pending |
-| `AuthStore::install_bootstrap_token` | Pending |
-| `AuthStore::list_api_tokens` | Pending |
-| `AuthStore::list_audit_log` | Pending |
-| `AuthStore::list_organization_members` | Pending |
-| `AuthStore::list_user_memberships` | Pending |
-| `AuthStore::load_api_token` | Pending |
-| `AuthStore::load_membership` | Pending |
-| `AuthStore::load_organization` | Pending |
-| `AuthStore::load_session` | Pending |
-| `AuthStore::load_user` | Pending |
-| `AuthStore::load_user_by_email` | Pending |
-| `AuthStore::mutate_membership` | Pending |
-| `AuthStore::project_access` | Pending |
-| `AuthStore::revoke_api_token` | Pending |
-| `AuthStore::revoke_session` | Pending |
-| `AuthStore::revoke_user_sessions` | Pending |
-| `AuthStore::set_user_disabled` | Pending |
-| `AuthStore::touch_api_token` | Pending |
-| `AuthStore::touch_session` | Pending |
-| `AuthStore::update_password_hash` | Pending |
+| `AuthStore::append_audit` | `crates/postgres/src/auth.rs` |
+| `AuthStore::consume_bootstrap` | `crates/postgres/src/auth.rs` |
+| `AuthStore::consume_password_setup` | `crates/postgres/src/auth.rs` |
+| `AuthStore::create_api_token` | `crates/postgres/src/auth.rs` |
+| `AuthStore::create_invited_user` | `crates/postgres/src/auth.rs` |
+| `AuthStore::create_owned_organization` | `crates/postgres/src/auth.rs` |
+| `AuthStore::create_password_setup_token` | `crates/postgres/src/auth.rs` |
+| `AuthStore::create_session` | `crates/postgres/src/auth.rs` |
+| `AuthStore::install_bootstrap_token` | `crates/postgres/src/auth.rs` |
+| `AuthStore::list_api_tokens` | `crates/postgres/src/auth.rs` |
+| `AuthStore::list_audit_log` | `crates/postgres/src/auth.rs` |
+| `AuthStore::list_organization_members` | `crates/postgres/src/auth.rs` |
+| `AuthStore::list_user_memberships` | `crates/postgres/src/auth.rs` |
+| `AuthStore::load_api_token` | `crates/postgres/src/auth.rs` |
+| `AuthStore::load_membership` | `crates/postgres/src/auth.rs` |
+| `AuthStore::load_organization` | `crates/postgres/src/auth.rs` |
+| `AuthStore::load_session` | `crates/postgres/src/auth.rs` |
+| `AuthStore::load_user` | `crates/postgres/src/auth.rs` |
+| `AuthStore::load_user_by_email` | `crates/postgres/src/auth.rs` |
+| `AuthStore::mutate_membership` | `crates/postgres/src/auth.rs` |
+| `AuthStore::project_access` | `crates/postgres/src/auth.rs` |
+| `AuthStore::revoke_api_token` | `crates/postgres/src/auth.rs` |
+| `AuthStore::revoke_session` | `crates/postgres/src/auth.rs` |
+| `AuthStore::revoke_user_sessions` | `crates/postgres/src/auth.rs` |
+| `AuthStore::set_user_disabled` | `crates/postgres/src/auth.rs` |
+| `AuthStore::touch_api_token` | `crates/postgres/src/auth.rs` |
+| `AuthStore::touch_session` | `crates/postgres/src/auth.rs` |
+| `AuthStore::update_password_hash` | `crates/postgres/src/auth.rs` |
 | `EventStore::insert_batch` | Pending |
 | `EventStore::prepare` | Pending |
 | `EventBacklog::load_due` | Pending |

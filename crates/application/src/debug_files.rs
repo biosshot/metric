@@ -328,15 +328,14 @@ impl DebugFileService {
         &self,
         record: DebugUploadRecord,
     ) -> Result<AssembleState, DebugFileError> {
-        if record.state == DebugUploadState::Complete {
-            if let Some(file) = self
+        if record.state == DebugUploadState::Complete
+            && let Some(file) = self
                 .metadata
                 .load_by_sha1(record.upload.project_id, record.upload.sha1)
                 .await
                 .map_err(map_store)?
-            {
-                return Ok(AssembleState::Ok { file, revision: 0 });
-            }
+        {
+            return Ok(AssembleState::Ok { file, revision: 0 });
         }
         let _permit = self
             .assemblies

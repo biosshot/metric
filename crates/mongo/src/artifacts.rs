@@ -468,16 +468,17 @@ impl MongoArtifactStore {
                 );
             }
         }
-        if candidates.len() < request.limit {
-            if let Some(release_id) = request.release_id {
-                let mut element =
-                    doc! { "p": request.project_id.get(), "r": binary(&release_id.as_bytes()) };
-                if let Some(dist) = &request.dist {
-                    element.insert("d", dist.as_ref());
-                } else {
-                    element.insert("d", doc! { "$exists": false });
-                }
-                let mut cursor = collection
+        if candidates.len() < request.limit
+            && let Some(release_id) = request.release_id
+        {
+            let mut element =
+                doc! { "p": request.project_id.get(), "r": binary(&release_id.as_bytes()) };
+            if let Some(dist) = &request.dist {
+                element.insert("d", dist.as_ref());
+            } else {
+                element.insert("d", doc! { "$exists": false });
+            }
+            let mut cursor = collection
                     .find(doc! {
                         "o": i64::try_from(request.organization_id.get()).map_err(|_| ArtifactStoreError::InvalidData)?,
                         "b": { "$elemMatch": element },
@@ -487,15 +488,14 @@ impl MongoArtifactStore {
                     .limit(i64::try_from(request.limit).unwrap_or(20))
                     .await
                     .map_err(unavailable)?;
-                while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
-                    let bundle = decode_bundle(&document)?;
-                    candidates.entry(bundle.id).or_insert(ArtifactCandidate {
-                        bundle,
-                        resolved_with: ArtifactResolution::Release,
-                    });
-                    if candidates.len() == request.limit {
-                        break;
-                    }
+            while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+                let bundle = decode_bundle(&document)?;
+                candidates.entry(bundle.id).or_insert(ArtifactCandidate {
+                    bundle,
+                    resolved_with: ArtifactResolution::Release,
+                });
+                if candidates.len() == request.limit {
+                    break;
                 }
             }
         }

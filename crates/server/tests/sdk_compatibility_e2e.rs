@@ -341,7 +341,7 @@ async fn real_go_sdk_sends_an_error_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Rust 1.88 and a locked sdk-tests/rust build"]
+#[ignore = "requires Rust 1.94 and a locked sdk-tests/rust build"]
 async fn real_rust_sdk_sends_an_error_event() {
     exercise_external_sdk(ExternalFixture::Rust).await.unwrap();
 }

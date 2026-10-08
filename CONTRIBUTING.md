@@ -11,7 +11,7 @@ Thank you for helping improve Metric.
 
 ## Development setup
 
-Metric uses Rust 1.88, Node.js 24 and MongoDB 8.
+Metric uses Rust 1.94, Node.js 24 and MongoDB 8.
 
 Start the development database:
 

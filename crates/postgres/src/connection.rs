@@ -3,7 +3,7 @@ use sqlx::{
     ConnectOptions, PgPool,
     postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
 };
-use std::{collections::BTreeSet, path::PathBuf, str::FromStr, time::Duration};
+use std::{collections::BTreeSet, fmt, path::PathBuf, str::FromStr, time::Duration};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SslMode {
@@ -35,7 +35,7 @@ impl SslMode {
 }
 
 /// Driver-free validated settings; credentials are passed separately and never Debug.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConnectionPolicy {
     pub bootstrap_timeout: Duration,
     pub acquire_timeout: Duration,
@@ -47,6 +47,30 @@ pub struct ConnectionPolicy {
     pub ssl_mode: SslMode,
     pub allow_insecure_connection: bool,
     pub ssl_root_cert: Option<PathBuf>,
+}
+
+impl fmt::Debug for ConnectionPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConnectionPolicy")
+            .field("bootstrap_timeout", &self.bootstrap_timeout)
+            .field("acquire_timeout", &self.acquire_timeout)
+            .field("min_connections", &self.min_connections)
+            .field("max_connections", &self.max_connections)
+            .field("statement_timeout", &self.statement_timeout)
+            .field("lock_timeout", &self.lock_timeout)
+            .field(
+                "idle_in_transaction_timeout",
+                &self.idle_in_transaction_timeout,
+            )
+            .field("ssl_mode", &self.ssl_mode)
+            .field("allow_insecure_connection", &self.allow_insecure_connection)
+            .field(
+                "ssl_root_cert",
+                &self.ssl_root_cert.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl Default for ConnectionPolicy {
@@ -116,9 +140,18 @@ impl ConnectionPolicy {
 
     pub(crate) fn connect_options(&self, uri: &str) -> Result<PgConnectOptions, PostgresError> {
         self.validate_uri(uri)?;
+        // SQLx Require skips CA validation even with a supplied root. Honor our
+        // documented native-libpq-compatible policy by using VerifyCa in that case.
+        let ssl_mode = if self.ssl_mode == SslMode::Require
+            && (self.ssl_root_cert.is_some() || std::env::var_os("PGSSLROOTCERT").is_some())
+        {
+            PgSslMode::VerifyCa
+        } else {
+            self.ssl_mode.driver()
+        };
         let mut options = PgConnectOptions::from_str(uri)
             .map_err(|_| PostgresError::InvalidUri)?
-            .ssl_mode(self.ssl_mode.driver())
+            .ssl_mode(ssl_mode)
             .application_name("metric")
             .disable_statement_logging()
             .options([
@@ -208,6 +241,11 @@ mod tests {
     #[test]
     fn uri_policy_rejects_values_before_driver_logging() {
         let policy = ConnectionPolicy::default();
+        let with_root = ConnectionPolicy {
+            ssl_root_cert: Some(PathBuf::from("private-ca-location-marker.pem")),
+            ..policy.clone()
+        };
+        assert!(!format!("{with_root:?}").contains("private-ca-location-marker"));
         for uri in [
             "postgres://user:secret@localhost/metric?options=-c%20search_path=public",
             "postgres://user:secret@localhost/metric?password=secret",
@@ -341,5 +379,148 @@ mod tests {
                 "operator environment value entered logs"
             );
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL TLS profile and local test certificates"]
+    async fn verified_local_tls_rejects_wrong_ca_and_hostname() {
+        let uri = std::env::var("METRIC_TEST_POSTGRES_TLS_URI")
+            .expect("TLS fixture URI required; no silent skip");
+        let root =
+            std::env::var_os("METRIC_TEST_POSTGRES_TLS_ROOT").expect("local test CA required");
+        let wrong = std::env::var_os("METRIC_TEST_POSTGRES_TLS_WRONG_ROOT")
+            .expect("wrong local test CA required");
+        let policy = ConnectionPolicy {
+            ssl_root_cert: Some(root.clone().into()),
+            bootstrap_timeout: Duration::from_secs(10),
+            acquire_timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+        let database = PostgresDatabase::connect(&uri, &policy).await.unwrap();
+        let encrypted: bool =
+            sqlx::query_scalar("SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert!(encrypted);
+        database.close().await;
+        let wrong_policy = ConnectionPolicy {
+            ssl_root_cert: Some(wrong.clone().into()),
+            ..policy.clone()
+        };
+        assert!(
+            PostgresDatabase::connect(&uri, &wrong_policy)
+                .await
+                .is_err()
+        );
+        let mut bad_host = url::Url::parse(&uri).unwrap();
+        bad_host.set_host(Some("localhost")).unwrap();
+        // Prove an actual certificate-name rejection rather than accepting a DNS
+        // or connect timeout as evidence. Windows may try IPv6 localhost first.
+        use sqlx::{Connection, PgConnection};
+        let hostname_result = tokio::time::timeout(
+            Duration::from_secs(10),
+            PgConnection::connect_with(&policy.connect_options(bad_host.as_str()).unwrap()),
+        )
+        .await
+        .expect("hostname probe exceeded its connection budget");
+        assert!(matches!(hostname_result, Err(sqlx::Error::Io(ref error))
+            if error.kind() == std::io::ErrorKind::InvalidData
+                && error.to_string().contains("not valid for name")));
+        let no_root = ConnectionPolicy {
+            ssl_root_cert: None,
+            ..policy.clone()
+        };
+        assert!(PostgresDatabase::connect(&uri, &no_root).await.is_err());
+        let ca_only = ConnectionPolicy {
+            ssl_mode: SslMode::VerifyCa,
+            allow_insecure_connection: true,
+            ..policy.clone()
+        };
+        let database = PostgresDatabase::connect(bad_host.as_str(), &ca_only)
+            .await
+            .expect("verify-ca must validate the CA while accepting a mismatched hostname");
+        database.close().await;
+        let require_ca = ConnectionPolicy {
+            ssl_mode: SslMode::Require,
+            allow_insecure_connection: true,
+            ..policy.clone()
+        };
+        let database = PostgresDatabase::connect(&uri, &require_ca).await.unwrap();
+        database.close().await;
+        let bad_require = ConnectionPolicy {
+            ssl_root_cert: Some(wrong.into()),
+            ..require_ca
+        };
+        assert!(PostgresDatabase::connect(&uri, &bad_require).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL TLS profile and local test certificates"]
+    async fn operator_tls_certificates_are_inherited_and_values_redacted() {
+        const CHILD: &str = "METRIC_PG_TLS_ENV_PROBE";
+        if std::env::var_os(CHILD).is_some() {
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::WARN)
+                .without_time()
+                .with_ansi(false)
+                .init();
+            let uri = std::env::var("METRIC_TEST_POSTGRES_TLS_URI").unwrap();
+            // No explicit CA/client certificate paths: the driver inherits them.
+            let policy = ConnectionPolicy {
+                bootstrap_timeout: Duration::from_secs(2),
+                acquire_timeout: Duration::from_secs(1),
+                ..Default::default()
+            };
+            let database = PostgresDatabase::connect(&uri, &policy).await.unwrap();
+            let encrypted: bool =
+                sqlx::query_scalar("SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()")
+                    .fetch_one(&database.pool)
+                    .await
+                    .unwrap();
+            assert!(encrypted);
+            let timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+            assert_eq!(timeout, "10s");
+            database.close().await;
+            return;
+        }
+        let root = std::env::var("METRIC_TEST_POSTGRES_TLS_ROOT").expect("TLS CA path required");
+        let cert = std::env::var("METRIC_TEST_POSTGRES_TLS_CLIENT_CERT")
+            .expect("TLS client certificate path required");
+        let key = std::env::var("METRIC_TEST_POSTGRES_TLS_CLIENT_KEY")
+            .expect("TLS client key path required");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "connection::tests::operator_tls_certificates_are_inherited_and_values_redacted",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PGOPTIONS", "-c statement_timeout=0")
+            .env("PGSSLROOTCERT", &root)
+            .env("PGSSLCERT", &cert)
+            .env("PGSSLKEY", &key)
+            .output()
+            .unwrap();
+        let logs = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success(),
+            "isolated inherited TLS connection probe failed"
+        );
+        for name in ["PGOPTIONS", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY"] {
+            assert!(logs.contains(name));
+        }
+        for value in [&root, &cert, &key] {
+            assert!(!logs.contains(value), "certificate path entered logs");
+        }
+        assert!(!logs.contains("statement_timeout=0"));
     }
 }

@@ -551,15 +551,12 @@ async fn observe_request(
     let request_id = RequestId::from_bytes(*uuid::Uuid::new_v4().as_bytes());
     request.extensions_mut().insert(request_id);
     let method = request.method().clone();
-    let route = route_override.map_or_else(
-        || {
-            request
-                .extensions()
-                .get::<MatchedPath>()
-                .map_or_else(|| request.uri().path(), MatchedPath::as_str)
-        },
-        |route| route,
-    );
+    let route = route_override.unwrap_or_else(|| {
+        request
+            .extensions()
+            .get::<MatchedPath>()
+            .map_or_else(|| request.uri().path(), MatchedPath::as_str)
+    });
     let span = info_span!(
         "http.request",
         request_id = %request_id,

@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -112,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -137,7 +137,7 @@ jobs:
       METRIC_TEST_MONGODB_URI: mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
@@ -174,6 +174,48 @@ jobs:
       - name: Stop isolated MongoDB
         if: always()
         run: docker compose -f deploy/compose.dev.yml down
+
+  postgres:
+    name: PostgreSQL integration and TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      METRIC_TEST_POSTGRES_URI: postgres://metric_test:metric-postgres-local-only@127.0.0.1:54329/metric_test
+      METRIC_TEST_POSTGRES_TLS_URI: postgres://metric_test:metric-postgres-local-only@127.0.0.1:54330/metric_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Start isolated PostgreSQL and local test CA
+        run: >-
+          docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml
+          --profile tls up -d --wait postgres postgres-tls
+      - name: Prepare ephemeral local certificates
+        shell: bash
+        run: |
+          set -euo pipefail
+          certs="$GITHUB_WORKSPACE/target/postgres-test-tls"
+          mkdir -p "$certs"
+          fixture="$(docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml --profile tls ps --all --quiet postgres-test-certs)"
+          for file in ca.crt wrong-ca.crt client.crt client.key; do
+            docker cp "${fixture}:/certs/${file}" "${certs}/${file}"
+          done
+          {
+            echo "METRIC_TEST_POSTGRES_TLS_ROOT=${certs}/ca.crt"
+            echo "METRIC_TEST_POSTGRES_TLS_WRONG_ROOT=${certs}/wrong-ca.crt"
+            echo "METRIC_TEST_POSTGRES_TLS_CLIENT_CERT=${certs}/client.crt"
+            echo "METRIC_TEST_POSTGRES_TLS_CLIENT_KEY=${certs}/client.key"
+          } >> "$GITHUB_ENV"
+      - name: Run real storage, migration and TLS gates
+        run: >-
+          cargo test -p metric-postgres --all-targets --all-features --locked --no-fail-fast
+          -- --include-ignored --test-threads=1
+      - name: Inspect PostgreSQL after failure
+        if: failure()
+        run: docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml --profile tls logs postgres postgres-tls
+      - name: Stop isolated PostgreSQL
+        if: always()
+        run: docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml --profile tls down --volumes
 
   container:
     name: Container build

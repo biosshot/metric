@@ -32,19 +32,18 @@ pub enum DebugId {
 
 impl DebugId {
     pub fn parse(value: &str) -> Result<Self, DebugFileValueError> {
-        if let Some((timestamp, age)) = value.split_once(':') {
-            if timestamp.len() == 8
-                && age.len() <= 8
-                && timestamp.bytes().all(|byte| byte.is_ascii_hexdigit())
-                && age.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Ok(Self::Pdb20 {
-                    timestamp: u32::from_str_radix(timestamp, 16)
-                        .map_err(|_| DebugFileValueError::InvalidDebugId)?,
-                    age: u32::from_str_radix(age, 16)
-                        .map_err(|_| DebugFileValueError::InvalidDebugId)?,
-                });
-            }
+        if let Some((timestamp, age)) = value.split_once(':')
+            && timestamp.len() == 8
+            && age.len() <= 8
+            && timestamp.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && age.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Ok(Self::Pdb20 {
+                timestamp: u32::from_str_radix(timestamp, 16)
+                    .map_err(|_| DebugFileValueError::InvalidDebugId)?,
+                age: u32::from_str_radix(age, 16)
+                    .map_err(|_| DebugFileValueError::InvalidDebugId)?,
+            });
         }
         let (uuid_text, appendix) = if value.len() > 36 {
             let (uuid, appendix) = value
