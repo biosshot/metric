@@ -2283,24 +2283,22 @@ fn validate_and_scrub_event(
     {
         return Err(IngestError::invalid("event_type_not_error"));
     }
-    let body_event_id = object
-        .get("event_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| IngestError::invalid("missing_event_id"))
-        .and_then(|value| {
-            EventId::parse(value).map_err(|_| IngestError::invalid("invalid_event_id"))
-        })?;
-    for stated in [primary.header_event_id, envelope_event_id]
+    let body_event_id = optional_event_id(object.get("event_id"), "invalid_event_id")?;
+    let resolved_event_id = body_event_id
+        .or(primary.header_event_id)
+        .or(envelope_event_id)
+        .ok_or_else(|| IngestError::invalid("missing_event_id"))?;
+    for stated in [body_event_id, primary.header_event_id, envelope_event_id]
         .into_iter()
         .flatten()
     {
-        if stated != body_event_id {
+        if stated != resolved_event_id {
             return Err(IngestError::invalid("conflicting_event_id"));
         }
     }
     object.insert(
         "event_id".to_owned(),
-        Value::String(body_event_id.to_string()),
+        Value::String(resolved_event_id.to_string()),
     );
     object.remove("project");
     scrub_value(&mut value, None, &snapshot.scrub_policy, 0)?;
@@ -2346,7 +2344,7 @@ fn validate_and_scrub_event(
         fields.request_path = request_url.as_ref().map(url::Url::path);
         if let Some(matched) = snapshot.inbound_filters.matches(&fields) {
             return Ok(ValidatedPrimaryEvent::Filtered {
-                event_id: body_event_id,
+                event_id: resolved_event_id,
                 matched,
             });
         }
@@ -2356,7 +2354,7 @@ fn validate_and_scrub_event(
         code: "scrub_failed",
     })?;
     Ok(ValidatedPrimaryEvent::Accepted {
-        event_id: body_event_id,
+        event_id: resolved_event_id,
         payload,
     })
 }
@@ -3151,7 +3149,7 @@ fn span_from_parts(
         operation_class: SpanOperationClass::from_operation(operation),
         operation: bounded_text(operation, 128, "span_operation_too_large")?,
         status: bounded_text(status, 64, "span_status_too_large")?,
-        name: bounded_text(name, 1_024, "span_name_too_large")?,
+        name: normalize_span_name(name)?,
         environment,
         release,
         service,
@@ -3267,6 +3265,14 @@ fn optional_bounded(value: Option<&Value>, maximum: usize) -> Option<Box<str>> {
         .map(|value| truncate_text(value, maximum).into())
 }
 
+fn normalize_span_name(value: &str) -> Result<Box<str>, IngestError> {
+    // Keep the indexed name bounded without discarding an otherwise valid trace.
+    // The complete name remains available in the span's original JSON body.
+    if value.chars().any(char::is_control) {
+        return Err(IngestError::invalid("span_name_too_large"));
+    }
+    Ok(truncate_text(value, 1_024).into())
+}
 fn bounded_text(value: &str, maximum: usize, code: &'static str) -> Result<Box<str>, IngestError> {
     if value.chars().any(char::is_control) || value.len() > maximum {
         return Err(IngestError::invalid(code));
@@ -3662,6 +3668,82 @@ mod tests {
     }
 
     #[test]
+    fn header_only_event_ids_are_normalized_for_php_sdk_errors() {
+        let expected = EventId::from_bytes([7; 16]);
+        let raw = br#"{"platform":"php","exception":{"values":[{"type":"RuntimeException","value":"PHP envelope test"}]}}"#;
+        for (item_id, envelope_id) in [
+            (None, Some(expected)),
+            (Some(expected), None),
+            (Some(expected), Some(expected)),
+        ] {
+            let validated = validate_and_scrub_event(
+                PrimaryEvent {
+                    header_event_id: item_id,
+                    raw_json: raw.as_slice().into(),
+                },
+                envelope_id,
+                &snapshot(),
+            )
+            .unwrap();
+            let ValidatedPrimaryEvent::Accepted { event_id, payload } = validated else {
+                panic!("PHP error must be accepted");
+            };
+            assert_eq!(event_id, expected);
+            let payload: Value = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(payload["event_id"], expected.to_string());
+            assert_eq!(payload["platform"], "php");
+            assert_eq!(
+                payload["exception"]["values"][0]["type"],
+                "RuntimeException"
+            );
+        }
+    }
+
+    #[test]
+    fn header_only_event_ids_still_reject_conflicts_and_missing_ids() {
+        let first = EventId::from_bytes([7; 16]);
+        let second = EventId::from_bytes([8; 16]);
+        for (item_id, envelope_id, code) in [
+            (Some(first), Some(second), "conflicting_event_id"),
+            (None, None, "missing_event_id"),
+        ] {
+            let error = validate_and_scrub_event(
+                PrimaryEvent {
+                    header_event_id: item_id,
+                    raw_json: br#"{"platform":"php"}"#.as_slice().into(),
+                },
+                envelope_id,
+                &snapshot(),
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), code);
+        }
+    }
+
+    #[test]
+    fn valid_envelope_id_does_not_hide_a_malformed_body_event_id() {
+        for raw in [
+            br#"{"event_id":"invalid"}"#.as_slice(),
+            br#"{"event_id":42}"#.as_slice(),
+            br#"{"event_id":null}"#.as_slice(),
+        ] {
+            assert_eq!(
+                validate_and_scrub_event(
+                    PrimaryEvent {
+                        header_event_id: None,
+                        raw_json: raw.into()
+                    },
+                    Some(EventId::from_bytes([7; 16])),
+                    &snapshot(),
+                )
+                .unwrap_err()
+                .code(),
+                "invalid_event_id"
+            );
+        }
+    }
+
+    #[test]
     fn conflicting_event_ids_fail_closed() {
         let event_id = EventId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         let raw = br#"{"event_id":"0123456789abcdef0123456789abcdef"}"#;
@@ -3758,6 +3840,91 @@ mod tests {
         assert_ne!(first[0].insight_flags & (1 << 3), 0);
     }
 
+    #[test]
+    fn long_span_names_keep_the_transaction_and_original_descriptions() {
+        let long_url = format!(
+            "https://cllctr.roistat.com/stream/view/{}",
+            "x".repeat(3_100)
+        );
+        let unicode_name = format!("{}{}", "a".repeat(1_023), "я".repeat(100));
+        let payload = serde_json::json!({
+            "type": "transaction",
+            "transaction": long_url,
+            "start_timestamp": 1753372800.0,
+            "timestamp": 1753372801.5,
+            "contexts": {"trace": {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "1111111111111111",
+                "op": "pageload"
+            }},
+            "spans": [
+                {
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "span_id": "2222222222222222",
+                    "parent_span_id": "1111111111111111",
+                    "start_timestamp": 1753372800.1,
+                    "timestamp": 1753372800.6,
+                    "op": "resource.script",
+                    "description": long_url
+                },
+                {
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "span_id": "3333333333333333",
+                    "parent_span_id": "1111111111111111",
+                    "start_timestamp": 1753372800.2,
+                    "timestamp": 1753372800.7,
+                    "op": "resource.img",
+                    "description": unicode_name
+                },
+                {
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "span_id": "4444444444444444",
+                    "parent_span_id": "1111111111111111",
+                    "start_timestamp": 1753372800.3,
+                    "timestamp": 1753372800.8,
+                    "op": "resource.script",
+                    "description": "short name"
+                }
+            ]
+        });
+        let records = normalize_transaction(
+            &snapshot(),
+            metric_domain::Timestamp::from_unix_millis(1_753_372_801_600).unwrap(),
+            &serde_json::to_vec(&payload).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 4);
+        assert!(records[0].is_segment);
+        assert_eq!(records[0].name.as_ref(), &long_url[..1_024]);
+        assert_eq!(records[1].name.as_ref(), &long_url[..1_024]);
+        assert_eq!(records[2].name.as_ref(), "a".repeat(1_023));
+        assert_eq!(records[3].name.as_ref(), "short name");
+        for record in &records {
+            assert!(record.name.len() <= 1_024);
+        }
+        let root: serde_json::Value = serde_json::from_slice(records[0].body.as_bytes()).unwrap();
+        let child: serde_json::Value = serde_json::from_slice(records[1].body.as_bytes()).unwrap();
+        let unicode_child: serde_json::Value =
+            serde_json::from_slice(records[2].body.as_bytes()).unwrap();
+        assert_eq!(root["transaction"], long_url);
+        assert_eq!(child["description"], long_url);
+        assert_eq!(unicode_child["description"], unicode_name);
+    }
+
+    #[test]
+    fn span_name_truncation_preserves_boundaries_and_control_character_validation() {
+        assert_eq!(
+            normalize_span_name(&"a".repeat(1_024)).unwrap().len(),
+            1_024
+        );
+        assert_eq!(normalize_span_name(&"я".repeat(513)).unwrap().len(), 1_024);
+        let invalid = format!("{}\n", "a".repeat(1_025));
+        assert_eq!(
+            normalize_span_name(&invalid).unwrap_err().code(),
+            "span_name_too_large"
+        );
+    }
     #[test]
     fn malformed_span_time_and_identity_fail_before_storage() {
         let payload = br#"{

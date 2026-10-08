@@ -17,6 +17,22 @@ optional SDK feature is tested on every platform.
 
 A version not listed here may work, but it has not passed the release tests.
 
+## PHP integration notes
+
+The PHP example in SDK setup uses `sentry/sentry` 4.19.1. Error events with an
+Event ID only in the envelope or item header are accepted and normalized into the
+stored event body. Conflicting IDs and malformed body IDs are still rejected.
+
+A local Docker integration was manually verified with PHP 8.4, Laravel 11,
+`sentry/sentry` 4.19.1 and `sentry/sentry-laravel` 4.20.1. The checks exercised
+error events, HTTP and SQL spans, structured logs, application metrics and cron
+check-ins. These checks are not yet part of the automated release-test matrix
+and do not establish compatibility for every optional PHP SDK feature.
+
+Indexed transaction and span names are limited to 1,024 UTF-8 bytes. Longer names
+are truncated at a character boundary, while the full name remains in the stored,
+scrubbed JSON body. Control characters still cause the span to be rejected.
+
 ## Other supported data
 
 Metric also accepts:
@@ -39,9 +55,9 @@ combinations may work but are not all part of the release tests.
 
 Session Replay is disabled for each new project until you enable it.
 
-## Not currently tested
+## Not currently covered by release tests
 
-Metric does not currently claim compatibility with:
+The following SDK families are not part of the automated compatibility matrix:
 
 - Apple and Cocoa;
 - Flutter and Dart;
