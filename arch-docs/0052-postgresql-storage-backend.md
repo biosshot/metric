@@ -213,8 +213,15 @@ or connectivity requirement for the selected backend.
 The adapter owns one fixed `metric` SQL schema and uses qualified table names.
 Do not accept arbitrary schemas or driver `options`/`search_path` strings. Parse a
 documented allowlist of URI fields; reject duplicate/unknown policy options. TLS,
-timeouts and migration target are controlled by the typed settings, not overwritten
-by URI parameters or ambient `PG*` environment variables. Reject conflicting URI
+timeouts and migration target are controlled by typed settings. Explicit Metric
+settings take precedence over the corresponding driver defaults. Preserve the
+driver's environment defaults, including `PGOPTIONS`, `PGSSLROOTCERT`, `PGSSLCERT`
+and `PGSSLKEY`; their presence is not a configuration error. These are trusted
+operator inputs, accepted by the user on 2026-10-08. Emit a warning naming applicable
+variables without their values; certificate paths and option contents must not enter
+logs. Invalid inherited options can still produce an ordinary connection failure,
+but do not reject startup merely because the variables exist. Do not mutate process
+environment or silently strip these options. Reject conflicting URI
 TLS settings with a redacted error. Keep SQLx connect-option Debug/URL formatting
 out of error paths.
 

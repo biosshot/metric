@@ -97,6 +97,11 @@ Mongo integration pass. Review `git diff -- crates/mongo` for accidental changes
 - Prove plain TCP with explicit acknowledgement, verified TLS with a local CA,
   weak TLS acknowledgement, and rejection of conflicting URI options. Prove no
   outbound HTTP or public certificate service is required.
+- Preserve native driver environment defaults (`PGOPTIONS`, `PGSSLROOTCERT`,
+  `PGSSLCERT`, `PGSSLKEY`) as approved operator inputs. Warn with variable names
+  only; do not fail just because a variable exists. Explicit typed settings retain
+  precedence. Verify acceptance and redaction in isolated child processes so tests
+  do not mutate the environment of parallel Rust tests.
 - Implement initial schema, immutable SQL migration registry and the schema manager
   extension interface for bounded Rust data steps. Hold migration ownership for SQL,
   data and final publication without nested-lock deadlocks.
