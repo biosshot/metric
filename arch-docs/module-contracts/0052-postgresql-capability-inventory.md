@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 53/164. Delivery requires every row
+Implemented signatures: 61/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -87,14 +87,14 @@ and its conformance evidence, including signatures added after this snapshot.
 | `DashboardStore::load_saved_query` | Pending |
 | `DashboardStore::replace_dashboard` | Pending |
 | `DashboardStore::replace_saved_query` | Pending |
-| `ReleaseStore::create_deploy` | Pending |
-| `ReleaseStore::create_release` | Pending |
-| `ReleaseStore::finalize_release` | Pending |
-| `ReleaseStore::finish_deploy` | Pending |
-| `ReleaseStore::list_deploys` | Pending |
-| `ReleaseStore::list_release_issues` | Pending |
-| `ReleaseStore::load_release` | Pending |
-| `ReleaseStore::resolve_projects` | Pending |
+| `ReleaseStore::create_deploy` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::create_release` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::finalize_release` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::finish_deploy` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::list_deploys` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::list_release_issues` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::load_release` | `crates/postgres/src/releases.rs` |
+| `ReleaseStore::resolve_projects` | `crates/postgres/src/releases.rs` |
 | `SignalStore::list_logs` | Pending |
 | `SignalStore::list_segments` | Pending |
 | `SignalStore::load_log` | Pending |

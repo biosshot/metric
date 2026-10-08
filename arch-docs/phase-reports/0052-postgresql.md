@@ -400,3 +400,31 @@ normal successful fixtures clean themselves up.
 
 Current source coverage is 53/164. Remaining capabilities and full deployment,
 restricted-credential, SDK/browser, security, recovery and soak gates are pending.
+
+## Release and Deploy control plane
+
+Schema generation 7 adds organization-scoped Deploys and ordered project links.
+It replaces the existing Release/Issue indexes through a new immutable migration
+so their order matches the public first-seen and regression cursors. All eight
+ReleaseStore methods are implemented without changing shared contracts or Mongo.
+Explicit Release creation supplements an implicit catalog entry while retaining
+its creation time, occurrence pairs and existing metadata. Metadata and names use
+bounded lossless bytes; every SQL value is bound. Composite foreign keys and
+project locks prevent cross-organization links and fence deleted projects.
+
+Deploy retries compare the complete command, including original project order.
+Concurrent identical inserts converge on one record; conflicting commands return
+Conflict. Finishing a Deploy is conditional and idempotent. Lists use bounded
+keyset pages and stable timestamp/identity ties. Lost COMMIT replies remain
+Unavailable under the existing port, with deterministic retries.
+
+Six new Docker tests passed, covering resolution and scope, implicit-to-explicit
+Release metadata, concurrent Deploy creation/finish and ordered associations,
+stable pagination and selective indexes over 10,000 unrelated rows, exact binary
+Release/Issue queries, injected transactional rollback, lost COMMIT replies and
+bounded corruption rejection. The complete generation-7 suite passed 53/53 with
+no ignored tests. Strict workspace Clippy passed with warnings denied.
+
+Current source coverage is 61/164. The remaining capabilities and full runtime,
+restricted-credential, SDK/browser, recovery, security and soak gates remain
+pending; PostgreSQL is not yet selectable through public configuration.
