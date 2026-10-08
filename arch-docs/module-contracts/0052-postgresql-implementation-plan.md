@@ -1,7 +1,7 @@
 # PostgreSQL implementation plan and acceptance gates
 
 - Date: 2026-10-08
-- Status: Plan only; no PostgreSQL implementation or runtime verification claimed
+- Status: Implementation in progress; actual evidence is tracked in the phase report
 - Owning decision: [ADR-0052](../0052-postgresql-storage-backend.md)
 - Required implementation branch: `feat/postgres`
 - Commit convention: Conventional Commits
@@ -26,7 +26,9 @@ Before runtime edits, inspect status and current branch, preserve unrelated work
 and create `feat/postgres` from the agreed current base. If that branch already
 exists, inspect and reuse it only if it is the same implementation; never reset or
 overwrite it. Do not implement on `main`. This documentation-only planning change
-does not claim the implementation branch has already been created.
+does not claim the implementation branch has already been created. Implementation is
+now on `feat/postgres`; see [the phase report](../phase-reports/0052-postgresql.md)
+for completed stages.
 
 Use reviewable Conventional Commits, for example:
 

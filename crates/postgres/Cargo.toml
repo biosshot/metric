@@ -1,0 +1,23 @@
+[package]
+name = "metric-postgres"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+metric-domain = { path = "../domain" }
+metric-ports = { path = "../ports" }
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

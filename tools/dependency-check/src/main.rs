@@ -24,6 +24,11 @@ const CRATES: &[(&str, &str, &[&str])] = &[
         &["metric-domain", "metric-ports"],
     ),
     (
+        "metric-postgres",
+        "crates/postgres",
+        &["metric-domain", "metric-ports"],
+    ),
+    (
         "metric-blob",
         "crates/blob",
         &["metric-domain", "metric-ports"],
