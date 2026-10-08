@@ -1,4 +1,5 @@
 //! Native PostgreSQL storage adapter. Driver types stay within this crate.
+mod api;
 mod auth;
 mod codec;
 mod connection;
@@ -10,6 +11,7 @@ mod migrations;
 mod projects;
 mod releases;
 
+pub use api::PostgresInvestigationStore;
 pub use auth::PostgresAuthStore;
 pub use connection::{ConnectionPolicy, PostgresDatabase, SslMode};
 pub use error::PostgresError;

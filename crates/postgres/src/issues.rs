@@ -15,7 +15,7 @@ use metric_domain::{
 };
 use metric_ports::{IssueStore, IssueStoreError, PortFuture};
 use serde_json::{Value, json};
-use sqlx::{PgConnection, Row, postgres::PgRow};
+use sqlx::{PgConnection, Postgres, QueryBuilder, Row, postgres::PgRow};
 use std::num::NonZeroU64;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
@@ -249,16 +249,35 @@ impl PostgresIssueStore {
         project: ProjectId,
         issue: IssueId,
     ) -> Result<PgRow, IssueStoreError> {
-        sqlx::query("SELECT project_id,issue_id,grouping_key,title,culprit,first_seen,last_seen,first_event_id,latest_event_id,representative_event_id,occurrence_count,status,assignee,workflow_at,workflow_actor,regression_at,regression_event_id,regression_count,regression_release,first_release,last_release,CASE WHEN octet_length(grouping_body)<=$3 THEN grouping_body END AS grouping_body FROM metric.issues WHERE project_id=$1 AND issue_id=$2 FOR UPDATE")
-            .bind(project.get()).bind(issue.as_bytes().as_slice()).bind(self.body_limit())
-            .fetch_optional(connection).await.map_err(unavailable)?.ok_or(IssueStoreError::NotFound)
+        self.select()
+            .push(" WHERE project_id=")
+            .push_bind(project.get())
+            .push(" AND issue_id=")
+            .push_bind(issue.as_bytes().to_vec())
+            .push(" FOR UPDATE")
+            .build()
+            .fetch_optional(connection)
+            .await
+            .map_err(unavailable)?
+            .ok_or(IssueStoreError::NotFound)
     }
 
     fn body_limit(&self) -> i64 {
         self.codec.max_encoded_row_bytes as i64
     }
 
-    fn decode(&self, row: &PgRow) -> Result<IssueSnapshot, IssueStoreError> {
+    /// A single bounded projection is shared by point reads and investigation pages.
+    pub(crate) fn select(&self) -> QueryBuilder<sqlx::Postgres> {
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT project_id,issue_id,grouping_key,title,culprit,first_seen,last_seen,first_event_id,latest_event_id,representative_event_id,occurrence_count,status,assignee,workflow_at,workflow_actor,regression_at,regression_event_id,regression_count,regression_release,first_release,last_release,CASE WHEN octet_length(grouping_body)<=",
+        );
+        query
+            .push_bind(self.body_limit())
+            .push(" THEN grouping_body END AS grouping_body FROM metric.issues");
+        query
+    }
+
+    pub(crate) fn decode(&self, row: &PgRow) -> Result<IssueSnapshot, IssueStoreError> {
         let project_id =
             ProjectId::new(row.try_get("project_id").map_err(invalid)?).map_err(invalid)?;
         let issue_id = IssueId::from_bytes(fixed(row, "issue_id")?);
@@ -463,9 +482,17 @@ impl IssueStore for PostgresIssueStore {
         issue: IssueId,
     ) -> PortFuture<'_, Result<IssueSnapshot, IssueStoreError>> {
         Box::pin(async move {
-            let row = sqlx::query("SELECT project_id,issue_id,grouping_key,title,culprit,first_seen,last_seen,first_event_id,latest_event_id,representative_event_id,occurrence_count,status,assignee,workflow_at,workflow_actor,regression_at,regression_event_id,regression_count,regression_release,first_release,last_release,CASE WHEN octet_length(grouping_body)<=$3 THEN grouping_body END AS grouping_body FROM metric.issues WHERE project_id=$1 AND issue_id=$2")
-                .bind(project.get()).bind(issue.as_bytes().as_slice()).bind(self.body_limit())
-                .fetch_optional(&self.database.pool).await.map_err(unavailable)?.ok_or(IssueStoreError::NotFound)?;
+            let row = self
+                .select()
+                .push(" WHERE project_id=")
+                .push_bind(project.get())
+                .push(" AND issue_id=")
+                .push_bind(issue.as_bytes().to_vec())
+                .build()
+                .fetch_optional(&self.database.pool)
+                .await
+                .map_err(unavailable)?
+                .ok_or(IssueStoreError::NotFound)?;
             self.decode(&row)
         })
     }

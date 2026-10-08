@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 61/164. Delivery requires every row
+Implemented signatures: 69/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -68,14 +68,14 @@ and its conformance evidence, including signatures added after this snapshot.
 | `IssueStore::load` | `crates/postgres/src/issues.rs` |
 | `IssueStore::search_titles` | `crates/postgres/src/issues.rs` |
 | `FinalizationStore::finalize` | `crates/postgres/src/finalization.rs` |
-| `InvestigationStore::issue_activity` | Pending |
-| `InvestigationStore::issue_statistics` | Pending |
-| `InvestigationStore::list_environments` | Pending |
-| `InvestigationStore::list_events` | Pending |
-| `InvestigationStore::list_issues` | Pending |
-| `InvestigationStore::list_releases` | Pending |
-| `InvestigationStore::load_event` | Pending |
-| `InvestigationStore::search_candidates` | Pending |
+| `InvestigationStore::issue_activity` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::issue_statistics` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::list_environments` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::list_events` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::list_issues` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::list_releases` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::load_event` | `crates/postgres/src/api.rs` |
+| `InvestigationStore::search_candidates` | `crates/postgres/src/api.rs` |
 | `ExploreStore::execute` | Pending |
 | `DashboardStore::delete_dashboard` | Pending |
 | `DashboardStore::delete_saved_query` | Pending |

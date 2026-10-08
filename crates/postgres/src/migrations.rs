@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 7;
+const SCHEMA_GENERATION: i64 = 8;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 // This is application-owned static SQL, never configurable or derived from input.
@@ -178,6 +178,13 @@ fn registry() -> Migrator {
                 Cow::Borrowed("explicit Releases, Deploys and cursor indexes"),
                 MigrationType::Simple,
                 include_str!("../migrations/0007_releases.sql").into_sql_str(),
+                false,
+            ),
+            Migration::new(
+                8,
+                Cow::Borrowed("bounded investigation catalog timeline"),
+                MigrationType::Simple,
+                include_str!("../migrations/0008_investigation.sql").into_sql_str(),
                 false,
             ),
         ]),

@@ -428,3 +428,31 @@ no ignored tests. Strict workspace Clippy passed with warnings denied.
 Current source coverage is 61/164. The remaining capabilities and full runtime,
 restricted-credential, SDK/browser, recovery, security and soak gates remain
 pending; PostgreSQL is not yet selectable through public configuration.
+
+## Native investigation queries
+
+All eight InvestigationStore methods now use scoped native queries, bounded
+keyset pages and the existing adapter-owned binary JSON codec. Issue point reads,
+locked mutations and investigation pages share one server-bounded projection and
+decoder. SQL builders contain static fragments only; cursor, ID, time and token
+values are bound. Candidate searches preserve the existing bounded branch union
+and examined-count behavior without duplicating rows or exposing pending/failed
+Events. Custom platforms continue to come from the processed payload projection.
+Schema generation 8 adds the partial visible-Environment timeline index through
+a separate immutable migration.
+
+Six new Docker cases passed: project isolation, stable timestamp ties and status
+filters; all search anchors, signed token extremes and foreign-project cursors;
+ordered activities and hourly statistics; binary Release/Environment catalogs,
+hidden entries and catalog identity checks; encoded/decompressed bounds and
+malformed bodies; and real EXPLAIN evidence for project/Issue Event timelines,
+selective token GIN and visible-Environment indexes over 10,000 unrelated rows.
+The initial EXPLAIN assertion compared a JSON floating-point row count with an
+integer representation; the fixture now compares their numeric value. No query
+or production behavior changed for that correction.
+
+Current source coverage is 69/164. Runtime selection and the remaining full
+backend acceptance gates are pending.
+The full generation-8 Docker suite passed 59/59 with no ignored cases. The failed
+EXPLAIN fixture's exact generated database was removed after the suite completed
+and the task-owned Compose project was verified.
