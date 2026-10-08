@@ -29,8 +29,8 @@ const exceptionTitle = computed(() => {
   const body = event.data.value?.body;
   if (!body) return '';
   const exception = body.exception as { values?: Array<{ type?: string; value?: string }> };
-  const first = exception?.values?.[0];
-  return [first?.type, first?.value].filter(Boolean).join(': ');
+  const primary = exception?.values?.at(-1);
+  return [primary?.type, primary?.value].filter(Boolean).join(': ');
 });
 const relations = computed(() => extractEventRelations(event.data.value?.body));
 const relatedLinks = computed<RelatedSignalLink[]>(() => {

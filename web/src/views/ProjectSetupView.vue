@@ -13,7 +13,7 @@ import StatusBadge from '../components/StatusBadge.vue';
 import { useSessionStore } from '../stores/session';
 import { copyText } from '../lib/clipboard';
 
-type SdkId = 'browser' | 'node' | 'python' | 'java' | 'dotnet' | 'go' | 'rust';
+type SdkId = 'browser' | 'node' | 'php' | 'python' | 'java' | 'dotnet' | 'go' | 'rust';
 
 interface SdkSetup {
   id: SdkId;
@@ -52,6 +52,19 @@ Sentry.init({
 
 Sentry.captureMessage("Metric test event");`,
     documentationUrl: 'https://docs.sentry.io/platforms/javascript/guides/node/',
+  },
+  {
+    id: 'php',
+    label: 'PHP',
+    language: 'php',
+    install: 'composer require sentry/sentry:4.19.1',
+    initialize: (dsn) => `<?php
+
+require __DIR__ . '/vendor/autoload.php';
+
+\\Sentry\\init(['dsn' => '${dsn}']);
+\\Sentry\\captureException(new \\RuntimeException('Metric test event'));`,
+    documentationUrl: 'https://docs.sentry.io/platforms/php/',
   },
   {
     id: 'python',

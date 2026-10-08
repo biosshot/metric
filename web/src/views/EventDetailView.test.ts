@@ -106,6 +106,35 @@ describe('EventDetailView relations', () => {
     ).toBeTruthy();
   });
 
+  it('titles PHP chained errors with the outermost exception', async () => {
+    api.event.mockResolvedValueOnce({
+      event_id: 'php-event',
+      project_id: '42',
+      issue_id: 'php-issue',
+      received_at: '2026-10-07T17:00:00Z',
+      occurred_at: '2026-10-07T17:00:00Z',
+      level: 'error',
+      platform: 'php',
+      replay_ids: [],
+      feedback_ids: [],
+      body: {
+        exception: {
+          values: [
+            { type: 'LogicException', value: 'inner cause' },
+            { type: 'RuntimeException', value: 'request failed' },
+          ],
+        },
+      },
+    });
+    renderView();
+    expect(
+      await screen.findByRole('heading', { name: 'RuntimeException: request failed' }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('heading', { name: 'LogicException: inner cause' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('does not link Replay when the project capability is disabled', async () => {
     state.replayEnabled = false;
     renderView();
