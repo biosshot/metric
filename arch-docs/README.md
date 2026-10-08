@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-09-05:
+Status as of 2026-10-08:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -33,6 +33,7 @@ Status as of 2026-09-05:
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
 | Automatic schema-migration framework | Complete; generation 19 to 20 Telegram and 20 to 21 DSN-map transitions registered | ADR-0049/0050 |
+| Independent PostgreSQL backend | Planned only; implementation on `feat/postgres`; MongoDB remains default | ADR-0052 and its implementation plan |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
@@ -134,7 +135,8 @@ Phase 37 and Session Replay Phase 38, and keeps Profiling deferred.
 
 The supported application shape remains one active `--role=all` process. NATS,
 split roles, multiple active application replicas, sharding, disk spool, MCP and a
-second storage backend are deferred. ADR-0044 is a closed historical program, not a
+second storage backend are not implemented. PostgreSQL is now planned in ADR-0052;
+the shipped default remains MongoDB. ADR-0044 is a closed historical program, not a
 current production declaration gate. Current limits are stated directly in
 `docs/known-limits.md`.
 
@@ -169,6 +171,12 @@ current production declaration gate. Current limits are stated directly in
   policy and the first production migration from generation 19 to 20.
 - `0051-helm-chart-and-release-versioning.md`: single-instance Kubernetes deployment,
   persistent storage and exact agreement between Metric, image and chart versions.
+- [0052-postgresql-storage-backend.md](0052-postgresql-storage-backend.md): planned
+  independent PostgreSQL adapter, EventWriter naming, native TCP/TLS configuration,
+  security, migration interfaces and minimal Mongo changes; not yet implemented.
+- [module-contracts/0052-postgresql-implementation-plan.md](module-contracts/0052-postgresql-implementation-plan.md):
+  implementation stages, `feat/postgres`, Conventional Commits and mandatory Docker,
+  security, migration, fault and regression gates.
 - `phase-reports/0051-helm-chart.md`: Helm implementation and verification evidence;
   public release publication remains pending.
 - `verification/2026-09-05-manual-backup-restore.md`: database-scoped manual MongoDB
