@@ -456,3 +456,62 @@ backend acceptance gates are pending.
 The full generation-8 Docker suite passed 59/59 with no ignored cases. The failed
 EXPLAIN fixture's exact generated database was removed after the suite completed
 and the task-owned Compose project was verified.
+
+## Saved Query and Dashboard configuration
+
+Schema generation 9 adds one adapter-private configuration table with separate
+Saved Query/Dashboard kinds, project-scoped identities and name reservations,
+revision CAS and a bounded binary body. All ten DashboardStore methods share
+native CRUD helpers and preserve the current application contracts. A Dashboard
+can retain a missing Saved Query reference; the existing refresh service reports
+that widget's failure. List reads skip malformed entries under the same bounded
+database limit, while direct loads return InvalidData, matching current behavior.
+
+The versioned private query codec preserves typed integer versus floating-point
+values, exact NUL-bearing query text, legacy predicate arrays and expressions.
+Flat expression nodes support the domain's maximum 256 nodes without recursive
+JSON nesting; decoders reject cycles, shared children, orphans and unknown kinds.
+The existing canonical JSON/zstd codec provides encoded and decompressed bounds.
+Project locks fence writes; all SQL data is bound and driver logging is disabled.
+
+Six Docker cases and one static malformed-expression case passed: scoped CRUD,
+unique names and dangling widget references; concurrent CAS and name admission;
+all datasets and typed queries, 256-node expressions and maximum control-bearing
+predicates; validation and project fences; ordered bounded lists, corruption,
+decompression limits and a selective configuration index over 10,000 unrelated
+rows; and injected update rollback versus real lost COMMIT replies. Under the
+existing port, the latter returns Unavailable and a direct load exposes the
+durable revision; retrying the old revision returns Conflict. The full
+generation-9 Docker suite passed 66/66, with no ignored cases. Strict workspace
+Clippy passed with warnings denied.
+
+Current source coverage is 79/164. PostgreSQL runtime selection and the remaining
+backend acceptance gates are still pending.
+
+## Pending Session rebuild boundary decision
+
+Implementation is stopped before the Session capability family for an explicit
+user decision, as requested for newly discovered behavioral disagreements.
+Mongo's `sessions.rs::rebuild_inner` selects Session starts in the raw `[from,until)`
+range, deletes hourly rows whose bucket starts lie in that same raw range, then
+inserts rebuilt buckets without a transaction. If a boundary falls inside an
+hour, a rebuilt bucket may lie outside the deleted range. This can conflict with
+an existing bucket and partially change another bucket to an incomplete count.
+The existing Session test exercises an input whose bucket start is still within
+the raw range, so it does not cover this boundary case.
+
+`python scripts/session-health-range-mongo-probe.py`, piped into mongosh in the
+task-owned Docker Mongo 8.0.12 fixture, reproduced the current source-selection,
+delete and insert algorithm on synthetic data. A half-hour through one-and-a-half
+hour range produced duplicate-key failure and changed whole-hour counts `[2,2]`
+to `[2,1]`. This is an algorithm reproduction, not an invocation of the Rust port.
+Its generated fixture database was dropped in finally; Mongo code and real data
+were not modified.
+
+Proposed PostgreSQL behavior: expand a rebuild range to all intersected whole
+hours, derive counters and sketches from all Sessions in those hours, and replace
+the corresponding statistics transactionally while excluding concurrent Session
+mutations for that project. Keep Mongo unchanged. This avoids reproducing a data
+consistency defect but differs from the existing adapter for unaligned bounds;
+authorization for that specific difference is pending. No Session schema or
+implementation has been added yet.

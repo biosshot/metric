@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 69/164. Delivery requires every row
+Implemented signatures: 79/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -77,16 +77,16 @@ and its conformance evidence, including signatures added after this snapshot.
 | `InvestigationStore::load_event` | `crates/postgres/src/api.rs` |
 | `InvestigationStore::search_candidates` | `crates/postgres/src/api.rs` |
 | `ExploreStore::execute` | Pending |
-| `DashboardStore::delete_dashboard` | Pending |
-| `DashboardStore::delete_saved_query` | Pending |
-| `DashboardStore::insert_dashboard` | Pending |
-| `DashboardStore::insert_saved_query` | Pending |
-| `DashboardStore::list_dashboards` | Pending |
-| `DashboardStore::list_saved_queries` | Pending |
-| `DashboardStore::load_dashboard` | Pending |
-| `DashboardStore::load_saved_query` | Pending |
-| `DashboardStore::replace_dashboard` | Pending |
-| `DashboardStore::replace_saved_query` | Pending |
+| `DashboardStore::delete_dashboard` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::delete_saved_query` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::insert_dashboard` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::insert_saved_query` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::list_dashboards` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::list_saved_queries` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::load_dashboard` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::load_saved_query` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::replace_dashboard` | `crates/postgres/src/dashboards.rs` |
+| `DashboardStore::replace_saved_query` | `crates/postgres/src/dashboards.rs` |
 | `ReleaseStore::create_deploy` | `crates/postgres/src/releases.rs` |
 | `ReleaseStore::create_release` | `crates/postgres/src/releases.rs` |
 | `ReleaseStore::finalize_release` | `crates/postgres/src/releases.rs` |
