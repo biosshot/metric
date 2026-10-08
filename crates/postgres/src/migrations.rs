@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 1;
+const SCHEMA_GENERATION: i64 = 2;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 
@@ -128,13 +128,22 @@ impl PostgresSchemaManager {
 
 fn registry() -> Migrator {
     Migrator {
-        migrations: Cow::Owned(vec![Migration::new(
-            1,
-            Cow::Borrowed("schema infrastructure"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!("../migrations/0001_schema.sql")),
-            false,
-        )]),
+        migrations: Cow::Owned(vec![
+            Migration::new(
+                1,
+                Cow::Borrowed("schema infrastructure"),
+                MigrationType::Simple,
+                Cow::Borrowed(include_str!("../migrations/0001_schema.sql")),
+                false,
+            ),
+            Migration::new(
+                2,
+                Cow::Borrowed("project identity"),
+                MigrationType::Simple,
+                Cow::Borrowed(include_str!("../migrations/0002_identity.sql")),
+                false,
+            ),
+        ]),
         locking: false, // The dedicated connection already owns MIGRATION_LOCK.
         ..Migrator::DEFAULT
     }
@@ -393,7 +402,7 @@ mod tests {
                 .await
                 .unwrap()
                 .generation,
-            1
+            SCHEMA_GENERATION
         );
         fixture.cleanup().await;
     }
@@ -478,8 +487,8 @@ mod tests {
             PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &policy),
             PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &policy)
         );
-        assert_eq!(one.unwrap().generation, 1);
-        assert_eq!(two.unwrap().generation, 1);
+        assert_eq!(one.unwrap().generation, SCHEMA_GENERATION);
+        assert_eq!(two.unwrap().generation, SCHEMA_GENERATION);
         let mut owner = fixture.connection().await;
         acquire_ownership(&mut owner, Duration::from_secs(1))
             .await
@@ -500,7 +509,7 @@ mod tests {
     fn upgraded_registry(sql: &'static str) -> Migrator {
         let mut migrator = registry();
         migrator.migrations.to_mut().push(Migration::new(
-            2,
+            SCHEMA_GENERATION + 1,
             Cow::Borrowed("synthetic future upgrade"),
             MigrationType::Simple,
             Cow::Borrowed(sql),
@@ -522,7 +531,7 @@ mod tests {
                 &MigrationPolicy::default(),
                 &bad,
                 &[],
-                2
+                SCHEMA_GENERATION + 1
             )
             .await
             .is_err()
@@ -534,7 +543,10 @@ mod tests {
                 .await
                 .unwrap();
         assert!(!exists);
-        assert_eq!(read_state(&mut connection).await.unwrap(), 1);
+        assert_eq!(
+            read_state(&mut connection).await.unwrap(),
+            SCHEMA_GENERATION
+        );
         connection.close().await.unwrap();
         bootstrap(&fixture).await;
         fixture.cleanup().await;
@@ -549,7 +561,7 @@ mod tests {
             "synthetic-bounded-upgrade"
         }
         fn generation(&self) -> i64 {
-            2
+            SCHEMA_GENERATION + 1
         }
         fn checksum(&self) -> &'static [u8] {
             b"immutable-test-step-v1"
@@ -628,13 +640,16 @@ mod tests {
                 &policy,
                 &sql,
                 &steps,
-                2
+                SCHEMA_GENERATION + 1
             )
             .await,
             Err(PostgresError::Unavailable)
         );
         let mut connection = fixture.connection().await;
-        assert_eq!(read_state(&mut connection).await.unwrap(), 1);
+        assert_eq!(
+            read_state(&mut connection).await.unwrap(),
+            SCHEMA_GENERATION
+        );
         let checkpoint: String = sqlx::query_scalar("SELECT checkpoint FROM metric.data_migrations WHERE step_id='synthetic-bounded-upgrade'").fetch_one(&mut connection).await.unwrap();
         assert_eq!(checkpoint, "1");
         let second: i32 =
@@ -654,7 +669,7 @@ mod tests {
                 &check,
                 &sql,
                 &steps,
-                2
+                SCHEMA_GENERATION + 1
             )
             .await,
             Err(PostgresError::MigrationRequired)
@@ -666,12 +681,12 @@ mod tests {
                 &policy,
                 &sql,
                 &steps,
-                2
+                SCHEMA_GENERATION + 1
             )
             .await
             .unwrap()
             .generation,
-            2
+            SCHEMA_GENERATION + 1
         );
         assert_eq!(
             PostgresSchemaManager::ensure_registry(
@@ -680,12 +695,12 @@ mod tests {
                 &check,
                 &sql,
                 &steps,
-                2
+                SCHEMA_GENERATION + 1
             )
             .await
             .unwrap()
             .generation,
-            2
+            SCHEMA_GENERATION + 1
         );
         connection.close().await.unwrap();
         fixture.cleanup().await;

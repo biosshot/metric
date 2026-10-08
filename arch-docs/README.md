@@ -33,7 +33,7 @@ Status as of 2026-10-08:
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
 | Automatic schema-migration framework | Complete; generation 19 to 20 Telegram and 20 to 21 DSN-map transitions registered | ADR-0049/0050 |
-| Independent PostgreSQL backend | Planned only; implementation on `feat/postgres`; MongoDB remains default | ADR-0052 and its implementation plan |
+| Independent PostgreSQL backend | Implementation in progress on `feat/postgres`; runtime parity pending; MongoDB remains default | ADR-0052, implementation plan and phase report |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 

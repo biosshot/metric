@@ -1,6 +1,6 @@
 # ADR-0052: Independent PostgreSQL storage backend
 
-- Status: Planned; implementation not started
+- Status: Accepted; implementation in progress on `feat/postgres`
 - Date: 2026-10-08
 - Delivery contract: [PostgreSQL implementation plan](module-contracts/0052-postgresql-implementation-plan.md)
 - Implementation branch: `feat/postgres`

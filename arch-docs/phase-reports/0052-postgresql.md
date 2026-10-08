@@ -98,3 +98,27 @@ These are foundation checks. Verified TLS, separate restricted credentials,
 SIGTERM/container faults, all capability stores, full PostgreSQL server/SDK/UI,
 Docker image/offline runtime and measured 30-minute load/soak gates are still pending.
 The application cannot select a partially implemented PostgreSQL backend yet.
+
+## Project identity store
+
+The first complete capability is `ProjectStore` (all 13 methods, including the
+port's default methods). A source inventory is tracked in
+[the capability table](../module-contracts/0052-postgresql-capability-inventory.md);
+the delivery gate is `python scripts/validate-postgres-coverage.py --require-complete`.
+At this stage the table contains 164 methods, 13 implemented, 151 pending. This
+source count does not claim behavior coverage for pending capabilities.
+
+Schema generation 2 adds organizations/projects, native keys and DSN aliases.
+Native keys and aliases share one unique reservation namespace, closing concurrent
+shadowing races. Foreign keys validate ownership. Project-first transaction locks
+serialize bounded key creation, policy CAS updates and lifecycle state changes.
+Values, including names and malicious filter patterns, are bound SQL parameters.
+No changes were made to Mongo's schema or source.
+
+Real Docker run after these changes: 13 passed, 0 failed/ignored (11 real database
+cases, 2 static policy checks). New cases cover identity round trips and organization
+scope, wrong-project key mutation, state/suspension restoration, duplicate identities
+and slugs, concurrent key limit/CAS enforcement, inbound filter persistence, alias
+target scope and concurrent alias/native reservation collisions. All-target adapter
+Clippy with warnings denied also passed. The earlier foundation tests were rerun
+against the enlarged registry; future synthetic upgrades use the next generation.

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 metric-domain = { path = "../domain" }
 metric-ports = { path = "../ports" }
+serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

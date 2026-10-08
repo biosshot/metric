@@ -2406,6 +2406,7 @@ version = "0.1.7"
 dependencies = [
  "metric-domain",
  "metric-ports",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",
