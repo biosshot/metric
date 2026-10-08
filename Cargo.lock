@@ -2349,6 +2349,7 @@ dependencies = [
  "metric-domain",
  "metric-ports",
  "metric-testkit",
+ "metrics",
  "serde_json",
  "sqlx",
  "thiserror",

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{MigrationPolicy, PostgresProjectStore, PostgresSchemaManager, test_support::Fixture};
 use metric_domain::{blob::BlobObjectId, processing::ProcessingErrorCode};
-use metric_ports::ProjectStore;
+use metric_ports::{FinalizationStore, ProjectStore};
 use serde_json::json;
 use std::time::Duration;
 
@@ -559,6 +559,7 @@ async fn concurrent_batches_preserve_one_body_and_writer_recovers_rejected_hando
 async fn sparse_pending_backlog_uses_partial_index_with_bounded_plan() {
     let (fixture, database, store, _) = setup().await;
     // Disposable representative history: real prepared rows, mostly completed.
+    let mut history = Vec::new();
     for batch in 0..20_u128 {
         let events: Vec<_> = (batch * 500..(batch + 1) * 500)
             .map(|index| {
@@ -571,6 +572,17 @@ async fn sparse_pending_backlog_uses_partial_index_with_bounded_plan() {
                     }))
                     .unwrap(),
                 );
+                if index < 9900 {
+                    history.push(crate::test_support::finalized(
+                        1,
+                        1,
+                        id,
+                        index as i64,
+                        index as i64 + 1,
+                        None,
+                        None,
+                    ));
+                }
                 store.prepare(accepted).unwrap()
             })
             .collect();
@@ -583,8 +595,26 @@ async fn sparse_pending_backlog_uses_partial_index_with_bounded_plan() {
                 .all(|status| *status == EventWriteStatus::Inserted)
         );
     }
-    sqlx::query("UPDATE metric.error_events SET processing_state=2,next_attempt_at=NULL WHERE received_at<=$1")
-        .bind(9900_i64).execute(&database.pool).await.unwrap();
+    let finalizer = crate::PostgresFinalizationStore::new(
+        database.clone(),
+        EventCodecConfig::default(),
+        crate::IssueCodecConfig::default(),
+    )
+    .unwrap();
+    let result = finalizer
+        .finalize(
+            metric_domain::finalization::FinalizeBatch { events: history },
+            metric_domain::finalization::FinalizationPolicy {
+                event_retention: Duration::from_secs(86400),
+                hourly_retention: Duration::from_secs(86400),
+                archive_events: false,
+                max_implicit_releases_per_project_day: 100,
+                max_implicit_environments_per_project: 100,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.finalized, 9900);
     sqlx::query("VACUUM ANALYZE metric.error_events")
         .execute(&database.pool)
         .await

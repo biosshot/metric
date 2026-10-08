@@ -352,3 +352,51 @@ every Unicode tokenizer edge. The approved NUL-search exception is tested apart.
 The complete PostgreSQL suite passed 37/37 with no ignored cases. Remaining
 capabilities and full runtime/SDK/browser/security/fault/soak gates are still pending;
 PostgreSQL is not yet selectable in the public runtime configuration.
+
+## Transactional finalization capability
+
+Schema generation 6 adds finalized Event projections, hourly statistics, exact
+binary Release/Environment catalogs, scoped Release project links and bounded
+project catalog usage. `PostgresFinalizationStore` implements the existing port
+with the shared Issue mutation helper and binary JSON codec. No shared production
+contract, application or Mongo implementation changes are needed.
+
+One transaction locks projects, separate project catalog-usage rows, Event keys,
+Issue keys, hour tuples, organization/Release IDs and Environment IDs in stable
+order. Separate usage rows avoid upgrading shared project locks. Finalized Event
+state commits together with Issues, authoritative hourly increments, catalog
+admission and notification transitions. Activities remain best effort after that
+commit. Missing/fenced/failed/completed Events are skipped; a fully skipped batch
+rolls back incidental usage-row creation. Disabled projects remain processable.
+
+The unchanged port has no `Ambiguous` variant, so a lost COMMIT reply returns
+`Unavailable`; a subsequent attempt observes the committed Event state and skips
+its effects. Retention either publishes hot expiry or an archive hold, preserves
+integer timestamps and signed 64-bit search tokens, and projects valid trace/span
+pairs without exposing their payloads in logs. Release/project composite foreign
+keys reject cross-organization associations. Catalog limits skip materialization
+without losing the Event; existing identities remain usable and only creation
+reserves capacity. Stored metadata retains exact NUL-bearing UTF8 bytes.
+
+Ten new Docker cases passed: complete row/counter/catalog/trace/token/retention
+behavior; injected failure at the final Event update with rollback of every
+derived effect; a real lost COMMIT reply; concurrent identical and opposing
+project batches; scoped catalog admission and day rollover; shared organization
+Release creation and deterministic full Event-key pairs; the supported maximum
+10,000-event single-Issue batch and oversized-batch rejection; archive holds and
+project fences; input/corruption/overflow rejection; and post-commit best-effort
+regression activity failure. The first shared-organization test accidentally reused
+an already occupied project slug; its synthetic fixture was corrected before the
+ten-case run passed. No production slug behavior changed.
+
+The existing sparse-backlog EXPLAIN fixture now genuinely finalizes its 9,900
+completed rows through the adapter, instead of manually assigning a completed
+status without required metadata. Its partial-index query evidence still passes.
+The whole PostgreSQL suite passed 47/47, with no ignored cases, on the generation-6
+schema. Formatting, dependency boundaries and documentation checks passed.
+Three abandoned generated databases from earlier failed assertions were removed
+after verifying the task-owned Docker project and their exact fixture identifiers;
+normal successful fixtures clean themselves up.
+
+Current source coverage is 53/164. Remaining capabilities and full deployment,
+restricted-credential, SDK/browser, security, recovery and soak gates are pending.

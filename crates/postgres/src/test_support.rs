@@ -7,6 +7,40 @@ use metric_domain::{
 use metric_ports::ProjectStore;
 use sqlx::{AssertSqlSafe, ConnectOptions, Connection, PgConnection};
 
+/// One bounded Event/Issue fixture shared by finalization and backlog tests.
+pub(crate) fn finalized(
+    project: i32,
+    issue_seed: u8,
+    event_id: metric_domain::EventId,
+    occurred: i64,
+    received: i64,
+    release: Option<&str>,
+    environment: Option<&str>,
+) -> metric_domain::finalization::FinalizeEvent {
+    use metric_domain::{
+        event::{EventLevel, EventPlatform},
+        finalization::{FinalizeEvent, ProcessedEventPayload, SearchToken},
+        grouping::{
+            GroupingComponent, GroupingComponentKind, GroupingExplanation, GroupingKey,
+            GroupingStrategy, derive_issue_id,
+        },
+        issue::{IssueCulprit, IssueGroupingDetail, IssueOccurrence, IssueRelease, IssueTitle},
+    };
+    let project_id = ProjectId::new(project).unwrap();
+    let mut bytes = [issue_seed; 34];
+    bytes[..2].copy_from_slice(&1_u16.to_be_bytes());
+    let grouping_key = GroupingKey::parse(&bytes).unwrap();
+    let occurred_at = Timestamp::from_unix_millis(occurred).unwrap();
+    let received_at = Timestamp::from_unix_millis(received).unwrap();
+    FinalizeEvent {
+        project_id,event_id,occurred_at,received_at,level:EventLevel::Error,platform:EventPlatform::Rust,
+        issue:IssueOccurrence { project_id,event_id,occurred_at,received_at,grouping_key,issue_id:derive_issue_id(project_id,grouping_key),release:release.map(|value|IssueRelease::new(value).unwrap()),title:IssueTitle::new(format!("Panic: synthetic Issue {issue_seed}")).unwrap(),culprit:Some(IssueCulprit::new("crate::synthetic").unwrap()),increment:std::num::NonZeroU64::MIN,grouping:IssueGroupingDetail { strategy:GroupingStrategy::Message,explanation:GroupingExplanation { summary:"normalized message".into(),components:vec![GroupingComponent { kind:GroupingComponentKind::Message,value:format!("synthetic Issue {issue_seed}").into() }] } } },
+        environment:environment.map(Into::into),
+        search_tokens:release.map(SearchToken::release).into_iter().chain(environment.map(SearchToken::environment)).collect(),
+        payload:ProcessedEventPayload::new(serde_json::to_vec(&serde_json::json!({"event_id":event_id.to_string(),"_metric":{"symbolication":{"status":"not_required"}},"release":release,"environment":environment,"message":"processed synthetic event","timestamp":occurred,"platform":"rust"})).unwrap()),
+    }
+}
+
 pub(crate) struct Fixture {
     pub(crate) uri: String,
     pub(crate) policy: ConnectionPolicy,
