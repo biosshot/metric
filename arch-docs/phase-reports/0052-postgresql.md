@@ -197,8 +197,12 @@ The audit decoder also rejects unknown/duplicate metadata keys and overlong valu
 
 The Mongo Docker regression passed 20/20: three migration cases and seventeen
 store cases, with performance targets deliberately excluded. Schema generation
-remains 21. Server Docker and real Rust SDK reruns are tracked separately when
-they finish. A separate PostgreSQL integration/TLS CI job now invokes the actual
+remains 21. The server Docker regression also passed 5/5 (three durable-ingest
+cases and two native API cases). The real Rust SDK fixture built with its existing
+lockfile on Rust 1.94, and `real_rust_sdk_sends_an_error_event` passed 1/1 against
+the shared protocol harness. This is a toolchain/protocol regression check, not
+a PostgreSQL server/SDK acceptance claim. The Rust compatibility row now records
+this tested toolchain and server build. A separate PostgreSQL integration/TLS CI job now invokes the actual
 ignored database tests with ephemeral local certificates and task-owned cleanup;
 the remote GitHub Actions job itself has not been executed in this local session.
 
@@ -213,3 +217,58 @@ python scripts/validate-compatibility.py
 docker build --tag metric:postgres-rust194 .
 docker run --rm --network none metric:postgres-rust194 --version
 ```
+
+The verified authentication/TLS and dependency upgrade milestone is committed as
+`642929e feat(postgres): add authentication and verified TLS with SQLx 0.9`.
+
+## Durable Event capability family
+
+Schema generation 4 adds project processing revisions, durable Error Events and
+one project/Event/object-scoped Blob reference registry. `PostgresEventStore`
+implements every method of `EventStore`, `EventBacklog`, `ProcessingProjectStore`,
+`ProcessingStateStore` and `BlobReferenceStore`. No application/domain/port or Mongo
+changes are required for these capabilities. The existing `EventWriter` is used
+directly in a real adapter test; the application dependency is test-only.
+
+Preparation validates payload identity and bounded canonical JSON, adaptively
+compresses with a versioned PostgreSQL-owned zstd format, bounds decompression,
+deduplicates owned Blob references and accounts for reference bytes in batch size.
+Bulk arrays keep SQL parameter count constant. Deterministic project/key lock order
+and one transaction protect insertion, references and deletion fencing. Duplicate
+keys preserve the first committed body and references. A lost COMMIT reply returns
+`Ambiguous`; a retry finds the existing scoped identity rather than overwriting it.
+Processing failures use an attempts/state CAS. Disabled projects remain processable;
+deletion-fenced projects are excluded from refill and reject new writes.
+
+The refill page bound matches the existing Dispatcher maximum (32,768); its
+exclusion bound separately covers the supported maximum of 100,000 queued keys
+plus 4,096 running workers. Tenant predicates also remain present in key/reference
+lookups. Only bounded global backlog discovery and observation operate globally.
+
+The enlarged Docker PostgreSQL suite passed 30/30, with no ignored cases (28 actual
+database cases and two static connection-policy cases). Eight Event cases cover
+conflicting/repeated identities, same Event ID in different organizations/projects,
+missing/fenced projects, a fresh pool recovering durable backlog, compression and
+identity corruption, reference/batch size bounds, concurrent attempts CAS,
+permanent failure, real EventWriter use with a rejected handoff, and project locks.
+A PostgreSQL trigger injects failure after Event insertion and proves both Event and
+reference writes roll back. A bounded native TCP proxy drops an actual PostgreSQL
+`COMMIT` completion response after the server has committed, proving ambiguous
+acknowledgement and idempotent recovery with both body and references intact.
+
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` on 10,000 real prepared synthetic rows
+(9,900 completed and 100 pending) uses `event_pending_due` for the bounded refill
+and returns the requested ten rows. The first assertion incorrectly compared an
+EXPLAIN JSON floating-point row count to an integer JSON value; it was corrected
+to numeric comparison, and the entire 30-case suite then passed. This test does
+not set a throughput or production resource claim. A shared two-organization
+fixture now avoids duplicating identity setup across PostgreSQL capability tests.
+
+Follow-up Event checks also passed 8/8 after accepting an exclusion list of 40,000
+keys from a supported Dispatcher configuration and guarding encoded payload size
+in SQL before client-side materialization. An oversized corrupt row produces a
+static `InvalidData` result without transferring that body's bytes to the adapter.
+
+The source inventory is now 48/164, with 116 methods still pending. Issue/finalizer,
+other signals, querying, lifecycle, restricted credentials, full PostgreSQL runtime,
+container/SDK/browser acceptance and measured soak remain required delivery gates.

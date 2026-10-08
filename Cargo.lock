@@ -2345,6 +2345,7 @@ dependencies = [
 name = "metric-postgres"
 version = "0.1.7"
 dependencies = [
+ "metric-application",
  "metric-domain",
  "metric-ports",
  "metric-testkit",
@@ -2356,6 +2357,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zstd",
 ]
 
 [[package]]

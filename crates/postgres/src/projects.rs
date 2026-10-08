@@ -674,29 +674,7 @@ mod tests {
         Timestamp::from_unix_millis(1_700_000_000_000).unwrap()
     }
     fn project(id: i32, organization: u64) -> ProjectIdentity {
-        ProjectIdentity {
-            id: ProjectId::new(id).unwrap(),
-            organization_id: OrganizationId::new(organization).unwrap(),
-            slug: Slug::new("same-project").unwrap(),
-            display_name: DisplayName::new("'; DROP TABLE metric.projects; -- Юникод").unwrap(),
-            state: ProjectAcceptanceState::Active,
-            policy_revision: 1,
-            ip_policy: IpScrubPolicy::Hmac,
-            items: ItemCapabilities {
-                error: true,
-                client_report: true,
-                log: true,
-                transaction: true,
-                span: true,
-                feedback: true,
-                check_in: true,
-                metric: true,
-                replay: true,
-            },
-            limits: ProjectIngestLimits::default(),
-            grouping_revision: 1,
-            created_at: now(),
-        }
+        crate::test_support::project_identity(id, organization)
     }
     fn key(id: i32, byte: u8) -> ProjectKeyIdentity {
         ProjectKeyIdentity {
@@ -715,24 +693,7 @@ mod tests {
         let database = PostgresDatabase::connect(&fixture.uri, &fixture.policy)
             .await
             .unwrap();
-        let store =
-            PostgresProjectStore::new(database.clone(), SecretBytes::new([42; 32]), max_keys)
-                .unwrap();
-        for organization in [1, 2] {
-            store
-                .insert_organization(OrganizationIdentity {
-                    id: OrganizationId::new(organization).unwrap(),
-                    slug: Slug::new(format!("org-{organization}")).unwrap(),
-                    display_name: DisplayName::new("Test").unwrap(),
-                    created_at: now(),
-                })
-                .await
-                .unwrap();
-            store
-                .insert_project(project(organization as i32, organization))
-                .await
-                .unwrap();
-        }
+        let store = crate::test_support::seed_projects(database.clone(), max_keys).await;
         (fixture, database, store)
     }
 

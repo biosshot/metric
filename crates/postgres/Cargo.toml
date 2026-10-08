@@ -15,8 +15,10 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
+metric-application = { path = "../application" }
 metric-testkit = { path = "../testkit" }
 tracing-subscriber.workspace = true
 uuid.workspace = true

@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 41/164. Delivery requires every row
+Implemented signatures: 48/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -56,13 +56,13 @@ and its conformance evidence, including signatures added after this snapshot.
 | `AuthStore::touch_api_token` | `crates/postgres/src/auth.rs` |
 | `AuthStore::touch_session` | `crates/postgres/src/auth.rs` |
 | `AuthStore::update_password_hash` | `crates/postgres/src/auth.rs` |
-| `EventStore::insert_batch` | Pending |
-| `EventStore::prepare` | Pending |
-| `EventBacklog::load_due` | Pending |
-| `EventBacklog::observe` | Pending |
-| `ProcessingProjectStore::load_processing_project` | Pending |
-| `ProcessingStateStore::record_processing_failure` | Pending |
-| `BlobReferenceStore::is_referenced` | Pending |
+| `EventStore::insert_batch` | `crates/postgres/src/events.rs` |
+| `EventStore::prepare` | `crates/postgres/src/events.rs` |
+| `EventBacklog::load_due` | `crates/postgres/src/events.rs` |
+| `EventBacklog::observe` | `crates/postgres/src/events.rs` |
+| `ProcessingProjectStore::load_processing_project` | `crates/postgres/src/events.rs` |
+| `ProcessingStateStore::record_processing_failure` | `crates/postgres/src/events.rs` |
+| `BlobReferenceStore::is_referenced` | `crates/postgres/src/events.rs` |
 | `IssueStore::apply_command` | Pending |
 | `IssueStore::apply_occurrence` | Pending |
 | `IssueStore::load` | Pending |
