@@ -12,6 +12,9 @@ Deliver the complete current PostgreSQL backend plus the `EventWriter` rename an
 the minimum supporting configuration/composition/test changes. Most new code belongs
 to `crates/postgres`. Keep Mongo behavior, data and migrations unchanged. Every Mongo
 file edit needs a specific extraction/compatibility reason and regression coverage.
+One explicit exception was authorized on 2026-10-08: correct the final-owner guard
+in both adapters to count only enabled users. Keep Mongo edits limited to that
+guard and its shared regression-test wiring; no Mongo schema or migration changes.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 

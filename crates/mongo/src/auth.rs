@@ -457,17 +457,18 @@ impl MongoAuthStore {
             MembershipMutationKind::Create(OrganizationRole::Owner)
                 | MembershipMutationKind::ChangeRole(OrganizationRole::Owner)
         );
-        if was_owner && !remains_owner {
-            let owners = collection
-                .count_documents(doc! {
-                    "organization_id": organization_i64(mutation.organization_id)?,
-                    "role": "owner",
-                })
-                .await
-                .map_err(unavailable)?;
-            if owners <= 1 {
-                return Err(AuthStoreError::FinalOwner);
-            }
+        if was_owner
+            && !remains_owner
+            && self
+                .load_user_inner(mutation.user_id)
+                .await?
+                .disabled_at
+                .is_none()
+            && !self
+                .has_other_active_owner(mutation.organization_id, mutation.user_id)
+                .await?
+        {
+            return Err(AuthStoreError::FinalOwner);
         }
         match mutation.kind {
             MembershipMutationKind::Create(role) => collection
@@ -541,24 +542,25 @@ impl MongoAuthStore {
             }
             locked.push(organization_id);
         }
-        if disabled_at.is_some() {
-            for organization_id in &locked {
-                let owners = self
-                    .database
-                    .collection::<Document>("organization_memberships")
-                    .count_documents(doc! {
-                        "organization_id": organization_i64(*organization_id)?,
-                        "role": "owner",
-                    })
-                    .await
-                    .map_err(unavailable)?;
-                if owners <= 1 {
-                    for acquired in locked {
-                        self.release_organization_lock(acquired, operation_id).await;
+        let check = async {
+            if disabled_at.is_some() && self.load_user_inner(user_id).await?.disabled_at.is_none() {
+                for organization_id in &locked {
+                    if !self
+                        .has_other_active_owner(*organization_id, user_id)
+                        .await?
+                    {
+                        return Err(AuthStoreError::FinalOwner);
                     }
-                    return Err(AuthStoreError::FinalOwner);
                 }
             }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = check {
+            for acquired in locked {
+                self.release_organization_lock(acquired, operation_id).await;
+            }
+            return Err(error);
         }
         let update = if let Some(timestamp) = disabled_at {
             doc! { "$set": { "disabled_at": date(timestamp) } }
@@ -577,6 +579,35 @@ impl MongoAuthStore {
                 .await;
         }
         result
+    }
+
+    /// The organization auth lock is held by the caller. A disabled owner's
+    /// membership cannot justify disabling/removing the last active owner.
+    async fn has_other_active_owner(
+        &self,
+        organization_id: OrganizationId,
+        excluded_user: UserId,
+    ) -> Result<bool, AuthStoreError> {
+        let mut cursor = self
+            .database
+            .collection::<Document>("organization_memberships")
+            .aggregate(vec![
+                doc! { "$match": {
+                    "organization_id": organization_i64(organization_id)?,
+                    "role": "owner", "user_id": { "$ne": user_i64(excluded_user)? },
+                } },
+                doc! { "$lookup": {
+                    "from": "users", "localField": "user_id", "foreignField": "_id",
+                    "pipeline": [ { "$match": { "disabled_at": { "$exists": false } } },
+                        { "$project": { "_id": 1 } } ], "as": "active_user",
+                } },
+                doc! { "$match": { "active_user.0": { "$exists": true } } },
+                doc! { "$limit": 1 },
+                doc! { "$project": { "_id": 1 } },
+            ])
+            .await
+            .map_err(unavailable)?;
+        Ok(cursor.try_next().await.map_err(unavailable)?.is_some())
     }
 
     async fn create_session_inner(&self, session: WebSession) -> Result<(), AuthStoreError> {
