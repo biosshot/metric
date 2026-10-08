@@ -349,7 +349,7 @@ target\release\durable-ingest-bench.exe
 
 k6 run -e METRIC_RPS=1158 -e METRIC_DURATION=15s `
   -e METRIC_FIXTURE_REVISION=error-event-v1-mongodb-maintenance `
-  -e METRIC_DURABILITY="MongoWriter plus concurrent Phase 14 Scheduler" `
+  -e METRIC_DURABILITY="EventWriter plus concurrent Phase 14 Scheduler" `
   -e METRIC_RESULT=performance/results/phase14-maintenance-ingest.json `
   performance/k6/ingest-mongodb.js
 ```

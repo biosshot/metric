@@ -88,7 +88,7 @@ see projected daily and retained storage.
 
 ### Hot-path batch assumptions
 
-The accepted MongoWriter defaults remain:
+The accepted EventWriter defaults remain:
 
 ```toml
 max_wait_ms = 20
@@ -134,7 +134,7 @@ Module gates include:
 
 ```text
 Ingest parser        requests/s, bytes/s, allocations, malformed/fuzz corpus
-MongoWriter          documents/s, batch occupancy, bytes, partial/ambiguous failure
+EventWriter          documents/s, batch occupancy, bytes, partial/ambiguous failure
 Dispatcher           refill rate, dedup set, restart with large pending backlog
 Processor stages     CPU/event and allocations by Event fixture class
 Finalizer            issue/bucket update throughput and contention

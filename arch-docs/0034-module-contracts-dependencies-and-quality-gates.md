@@ -113,7 +113,7 @@ behavior:
 ```text
 Envelope/HTTP protocol   golden fixtures, compatibility, fuzz, load
 DSN/project resolution  security vectors, cache and integration tests
-MongoWriter              real MongoDB, ambiguous failure, partial batch, load
+EventWriter              real MongoDB, ambiguous failure, partial batch, load
 Dispatcher               deterministic simulation, restart recovery, soak
 Normalizer/PII           golden, unit, property and adversarial corpus
 BSON/body codecs         round trip, malformed input, byte-size golden tests
@@ -143,7 +143,7 @@ HTTP -> authentication/parser/admission -> fake durable EventSink -> response
 As modules are completed, the same suite grows without discarding earlier isolation:
 
 ```text
-HTTP -> Ingest -> MongoWriter -> MongoDB
+HTTP -> Ingest -> EventWriter -> MongoDB
 HTTP -> ... -> Dispatcher -> Processor -> finalized Event
 HTTP -> ... -> IssueService -> Web/API query
 ```

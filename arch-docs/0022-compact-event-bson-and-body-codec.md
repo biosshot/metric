@@ -108,7 +108,7 @@ uses codec 1 only when the complete stored body is at least 64 bytes smaller tha
 codec 0. The threshold and compression level are configurable within safe bounds.
 The uncompressed size remains subject to Event and derived-output limits.
 
-Fresh Events passed from MongoWriter to Dispatcher retain their parsed in-memory
+Fresh Events passed from EventWriter to Dispatcher retain their parsed in-memory
 value, so ordinary immediate processing does not decompress the body just written.
 Backlog refill and reprocessing decode it through the same versioned codec.
 

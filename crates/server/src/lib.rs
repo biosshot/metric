@@ -72,7 +72,7 @@ use metric_application::{
     span_writer::{SpanWriter, SpanWriterConfig, SpanWriterStartError, SpanWriterTask},
     symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
     uptime::{UptimeScheduler, UptimeSchedulerConfig, UptimeSchedulerError},
-    writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
+    writer::{EventWriter, EventWriterConfig, EventWriterStartError, EventWriterTask},
 };
 use metric_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
 use metric_domain::Timestamp;
@@ -109,7 +109,7 @@ pub enum ServerError {
     #[error("initial MongoDB connection exceeded its deadline")]
     MongoConnectTimeout,
     #[error(transparent)]
-    Writer(#[from] MongoWriterStartError),
+    Writer(#[from] EventWriterStartError),
     #[error(transparent)]
     LogWriter(#[from] LogWriterStartError),
     #[error(transparent)]
@@ -171,7 +171,7 @@ struct RuntimeModules {
     session_sink: Option<std::sync::Arc<dyn SessionSink>>,
     monitor_sink: Option<std::sync::Arc<dyn MonitorSink>>,
     feedback_sink: Option<std::sync::Arc<dyn FeedbackSink>>,
-    writer_task: Option<MongoWriterTask>,
+    writer_task: Option<EventWriterTask>,
     log_writer_task: Option<LogWriterTask>,
     metric_writer_task: Option<MetricWriterTask>,
     replay_writer_task: Option<ReplayWriterTask>,
@@ -936,10 +936,10 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         )
         .await?;
         let backlog_guard = dispatcher.backlog_guard();
-        let (writer, writer_task) = MongoWriter::start(
+        let (writer, writer_task) = EventWriter::start(
             event_store,
             dispatcher,
-            MongoWriterConfig {
+            EventWriterConfig {
                 channel_capacity: config.ingest.max_waiting_for_storage,
                 max_wait: config.ingest.batch.max_wait.get(),
                 max_documents: config.ingest.batch.max_documents,
@@ -1155,7 +1155,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         && monitor_alert_task.is_some()
         && (!config.archive.enabled || archive_task.is_some());
     let mut required_tasks = Vec::new();
-    required_tasks.extend(writer_task.as_ref().map(MongoWriterTask::abort_handle));
+    required_tasks.extend(writer_task.as_ref().map(EventWriterTask::abort_handle));
     required_tasks.extend(log_writer_task.as_ref().map(LogWriterTask::abort_handle));
     required_tasks.extend(
         metric_writer_task

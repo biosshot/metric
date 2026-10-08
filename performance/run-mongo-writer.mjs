@@ -31,7 +31,7 @@ const output = run("cargo", [
   "--nocapture",
 ]);
 const metrics = output.match(
-  /MongoWriter: (\d+) events\/s, batches=(\d+), avg occupancy=([\d.]+), p95=(\d+) ms, p99=(\d+) ms/,
+  /EventWriter: (\d+) events\/s, batches=(\d+), avg occupancy=([\d.]+), p95=(\d+) ms, p99=(\d+) ms/,
 );
 if (!metrics) {
   throw new Error("benchmark output did not match the Phase 3 result schema");

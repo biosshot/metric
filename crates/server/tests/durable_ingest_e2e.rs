@@ -25,7 +25,7 @@ use metric_application::{
     projects::{ProjectCacheConfig, ProjectService},
     shutdown::ShutdownRoot,
     symbolication::BaselineSymbolicationService,
-    writer::{MongoWriter, MongoWriterConfig},
+    writer::{EventWriter, EventWriterConfig},
 };
 use metric_domain::{
     AcceptedEvent, DisplayName, DsnKey, EventId, EventKey, IpScrubPolicy, ItemCapabilities,
@@ -195,10 +195,10 @@ async fn measure_writer(database: &Database) -> Result<(), Box<dyn Error>> {
     });
     let root = ShutdownRoot::new();
     let handoff = Arc::new(CapturingHandoff::default());
-    let (writer, task) = MongoWriter::start(
+    let (writer, task) = EventWriter::start(
         Arc::clone(&store),
         handoff.clone(),
-        MongoWriterConfig {
+        EventWriterConfig {
             channel_capacity: 512,
             max_wait: Duration::from_millis(20),
             max_documents: 250,
@@ -250,14 +250,14 @@ async fn measure_writer(database: &Database) -> Result<(), Box<dyn Error>> {
     );
     assert_eq!(handoff.0.lock().unwrap().len(), iterations as usize);
     eprintln!(
-        "MongoWriter: {rps:.0} events/s, batches={}, avg occupancy={occupancy:.1}, p95={} ms, p99={} ms",
+        "EventWriter: {rps:.0} events/s, batches={}, avg occupancy={occupancy:.1}, p95={} ms, p99={} ms",
         batches.len(),
         percentile(95).as_millis(),
         percentile(99).as_millis()
     );
     assert!(
         rps >= 5_000.0,
-        "MongoWriter baseline {rps:.0} RPS is below steady gate"
+        "EventWriter baseline {rps:.0} RPS is below steady gate"
     );
     assert!(percentile(95) < Duration::from_millis(100));
     assert!(percentile(99) < Duration::from_millis(250));
@@ -448,10 +448,10 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
         root.signal(),
     )
     .await?;
-    let (writer, writer_task) = MongoWriter::start(
+    let (writer, writer_task) = EventWriter::start(
         event_store,
         dispatcher,
-        MongoWriterConfig {
+        EventWriterConfig {
             channel_capacity: 32,
             max_wait: Duration::from_millis(1),
             max_documents: 100,
@@ -578,10 +578,10 @@ async fn exercise_processor_e2e(database: &Database) -> Result<(), Box<dyn Error
         root.signal(),
     )
     .await?;
-    let (writer, writer_task) = MongoWriter::start(
+    let (writer, writer_task) = EventWriter::start(
         event_store,
         dispatcher,
-        MongoWriterConfig {
+        EventWriterConfig {
             channel_capacity: 32,
             max_wait: Duration::from_millis(1),
             max_documents: 100,

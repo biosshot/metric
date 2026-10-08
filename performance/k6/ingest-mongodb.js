@@ -17,7 +17,7 @@ const resultPath = __ENV.METRIC_RESULT || "performance/results/ingest-mongodb.js
 const fixtureRevision =
   __ENV.METRIC_FIXTURE_REVISION || "error-event-v1-mongodb";
 const durability =
-  __ENV.METRIC_DURABILITY || "MongoWriter unordered insert_many to MongoDB";
+  __ENV.METRIC_DURABILITY || "EventWriter unordered insert_many to MongoDB";
 
 export const options = {
   scenarios: {

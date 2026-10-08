@@ -22,7 +22,7 @@ The `all` runtime starts these logical components:
 
 ```text
 HTTP Ingest
-    -> MongoWriter
+    -> EventWriter
     -> Dispatcher
     -> Processor
         -> Normalizer
@@ -70,9 +70,9 @@ Ingest does not group events, resolve symbols, update issues, send alerts, or pe
 retention. It may aggregate bounded SDK `client_report` diagnostics without storing
 their raw payloads.
 
-### MongoWriter
+### EventWriter
 
-MongoWriter owns durable micro-batch insertion. It:
+EventWriter owns durable micro-batch insertion. It:
 
 - collects accepted events according to the configured wait and document limits;
 - performs unordered MongoDB batch insertion;
@@ -80,7 +80,7 @@ MongoWriter owns durable micro-batch insertion. It:
 - treats an existing idempotency key as a successful retry;
 - offers each newly persisted in-memory payload to Dispatcher without copying it.
 
-MongoWriter does not interpret stack traces or issue semantics.
+EventWriter does not interpret stack traces or issue semantics.
 
 ### Dispatcher
 

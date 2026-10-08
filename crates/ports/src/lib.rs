@@ -645,7 +645,7 @@ pub trait PreparedEvent: Send + 'static {
     fn into_event(self) -> AcceptedEvent;
 }
 
-/// Capability-specific durable Event insertion port used only by MongoWriter.
+/// Capability-specific durable Event insertion port used only by EventWriter.
 pub trait EventStore: Send + Sync + 'static {
     type Prepared: PreparedEvent;
 
@@ -657,7 +657,7 @@ pub trait EventStore: Send + Sync + 'static {
     ) -> PortFuture<'a, Result<Vec<EventWriteStatus>, EventStoreError>>;
 }
 
-/// Fresh-payload acceleration seam. MongoDB remains authoritative if an offer fails.
+/// Fresh-payload acceleration seam. Durable Event storage remains authoritative if an offer fails.
 pub trait AcceptedEventHandoff: Send + Sync + 'static {
     fn offer(&self, event: AcceptedEvent) -> Result<(), AcceptedEvent>;
 }

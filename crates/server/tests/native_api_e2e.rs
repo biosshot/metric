@@ -32,7 +32,7 @@ use metric_application::{
     search::{SearchConfig, SearchService},
     shutdown::ShutdownRoot,
     symbolication::BaselineSymbolicationService,
-    writer::{MongoWriter, MongoWriterConfig},
+    writer::{EventWriter, EventWriterConfig},
 };
 use metric_blob::{LocalBlobConfig, LocalBlobStore};
 use metric_domain::{
@@ -457,10 +457,10 @@ async fn exercise_cumulative_e2e(database: &Database) -> Result<(), Box<dyn Erro
         root.signal(),
     )
     .await?;
-    let (writer, writer_task) = MongoWriter::start(
+    let (writer, writer_task) = EventWriter::start(
         event_store,
         dispatcher,
-        MongoWriterConfig {
+        EventWriterConfig {
             channel_capacity: 32,
             max_wait: Duration::from_millis(1),
             max_documents: 100,
