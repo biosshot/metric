@@ -1,0 +1,29 @@
+{
+  "titles": [
+    {"id": 1, "project": 1, "title": "Panic bounded failure"},
+    {"id": 2, "project": 1, "title": "bounded warning"},
+    {"id": 3, "project": 1, "title": "failure noise"},
+    {"id": 4, "project": 1, "title": "Café Ошибка 雪"},
+    {"id": 5, "project": 1, "title": "panic cafe"},
+    {"id": 6, "project": 2, "title": "Panic bounded failure"},
+    {"id": 7, "project": 1, "title": "the panic"}
+  ],
+  "queries": [
+    {"text": "bounded failure", "expected": [1, 2, 3]},
+    {"text": "\"bounded failure\"", "expected": [1]},
+    {"text": "\"bounded failure\" warning", "expected": [1]},
+    {"text": "\"bounded failure\" \"panic\"", "expected": [1]},
+    {"text": "panic -cafe", "expected": [1, 7]},
+    {"text": "CAFÉ", "expected": [4, 5]},
+    {"text": "cafe", "expected": [4, 5]},
+    {"text": "\"panic cafe\"", "expected": [5]},
+    {"text": "\"cafe panic\"", "expected": []},
+    {"text": "-panic", "expected": []},
+    {"text": "PANIC", "expected": [1, 5, 7]},
+    {"text": "the", "expected": [7]},
+    {"text": "failures", "expected": []},
+    {"text": "ОШИБКА", "expected": [4]},
+    {"text": "雪", "expected": [4]},
+    {"text": "panic -bounded -cafe", "expected": [7]}
+  ]
+}

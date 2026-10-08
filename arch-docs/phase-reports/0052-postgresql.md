@@ -293,13 +293,62 @@ unsupported Unicode escape error. This matches the
 and [character-type documentation](https://www.postgresql.org/docs/18/datatype-character.html).
 No user database data, constraints or schemas were changed by those probes.
 
-Proposed approach, awaiting the user's decision: preserve unconstrained original
+The user approved the following approach: preserve unconstrained original
 UTF8 values and canonical metadata in bounded binary/escaped representations owned
 only by `crates/postgres`, with parameter binding and indexed exact-match keys.
 Keep searchable projections separate from original values and verify their public
 search behavior against shared adapter fixtures. Continue using native text/JSONB
 where existing domain validation makes it suitable. Do not strip characters,
 change domain/application validation or modify Mongo to accommodate SQL types.
-Rejecting these values only in PostgreSQL is an alternative, but would introduce
-a backend-specific input limitation. No Issue store, new migration or new runtime
-configuration has been implemented for either choice yet.
+Issue/finalizer work resumes with this representation. The decision adds no shared
+validation change, Mongo change or public backend configuration.
+
+The user also approved keeping Mongo unchanged and searching the full normalized
+title projection in PostgreSQL instead of copying Mongo text-index truncation at
+U+0000. A disposable Mongo 8.0.12 fixture confirmed that `panic\u0000cafe` is found
+by `panic` but not `cafe`. The original title remains lossless in either adapter.
+The ordinary application path already replaces controls with spaces when building
+Issue titles and culprits; the difference concerns direct storage inputs. Keep
+this explicit exception separate from ordinary term/phrase search conformance.
+
+## Issue capability family
+
+Schema generation 5 adds scoped Issues, critical notification transitions and
+best-effort deterministic activities. `PostgresIssueStore` implements all four
+Issue methods. The adapter-owned canonical JSON/zstd codec is shared privately
+with Event storage; the domain, ports, application and Mongo implementation are
+unchanged. Exact titles, culprits, release pairs and grouping metadata preserve
+NUL-bearing UTF8 through bounded bytes. Native search projections remain separate.
+
+Project locks precede Issue locks. Creation and full-key collision checks, stable
+creation summaries, timestamp/Event-ID pairs, count overflow and receipt-time
+regression rules are transactional. Critical transitions commit with Issue state;
+activity writes follow that commit and cannot roll back state if they fail. The
+private occurrence batch helper covers the existing Finalizer maximum of 10,000
+events, even when all events share one Issue. Standalone occurrence retries retain
+the accepted approximate count drift; finalized Event retries will use the Event
+fence in the upcoming finalization transaction.
+
+Seven real PostgreSQL Issue cases passed: concurrent creation/update/regression;
+workflow, assignment and retry semantics; exact NUL/Unicode round trips and scoped
+search; injected critical rollback versus best-effort activity failure; identity,
+UTF8, canonical codec/decompression and overflow corruption; multi-occurrence
+pairs; and selective GIN search on 10,000 unrelated synthetic rows. An initial
+secondary unique full-key constraint caused a concurrent creation conflict before
+the primary-key retry path; it was removed from this unpublished migration.
+The project/Issue primary key plus locked complete-key verification retains the
+identity invariant. The query-plan fixture also needed VACUUM/ANALYZE to flush
+the GIN pending list before collecting representative planner evidence.
+
+The shared `testkit/fixtures/issue-title-search.json` corpus contains 16 ordinary
+term/phrase, phrase-plus-term, multiple-phrase, negation, Unicode, case/diacritic,
+stop-word and no-stemming scenarios. It passed on both Docker PostgreSQL 18.6 and
+Mongo 8.0.12. The disposable Mongo probe is emitted by
+`python scripts/issue-title-search-mongo-probe.py` and piped into mongosh on the
+task-owned container; it deletes only its generated synthetic fixture database.
+This tests result membership, not identical database-native relevance scores or
+every Unicode tokenizer edge. The approved NUL-search exception is tested apart.
+
+The complete PostgreSQL suite passed 37/37 with no ignored cases. Remaining
+capabilities and full runtime/SDK/browser/security/fault/soak gates are still pending;
+PostgreSQL is not yet selectable in the public runtime configuration.

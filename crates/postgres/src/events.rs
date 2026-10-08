@@ -104,21 +104,13 @@ impl EventStore for PostgresEventStore {
             return Err(EventPrepareError::TooLarge);
         }
         let references = owned_references(&value, EventKey::new(event.project_id, event.event_id))?;
-        let compressed = zstd::bulk::compress(&canonical, self.codec.compression_level)
-            .map_err(|_| EventPrepareError::InvalidEvent)?;
-        let compressed_wins = compressed
-            .len()
-            .saturating_add(self.codec.compression_min_savings)
-            <= canonical.len();
-        // PostgreSQL-owned immutable version 1: canonical JSON (0), or bounded zstd (1).
-        let bytes = if compressed_wins {
-            &compressed
-        } else {
-            &canonical
-        };
-        let mut body = Vec::with_capacity(bytes.len() + 2);
-        body.extend_from_slice(&[1, u8::from(compressed_wins)]);
-        body.extend_from_slice(bytes);
+        let (body, canonical) = crate::codec::encode_json(
+            &value,
+            self.codec.compression_level,
+            self.codec.compression_min_savings,
+            self.codec.max_decoded_body_bytes,
+        )
+        .map_err(|_| EventPrepareError::InvalidEvent)?;
         event.payload = ScrubbedEventPayload::new(canonical);
         let prepared = PostgresPreparedEvent {
             event,
@@ -449,19 +441,7 @@ fn owned_references(value: &Value, expected: EventKey) -> Result<Vec<BlobKey>, E
 }
 
 pub(crate) fn decode_body(body: &[u8], maximum: usize) -> Result<Vec<u8>, PostgresError> {
-    if body.first() != Some(&1) || body.len() < 2 {
-        return Err(PostgresError::InvalidData);
-    }
-    let bytes = match body[1] {
-        0 if body.len() - 2 <= maximum => body[2..].to_vec(),
-        1 => zstd::bulk::decompress(&body[2..], maximum).map_err(|_| PostgresError::InvalidData)?,
-        _ => return Err(PostgresError::InvalidData),
-    };
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| PostgresError::InvalidData)?;
-    if serde_json::to_vec(&value).map_err(|_| PostgresError::InvalidData)? != bytes {
-        return Err(PostgresError::InvalidData);
-    }
-    Ok(bytes)
+    crate::codec::decode_json(body, maximum)
 }
 
 fn decode_key(bytes: &[u8]) -> Result<EventKey, PostgresError> {

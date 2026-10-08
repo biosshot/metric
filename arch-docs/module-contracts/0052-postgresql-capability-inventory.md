@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 48/164. Delivery requires every row
+Implemented signatures: 52/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -63,10 +63,10 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ProcessingProjectStore::load_processing_project` | `crates/postgres/src/events.rs` |
 | `ProcessingStateStore::record_processing_failure` | `crates/postgres/src/events.rs` |
 | `BlobReferenceStore::is_referenced` | `crates/postgres/src/events.rs` |
-| `IssueStore::apply_command` | Pending |
-| `IssueStore::apply_occurrence` | Pending |
-| `IssueStore::load` | Pending |
-| `IssueStore::search_titles` | Pending |
+| `IssueStore::apply_command` | `crates/postgres/src/issues.rs` |
+| `IssueStore::apply_occurrence` | `crates/postgres/src/issues.rs` |
+| `IssueStore::load` | `crates/postgres/src/issues.rs` |
+| `IssueStore::search_titles` | `crates/postgres/src/issues.rs` |
 | `FinalizationStore::finalize` | Pending |
 | `InvestigationStore::issue_activity` | Pending |
 | `InvestigationStore::issue_statistics` | Pending |

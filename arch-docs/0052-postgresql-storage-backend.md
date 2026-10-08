@@ -295,6 +295,15 @@ connection or query. Tests must cover the actual selected SQLx TLS semantics.
 Design tables from operation contracts, not a BSON-shaped JSONB copy of each Mongo
 document. Use typed columns for scope, IDs, time, status and indexed projections;
 bounded JSONB for suitable flexible metadata; binary Event body encoding in `bytea`.
+Domain-valid free strings can contain U+0000, which PostgreSQL text/JSONB cannot
+represent. Preserve these exact UTF8 bytes in bounded `bytea` columns and flexible
+metadata in the versioned binary JSON codec. Keep normalized search projections
+separate from original values. This adapter-owned representation is approved;
+do not strip original characters or change shared validation to fit SQL types.
+The user approved one title-search edge difference: Mongo's native text index
+stops at U+0000, while PostgreSQL searches the complete normalized projection.
+Keep Mongo unchanged and do not emulate truncation in PostgreSQL. Normal Issue
+creation already replaces controls with spaces in `application::issues`.
 Keep nanosecond values as integers where required, without rounding through SQL
 timestamp precision. Preserve exact ID bytes, case sensitivity, missing/null
 semantics, signed token bit patterns and public cursor ordering.

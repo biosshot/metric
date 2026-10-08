@@ -15,6 +15,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
+unicode-normalization = "0.1.25"
 zstd.workspace = true
 
 [dev-dependencies]
