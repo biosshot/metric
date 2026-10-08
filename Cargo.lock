@@ -2383,6 +2383,7 @@ dependencies = [
  "hex",
  "metric-domain",
  "metric-ports",
+ "metric-testkit",
  "metrics",
  "mongodb",
  "serde_json",
@@ -2406,6 +2407,7 @@ version = "0.1.7"
 dependencies = [
  "metric-domain",
  "metric-ports",
+ "metric-testkit",
  "serde_json",
  "sqlx",
  "thiserror",

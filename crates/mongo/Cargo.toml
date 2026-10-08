@@ -20,5 +20,8 @@ time.workspace = true
 tokio.workspace = true
 zstd.workspace = true
 
+[dev-dependencies]
+metric-testkit = { path = "../testkit" }
+
 [lints]
 workspace = true

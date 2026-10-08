@@ -1,5 +1,6 @@
 //! Reusable fakes implement the same narrow ports used by production composition.
 
+pub mod auth_conformance;
 pub mod incident_capsule;
 
 use std::{

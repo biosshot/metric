@@ -17,6 +17,7 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+metric-testkit = { path = "../testkit" }
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
