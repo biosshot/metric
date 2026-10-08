@@ -272,3 +272,34 @@ static `InvalidData` result without transferring that body's bytes to the adapte
 The source inventory is now 48/164, with 116 methods still pending. Issue/finalizer,
 other signals, querying, lifecycle, restricted credentials, full PostgreSQL runtime,
 container/SDK/browser acceptance and measured soak remain required delivery gates.
+
+## Next representation decision: valid NUL-bearing strings
+
+Implementation stopped before starting Issue/finalizer storage to honor the user's
+explicit instruction to stop and ask about newly discovered compatibility issues.
+`domain::issue::IssueRelease::new`, `domain::releases::validate_version` and
+`application::normalizer::identity_string` validate byte bounds but accept U+0000
+within release/environment strings. Mapping all such values directly to native
+SQL `text` or `jsonb` would reject otherwise valid existing input. The already
+implemented binary Event body format does not have this limitation. Existing
+project display names, inbound filters and bounded audit metadata reject control
+characters in their domain constructors and do not require the same adjustment.
+
+Two read-only probes on the task-owned PostgreSQL 18.6 Docker fixture confirmed
+the mismatch: converting bytes `610062` to SQL text returns an invalid UTF8 byte
+sequence at `0x00`; casting `{"release":"a\u0000b"}` to `jsonb` returns an
+unsupported Unicode escape error. This matches the
+[PostgreSQL JSON documentation](https://www.postgresql.org/docs/18/datatype-json.html)
+and [character-type documentation](https://www.postgresql.org/docs/18/datatype-character.html).
+No user database data, constraints or schemas were changed by those probes.
+
+Proposed approach, awaiting the user's decision: preserve unconstrained original
+UTF8 values and canonical metadata in bounded binary/escaped representations owned
+only by `crates/postgres`, with parameter binding and indexed exact-match keys.
+Keep searchable projections separate from original values and verify their public
+search behavior against shared adapter fixtures. Continue using native text/JSONB
+where existing domain validation makes it suitable. Do not strip characters,
+change domain/application validation or modify Mongo to accommodate SQL types.
+Rejecting these values only in PostgreSQL is an alternative, but would introduce
+a backend-specific input limitation. No Issue store, new migration or new runtime
+configuration has been implemented for either choice yet.
