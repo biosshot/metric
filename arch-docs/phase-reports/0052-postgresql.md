@@ -1309,3 +1309,55 @@ warnings denied. Formatting, ADR-0034 dependency graph, documentation, deploymen
 and the regenerated PostgreSQL source inventory passed.
 PostgreSQL remains generation 17 with 131/164 methods and 33 pending. This repair
 does not expose an incomplete runtime backend or change the default Mongo choice.
+
+## Archive mutable Metrics source: confirmed separate discrepancy
+
+Resuming ArchiveStore implementation after the authorized schema repair exposed a
+separate data-preservation issue. Metric buckets remain mutable after archive
+publication and source commitment. MongoMetricStore::apply_delta updates the
+existing aggregate without checking archive ownership/segment state, while
+MongoArchiveStore::commit_sources checks source identities and segment conflicts
+but does not compare the current contents with the published snapshot. A successful
+late delta therefore can remain only in a hot copy whose TTL was already assigned.
+The current PostgreSQL MetricStore likewise updates an existing bucket without an
+archive_segment guard; its ArchiveStore has not yet been implemented. PostgreSQL
+must not reproduce this loss as part of the next capability.
+
+A temporary isolated real-server Docker probe passed expected-defect assertions
+(1/1, 25.53 seconds). It used current synthetic dates, an archive-enabled one-day
+MetricRetention and a synthetic bucket from two days earlier. The ordinary
+ArchiveService published and verified a real LocalBlobStore Parquet object from a
+sum-2 counter snapshot. A test-only ArchiveStore wrapper deterministically
+interleaved a normal accepted sum-3 delta after completion and before source
+commit, then an accepted sum-4 delta immediately after source commit. Both writes
+used the public MetricStore path. The resulting native hot record had sum 9,
+measurement count 3, no archive hold and the original ten-second hot-copy expiry.
+Another public archive claim found no work. The actual Mongo TTL monitor deleted
+that hot source, while the referenced immutable archive bytes and checksum still
+matched the original sum-2 Parquet exactly. This was a synthetic loss reproduction,
+not a finding about the user's stored telemetry.
+
+The fixture used only its generated metric_pg_archive_metric_late_probe_<ObjectId>
+database and crates/server/target/metric-pg-archive-probes/<UUID> blob directory. Cleanup dropped
+that database and checked the canonical blob-directory parent before removing
+its own files. The Docker catalog confirms no matching fixture databases remain.
+The temporary test target was removed only after its Cargo process completed;
+no Mongo/PostgreSQL production code, schema, installed migration or deployment
+configuration was changed during this diagnostic.
+
+Source review also confirms Metric ingest normalization bounds timestamp validity
+but does not reject measurements merely for being older than the metric retention
+window. The storage interleaving is therefore not ruled out by a documented
+upstream age guard. The probe confirms Metrics only; no equivalent Session failure
+is claimed without a separate reproduction.
+
+Implementation is stopped for the user's decision, as explicitly required for a
+new discrepancy. The previous exception authorized schema admission and TTL only;
+changing foreground Metric writes or archive source-consistency semantics requires
+separate authorization. The recommended acceptance behavior is to preserve
+successfully accepted late values, retain/requeue a changed source, and publish a
+new immutable segment instead of expiring unarchived changes or overwriting the
+old object. The exact revision/claim guards and retry identity must be designed
+before coding so interruption and concurrent writes cannot reopen the same gap.
+Archive defaults remain disabled, PostgreSQL remains generation 17 with 131/164
+methods and no exposed incomplete runtime backend, and Mongo remains the default.
