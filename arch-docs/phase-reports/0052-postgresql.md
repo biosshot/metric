@@ -1628,3 +1628,50 @@ Commands used the existing task-owned METRIC_TEST_MONGODB_URI:
 and `cargo clippy -p metric-mongo --test maintenance_store --locked -j1 -- -D warnings`.
 PostgreSQL's exact quota reconciliation already passed its Docker boundary case;
 the remaining PostgreSQL binary/lifecycle stores and application gates resume next.
+
+## 2026-10-09 — PostgreSQL DebugFileStore and schema generation 19
+
+Added all ten DebugFileStore methods in the PostgreSQL crate. Append-only migration
+0019 adds bounded native debug-file/upload metadata and project byte/file quota
+counters; migrations 1–18 remain immutable. The existing PostgreSQL ProjectView
+decoder is reused with crate-only visibility. No Mongo production/test source,
+common port, service, configuration or filesystem Blob implementation changed in
+this step. DebugFileQuota retains the existing adapter default (10 GiB and 10,000
+files per project), with checked SQL bigint bounds and zero quotas denying new
+publication. Configuration/runtime composition is still pending.
+
+Project guards precede upload/file mutations. Publication atomically inserts
+metadata, charges quota, increments the symbolication revision and completes the
+upload. A duplicate SHA1/content identity does not charge or increment twice;
+conflicting content and wrong-project/organization uploads fail closed. Deletion
+and quota/revision release share one transaction and preserve another project's
+equal local file ID. Native commit ambiguity maps to Unavailable, with durable
+metadata observable by a retry. Driver errors never become returned SQL/secret
+strings. Name normalization and DebugId/CodeId decoding reuse domain rules. Chunk
+manifests are bounded to 256 SHA1 entries, recovery to 1,000 rows and lookup to 20;
+variable names/chunks/error strings are bounded before transfer. Every SQL value
+is bound and all identifier/query branches are adapter literals.
+
+Seven new real Docker cases passed 7/7 in 6.31 seconds: full lifecycle/scope/lookup,
+concurrent quota admission and eight duplicate publications, native dropped COMMIT
+replies for publication/deletion, induced upload-completion failure rolling back
+file/quota/state, invalid bounds and corrupted manifest reads, project fencing,
+and native indexed EXPLAIN ANALYZE/BUFFERS on 4,096 synthetic records. The existing
+DebugFileService and actual LocalBlobStore assembled a SHA1-verified chunk,
+published/reopened/read the same bytes, handled repeat assembly and removed the
+metadata/file with the expected revision. Its generated target-only Blob directory
+was verified and removed. Two isolated databases left by initial test-setup SQL
+errors were positively identified by generation 19 and these synthetic fixtures
+and dropped; the prepared multi-command test SQL was corrected to raw static SQL.
+
+A real migration test upgraded generation 18 to 19 twice, preserving prior project
+fields, initializing counters to zero and retaining archive infrastructure. The
+existing generation-17 held-Metric upgrade also still passes through the current
+registry. Full PostgreSQL real Docker library run with all local TLS variables,
+--all-features --locked -j1 -- --ignored --test-threads=1 passed 153/153 in 162.73
+seconds. Strict PostgreSQL/testkit Clippy, formatting, dependency graph,
+documentation, compatibility and deployment-profile validators passed.
+
+Source inventory is 146/164; remaining methods are ArtifactStore (14) and
+ProjectDeletionStore (4). Final server/container/SDK/offline/soak gates remain
+pending; this step does not claim a complete PostgreSQL application runtime.

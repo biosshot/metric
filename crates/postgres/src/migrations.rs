@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 18;
+const SCHEMA_GENERATION: i64 = 19;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 // This is application-owned static SQL, never configurable or derived from input.
@@ -257,6 +257,13 @@ fn registry() -> Migrator {
                 include_str!("../migrations/0018_archive.sql").into_sql_str(),
                 false,
             ),
+            Migration::new(
+                19,
+                Cow::Borrowed("transactional debug metadata and project quotas"),
+                MigrationType::Simple,
+                include_str!("../migrations/0019_debug_files.sql").into_sql_str(),
+                false,
+            ),
         ]),
         locking: false, // The dedicated connection already owns MIGRATION_LOCK.
         table_name: Cow::Borrowed(MIGRATION_TABLE),
@@ -496,6 +503,57 @@ mod tests {
         PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &MigrationPolicy::default())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
+    async fn debug_metadata_upgrade_from_eighteen_preserves_project_and_archive() {
+        let fixture = Fixture::new().await;
+        let mut legacy = registry();
+        legacy.migrations.to_mut().retain(|step| step.version <= 18);
+        PostgresSchemaManager::ensure_registry(
+            &fixture.uri,
+            &fixture.policy,
+            &MigrationPolicy::default(),
+            &legacy,
+            &[],
+            18,
+        )
+        .await
+        .unwrap();
+        let database = crate::PostgresDatabase::connect(&fixture.uri, &fixture.policy)
+            .await
+            .unwrap();
+        crate::test_support::seed_projects(database.clone(), 32).await;
+        let before: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(p) FROM metric.projects p WHERE id=1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        bootstrap(&fixture).await;
+        bootstrap(&fixture).await;
+        let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p)-'debug_file_bytes'-'debug_file_count' FROM metric.projects p WHERE id=1").fetch_one(&database.pool).await.unwrap();
+        assert_eq!(before, after);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM metric._sqlx_migrations")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, SCHEMA_GENERATION);
+        let quotas: (i64, i64) = sqlx::query_as(
+            "SELECT debug_file_bytes,debug_file_count FROM metric.projects WHERE id=1",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(quotas, (0, 0));
+        let archive: bool =
+            sqlx::query_scalar("SELECT to_regclass('metric.archive_manifests') IS NOT NULL")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert!(archive);
+        database.pool.close().await;
+        fixture.cleanup().await;
     }
 
     #[tokio::test]

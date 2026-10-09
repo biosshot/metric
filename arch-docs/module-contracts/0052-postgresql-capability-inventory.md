@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 136/164. Delivery requires every row
+Implemented signatures: 146/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -151,16 +151,16 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ArchiveStore::complete` | `crates/postgres/src/archive.rs` |
 | `ArchiveStore::object_referenced` | `crates/postgres/src/archive.rs` |
 | `MaintenanceStore::run` | `crates/postgres/src/maintenance.rs` |
-| `DebugFileStore::delete_debug_file` | Pending |
-| `DebugFileStore::find_debug_files` | Pending |
-| `DebugFileStore::load_by_sha1` | Pending |
-| `DebugFileStore::load_debug_file` | Pending |
-| `DebugFileStore::project_organization` | Pending |
-| `DebugFileStore::publish_debug_file` | Pending |
-| `DebugFileStore::recoverable_uploads` | Pending |
-| `DebugFileStore::resolve_project_slugs` | Pending |
-| `DebugFileStore::set_upload_state` | Pending |
-| `DebugFileStore::upsert_upload` | Pending |
+| `DebugFileStore::delete_debug_file` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::find_debug_files` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::load_by_sha1` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::load_debug_file` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::project_organization` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::publish_debug_file` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::recoverable_uploads` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::resolve_project_slugs` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::set_upload_state` | `crates/postgres/src/debug_files.rs` |
+| `DebugFileStore::upsert_upload` | `crates/postgres/src/debug_files.rs` |
 | `ArtifactStore::claim_gc` | Pending |
 | `ArtifactStore::finish_gc` | Pending |
 | `ArtifactStore::load_by_sha1` | Pending |

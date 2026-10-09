@@ -515,7 +515,7 @@ fn items_code(items: ItemCapabilities) -> i32 {
     .fold(0, |code, (bit, enabled)| code | (i32::from(enabled) << bit))
 }
 
-fn decode_project(row: &PgRow) -> Result<ProjectView, ProjectStoreError> {
+pub(crate) fn decode_project(row: &PgRow) -> Result<ProjectView, ProjectStoreError> {
     let code: i32 = get(row, "items")?;
     let enabled = |bit| code & (1 << bit) != 0;
     let limits_value = |name| -> Result<NonZeroU32, ProjectStoreError> {
