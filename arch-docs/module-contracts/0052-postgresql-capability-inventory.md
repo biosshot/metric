@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 135/164. Delivery requires every row
+Implemented signatures: 136/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -150,7 +150,7 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ArchiveStore::commit_sources` | `crates/postgres/src/archive.rs` |
 | `ArchiveStore::complete` | `crates/postgres/src/archive.rs` |
 | `ArchiveStore::object_referenced` | `crates/postgres/src/archive.rs` |
-| `MaintenanceStore::run` | Pending |
+| `MaintenanceStore::run` | `crates/postgres/src/maintenance.rs` |
 | `DebugFileStore::delete_debug_file` | Pending |
 | `DebugFileStore::find_debug_files` | Pending |
 | `DebugFileStore::load_by_sha1` | Pending |

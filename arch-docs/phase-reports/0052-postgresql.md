@@ -1487,3 +1487,61 @@ Native expiry execution belongs to the next MaintenanceStore capability; this
 Archive phase proves expiry assignment and retention holds, not automatic native
 deletion. Final application composition, whole-workspace/container/SDK/offline
 and soak gates remain pending until the remaining capabilities are implemented.
+
+## 2026-10-09 — Native MaintenanceStore verified
+
+PostgresMaintenanceStore implements the existing single run capability and all
+eight Scheduler task dispositions. RetryBacklog reports the native bounded due
+probe; EventRetention repairs terminal-event deadlines while never expiring a
+Pending event or overwriting a completed archive's hot-copy deadline. HourlyRetention
+repairs Issue hour deadlines. Native expiry phases replace Mongo's background TTL
+for Error, Log, Span, Session, Metrics, Feedback, Replay, Monitor-run and terminal
+notification records, authentication-token/session metadata and the three hourly
+statistics families. No database-wide delete, raw query port or new Scheduler task
+was added. Previously configured binary UploadExpiry/BlobOrphanRegistration probes
+explicitly remain Disabled, matching the existing Scheduler adapter behavior;
+actual binary metadata lifecycle belongs to the remaining binary stores.
+
+Each expiry statement selects at most batch_size rows via its native expiry index,
+locks with SKIP LOCKED and deletes exactly that selection. ctid is local to one SQL
+statement and never appears in a persisted cursor. Source/reference removal is
+atomic in the same transaction; foreign-key cascades remove the owning Feedback
+attachments and Replay segment metadata. Archive holds, live Sessions, Pending
+Events and non-terminal Monitor/notification records are excluded. A lost COMMIT
+reply returns Unavailable; a repeated call observes the durable state without
+releasing another record's hold. Physical removal is scheduled, not immediate at
+assignment of expire_at, including a zero hot-copy delay.
+
+Cursor tags distinguish tasks/phases; identifier widths, scope, batch sizes,
+retention bounds and deadline overflow are checked. SQL values are bound and all
+table/projection/order identifiers are adapter-owned literals. Event/Issue/hourly
+repairs hold sorted project guards before source mutations. Issue reconciliation
+only raises lifetime counts to a bounded retained-event lower bound and never
+decreases them after hot-event deletion. Environment quota reconciliation uses an
+exact native project-scoped aggregate under an exclusive project guard, rather
+than replacing a count with a truncated page. At most 32 projects/Issues are
+reconciled per call; unusually large exact catalog aggregates remain bounded by
+the connection's statement timeout and Scheduler cancellation, not by a claim
+that a complete catalog always fits in one row page.
+
+Seven real Docker Maintenance tests passed in 7.75 seconds. They verify actual
+removal of all five archived hot-source families after their delay, preservation
+of equal IDs belonging to another held project, Pending/failed-event behavior,
+hourly policy repair, lifetime counts, exact quota repair with more environments
+than batch_size, actual concurrent expiry and native dropped COMMIT replies,
+malformed cursors/limits/corrupt Pending metadata/deadline overflow, partial-index
+EXPLAIN ANALYZE/BUFFERS evidence and bounded deletion counts. An induced Blob-reference
+DELETE trigger failure proved both source and references roll back; retry then
+removed both. The actual existing application Scheduler accepted and ran the
+PostgreSQL adapter through its public MaintenanceStore port.
+
+The full real Docker PostgreSQL library command with all TLS fixture variables,
+--all-features --locked -j1 -- --ignored --test-threads=1 passed 145/145 tests
+in 156.33 seconds. Strict PostgreSQL/testkit Clippy with all targets/features and
+-D warnings passed. Documentation, compatibility, deployment profiles and source
+coverage report passed. Existing archive test fixtures are reused within the
+PostgreSQL test build; no application, domain, port, configuration or Mongo
+production source was changed. No new SQL migration is needed; generation stays
+18. Source capability count is 136/164 with 28 pending: ProjectDeletionStore (4),
+DebugFileStore (10) and ArtifactStore (14). Whole-application composition and final
+container/SDK/offline/soak delivery gates remain pending.

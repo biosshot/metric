@@ -884,4 +884,4 @@ fn unavailable<T>(_: T) -> ArchiveStoreError {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

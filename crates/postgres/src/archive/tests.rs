@@ -56,7 +56,7 @@ async fn add_metric(store: &PostgresMetricStore, value: MetricDelta) {
     batch.push(value);
     store.persist_metrics(batch).await.unwrap();
 }
-fn claim(kind: ArchiveKind, time: Timestamp) -> ArchiveClaimRequest {
+pub(crate) fn claim(kind: ArchiveKind, time: Timestamp) -> ArchiveClaimRequest {
     ArchiveClaimRequest {
         kind,
         now: time,
@@ -64,7 +64,7 @@ fn claim(kind: ArchiveKind, time: Timestamp) -> ArchiveClaimRequest {
         target_uncompressed_bytes: 1024 * 1024,
     }
 }
-fn complete(batch: &ArchiveBatch, time: Timestamp) -> ArchiveCompleteRequest {
+pub(crate) fn complete(batch: &ArchiveBatch, time: Timestamp) -> ArchiveCompleteRequest {
     ArchiveCompleteRequest {
         segment_id: batch.segment_id,
         object: BlobObject {
@@ -77,7 +77,7 @@ fn complete(batch: &ArchiveBatch, time: Timestamp) -> ArchiveCompleteRequest {
         completed_at: time,
     }
 }
-fn commit(batch: &ArchiveBatch, time: Timestamp) -> ArchiveSourceCommitRequest {
+pub(crate) fn commit(batch: &ArchiveBatch, time: Timestamp) -> ArchiveSourceCommitRequest {
     ArchiveSourceCommitRequest {
         kind: batch.kind,
         segment_id: batch.segment_id,
@@ -86,7 +86,7 @@ fn commit(batch: &ArchiveBatch, time: Timestamp) -> ArchiveSourceCommitRequest {
     }
 }
 
-async fn seed_all(database: &PostgresDatabase, time: Timestamp) {
+pub(crate) async fn seed_all(database: &PostgresDatabase, time: Timestamp) {
     let base = at(time.unix_millis() - 2 * DAY).unwrap();
     let events = PostgresEventStore::new(database.clone(), EventCodecConfig::default()).unwrap();
     let event = AcceptedEvent {
@@ -801,7 +801,7 @@ async fn ambiguous_commit_replies_resume_manifest_completion_and_source_commit()
     fixture.cleanup().await;
 }
 
-fn now() -> Timestamp {
+pub(crate) fn now() -> Timestamp {
     Timestamp::from_unix_millis(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -810,7 +810,7 @@ fn now() -> Timestamp {
     )
     .unwrap()
 }
-async fn setup() -> (Fixture, PostgresDatabase, PostgresArchiveStore) {
+pub(crate) async fn setup() -> (Fixture, PostgresDatabase, PostgresArchiveStore) {
     let fixture = Fixture::new().await;
     PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &MigrationPolicy::default())
         .await
