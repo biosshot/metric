@@ -1385,3 +1385,105 @@ table now correctly describes hot_copy_delay as an expiry delay after publicatio
 rather than a wait before archive work. ADR-0052 and the implementation plan record
 the accepted scope and deferred mechanism. This decision changes documentation
 only; PostgreSQL remains generation 17 with 131/164 methods and 33 pending.
+
+## 2026-10-09 — Archive implementation and confirmed TLS provider blocker
+
+Uncommitted PostgreSQL work adds all four ArchiveStore methods and append-only
+SQL migration 18. Generated source inventory is 135/164 with 29 remaining; this
+is implementation presence, not completion of all validation or application
+composition. Mongo sources, installed Mongo schema and default configuration
+are unchanged. The shared application ArchiveService and actual LocalBlobStore
+publish the existing Parquet formats; PostgreSQL adds no second blob publisher.
+Session and Metric JSON payload fields are adapter-owned logical representations,
+while their enclosing shared Parquet schema stays unchanged.
+
+The real Docker Archive group initially passed 8/8 tests in 9.52 seconds. The
+subsequent full ignored PostgreSQL library run passed 134/136 in 135.32 seconds,
+including nine Archive tests, actual Parquet publication for all five families,
+cross-project equal source identities, concurrent claims/completions/commits,
+native committed transactions with deliberately lost replies, failed resume
+holds, corrupted metadata, oversized encoded Event bodies, terminal/Pending
+selection, and native EXPLAIN ANALYZE/BUFFERS evidence. Representative plans
+used log_archive_due, log_archive_project_day and archive_manifests_pkey without
+disabling sequential scans. Real migration from an actually installed generation
+17 to 18 passed with byte-for-byte logical preservation of a held Metrics row;
+repeat bootstrap was idempotent. A tenth Archive test for the one-record byte
+budget exception has compiled but has not yet executed. The previously accepted
+late-Metrics snapshot/expiry limitation is retained and explicitly exercised.
+
+That full run initially failed two TLS tests because the invocation mistakenly
+used localhost, absent from the fixture certificate SAN. Retrying the connection
+group with its intended 127.0.0.1 endpoint passed 3/4 tests in 5.19 seconds,
+including inherited client certificate settings and the verified full connection.
+The remaining failure is a newly confirmed SQLx/Rustls provider-selection panic
+in the explicitly acknowledged VerifyCa connection. It is not an expired test
+certificate or a reason to disable certificate verification.
+
+Archive's real LocalBlobStore dev dependency brings the existing S3 client's
+aws-lc-rs Rustls provider into the same test binary as SQLx's configured ring
+provider. SQLx 0.9.0's normal handshake uses ClientConfig::builder_with_provider,
+but its accept_invalid_hostnames path constructs WebPkiServerVerifier::builder
+without a provider. Rustls 0.23.45 then cannot auto-select between the two enabled
+providers and panics. Existing public ConnectionPolicy::VerifyCa reaches this
+path; Require with an explicit root intentionally maps to VerifyCa as well.
+This combination also matters for future server composition with the S3 adapter;
+isolating or deleting the actual blob integration test would conceal the issue.
+
+Implementation is stopped for the user's decision on this newly confirmed
+discrepancy. Proposed narrow repair: explicitly select the already configured
+ring provider inside metric-postgres before driver TLS initialization, retaining
+an existing process-level provider if one has already been installed. This would
+require a direct Rustls dependency in the PostgreSQL crate and actual Docker
+regressions for VerifyFull, VerifyCa and Require with a root, including negative
+CA/name tests. No driver fork, Mongo edit or weakened trust policy is proposed.
+No provider repair has been applied. Strict Clippy and final Archive verification
+remain pending; the current capability work has not been committed as delivered.
+
+Commands used real fixtures metric-pg-dev-postgres-1 and
+metric-pg-dev-postgres-tls-1, with METRIC_TEST_POSTGRES_URI and the fixture-only TLS
+URI/root/client certificate variables. Cargo was serialized with --locked -j1:
+`cargo test -p metric-postgres archive::tests:: --lib --locked -j1 -- --ignored --test-threads=1`,
+`cargo test -p metric-postgres --lib --all-features --locked -j1 -- --ignored --test-threads=1`,
+and `cargo test -p metric-postgres connection::tests:: --lib --all-features --locked -j1 -- --ignored --test-threads=1`.
+Source coverage report, documentation, SDK compatibility and deployment-profile
+validators passed. Fixtures use generated disposable databases and a canonical
+task-owned LocalBlobStore directory; no global Docker cleanup was performed.
+
+## 2026-10-09 — Archive and compatible TLS initialization verified
+
+The user approved the narrow provider-selection repair. ConnectionPolicy now
+initializes Rustls's existing ring provider before a native TLS connection when
+no process provider exists. The SQLx policy and trust checks are unchanged;
+plaintext connections do not initialize a TLS provider. A racing/existing
+application provider is retained. This applies equally to pooled, migration and
+native diagnostic connections through the shared connect_options boundary.
+The PostgreSQL crate references the already locked Rustls 0.23.45 with default
+features disabled; neither SQLx nor any dependency version was upgraded/forked.
+
+The corrected full real Docker command above passed 138/138 ignored PostgreSQL
+library tests in 163.11 seconds, including all ten Archive tests and migration
+17→18. VerifyFull, VerifyCa and Require with an explicit root passed; wrong CA
+and certificate-name rejection still passed. A fresh child process installed
+aws-lc-rs before any PostgreSQL connection, then proved actual encrypted native
+connections in all three TLS modes retain the exact installed provider Arc.
+Actual plaintext connection, operator-environment redaction, transaction reset
+and exhausted-pool timeout regressions passed as well.
+
+`cargo clippy -p metric-postgres -p metric-testkit --all-targets --all-features --locked -j1 -- -D warnings`
+passed. Ordinary `cargo test -p metric-postgres -p metric-testkit --all-targets --all-features --locked -j1`
+passed six PostgreSQL unit tests and three testkit unit tests; its 138 PostgreSQL
+ignored cases were separately executed in the Docker run, not treated as passes
+by ordinary Cargo. Formatting, dependency graph, documentation, compatibility,
+deployment profiles and source coverage report passed. Provider regression was
+performed with both providers enabled through the actual Blob/S3 dependency.
+
+ArchiveStore's four methods are now verified on PostgreSQL generation 18, with
+135/164 source methods implemented and 29 remaining. No Mongo file or common
+public port, scheduler, archive publisher, blob implementation or wire contract
+changed. Only existing Session/Signal decoder visibility was widened inside the
+PostgreSQL crate to reuse validation. The accepted late-Metrics loss window stays
+documented and covered without bucket revisions or an extra waiting protocol.
+Native expiry execution belongs to the next MaintenanceStore capability; this
+Archive phase proves expiry assignment and retention holds, not automatic native
+deletion. Final application composition, whole-workspace/container/SDK/offline
+and soak gates remain pending until the remaining capabilities are implemented.

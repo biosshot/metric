@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 17;
+const SCHEMA_GENERATION: i64 = 18;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 // This is application-owned static SQL, never configurable or derived from input.
@@ -250,6 +250,13 @@ fn registry() -> Migrator {
                 include_str!("../migrations/0017_notifications.sql").into_sql_str(),
                 false,
             ),
+            Migration::new(
+                18,
+                Cow::Borrowed("bounded archive manifests and scoped hot-copy commitment"),
+                MigrationType::Simple,
+                include_str!("../migrations/0018_archive.sql").into_sql_str(),
+                false,
+            ),
         ]),
         locking: false, // The dedicated connection already owns MIGRATION_LOCK.
         table_name: Cow::Borrowed(MIGRATION_TABLE),
@@ -489,6 +496,118 @@ mod tests {
         PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &MigrationPolicy::default())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
+    async fn archive_upgrade_from_seventeen_preserves_held_sources() {
+        let fixture = Fixture::new().await;
+        let mut legacy = registry();
+        legacy.migrations.to_mut().retain(|step| step.version <= 17);
+        PostgresSchemaManager::ensure_registry(
+            &fixture.uri,
+            &fixture.policy,
+            &MigrationPolicy::default(),
+            &legacy,
+            &[],
+            17,
+        )
+        .await
+        .unwrap();
+        let database = crate::PostgresDatabase::connect(&fixture.uri, &fixture.policy)
+            .await
+            .unwrap();
+        crate::test_support::seed_projects(database.clone(), 32).await;
+        let time = metric_domain::Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let store = crate::PostgresMetricStore::new(
+            database.clone(),
+            crate::MetricRetention {
+                days: 1,
+                max_series_per_project: 16,
+                archive: true,
+            },
+        )
+        .unwrap();
+        let mut batch = metric_domain::metrics::MetricDeltaBatch::default();
+        batch.push(metric_domain::metrics::MetricDelta {
+            series: metric_domain::metrics::MetricSeries {
+                project_id: metric_domain::ProjectId::new(1).unwrap(),
+                name: "archive-upgrade".into(),
+                kind: metric_domain::metrics::MetricKind::Counter,
+                unit: "none".into(),
+                tags: Default::default(),
+            },
+            bucket_start: metric_domain::Timestamp::from_unix_millis(
+                time.unix_millis() - 172_800_000,
+            )
+            .unwrap(),
+            bucket_width_seconds: 60,
+            received_at: time,
+            trace_id: None,
+            aggregate: metric_domain::metrics::MetricAggregate::from_measurement(
+                metric_domain::metrics::MetricKind::Counter,
+                2.0,
+            ),
+        });
+        metric_ports::MetricStore::persist_metrics(&store, batch)
+            .await
+            .unwrap();
+        let before: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(b) FROM metric.metric_buckets b")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM metric._sqlx_migrations")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap(),
+            17
+        );
+        bootstrap(&fixture).await;
+        bootstrap(&fixture).await;
+        assert_eq!(
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT to_jsonb(b) FROM metric.metric_buckets b"
+            )
+            .fetch_one(&database.pool)
+            .await
+            .unwrap(),
+            before
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM metric._sqlx_migrations")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap(),
+            SCHEMA_GENERATION
+        );
+        let archive =
+            crate::PostgresArchiveStore::new(database.clone(), crate::EventCodecConfig::default())
+                .unwrap();
+        let claimed = metric_ports::ArchiveStore::claim(
+            &archive,
+            metric_ports::ArchiveClaimRequest {
+                kind: metric_domain::archive::ArchiveKind::Metric,
+                now: time,
+                maximum_events: 10,
+                target_uncompressed_bytes: 1024 * 1024,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(claimed.records.len(), 1);
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT archive_due IS NOT NULL AND expire_at IS NULL FROM metric.metric_buckets"
+            )
+            .fetch_one(&database.pool)
+            .await
+            .unwrap()
+        );
+        database.pool.close().await;
+        fixture.cleanup().await;
     }
 
     #[tokio::test]

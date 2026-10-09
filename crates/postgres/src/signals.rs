@@ -777,7 +777,7 @@ fn validate_body(body: &[u8]) -> Result<(), SignalStoreError> {
         Ok(())
     }
 }
-fn decode_body(row: &PgRow) -> Result<SignalBody, SignalStoreError> {
+pub(crate) fn decode_body(row: &PgRow) -> Result<SignalBody, SignalStoreError> {
     let encoded: Vec<u8> = row.try_get("body").map_err(invalid)?;
     if encoded.first() != Some(&1) || encoded.len() < 2 {
         return Err(SignalStoreError::InvalidData);

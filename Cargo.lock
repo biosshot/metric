@@ -2345,14 +2345,18 @@ dependencies = [
 name = "metric-postgres"
 version = "0.1.7"
 dependencies = [
+ "futures-util",
  "metric-application",
+ "metric-blob",
  "metric-domain",
  "metric-ports",
  "metric-testkit",
  "metrics",
+ "rustls",
  "serde_json",
  "sqlx",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",

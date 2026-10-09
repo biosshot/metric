@@ -367,7 +367,7 @@ async fn save(
         .bind(record.project_id.get()).bind(record.id.as_bytes().as_slice()).bind(record.release_id.as_bytes().as_slice()).bind(record.environment_id.as_bytes().as_slice()).bind(record.started_at.unix_millis()).bind(record.last_update.unix_millis()).bind(record.state.code() as i16).bind(record.sequence.map(|value|value.to_be_bytes().to_vec())).bind(record.finished_at.map(|value|value.unix_millis())).bind(record.duration_ms.map(|value|i64::try_from(value).map_err(invalid)).transpose()?).bind(record.user_digest.map(|value|value.to_vec())).bind(if retention.archive {None}else{expire}).bind(if retention.archive {expire}else{None}).execute(connection).await.map_err(write_error)?;
     Ok(())
 }
-fn decode(row: &PgRow) -> Result<SessionRecord, SignalStoreError> {
+pub(crate) fn decode(row: &PgRow) -> Result<SessionRecord, SignalStoreError> {
     let sequence: Option<Vec<u8>> = row.try_get("sequence").map_err(invalid)?;
     let user: Option<Vec<u8>> = row.try_get("user_digest").map_err(invalid)?;
     let value = SessionRecord {

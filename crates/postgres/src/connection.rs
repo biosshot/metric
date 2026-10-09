@@ -149,6 +149,15 @@ impl ConnectionPolicy {
         } else {
             self.ssl_mode.driver()
         };
+        // SQLx's VerifyCa verifier uses Rustls's process-level provider. S3 can
+        // enable aws-lc alongside SQLx's ring feature, making auto-selection panic.
+        // Respect a provider installed by the embedding application; a racing
+        // installer winning install_default is likewise intentionally retained.
+        if self.ssl_mode != SslMode::Disable
+            && rustls::crypto::CryptoProvider::get_default().is_none()
+        {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
         let mut options = PgConnectOptions::from_str(uri)
             .map_err(|_| PostgresError::InvalidUri)?
             .ssl_mode(ssl_mode)
@@ -441,6 +450,11 @@ mod tests {
             .await
             .expect("verify-ca must validate the CA while accepting a mismatched hostname");
         database.close().await;
+        let bad_ca_only = ConnectionPolicy {
+            ssl_root_cert: Some(wrong.clone().into()),
+            ..ca_only
+        };
+        assert!(PostgresDatabase::connect(&uri, &bad_ca_only).await.is_err());
         let require_ca = ConnectionPolicy {
             ssl_mode: SslMode::Require,
             allow_insecure_connection: true,
@@ -453,6 +467,58 @@ mod tests {
             ..require_ca
         };
         assert!(PostgresDatabase::connect(&uri, &bad_require).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL TLS profile and local test certificates"]
+    async fn operator_crypto_provider_is_retained_by_native_tls() {
+        const CHILD: &str = "METRIC_PG_CRYPTO_PROVIDER_PROBE";
+        if std::env::var_os(CHILD).is_some() {
+            rustls::crypto::aws_lc_rs::default_provider()
+                .install_default()
+                .unwrap();
+            let installed = rustls::crypto::CryptoProvider::get_default()
+                .unwrap()
+                .clone();
+            let uri = std::env::var("METRIC_TEST_POSTGRES_TLS_URI").unwrap();
+            let root = std::env::var_os("METRIC_TEST_POSTGRES_TLS_ROOT").unwrap();
+            for ssl_mode in [SslMode::VerifyFull, SslMode::VerifyCa, SslMode::Require] {
+                let policy = ConnectionPolicy {
+                    ssl_mode,
+                    allow_insecure_connection: ssl_mode != SslMode::VerifyFull,
+                    ssl_root_cert: Some(root.clone().into()),
+                    ..Default::default()
+                };
+                let database = PostgresDatabase::connect(&uri, &policy).await.unwrap();
+                assert!(
+                    sqlx::query_scalar::<_, bool>(
+                        "SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()"
+                    )
+                    .fetch_one(&database.pool)
+                    .await
+                    .unwrap()
+                );
+                assert!(std::sync::Arc::ptr_eq(
+                    &installed,
+                    rustls::crypto::CryptoProvider::get_default().unwrap()
+                ));
+                database.close().await;
+            }
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "connection::tests::operator_crypto_provider_is_retained_by_native_tls",
+                "--ignored",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "isolated operator-provider TLS probe failed"
+        );
     }
 
     #[tokio::test]
