@@ -18,6 +18,11 @@ guard and its shared regression-test wiring; no Mongo schema or migration change
 The user also authorized mechanical Clippy compatibility fixes after raising Rust
 to 1.94. Such syntax-only edits may include Mongo, but must preserve its behavior
 and keep all strict lint checks enabled. This does not authorize other Mongo changes.
+On 2026-10-09 the user authorized one further minimal Mongo correction: expand
+Session-statistics rebuild bounds to all intersected whole hours, preserving an
+already aligned exclusive upper edge. Apply identical range semantics in both
+adapters and run one shared real-adapter regression. Keep Mongo schema, migrations,
+deployment topology and delete/insert mechanics unchanged for this correction.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 

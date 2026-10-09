@@ -312,12 +312,23 @@ impl MongoSessionStore {
         if from >= until {
             return Err(SignalStoreError::InvalidData);
         }
+        // Source rows and replaced counters must cover the same complete hours.
+        // Keep an already aligned exclusive upper bound unchanged, including
+        // pre-epoch dates. Raw BSON bounds can represent the domain's final
+        // exclusive hour boundary without constructing an out-of-range Timestamp.
+        let hour_millis = 3_600_000;
+        let from = DateTime::from_millis(from.unix_millis().div_euclid(hour_millis) * hour_millis);
+        let upper = until.unix_millis();
+        let until = DateTime::from_millis(
+            upper.div_euclid(hour_millis) * hour_millis
+                + i64::from(upper.rem_euclid(hour_millis) != 0) * hour_millis,
+        );
         let mut cursor = self
             .database
             .collection::<Document>("sessions")
             .find(doc! {
                 "p": project_id.get(),
-                "s": { "$gte": date(from), "$lt": date(until) },
+                "s": { "$gte": from, "$lt": until },
             })
             .await
             .map_err(unavailable)?;
@@ -352,7 +363,7 @@ impl MongoSessionStore {
         stats
             .delete_many(doc! {
                 "p": project_id.get(),
-                "h": { "$gte": date(from), "$lt": date(until) },
+                "h": { "$gte": from, "$lt": until },
             })
             .await
             .map_err(unavailable)?;

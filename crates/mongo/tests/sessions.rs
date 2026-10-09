@@ -22,6 +22,25 @@ async fn session_upsert_health_and_stale_terminalization_are_durable() {
     cleanup.unwrap();
 }
 
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn session_rebuild_preserves_all_intersected_hours() {
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    let result = async {
+        control.bootstrap_or_validate().await.unwrap();
+        metric_testkit::session_conformance::whole_hour_rebuild(
+            &control.session_store(SessionRetention::default()),
+            ProjectId::new(42).unwrap(),
+        )
+        .await
+    }
+    .await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
 async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;
