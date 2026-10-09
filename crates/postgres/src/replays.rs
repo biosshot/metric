@@ -80,15 +80,8 @@ impl PostgresReplayStore {
             .map(|id| id.as_bytes().to_vec())
             .collect();
         let mut transaction = self.database.pool.begin().await.map_err(unavailable)?;
-        let state: Option<i16> =
-            sqlx::query_scalar("SELECT state FROM metric.projects WHERE id=$1 FOR SHARE")
-                .bind(metadata.project_id.get())
-                .fetch_optional(&mut *transaction)
-                .await
-                .map_err(unavailable)?;
-        if !matches!(state, Some(0 | 1)) {
-            return Err(SignalStoreError::NotFound);
-        }
+        crate::signal_storage::lock_projects(&mut transaction, &[metadata.project_id.get()])
+            .await?;
         // Inserting the manifest and locking its row serializes even concurrent first
         // segments. Unrelated Replay identities and signal lanes remain independent.
         sqlx::query("INSERT INTO metric.replays(project_id,replay_id,started_at,ended_at,received_at,environment,release,url,error_ids,trace_ids,expire_at,archive_due) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(project_id,replay_id) DO NOTHING")

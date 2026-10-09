@@ -623,3 +623,40 @@ The complete generation-11 PostgreSQL suite passed 82/82 with no ignored cases,
 including TLS/migration checks. Source coverage is now 88/164. PostgreSQL runtime
 selection and the remaining capabilities and acceptance gates are still pending.
 No Mongo source or tests changed in this milestone.
+
+## PostgreSQL Application Metrics
+
+Schema generation 12 adds compact native Metric aggregates and all MetricStore
+admission behavior, reusing the existing MetricWriter. Sorted project locks and
+separate project-local Metric coordination make cardinality admission and the
+entire batch atomic across processes. A capped native DISTINCT/UNION counts
+existing/requested series; bounded indexed lateral lookups validate complete
+series metadata rather than trusting hash identity. Native upserts add counters,
+sum/count/min/max and fixed 64-bin sketches. Gauge last/received values and initial
+trace/retention metadata retain the existing semantics. TTL and archive holds
+remain separate. Numeric overflow rejects and rolls back the batch.
+
+Adapter bounds are 10,000 deltas, 16 MiB prepared batch bytes, 512 KiB metadata
+per delta and 1,000-row SQL chunks. Free metadata remains lossless binary UTF-8
+and canonical JSON. Name equality uses a fixed SHA-256 projection plus full value
+verification, avoiding oversized native index keys. A shared private project
+admission helper removes duplicate guards in Session, Replay and Metric stores;
+it introduces no public/domain contract changes.
+
+The Phase 37 at-least-once Metric contract is preserved: neither the store nor
+MetricWriter retries an unknown COMMIT internally. An explicit client retry can
+apply the same delta again. Seven real Docker cases passed: all aggregate kinds,
+lossless metadata/large names and retention; concurrent scoped cardinality and
+batch rollback; concurrent additive writes with the existing MetricWriter;
+failure after the first 1,000-row chunk and integer/float overflow; actual lost
+COMMIT through MetricWriter followed by an explicit additive client retry;
+invalid inputs, project fences and complete-identity collision guards; and the
+maximum 10,000-delta batch with native scoped time/series/name index evidence.
+PostgreSQL Clippy for all targets/features passed with warnings denied; formatting,
+source inventory and documentation validation passed. Source coverage is 89/164;
+runtime selection and the remaining backend gates are still pending. Mongo was
+not changed in this milestone.
+
+The complete generation-12 PostgreSQL Docker suite passed 89/89 with no ignored
+cases, including the Session/Replay regressions after the private guard extraction
+and native TLS/migration checks.

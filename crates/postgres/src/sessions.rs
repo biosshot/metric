@@ -347,19 +347,7 @@ async fn lock_projects(
     connection: &mut PgConnection,
     projects: &[i32],
 ) -> Result<(), SignalStoreError> {
-    let rows =
-        sqlx::query("SELECT id,state FROM metric.projects WHERE id=ANY($1) ORDER BY id FOR SHARE")
-            .bind(projects)
-            .fetch_all(&mut *connection)
-            .await
-            .map_err(unavailable)?;
-    if rows.len() != projects.len()
-        || rows
-            .iter()
-            .any(|row| !matches!(row.try_get::<i16, _>("state"), Ok(0 | 1)))
-    {
-        return Err(SignalStoreError::NotFound);
-    }
+    crate::signal_storage::lock_projects(connection, projects).await?;
     // Per-project mutexes serialize Session writes, repairs and stale changes;
     // shared project locks still permit unrelated Event/Issue traffic.
     sqlx::query("INSERT INTO metric.session_project_locks(project_id) SELECT unnest($1::integer[]) ORDER BY 1 ON CONFLICT(project_id) DO NOTHING").bind(projects).execute(&mut *connection).await.map_err(unavailable)?;
