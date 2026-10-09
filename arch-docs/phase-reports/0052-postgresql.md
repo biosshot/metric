@@ -660,3 +660,63 @@ not changed in this milestone.
 The complete generation-12 PostgreSQL Docker suite passed 89/89 with no ignored
 cases, including the Session/Replay regressions after the private guard extraction
 and native TLS/migration checks.
+
+## PostgreSQL Feedback
+
+Schema generation 13 adds all four FeedbackSink/FeedbackStore methods. The scoped
+parent, ordered at-most-ten attachments and existing Blob reference registry are
+written in one transaction. Submission retries compare immutable identity and
+cannot reset workflow, receive time, attachment creation time or retention.
+Project guards reject missing/fenced targets while retaining disabled-project
+behavior. Status changes are serialized on the scoped parent; stale different
+statuses conflict, while a repeated current status preserves its original time.
+The existing NativeApi continues deriving the current Issue through the associated
+scoped Event. No public contract or application service was changed.
+
+Bounded list/load queries read parent rows and attachments in one repeatable-read
+snapshot. Every filter and keyset value is bound. Native project/time, status and
+correlation indexes serve these queries. Binary UTF-8 storage preserves accepted
+attachment metadata, including NUL; corrupt stored filenames, content types and
+foreign Blob relationships fail closed. Metadata limits and integer ranges are
+checked before writes. Parent deletion cascades attachments and removes only its
+Feedback references in the same transaction; Error/other-project references and
+physical Blob bytes remain under their existing lifecycle owners.
+
+Six real Docker cases passed: ordered attachments, immutable retry/conflict and
+concurrent admission; scoped workflow, conjunctive filters and keyset pagination;
+injected reference/status failures and scoped deletion; actual lost COMMIT replies
+for submission and workflow followed by safe retries; invalid inputs, project
+fences and corrupt stored attachments; and native indexed query plans with 10,000
+unrelated synthetic Feedback records. PostgreSQL Clippy for all targets/features
+passed with warnings denied. Source coverage is 93/164; 71 signatures, runtime
+selection and the remaining backend acceptance gates are still pending. Mongo
+source/tests were not changed in this milestone.
+
+The complete generation-13 PostgreSQL Docker suite passed 95/95 with no ignored
+cases, including native TLS, migrations, fault injection and all earlier adapter
+regressions. Formatting, dependency graph and documentation validation passed.
+
+## Span statistic rebuild boundary decision pending
+
+Before implementing the SignalStore family, source review found the same raw-hour
+boundary mismatch in `crates/mongo/src/signals.rs::rebuild_inner`. This is a
+separate method from the previously authorized Session repair. It deletes buckets
+whose hour starts are in the raw `[from,until)` interval, selects only Spans in
+that raw interval, then calls incremental `apply_stat`. A partially intersected
+first hour survives and receives duplicate increments; the last hour is recreated
+from incomplete source data. Repeating repair increases the surviving first count.
+
+`python scripts/span-stats-range-mongo-probe.py`, piped into the task-owned Mongo
+8.0.12 Docker fixture with `mongosh --file /dev/stdin`, reproduced this exact
+selection/deletion/increment algorithm on four synthetic Spans dated 2026-10-09.
+For 00:30–01:30, correct whole-hour counts `[2,2]` became `[3,1]`, then `[4,1]`
+after a second repair. This is an algorithm reproduction, not an invocation of
+the Rust port. Its generated database was dropped in finally. No real data,
+Mongo code, schema or running deployment was changed.
+
+SignalStore implementation is stopped for the requested user decision: authorize
+a minimal whole-hour range correction in Mongo's separate Span repair method and
+matching complete-hour transactional PostgreSQL repair, or correct PostgreSQL only
+and retain this known Mongo boundary behavior. No broader Mongo write-mechanics
+change is proposed. Feedback completion and verification remain independently
+reviewable on `feat/postgres`.

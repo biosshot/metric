@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 89/164. Delivery requires every row
+Implemented signatures: 93/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -124,10 +124,10 @@ and its conformance evidence, including signatures added after this snapshot.
 | `MonitorStore::persist_monitors` | Pending |
 | `MonitorStore::terminalize_due_timeouts` | Pending |
 | `MonitorStore::upsert_monitor` | Pending |
-| `FeedbackStore::list_feedback` | Pending |
-| `FeedbackStore::load_feedback` | Pending |
-| `FeedbackStore::update_feedback_status` | Pending |
-| `FeedbackSink::persist_feedback` | Pending |
+| `FeedbackStore::list_feedback` | `crates/postgres/src/feedback.rs` |
+| `FeedbackStore::load_feedback` | `crates/postgres/src/feedback.rs` |
+| `FeedbackStore::update_feedback_status` | `crates/postgres/src/feedback.rs` |
+| `FeedbackSink::persist_feedback` | `crates/postgres/src/feedback.rs` |
 | `NotificationStore::claim_due` | Pending |
 | `NotificationStore::claim_due_aggregate_rule` | Pending |
 | `NotificationStore::complete_aggregate_rule` | Pending |
