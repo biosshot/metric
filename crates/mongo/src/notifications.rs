@@ -903,6 +903,7 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
                     "errors" => ExploreDataset::Errors,
                     "logs" => ExploreDataset::Logs,
                     "spans" => ExploreDataset::Spans,
+                    "metrics" => ExploreDataset::Metrics,
                     _ => return Err(NotificationStoreError::InvalidData),
                 },
                 lookback_minutes: u32::try_from(

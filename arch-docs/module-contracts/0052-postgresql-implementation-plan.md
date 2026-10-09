@@ -34,6 +34,9 @@ The user separately authorized the terminal notification history correction:
 when a delivered/dead record lacks the next-attempt field, decode its persisted
 terminal time into that non-optional domain field. Pending records remain strict.
 Limit Mongo production changes to this decoder fallback; no schema/data migration.
+The user then authorized the missing Metrics aggregate-rule decoder arm. Add only
+that existing dataset variant to Mongo and cover all four datasets in a shared
+rule round-trip/claim/completion fixture; keep schemas and migrations unchanged.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 

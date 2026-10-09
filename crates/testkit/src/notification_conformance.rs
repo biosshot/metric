@@ -8,8 +8,118 @@ use metric_domain::{
         NotificationDestinationId, NotificationPayload,
     },
 };
+use metric_domain::{
+    explore::ExploreDataset,
+    notifications::{AggregateAlert, AlertRule, NotificationText, RuleName},
+};
 use metric_ports::{NotificationStore, NotificationStoreError};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub async fn aggregate_datasets(
+    store: &dyn NotificationStore,
+    project: ProjectId,
+    foreign: ProjectId,
+) {
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let at = |v| Timestamp::from_unix_millis(v).unwrap();
+    for (i, dataset) in [
+        ExploreDataset::Errors,
+        ExploreDataset::Logs,
+        ExploreDataset::Spans,
+        ExploreDataset::Metrics,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut id = [20 + i as u8; 16];
+        id[..4].copy_from_slice(&project.get().to_be_bytes());
+        let filters = matches!(dataset, ExploreDataset::Logs | ExploreDataset::Spans);
+        let rule = AlertRule {
+            id: AlertRuleId::from_bytes(id),
+            project_id: project,
+            name: RuleName::new(format!("synthetic {}", dataset.as_str())).unwrap(),
+            enabled: true,
+            triggers: Box::new([]),
+            aggregate: Some(AggregateAlert {
+                dataset,
+                lookback_minutes: 5,
+                evaluation_interval_minutes: 1,
+                threshold: 100,
+                environment: filters.then(|| NotificationText::new("production", 200).unwrap()),
+                release: filters.then(|| NotificationText::new("r1", 200).unwrap()),
+                notify_resolved: true,
+            }),
+            monitor: None,
+            destination_ids: vec![NotificationDestinationId::from_bytes(id)].into_boxed_slice(),
+            cooldown_minutes: 0,
+            storm_limit_per_hour: 10,
+            next_evaluation_at: Some(at(now + i as i64)),
+            last_triggered_at: None,
+            storm_window_started_at: None,
+            storm_count: 0,
+            threshold_met: false,
+            created_at: at(now + i as i64),
+            updated_at: at(now + i as i64),
+        };
+        rule.validate().unwrap();
+        store.upsert_rule(rule.clone()).await.unwrap();
+        assert_eq!(
+            store
+                .list_rules(project, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|v| v.id == rule.id)
+                .unwrap(),
+            rule
+        );
+        let claimed = store
+            .claim_due_aggregate_rule(at(now + i as i64), at(now + 60_000))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed, rule);
+        store
+            .complete_aggregate_rule(
+                rule.id,
+                at(now + 60_000),
+                at(now + 120_000),
+                true,
+                Some(at(now)),
+                Some(at(now)),
+                1,
+                vec![],
+            )
+            .await
+            .unwrap();
+        let finished = store
+            .list_rules(project, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|v| v.id == rule.id)
+            .unwrap();
+        assert_eq!(finished.aggregate, rule.aggregate);
+        assert_eq!(finished.next_evaluation_at, Some(at(now + 120_000)));
+        assert!(finished.threshold_met);
+        assert_eq!(finished.storm_count, 1);
+    }
+    assert_eq!(store.list_rules(project, 100).await.unwrap().len(), 4);
+    assert!(store.list_rules(foreign, 100).await.unwrap().is_empty());
+    assert!(
+        store
+            .claim_due_aggregate_rule(at(now + 1000), at(now + 61_000))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
 
 pub async fn terminal_history(
     store: &dyn NotificationStore,
