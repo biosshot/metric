@@ -593,3 +593,33 @@ with no failed or ignored selected cases, using the unchanged Docker fixture and
 native TTL behavior. Retained performance baselines were excluded as before.
 Formatting and documentation validation passed. Clippy for the modified Replay
 integration target passed with all features and warnings denied.
+
+## PostgreSQL Replay manifests
+
+Schema generation 11 implements all four ReplayStore methods. Existing ReplayWriter
+and BlobStore ownership stay unchanged: recording bytes are never stored in SQL.
+Scoped manifests and compact segment references commit together. A shared project
+lock fences ingestion; the manifest row serializes concurrent first and subsequent
+segments while unrelated Replay identities remain independent. The adapter verifies
+the immutable recording key, size and checksum on duplicate admission, matching the
+existing ReplayWriter contract for conflicting bytes. Accepted metadata retains
+the existing optional-value and correlation replacement semantics; retention stays
+anchored to the first accepted segment. TTL and archive holds are distinct.
+
+One read-only repeatable-read transaction covers each bounded page and its segment
+sets. Segment identities and correlation arrays retain their existing limits and
+ordering, including repeated correlations. Native project/time keyset and array
+indexes serve list/filter queries; exact Blob reference checks use a unique key
+index. Manifest deletion cascades to references without touching recording bytes.
+All values are bound, stored metadata is validated, and driver errors are redacted.
+
+Seven real Docker cases passed: segment ordering, duplicates/conflicting bytes,
+metadata and retention; scoped filters/keyset ties; concurrent first admissions and
+consistent snapshots while filling all 100 segments; injected rollback followed
+by recovery and reference removal; actual lost COMMIT reply with safe retry;
+invalid inputs, project fences and corrupt decoding; and native indexed timelines,
+correlation searches and references with 10,000 unrelated manifests/segments.
+The complete generation-11 PostgreSQL suite passed 82/82 with no ignored cases,
+including TLS/migration checks. Source coverage is now 88/164. PostgreSQL runtime
+selection and the remaining capabilities and acceptance gates are still pending.
+No Mongo source or tests changed in this milestone.

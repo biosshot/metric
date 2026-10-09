@@ -11,6 +11,7 @@ mod issues;
 mod migrations;
 mod projects;
 mod releases;
+mod replays;
 mod sessions;
 
 pub use api::PostgresInvestigationStore;
@@ -24,6 +25,7 @@ pub use issues::{IssueCodecConfig, PostgresIssueStore};
 pub use migrations::{MigrationMode, MigrationPolicy, PostgresSchemaManager, SchemaStatus};
 pub use projects::PostgresProjectStore;
 pub use releases::PostgresReleaseStore;
+pub use replays::{PostgresReplayStore, ReplayRetention};
 pub use sessions::{PostgresSessionStore, SessionRetention};
 
 #[cfg(test)]
