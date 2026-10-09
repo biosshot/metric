@@ -872,3 +872,45 @@ the successful run. Its database and the failed initial index-plan fixture were
 inspected and dropped by their exact generated names after their test processes
 ended and no connections remained. Successful fixtures cleaned themselves. No
 installation database, persistent volume, image or credential was removed.
+
+## Monitor lifecycle boundary: awaiting a separate Mongo exception
+
+Before implementing MonitorStore, an isolated real-Rust-port Mongo probe confirmed
+a temporal merge defect. Two individually valid SDK updates for the same run can
+persist in this order: in_progress with started_at=T, then success with its own
+started_at=T-2000 ms and finished_at/received_at=T-1000 ms. The second message may
+have been received before the first, while queue/concurrent request processing
+persists it later. Both MonitorUpdate::validate calls succeed. Mongo acknowledges
+both writes as Accepted, preserves the first stored start, and replaces the finish
+with T-1000 ms. The resulting persisted finish precedes the persisted start.
+list_monitor_runs subsequently fails InvalidData when decode_run validates it;
+one such record can prevent the entire history page from being read.
+
+The real probe passed its expected-defect assertions: both valid input messages,
+two accepted acknowledgements, the incompatible stored time pair, and the failed
+typed history read. It generated T from current server/test time to remain inside
+retention and used its own metric_pg_monitor_order_<pid>_<nonce> database. That
+database was dropped before the assertions completed. The temporary Rust test
+target was removed after the test process ended; no Mongo production source,
+schema, existing fixture or installation data was changed.
+
+Suggested minimal correction: retain the original stored started_at and reject an
+in_progress-to-terminal transition whose finish precedes it, before updating the
+run. Mongo needs one guard inside its existing terminal-transition branch:
+
+```rust
+if incoming.finished_at.is_some_and(|finish| finish < existing.started_at) {
+    return Err(SignalStoreError::InvalidData);
+}
+```
+
+The PostgreSQL adapter should validate the merged record and enforce the same
+ordering with a native CHECK. This needs no port/domain change or implicit
+timestamp rewriting. A shared generated-date regression fixture should verify
+that the rejected transition leaves a readable original run, a subsequent valid
+terminal transition succeeds, and duplicate terminal messages stay immutable.
+
+Monitor implementation is stopped for user authorization of this new, separate
+minimal Mongo exception. Earlier authorization concerned Span-hour repair and
+does not automatically cover another production change. Explore remains committed
+and verified at generation 15; PostgreSQL coverage is still 102/164 signatures.
