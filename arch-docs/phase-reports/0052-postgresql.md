@@ -1675,3 +1675,105 @@ documentation, compatibility and deployment-profile validators passed.
 Source inventory is 146/164; remaining methods are ArtifactStore (14) and
 ProjectDeletionStore (4). Final server/container/SDK/offline/soak gates remain
 pending; this step does not claim a complete PostgreSQL application runtime.
+
+## 2026-10-09 — PostgreSQL ArtifactStore and schema generation 20
+
+Added all fourteen ArtifactStore methods inside the PostgreSQL crate. Append-only
+0020 adds organization-scoped bundle/upload metadata, normalized exact project/
+release/dist associations, quota counters, debug-token lookup indexes and GC
+state/generation/claim deadlines. Previous migrations remain immutable. SHA1 and
+ZIP are test-only dependencies already locked in the workspace; Cargo.lock changes
+only the PostgreSQL dependency list, with no version upgrades. Shared services,
+source-bundle parsing, BlobStore, authorization and symbolication remain unchanged.
+Zero organization quotas retain the existing unlimited convention, within checked
+native bigint bounds.
+
+Sorted project guards precede organization, upload and bundle mutations. Native
+transactions make association merge, publication/rescue, quota reservation,
+symbolication revisions and upload completion atomic. Duplicate publication does
+not charge or increment again. Exact removal preserves other associations and
+only the final removal enables GC. Same-organization projects share one content
+identity; wrong-organization reads/associations are fenced. Stable application-
+derived organization/SHA1 upload identity is enforced natively. Repeatable-read
+transactions keep returned content and association scope consistent.
+
+GC claims recheck native state under sorted organization locks and row locks.
+Publication is blocked during a physical-delete claim; stale tokens/generations
+cannot finish a later claim. Post-tombstone publication reserves one incremented
+generation; finish and quota release commit together. Tombstones retain bounded
+identity metadata internally until expiry and are hidden from lookup. Blob
+deletion remains owned by the existing GC service. Native maintenance adds bounded
+expiry of terminal uploads and tombstones, preserving Pending/Assembling uploads
+and active/claimed/reserved bundles.
+
+SQL values are bound and identifier/operator branches are static allowlists.
+Domain codecs validate IDs/bindings. Bounds are 64 SHA1 chunks, 512 canonical
+associations, 20,000 tokens, 20 lookup candidates, 1,000 recovery rows and 100 GC
+candidates. Chunk/token fields are bounded before driver transfer; recovery/GC
+accumulation has a 4 MiB budget. Invalid/corrupt data, quota overflow and driver
+failure return static port errors without SQL/secret strings.
+
+Eight real Docker Artifact cases passed 8/8 in 9.56 seconds; an additional concurrent
+association case passed 1/1 in 1.47 seconds. Evidence includes merge/scope/lookup/
+exact detach/revisions, concurrent quota admission/duplicate publication, orphan
+rescue, expired-claim takeover, post-tombstone generation, actual dropped COMMIT
+replies at publication/removal/claim/finish/reservation, native rollback of induced
+upload-completion failure, bounds/corruption/fences/expiry, and indexed EXPLAIN
+ANALYZE/BUFFERS on 4,096 synthetic rows. Existing ArtifactService assembled/parsed
+an actual SYSB/ZIP bundle via the shared DebugFileService chunk uploader and
+LocalBlobStore, reopened the same bytes, reused completed upload metadata, resolved
+its debug token and physically garbage-collected its content. Concurrent callers
+retained all 32 new associations plus the original, with one quota charge and
+33 revisions.
+
+A real 19-to-20 upgrade verification preserves published Debug metadata, project
+fields/counters and prior organization fields while initializing artifact quotas.
+The initial uncommitted migration's NULL dist check was corrected before delivery.
+Seven failed-test databases were positively verified as generated generation-20
+synthetic fixtures with zero uploads/bundles and dropped. The failed service test's
+single synthetic Blob was inspected and SHA1-verified before non-recursive removal;
+successful tests remove their own generated databases/directories. Strict adapter/
+testkit Clippy and documentation/compatibility/deployment validators passed.
+The complete real PostgreSQL Docker library suite with all local TLS variables,
+--all-features --locked -j1 -- --ignored --test-threads=1 passed 163/163 in 190.64
+seconds. All nine new Artifact cases and the real migration upgrade passed in
+that run. The failed-test Blob directory was also removed non-recursively using
+explicit literal paths after its verified synthetic file was removed; no fixture
+database or Blob directory from this step remains.
+
+Source signatures are 160/164. ProjectDeletionStore's four methods and final
+server/container/SDK/offline/soak gates remain pending; full runtime/configuration
+support is not yet advertised as delivered.
+
+## 2026-10-09 — Confirmed Mongo Artifact association race; stopped for scope decision
+
+Parity review found a separate pre-existing MongoArtifactStore::publish race. Its
+active-content branch reads the old association list, merges additions, then
+replaces the bundle using only ID/state as the guard. Another publisher can change
+the list meanwhile. Both return success, but the later replacement erases an
+already acknowledged association. Revisions can advance while metadata is lost.
+
+A temporary real Docker diagnostic used existing public ports in a newly generated
+metric_phase14_maintenance_test_<ObjectId> database. It bootstrapped synthetic
+organization/project metadata, published one bundle with one association, then
+issued 32 concurrent publications of the same content, each adding a distinct
+valid release association. All 32 returned success. Expected count was 33; actual
+stored count was 3. The expected-defect assertion passed 1/1 in 1.36 seconds; this
+is bug evidence, not a correctness gate. Command:
+`cargo test -p metric-mongo --test maintenance_store diagnostic_artifact_binding_concurrency --locked -j1 -- --ignored --exact --nocapture --test-threads=1`.
+No artificial delay, database failpoint or user database was involved.
+
+The diagnostic database was dropped before assertions. Its temporary test was
+removed, restoring Mongo source to the approved catalog-counter repair; working
+and staged Mongo diffs are empty. A database listing confirmed no diagnostic
+fixture remained. PostgreSQL retains all 33 associations in the analogous public-
+port case. This did not delete raw events or Blob bytes; the risk is losing the
+association used to discover a source bundle for project/release symbolication.
+
+Further implementation stops at this new confirmed discrepancy, as requested.
+The catalog-counter exception does not authorize this separate Mongo repair.
+Proposed minimal scope: include the previously read association list in the
+active-content update guard, including the empty/orphan case, so a stale publisher
+receives the existing Busy/retry outcome instead of acknowledging an overwrite.
+Prove concurrent preservation and orphan rescue on Docker. No repair of this race
+has been implemented or authorized, and no broader Mongo refactor is proposed.

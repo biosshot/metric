@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 146/164. Delivery requires every row
+Implemented signatures: 160/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -161,17 +161,17 @@ and its conformance evidence, including signatures added after this snapshot.
 | `DebugFileStore::resolve_project_slugs` | `crates/postgres/src/debug_files.rs` |
 | `DebugFileStore::set_upload_state` | `crates/postgres/src/debug_files.rs` |
 | `DebugFileStore::upsert_upload` | `crates/postgres/src/debug_files.rs` |
-| `ArtifactStore::claim_gc` | Pending |
-| `ArtifactStore::finish_gc` | Pending |
-| `ArtifactStore::load_by_sha1` | Pending |
-| `ArtifactStore::load_for_project` | Pending |
-| `ArtifactStore::lookup` | Pending |
-| `ArtifactStore::project_organization` | Pending |
-| `ArtifactStore::publication_generation` | Pending |
-| `ArtifactStore::publish_bundle` | Pending |
-| `ArtifactStore::recoverable_uploads` | Pending |
-| `ArtifactStore::remove_binding` | Pending |
-| `ArtifactStore::resolve_projects` | Pending |
-| `ArtifactStore::set_upload_state` | Pending |
-| `ArtifactStore::upsert_upload` | Pending |
-| `ArtifactStore::validate_gc_claim` | Pending |
+| `ArtifactStore::claim_gc` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::finish_gc` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::load_by_sha1` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::load_for_project` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::lookup` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::project_organization` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::publication_generation` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::publish_bundle` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::recoverable_uploads` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::remove_binding` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::resolve_projects` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::set_upload_state` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::upsert_upload` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::validate_gc_claim` | `crates/postgres/src/artifacts.rs` |

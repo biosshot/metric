@@ -517,6 +517,20 @@ const EVENT_TABLES: &[ExpiryTable] = &[
         guard: "",
         references: None,
     },
+    ExpiryTable {
+        table: "metric.artifact_uploads",
+        expiry: "expire_at",
+        order: "expire_at,upload_id",
+        guard: " AND state IN(2,3)",
+        references: None,
+    },
+    ExpiryTable {
+        table: "metric.artifact_bundles",
+        expiry: "due_at",
+        order: "due_at,bundle_id",
+        guard: " AND state=2",
+        references: None,
+    },
 ];
 const HOURLY_TABLES: &[ExpiryTable] = &[
     ExpiryTable {

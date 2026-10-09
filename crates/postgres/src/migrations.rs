@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 19;
+const SCHEMA_GENERATION: i64 = 20;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 // This is application-owned static SQL, never configurable or derived from input.
@@ -264,6 +264,13 @@ fn registry() -> Migrator {
                 include_str!("../migrations/0019_debug_files.sql").into_sql_str(),
                 false,
             ),
+            Migration::new(
+                20,
+                Cow::Borrowed("organization artifacts and generation-fenced garbage collection"),
+                MigrationType::Simple,
+                include_str!("../migrations/0020_artifacts.sql").into_sql_str(),
+                false,
+            ),
         ]),
         locking: false, // The dedicated connection already owns MIGRATION_LOCK.
         table_name: Cow::Borrowed(MIGRATION_TABLE),
@@ -503,6 +510,104 @@ mod tests {
         PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &MigrationPolicy::default())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
+    async fn artifact_upgrade_from_nineteen_preserves_debug_metadata_and_counters() {
+        use metric_domain::{
+            OrganizationId, ProjectId, Timestamp,
+            debug_files::{DebugFile, DebugFileId, DebugFileType, DebugId, DebugUpload},
+        };
+        use metric_ports::DebugFileStore;
+        let fixture = Fixture::new().await;
+        let mut legacy = registry();
+        legacy.migrations.to_mut().retain(|step| step.version <= 19);
+        PostgresSchemaManager::ensure_registry(
+            &fixture.uri,
+            &fixture.policy,
+            &MigrationPolicy::default(),
+            &legacy,
+            &[],
+            19,
+        )
+        .await
+        .unwrap();
+        let db = crate::PostgresDatabase::connect(&fixture.uri, &fixture.policy)
+            .await
+            .unwrap();
+        crate::test_support::seed_projects(db.clone(), 32).await;
+        let store =
+            crate::PostgresDebugFileStore::new(db.clone(), crate::DebugFileQuota::default())
+                .unwrap();
+        let pid = ProjectId::new(1).unwrap();
+        let time = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let upload = DebugUpload {
+            id: [1; 16],
+            project_id: pid,
+            organization_id: OrganizationId::new(1).unwrap(),
+            sha1: [1; 20],
+            name: "upgrade.so".into(),
+            debug_id: Some(DebugId::Uuid {
+                uuid: [9; 16],
+                appendix: 0,
+            }),
+            code_id: None,
+            chunks: vec![[1; 20]],
+            created_at: time,
+            updated_at: time,
+        };
+        let file = DebugFile {
+            id: DebugFileId::derive(pid, [9; 32]),
+            project_id: pid,
+            debug_id: upload.debug_id.clone(),
+            code_id: None,
+            file_type: DebugFileType::Elf,
+            checksum: [9; 32],
+            sha1: upload.sha1,
+            size: 3,
+            name: upload.name.clone(),
+            uploaded_at: time,
+        };
+        store.upsert_upload(upload.clone()).await.unwrap();
+        store
+            .publish_debug_file(upload.id, file.clone())
+            .await
+            .unwrap();
+        let project: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(p) FROM metric.projects p WHERE id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        let organization: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(o) FROM metric.organizations o WHERE id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        bootstrap(&fixture).await;
+        bootstrap(&fixture).await;
+        assert_eq!(store.load_debug_file(pid, file.id).await.unwrap(), file);
+        assert_eq!(
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT to_jsonb(p) FROM metric.projects p WHERE id=1"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+            project
+        );
+        assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(o)-'artifact_bytes'-'artifact_count' FROM metric.organizations o WHERE id=1").fetch_one(&db.pool).await.unwrap(),organization);
+        assert_eq!(
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT artifact_bytes,artifact_count FROM metric.organizations WHERE id=1"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+            (0, 0)
+        );
+        db.pool.close().await;
+        fixture.cleanup().await;
     }
 
     #[tokio::test]
