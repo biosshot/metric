@@ -1046,3 +1046,29 @@ The earlier exception covered monitor-run time ordering only. Monitors are commi
 and verified at generation 16, with 113/164 signatures implemented; Mongo remains
 the default/current runtime backend and the remaining 51 signatures and full
 end-to-end acceptance gates are pending.
+
+## Authorized terminal notification history correction
+
+The user separately authorized the preceding terminal-history correction. Mongo
+decode_delivery now uses a persisted terminal time only when the next-attempt field
+is absent and the status is delivered/dead. Pending records still require a valid
+next-attempt date, and a malformed present date remains InvalidData. This reads
+already-written terminal records without changing writes, schemas or migrations.
+Mongo production edits are one six-line fallback plus replacement of the field
+initializer; no unrelated notification behavior was changed.
+
+The new shared Testkit fixture passed on the real Mongo adapter (1/1 targeted case,
+7.47 seconds). It checks readable delivered/dead history, pending retry dates,
+diagnostic validation, first terminal result/payload/expiry preservation across
+late retries, repeated enqueue and opposing terminal calls, project isolation,
+creation-time ordering and page limits. A separate codec unit case passed (1/1),
+checking missing pending dates, malformed present dates, terminal fallback,
+preservation of existing terminal next-attempt dates and missing terminal dates.
+The fixture uses current synthetic times and its own generated database, which
+was dropped; the Docker catalog confirms no remaining fixture databases. The
+same fixture is ready for the pending PostgreSQL NotificationStore implementation.
+The selected complete Mongo infrastructure run passed 24 cases (real ignored
+adapter cases, excluding performance_/reports_rps, one test thread), including the
+new terminal-history fixture. Strict Clippy for Mongo/Testkit, formatting,
+documentation, deployment profiles, compatibility and source inventory passed.
+PostgreSQL source/runtime remained unchanged at generation 16 and 113/164 methods.

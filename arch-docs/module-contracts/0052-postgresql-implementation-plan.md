@@ -30,6 +30,10 @@ On 2026-10-09 the user authorized the monitor-run temporal merge exception:
 preserve the existing start and reject a terminal finish earlier than that start.
 Keep the Mongo change to one guard in its existing transition branch and add one
 shared real-adapter regression; no Mongo schema or migration change is authorized.
+The user separately authorized the terminal notification history correction:
+when a delivered/dead record lacks the next-attempt field, decode its persisted
+terminal time into that non-optional domain field. Pending records remain strict.
+Limit Mongo production changes to this decoder fallback; no schema/data migration.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 
