@@ -929,3 +929,70 @@ It passed on the real Docker Mongo adapter. The selected complete Mongo regressi
 run passed 23 cases (ignored real-adapter cases, excluding performance_/reports_rps)
 with one test thread. These are selected infrastructure checks, not a claim that
 the entire workspace or performance suite was run again.
+
+## Transactional PostgreSQL Cron and Uptime monitors
+
+Schema generation 16 adds typed monitor definitions, immutable run identities,
+native project/history/deadline/alert/expiry indexes and per-project monitor lane
+locks. PostgresMonitorStore explicitly implements all eleven MonitorStore methods.
+Project guards are acquired in sorted order before lane locks; background workers
+recheck project fences, due times, status and lease ownership after acquiring the
+same locks. Admission, definition/projection changes and run merges commit in one
+transaction, using bulk writes of at most 1000 rows rather than one write per run.
+Missed-slot existence is also loaded once per worker batch.
+
+In-progress admission fills the configured runtime deadline. Terminal transitions
+keep the first stored start/source/identity metadata and validate the actual merged
+run before writing it. A native CHECK additionally rejects finishes before the
+stored start. Terminal duplicates do not replace the first completion. Web-owned
+definitions win over SDK configuration; SDK-owned definitions retain their creation
+time and increment revision. Stable scoped keysets retain equal-timestamp rows and
+the existing inclusive run until bound. Monitor deletion cascades to its scoped
+history. Uptime claims are transactional leases; completion releases the lease and
+advances the next expected run. Existing MonitorWriter and UptimeScheduler use the
+unchanged ports without another queue/scheduler implementation.
+
+All values are bound. Closed fixed SQL clauses provide pagination, filters and
+worker selection; neither names nor endpoints become SQL text. Configuration uses
+the existing canonical/versioned/compressed adapter JSON codec, limited to 64 KiB,
+with strict enum/shape/domain validation. Sealed Uptime header ciphertext remains
+opaque; no plaintext secret is produced or logged. Run fields are native bounded
+columns. Admission caps at 10000 updates and 16 MiB of decoded input/configuration;
+loaded configuration has a separate 16 MiB budget. Definition pages apply a native
+cumulative 8 MiB decoded-byte budget before configuration transfer and continue
+from the last delivered record. Fixed-width history pages cap their row count to
+the same response budget. Scheduler decoding is bounded and leaves excess eligible
+work for later calls. Retention timestamps/indexes are present; the shared
+MaintenanceStore cleanup implementation is still pending and is not claimed here.
+
+Nine targeted cases passed (eight real Docker cases and one configuration codec
+unit case), including the shared Mongo/Postgres temporal fixture and native CHECK;
+scoped CRUD/keysets/filters; lifecycle immutability and atomic missing-definition
+rejection; SDK/web ownership; opaque headers, malformed configuration and limits;
+timeouts/missed runs/alert markers/project fences/retention timestamps;
+concurrent duplicate/deadline/lease ownership; an actual lost COMMIT response and
+second-chunk SQL failure with full rollback; and the existing writer/scheduler.
+The large-boundary case admitted 10000 runs, paged 260 large configurations without
+omissions/duplicates, and verified native history, timeout, Cron, Uptime and alert
+index plans with additional representative data. No optimizer index forcing was
+used.
+
+The complete generation-16 PostgreSQL suite passed 120/120, without ignored cases,
+in 149.93 seconds, including TLS, migrations and all earlier capabilities. The
+initial Uptime test fixture used an uppercase header name rejected by the domain;
+only that fixture was corrected before the successful targeted and full runs.
+Its three failed own fixture databases were inspected, verified connection-free
+and dropped by exact generated name after the failed process ended. Successful
+fixtures cleaned themselves; both PostgreSQL containers have no remaining own
+test databases. No installation data, volume, image or credential was removed.
+
+Strict Clippy passed for Postgres, Mongo and Testkit with all targets/features and
+warnings denied. The first lint run requested a boolean simplification in the new
+Postgres timeout recheck; the equivalent is_none_or expression was applied without
+disabling the lint. Coverage is now 113/164 signatures, with 51 pending. Mongo
+remains the installation default and only composed runtime backend until the
+remaining capabilities and end-to-end acceptance gates are complete.
+Formatting, ADR-0034 dependency graph, documentation, deployment profiles,
+compatibility matrix and the regenerated source inventory also passed. After the
+lint-only boolean simplification, the real deadline/alert/fence/retention case was
+rerun successfully (1/1); broad testing was not repeated for that equivalent edit.

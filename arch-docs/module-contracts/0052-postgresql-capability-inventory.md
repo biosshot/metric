@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 102/164. Delivery requires every row
+Implemented signatures: 113/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -113,17 +113,17 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ReplayStore::load_replay` | `crates/postgres/src/replays.rs` |
 | `ReplayStore::persist_replay_segment` | `crates/postgres/src/replays.rs` |
 | `ReplayStore::references_replay_blob` | `crates/postgres/src/replays.rs` |
-| `MonitorStore::claim_due_uptime` | Pending |
-| `MonitorStore::delete_monitor` | Pending |
-| `MonitorStore::list_monitor_runs` | Pending |
-| `MonitorStore::list_monitors` | Pending |
-| `MonitorStore::load_monitor` | Pending |
-| `MonitorStore::mark_monitor_alert_evaluated` | Pending |
-| `MonitorStore::materialize_due_missed` | Pending |
-| `MonitorStore::pending_monitor_alerts` | Pending |
-| `MonitorStore::persist_monitors` | Pending |
-| `MonitorStore::terminalize_due_timeouts` | Pending |
-| `MonitorStore::upsert_monitor` | Pending |
+| `MonitorStore::claim_due_uptime` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::delete_monitor` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::list_monitor_runs` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::list_monitors` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::load_monitor` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::mark_monitor_alert_evaluated` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::materialize_due_missed` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::pending_monitor_alerts` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::persist_monitors` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::terminalize_due_timeouts` | `crates/postgres/src/monitors.rs` |
+| `MonitorStore::upsert_monitor` | `crates/postgres/src/monitors.rs` |
 | `FeedbackStore::list_feedback` | `crates/postgres/src/feedback.rs` |
 | `FeedbackStore::load_feedback` | `crates/postgres/src/feedback.rs` |
 | `FeedbackStore::update_feedback_status` | `crates/postgres/src/feedback.rs` |
