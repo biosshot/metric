@@ -696,7 +696,7 @@ The complete generation-13 PostgreSQL Docker suite passed 95/95 with no ignored
 cases, including native TLS, migrations, fault injection and all earlier adapter
 regressions. Formatting, dependency graph and documentation validation passed.
 
-## Span statistic rebuild boundary decision pending
+## Span statistic rebuild boundary decision
 
 Before implementing the SignalStore family, source review found the same raw-hour
 boundary mismatch in `crates/mongo/src/signals.rs::rebuild_inner`. This is a
@@ -736,3 +736,69 @@ retention, avoiding the earlier fixed-date TTL fixture race. The new real Mongo
 Docker case passed; all 22 selected real Mongo cases then passed with no ignored
 cases. Mongo/Testkit strict Clippy passed. This is the sole new Mongo production
 change and PostgreSQL Signal implementation resumes with the approved semantics.
+
+## PostgreSQL Signals
+
+Schema generation 14 implements all eight SignalStore methods, retaining the
+existing LogWriter/SpanWriter services and public contracts. Raw Log/Span batches
+are admitted transactionally under ordered project guards and separate scoped
+Signal coordination. Native 1,000-row chunks preserve original admission order;
+bounded primary-key joins verify the existing duplicate identity rules. Retries
+retain the first payload and metadata. Missing/fenced projects reject writes,
+disabled-project storage behavior is retained, and ambiguous COMMIT replies are
+reported without internal retry.
+
+Raw JSON payloads use an adapter-owned versioned binary codec with optional Zstd
+and bounded 1 MiB decompression; original JSON byte formatting is preserved.
+Native binary UTF-8 projections retain accepted NUL metadata. Literal message
+substring search uses lowercase binary values with a native GIN trigram candidate
+index followed by exact binary substring verification. Values and filters are
+bound; schema identifiers and SQL fragments are application-owned constants.
+Malformed versions/UTF-8, inconsistent body sizes, dimension projections and
+foreign/scoped identities fail closed without exposing payloads in driver errors.
+
+Batch bounds are 10,000 records and 16 MiB decoded record bytes. Keyset pages retain
+the existing 200-record bound and additionally cap decoded records to 8 MiB, with
+a continuation cursor when the byte budget fills. Native window budgets run
+before payload transfer/decompression. Trace reads reuse the same budget per
+signal, select bounded per-project branches, and share one repeatable-read
+snapshot with at-most-100 finalized Error correlations. Truncated traces expose
+the existing partial/omitted flags; scoped keys and correlations remain binary.
+
+Hourly segment statistics group by a canonical typed dimension tuple, using a
+fixed SHA-256 index projection with full-value verification. Native aggregates
+retain count, failures, duration sum and the existing last-2,048 sample percentile
+contract. Statistics and source processing markers commit together; online
+rollups select at most 10,000 pending sources. A rollup savepoint preserves raw
+Span admission if derived-state updates fail, leaving markers available for
+retry/new admission or repair. The later Maintenance implementation must drain
+pending rollups before expiring their source Spans. Full-hour repair uses the
+approved bounds, rebuilds natively and commits statistics plus source markers
+under the same project coordination as concurrent admission. Failure rolls back
+the entire repair; repeated repair preserves all complete-hour data.
+
+Eight real Docker cases passed: scoped identities, original payloads and NUL
+metadata, literal search/filters/keysets; shared full-hour repair and injected
+repair/derived-state failure recovery; concurrent duplicate/new admission with
+repair; actual lost COMMIT replies and second-chunk rollback; large-payload byte
+budgets and separate archive retention; invalid values, fences and corrupted
+decoding; maximum batches, 2,048-sample cap and native scoped time/trace/GIN plans;
+and existing writers with real Event finalization and scoped Error correlation.
+The GIN plan fixture uses ordinary VACUUM/ANALYZE after its 10,000-row bulk load,
+retaining default fastupdate/autovacuum, planner and durability settings. This
+proves the steady-state native index shape, not the still-pending burst/soak gate.
+
+PostgreSQL strict Clippy, formatting, dependency graph, compatibility/deployment
+profile validators and source inventory passed. Source coverage is 101/164; 63
+signatures, runtime selection and the remaining integration/load acceptance gates
+remain pending. No normal dependency, configuration, installer or service
+composition change was introduced; Mongo remains the runtime/default backend.
+No Mongo production change beyond the separately committed authorized Span-range
+fix was made.
+
+The complete generation-14 PostgreSQL Docker suite passed 103/103 with no ignored
+cases, including native TLS/migrations, fault injection, previous capabilities
+and all eight Signal cases. The two disposable databases left by the initial
+test-fixture failures were inspected and removed by their exact generated names
+only after that test process ended. Successful test fixtures cleaned themselves;
+no installation data, volumes, images or credentials were removed.

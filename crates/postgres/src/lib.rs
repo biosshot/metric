@@ -16,6 +16,7 @@ mod releases;
 mod replays;
 mod sessions;
 mod signal_storage;
+mod signals;
 
 pub use api::PostgresInvestigationStore;
 pub use auth::PostgresAuthStore;
@@ -32,6 +33,7 @@ pub use projects::PostgresProjectStore;
 pub use releases::PostgresReleaseStore;
 pub use replays::{PostgresReplayStore, ReplayRetention};
 pub use sessions::{PostgresSessionStore, SessionRetention};
+pub use signals::{PostgresSignalStore, SignalRetention};
 
 #[cfg(test)]
 mod test_support;

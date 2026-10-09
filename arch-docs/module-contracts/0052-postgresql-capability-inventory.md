@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 93/164. Delivery requires every row
+Implemented signatures: 101/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -95,14 +95,14 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ReleaseStore::list_release_issues` | `crates/postgres/src/releases.rs` |
 | `ReleaseStore::load_release` | `crates/postgres/src/releases.rs` |
 | `ReleaseStore::resolve_projects` | `crates/postgres/src/releases.rs` |
-| `SignalStore::list_logs` | Pending |
-| `SignalStore::list_segments` | Pending |
-| `SignalStore::load_log` | Pending |
-| `SignalStore::performance` | Pending |
-| `SignalStore::persist_logs` | Pending |
-| `SignalStore::persist_spans` | Pending |
-| `SignalStore::rebuild_span_stats` | Pending |
-| `SignalStore::trace` | Pending |
+| `SignalStore::list_logs` | `crates/postgres/src/signals.rs` |
+| `SignalStore::list_segments` | `crates/postgres/src/signals.rs` |
+| `SignalStore::load_log` | `crates/postgres/src/signals.rs` |
+| `SignalStore::performance` | `crates/postgres/src/signals.rs` |
+| `SignalStore::persist_logs` | `crates/postgres/src/signals.rs` |
+| `SignalStore::persist_spans` | `crates/postgres/src/signals.rs` |
+| `SignalStore::rebuild_span_stats` | `crates/postgres/src/signals.rs` |
+| `SignalStore::trace` | `crates/postgres/src/signals.rs` |
 | `MetricStore::persist_metrics` | `crates/postgres/src/metrics.rs` |
 | `SessionStore::load_session` | `crates/postgres/src/sessions.rs` |
 | `SessionStore::persist_sessions` | `crates/postgres/src/sessions.rs` |
