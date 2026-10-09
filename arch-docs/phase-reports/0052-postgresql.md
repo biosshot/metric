@@ -1108,3 +1108,98 @@ following the explicit instruction to stop on newly discovered discrepancies.
 The terminal-history decoder exception does not cover this rule decoder change.
 Coverage remains 113/164 at PostgreSQL generation 16; the overall backend and
 end-to-end acceptance gates are still incomplete and Mongo remains the default.
+
+## Authorized Metrics aggregate rule decoder correction
+
+The user explicitly authorized the missing Metrics decoder arm. The Mongo
+production change is exactly one additional existing enum variant in decode_rule.
+It does not change the encoder, validator, schema generation or migrations. The
+shared Testkit fixture now round-trips, claims and completes valid aggregate rules
+for Errors, Logs, Spans and Metrics and checks project isolation and next evaluation
+state. Both Mongo notification Docker cases passed (2/2, 2.01 seconds), including
+the earlier terminal-history regression. The fixture uses current synthetic dates
+and drops its own generated database; installation data is not involved.
+The selected complete Mongo infrastructure run also passed 25 cases (real ignored
+adapter/migration cases, excluding performance_/reports_rps, one test thread),
+including both notification fixtures. The production diff remains one enum arm.
+
+## Transactional PostgreSQL notification control plane and outbox
+
+Schema generation 17 adds typed destinations, rules, delivery history, per-project
+notification lanes and a persisted identifier-only fairness cursor. The new
+PostgresNotificationStore explicitly implements all eighteen unchanged methods.
+Webhook, Telegram and SMTP destination metadata round-trip with opaque sealed
+ciphertext; issue, aggregate and monitor rules retain their existing DTOs. All four
+aggregate datasets are supported, and the PostgreSQL codec preserves the full u64
+threshold. The adapter uses existing canonical/versioned/bounded JSON compression
+for configuration and native bounded columns for scope, schedules, status, attempts
+and lease ownership. SQL values are bound; only closed application-owned clauses
+select table/query shapes. Driver diagnostics and secret values do not cross ports.
+
+Project guards precede sorted notification lane locks. Worker candidates contain
+only bounded native identity metadata; eligibility and project fences are rechecked
+after locking. Delivery claims increment attempts and publish one durable lease;
+the persisted cursor provides project/destination fairness across worker instances.
+Concurrent claimers do not claim the same delivery or aggregate lease. Missing or
+corrupt destinations leave the acknowledged attempt lease, allowing other work to
+progress. Aggregate evaluation stores lease ownership separately from its original
+scheduled slot; stale completion cannot enqueue deliveries or overwrite current
+state. Monitor and aggregate state updates commit with their delivery outbox in
+one transaction. Existing dispatcher and both evaluators remain unchanged.
+
+Transition consumption commits with all delivery inserts. Stable delivery identity
+permits retry after an unknown COMMIT even when the transition has already been
+consumed; identity conflicts reject the whole operation. Duplicate enqueue and late
+retry/terminal calls preserve the first payload and completed outcome. Delivered/dead
+history uses the persisted terminal date for the non-optional next-attempt DTO field,
+matching the separately authorized shared Mongo/Postgres regression. Scoped reads
+and mutations prevent foreign rules/destinations from exposing another project's
+ciphertext; deleted targets can still be retained as historical outbox identities.
+
+Writes cap at 10000 deliveries and 16 MiB of decoded payload plus metadata, with
+bulk SQL chunks of at most 1000 rows. Native cumulative response budgets bound
+configuration, endpoint/ciphertext and payload before transfer/decompression.
+The budget uses the greater of declared decoded and actual encoded configuration
+size and reserves fixed metadata for every selected row, including suppressed
+body rows; a corrupt stored size cannot defeat its transfer bound.
+List limits stay within the existing port bounds; an over-budget non-paged response
+fails explicitly rather than silently omitting rows. Native partial due indexes and
+scoped history/control-plane indexes support selection; expiry indexes prepare for
+the still-pending MaintenanceStore implementation.
+
+Twelve real Docker cases passed: the two shared Mongo/Postgres fixtures; scoped CRUD,
+all destination/rule kinds and corruption rejection; transition-consumption and
+second-chunk SQL faults; concurrent fairness/lease claims and project fences; stale
+aggregate completion; rule-state/outbox rollback for both evaluator kinds; actual
+lost COMMIT responses for expansion, delivery claim and aggregate completion;
+10000-row expansion and response/batch bounds; native due/history/destination index
+plans without optimizer forcing; and the existing dispatcher, all-dataset aggregate
+evaluator and monitor evaluator using real PostgreSQL stores. Delivery adapters in
+tests are in-memory receipts; no external notification was sent.
+
+The first monitor evaluator fixture incorrectly expected an issue-style payload
+type. It was corrected to assert the existing cron_monitor/firing/error fields;
+application and adapter behavior were unchanged. The failed own fixture database
+was inspected, confirmed connection-free and dropped by its exact generated name
+after the failed test process ended. Successful fixtures cleaned themselves.
+
+The complete generation-17 PostgreSQL suite passed 132/132 with no ignored tests
+in 142.28 seconds, including local verified TLS, weak-transport acknowledgement,
+operator environment handling, schema ownership/recovery and all earlier families.
+Source inventory now reports 131/164 signatures, with 33 pending. Archive,
+Maintenance, ProjectDeletion, DebugFile and Artifact stores and full runtime/E2E/
+load acceptance remain pending. Mongo is still the default and only composed
+runtime backend; no incomplete PostgreSQL mode has been enabled.
+
+After tightening the native notification transfer budget to account for corrupt
+declared sizes and all selected metadata, the complete notification family was
+rerun successfully (12/12 real Docker cases, 16.65 seconds). The large-boundary
+case also inspects the native returned byte sum for 1000 corrupt maximum-sized
+configurations with misleading size metadata; the 8 MiB budget still holds and
+the public read rejects the malformed configuration.
+Strict Clippy passed for Postgres, Mongo and Testkit with all targets/features and
+warnings denied. Formatting, ADR-0034 dependency graph, documentation, deployment
+profiles, compatibility and the regenerated source inventory passed. Both
+PostgreSQL Docker catalogs have no remaining own fixture databases, and Mongo has
+no remaining notification or archive-probe fixture databases. No installation
+data, credential, image or volume was removed.

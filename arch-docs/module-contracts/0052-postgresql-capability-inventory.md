@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 113/164. Delivery requires every row
+Implemented signatures: 131/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -128,24 +128,24 @@ and its conformance evidence, including signatures added after this snapshot.
 | `FeedbackStore::load_feedback` | `crates/postgres/src/feedback.rs` |
 | `FeedbackStore::update_feedback_status` | `crates/postgres/src/feedback.rs` |
 | `FeedbackSink::persist_feedback` | `crates/postgres/src/feedback.rs` |
-| `NotificationStore::claim_due` | Pending |
-| `NotificationStore::claim_due_aggregate_rule` | Pending |
-| `NotificationStore::complete_aggregate_rule` | Pending |
-| `NotificationStore::complete_monitor_alert` | Pending |
-| `NotificationStore::delete_destination` | Pending |
-| `NotificationStore::delete_rule` | Pending |
-| `NotificationStore::enqueue_delivery` | Pending |
-| `NotificationStore::expand_transition` | Pending |
-| `NotificationStore::list_delivery_history` | Pending |
-| `NotificationStore::list_destinations` | Pending |
-| `NotificationStore::list_rules` | Pending |
-| `NotificationStore::mark_dead` | Pending |
-| `NotificationStore::mark_delivered` | Pending |
-| `NotificationStore::matching_rules` | Pending |
-| `NotificationStore::pending_transitions` | Pending |
-| `NotificationStore::schedule_retry` | Pending |
-| `NotificationStore::upsert_destination` | Pending |
-| `NotificationStore::upsert_rule` | Pending |
+| `NotificationStore::claim_due` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::claim_due_aggregate_rule` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::complete_aggregate_rule` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::complete_monitor_alert` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::delete_destination` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::delete_rule` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::enqueue_delivery` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::expand_transition` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::list_delivery_history` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::list_destinations` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::list_rules` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::mark_dead` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::mark_delivered` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::matching_rules` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::pending_transitions` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::schedule_retry` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::upsert_destination` | `crates/postgres/src/notifications.rs` |
+| `NotificationStore::upsert_rule` | `crates/postgres/src/notifications.rs` |
 | `ArchiveStore::claim` | Pending |
 | `ArchiveStore::commit_sources` | Pending |
 | `ArchiveStore::complete` | Pending |
