@@ -2,6 +2,7 @@
 
 pub mod auth_conformance;
 pub mod incident_capsule;
+pub mod monitor_conformance;
 pub mod session_conformance;
 pub mod signal_conformance;
 

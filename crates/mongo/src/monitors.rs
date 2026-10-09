@@ -161,6 +161,12 @@ impl MongoMonitorStore {
                     if existing.status == MonitorRunStatus::InProgress
                         && incoming.status.is_terminal()
                     {
+                        if incoming
+                            .finished_at
+                            .is_some_and(|finish| finish < existing.started_at)
+                        {
+                            return Err(SignalStoreError::InvalidData);
+                        }
                         run_models.push(
                             UpdateOneModel::builder()
                                 .namespace(run_namespace.clone())

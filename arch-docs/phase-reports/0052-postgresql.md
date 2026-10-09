@@ -914,3 +914,18 @@ Monitor implementation is stopped for user authorization of this new, separate
 minimal Mongo exception. Earlier authorization concerned Span-hour repair and
 does not automatically cover another production change. Explore remains committed
 and verified at generation 15; PostgreSQL coverage is still 102/164 signatures.
+
+## Authorized monitor temporal merge correction
+
+The user authorized the preceding Mongo exception on 2026-10-09. Mongo now rejects
+a terminal finish earlier than the original stored start in its existing
+in_progress-to-terminal branch. The production change is one six-line guard;
+schema, migration, timeout scheduler and stored timestamp semantics are unchanged.
+
+The shared generated-date regression checks rejected-update immutability, readable
+history, a subsequent valid completion, duplicate terminal immutability, rejection
+of the invalid transition inside one batch, and equality at the stored-start edge.
+It passed on the real Docker Mongo adapter. The selected complete Mongo regression
+run passed 23 cases (ignored real-adapter cases, excluding performance_/reports_rps)
+with one test thread. These are selected infrastructure checks, not a claim that
+the entire workspace or performance suite was run again.

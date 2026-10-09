@@ -26,6 +26,10 @@ deployment topology and delete/insert mechanics unchanged for this correction.
 The user also authorized fixing only the Replay integration fixture's stale
 timestamps: derive its synthetic segments from one current timestamp without
 changing the Mongo Replay adapter, TTL policy or assertions.
+On 2026-10-09 the user authorized the monitor-run temporal merge exception:
+preserve the existing start and reject a terminal finish earlier than that start.
+Keep the Mongo change to one guard in its existing transition branch and add one
+shared real-adapter regression; no Mongo schema or migration change is authorized.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 
