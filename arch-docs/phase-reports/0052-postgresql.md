@@ -1203,3 +1203,58 @@ profiles, compatibility and the regenerated source inventory passed. Both
 PostgreSQL Docker catalogs have no remaining own fixture databases, and Mongo has
 no remaining notification or archive-probe fixture databases. No installation
 data, credential, image or volume was removed.
+
+## Metrics archive validators: awaiting a separate Mongo exception
+
+Review of the next ArchiveStore capability found two existing schema mismatches
+on the supported Metrics path. They are independent of the authorized aggregate
+notification-rule decoder correction, which is now committed and verified.
+
+First, ArchiveKind::Metric is selected and serialized by MongoArchiveStore, but
+archive_manifest_validator allows only event/log/span/session in kind. A valid
+due metric bucket can be persisted with archive retention enabled, yet its public
+ArchiveStore::claim returns Unavailable: the server rejects the writing manifest
+with Mongo validation code 121. No manifest is committed and the source retains
+its archive hold h, without an expiry x or segment z.
+
+Second, after adding only the missing manifest kind to the validator in an isolated
+throwaway database, the same public claim and complete succeed. Public
+commit_sources then returns Unavailable. The generic archive commit writes a binary
+segment ID to z, expiry date to x and removes h. metric_validator currently requires
+z to be a date, so the server rejects that update with validation code 121 as well.
+The complete manifest remains uncommitted and the original metric still retains h;
+the probe did not delete a source or lose its measurements.
+
+Two isolated real Docker probes passed expected-defect assertions. The first
+(1/1, 1.07 seconds) verified public rejection, native code 121, unchanged held
+source, absence of a manifest and acceptance of an otherwise identical manifest
+when only its kind was changed to session. The extended probe (1/1, 0.88 seconds)
+also verified public claim/complete after the temporary manifest-validator
+adjustment, public source-commit rejection, native code 121 for its exact update
+and preservation of the source. Each used current synthetic dates and its own
+metric_pg_archive_metrics_probe_<pid>_<nonce> database. The collMod diagnostic
+affected only that generated database, which was dropped before assertions were
+evaluated. The temporary Rust target was removed after the process ended; the
+Docker catalog confirms no probe databases remain. Mongo production archive,
+metric, validator, index and migration code was not changed.
+
+A narrowly scoped repair needs more than another decoder arm: allow metric
+manifests and explicitly distinguish the legacy ordinary-retention z date from
+the archive-segment z binary plus x expiry. Keep the legacy z-date TTL index and
+add a separate x-date expiry index for archived metric hot copies. Source inspection
+shows the current four metric indexes contain no x expiry index; merely admitting
+binary z would leave those hot copies without automatic expiry. This retention
+consequence is a source finding, not a claimed passing end-to-end deletion test.
+Use a successor registered Mongo schema migration to install corrected validators
+and the new index on existing databases; do not rewrite installed migration steps
+or user metric payloads. Add real fresh/upgraded-database archive publication,
+commit retry, integrity, expiry/hold and preservation regressions before declaring
+the path fixed. PostgreSQL should use its existing separate native archive_segment,
+archive_due and expire_at columns and unchanged archive service/ports.
+
+Implementation of the next capability is stopped for the user's separate decision,
+following their explicit requirement to stop on new discrepancies. The earlier
+authorization covered the notification Metrics decoder only and does not authorize
+these Mongo validator, index or migration changes. Completed notification work is
+committed on feat/postgres; PostgreSQL remains generation 17 with 131/164 methods,
+33 pending, and no exposed incomplete runtime backend. Mongo remains the default.
