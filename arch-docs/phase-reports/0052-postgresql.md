@@ -720,3 +720,19 @@ matching complete-hour transactional PostgreSQL repair, or correct PostgreSQL on
 and retain this known Mongo boundary behavior. No broader Mongo write-mechanics
 change is proposed. Feedback completion and verification remain independently
 reviewable on `feat/postgres`.
+
+On 2026-10-09 the user authorized this separate confirmed Span bug fix. Mongo's
+`signals.rs::rebuild_inner` now rounds both bounds to the same intersected full
+hours and keeps an exactly aligned exclusive upper edge. Nanosecond conversion
+is checked before deleting statistics. Source selection, delete/upsert mechanics,
+schemas, migrations and ingest behavior otherwise remain unchanged.
+
+A shared Testkit fixture runs four ranges twice through the real Rust SignalStore:
+half-hour edges, exact upper edge, an empty raw source window and a whole-hour
+interval. It checks complete counts, failures, averages, percentiles, representative
+trace and dimensions after each repair; invalid/overflowing ranges leave existing
+statistics unchanged. Synthetic received/start dates are generated inside current
+retention, avoiding the earlier fixed-date TTL fixture race. The new real Mongo
+Docker case passed; all 22 selected real Mongo cases then passed with no ignored
+cases. Mongo/Testkit strict Clippy passed. This is the sole new Mongo production
+change and PostgreSQL Signal implementation resumes with the approved semantics.
