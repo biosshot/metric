@@ -1361,3 +1361,27 @@ old object. The exact revision/claim guards and retry identity must be designed
 before coding so interruption and concurrent writes cannot reopen the same gap.
 Archive defaults remain disabled, PostgreSQL remains generation 17 with 131/164
 methods and no exposed incomplete runtime backend, and Mongo remains the default.
+
+## User decision: accept the late-Metrics archive limitation
+
+After reviewing the real loss reproduction and proposed revision/re-archival
+protocol, the user explicitly chose to document the issue and accept this current
+loss window in exchange for simpler code. This supersedes the preceding stop and
+recommendation: the late-Metrics discrepancy is no longer an implementation
+blocker. PostgreSQL should retain the existing snapshot/expiry semantics, with
+the limitation reported honestly instead of claiming loss-free late updates.
+
+No bucket revision, automatic re-archival, replacement-segment versioning or extra
+waiting protocol is added. Existing archive publication verification and retention
+holds on failure remain required. The acceptance is specific to late updates of
+an old Metrics bucket between snapshot creation and hot-copy removal; it does not
+authorize other data-loss windows or unrelated Mongo changes. Its frequency and
+volume in real workloads remain unmeasured, so the synthetic reproduction is not
+an estimate of production loss. Archive and Metrics archive defaults stay disabled.
+
+User-facing known limits now describe the enabling flags, possible late-update
+loss and asynchronous deletion even with a zero hot-copy delay. The configuration
+table now correctly describes hot_copy_delay as an expiry delay after publication,
+rather than a wait before archive work. ADR-0052 and the implementation plan record
+the accepted scope and deferred mechanism. This decision changes documentation
+only; PostgreSQL remains generation 17 with 131/164 methods and 33 pending.

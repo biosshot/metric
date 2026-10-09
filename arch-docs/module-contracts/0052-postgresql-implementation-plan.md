@@ -44,6 +44,13 @@ these schema-only changes through a new 21-to-22 Mongo migration; preserve insta
 migration steps and metric payloads. Cover fresh/upgraded lifecycle, retry/integrity,
 native TTL deletion and preserved holds. This exception does not authorize other
 Mongo behavior changes or enabling archive defaults.
+On 2026-10-09 the user accepted the separately confirmed late-Metrics archive
+window to keep the code simple: updates accepted after the archive snapshot may
+be lost at hot-copy expiry. Keep this as a documented known limitation in Mongo
+and PostgreSQL; it is no longer a blocking parity discrepancy. Defer bucket
+revisions, automatic re-archival, replacement-segment versioning and additional
+waiting protocols. This acceptance covers only that measured Metrics scenario,
+not unrelated loss, failed-publication expiry or other durability requirements.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 
@@ -210,6 +217,10 @@ Validate the following against real Docker databases, not only mocks:
 | Deletion | Project fencing, concurrent ingest, cancellation/retry, all datasets and blob namespaces, bounded batches |
 | Regression | Original Mongo Docker path, original TOML profiles, schema/migration behavior and default installer behavior |
 | Resource/load | Sustained and burst writes, duplicates, concurrent Explore, cleanup under ingest, connection count, memory, p95/p99, DB/index size and vacuum impact |
+
+For Archive/Blob evidence, report the accepted late-Metrics snapshot/expiry
+limitation explicitly; it does not fail the parity gate or authorize implementing
+the deferred revision/re-archival design. Preserve all other archive guarantees.
 
 Run a finite reproducible soak (initial target: 30 minutes) on the measured test
 hardware and workload. Capture actual limits before claiming parity with Mongo.

@@ -165,9 +165,14 @@ Cold archive is disabled by default.
 | `archive.target_uncompressed_bytes` | `64 MiB` | Target batch size before compression. |
 | `archive.write_chunk_bytes` | `256 KiB` | Streaming write chunk size. |
 | `archive.poll_interval` | `30s` | How often Metric looks for archive work. |
-| `archive.hot_copy_delay` | `0s` | Time data remains only in hot storage before archive work starts. |
+| `archive.hot_copy_delay` | `0s` | Delay added to the archive pass time when assigning hot-copy expiry after publication. Physical deletion is asynchronous. |
 | `archive.orphan_grace` | `24h` | Age required before an unused archive object can be deleted. |
 | `archive.cleanup_max_pages` | `4` | Maximum cleanup pages handled in one run. |
+
+Metrics archival also requires `retention.metric_archive = true`. Accepted late
+updates to an archived metric bucket may be lost when its hot copy is removed;
+see [Known limits](known-limits.md#backup-and-archive). A zero hot-copy delay does
+not make publication and deletion atomic or eliminate that known window.
 
 ## Native crashes and symbolication
 

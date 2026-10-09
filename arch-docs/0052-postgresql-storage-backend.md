@@ -335,6 +335,17 @@ until evidence justifies it and uniqueness semantics have a reviewed design.
 Blob publication, reference commits and orphan cleanup retain their crash windows
 and recovery rules; do not pretend SQL transactions also transact blob files.
 
+On 2026-10-09 the user explicitly accepted the confirmed late-Metrics archive
+window as a current simplicity tradeoff. A metric bucket can accept updates after
+its published snapshot and lose those changes when the hot copy expires. Document
+this limitation in both backend acceptance evidence and user-facing known limits;
+do not add bucket revisions, automatic re-archival or versioned replacement
+segments in this implementation. Its production frequency/volume is unmeasured.
+This decision removes that specific discrepancy as a PostgreSQL implementation
+blocker. It does not relax verify-before-source-expiry, archive holds on failed
+publication, tenant isolation or other durability requirements. Archive defaults
+remain disabled, and no additional waiting protocol is introduced.
+
 ## Migration interfaces from the first PostgreSQL commit
 
 Use SQLx's embedded SQL migrations for DDL and its immutable applied-version/checksum

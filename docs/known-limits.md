@@ -39,6 +39,15 @@ There are no reverse migrations or mixed-version rolling upgrades. Read
   a point-in-time snapshot.
 - MongoDB, file storage and installation secrets must be retained together.
 - Cold archives cannot be searched or restored through Metric.
+- With both `archive.enabled` and `retention.metric_archive` enabled, late
+  measurements for an old metric bucket can be accepted after its archive snapshot
+  has been created. These changes are not automatically re-archived and may be lost
+  when the hot copy is removed. Setting `archive.hot_copy_delay = "0s"` does not
+  eliminate the window: publication and source commitment are separate operations,
+  and MongoDB TTL deletion runs asynchronously. This is an accepted current
+  limitation to keep the implementation simple. Its frequency and volume under
+  production workloads have not been measured. Metrics archival remains disabled
+  in all supplied configurations.
 
 ## Features
 
