@@ -203,6 +203,99 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn catalog_counter_counts_above_page_size_and_preserves_reservations() {
+    let database = test_database().await.unwrap();
+    let result = exercise_catalog_counter(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn exercise_catalog_counter(database: &Database) -> Result<(), Box<dyn Error>> {
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
+    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let environments = database.collection::<Document>("environments");
+    for seed in 1_u8..=5 {
+        environments
+            .insert_one(doc! {
+                "_id": binary([seed; 16]), "project_id": 7_i32,
+                "name": format!("synthetic-{seed}"), "first_seen": DateTime::from_millis(now),
+                "last_seen": DateTime::from_millis(now), "hidden": false, "source": "event",
+            })
+            .await?;
+    }
+    let projects = database.collection::<Document>("projects");
+    let maintenance = MongoMaintenanceStore::from_database(database.clone());
+    // Exact count, including repair of an already truncated value. A reservation
+    // may precede materialization, so a larger counter must never be lowered.
+    for (initial, expected) in [(5_i32, 5_i32), (1, 5), (0, 5), (6, 6)] {
+        let update = if initial == 0 {
+            doc! { "$unset": { "catalog_usage.ec": "" } }
+        } else {
+            doc! { "$set": { "catalog_usage.ec": initial } }
+        };
+        projects.update_one(doc! { "_id": 7_i32 }, update).await?;
+        run_complete_pass(
+            &maintenance,
+            request(MaintenanceTask::CounterReconciliation, now, 1),
+        )
+        .await?;
+        let project = projects.find_one(doc! { "_id": 7_i32 }).await?.unwrap();
+        assert_eq!(
+            project.get_document("catalog_usage")?.get_i32("ec")?,
+            expected
+        );
+        assert_eq!(
+            environments
+                .count_documents(doc! { "project_id": 7_i32 })
+                .await?,
+            5
+        );
+    }
+    // Concurrent foreground reservations must survive every maintenance pass.
+    let (reserved, reconciled) = tokio::join!(
+        async {
+            for _ in 0..20 {
+                projects
+                    .update_one(
+                        doc! { "_id": 7_i32 },
+                        doc! { "$inc": { "catalog_usage.ec": 1_i32 } },
+                    )
+                    .await?;
+            }
+            Ok::<_, Box<dyn Error>>(())
+        },
+        async {
+            for _ in 0..20 {
+                run_complete_pass(
+                    &maintenance,
+                    request(MaintenanceTask::CounterReconciliation, now, 1),
+                )
+                .await?;
+            }
+            Ok::<_, Box<dyn Error>>(())
+        }
+    );
+    reserved?;
+    reconciled?;
+    let project = projects.find_one(doc! { "_id": 7_i32 }).await?.unwrap();
+    assert_eq!(project.get_document("catalog_usage")?.get_i32("ec")?, 26);
+    let explain = database.run_command(doc! {
+        "explain": {
+            "aggregate": "environments", "pipeline": [
+                { "$match": { "project_id": 7_i32 } }, { "$group": { "_id": 1_i32, "n": { "$sum": 1_i32 } } }
+            ], "cursor": {}, "hint": "environment_project_timeline", "maxTimeMS": 10_000_i32,
+        }, "verbosity": "executionStats",
+    }).await?;
+    assert!(format!("{explain:?}").contains("environment_project_timeline"));
+    Ok(())
+}
+
 async fn run_complete_pass(
     store: &MongoMaintenanceStore,
     mut request: MaintenanceRequest,

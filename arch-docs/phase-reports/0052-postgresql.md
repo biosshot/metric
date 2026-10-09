@@ -1594,3 +1594,37 @@ Clippy, formatting, dependency graph, documentation, compatibility and deploymen
 profile checks passed. Ordinary PostgreSQL tests passed 6/6 and explicitly skipped
 the 145 real cases already executed separately. Only this diagnostic report
 remains as an additional documentation change.
+
+## 2026-10-09 — Approved minimal Mongo catalog-counter repair
+
+The user authorized this specific Mongo exception after reviewing its trigger,
+quota consequences and ordinary configuration. Only Mongo maintenance production
+code and its existing integration-test target changed; no Mongo schema, migration,
+finalizer, deployment configuration or shared port was changed.
+
+Environment reconciliation now obtains the exact project-scoped cardinality using
+count_documents with the existing environment_project_timeline index hint and a
+10-second native maxTimeMS budget. batch_size still bounds the outer project page;
+an unusually large complete catalog aggregate is time-bounded rather than treated
+as a bounded row prefix. Checked conversion rejects counter overflow. Atomic $max
+repairs underestimated counts while retaining foreground quota reservations that
+can precede materialization. Reconciliation intentionally does not lower an
+overestimated reservation count or claim recovery of failed reservations; this
+avoids overwriting concurrent admission increments.
+
+The original maintenance regression and new above-page-size/reservation test
+passed 2/2 against the real isolated Mongo Docker fixture in 2.12 seconds. Evidence
+covers five environments with batch_size=1, correct and previously truncated
+counters, a missing counter, a reserved sixth slot before materialization, twenty
+foreground increments concurrent with twenty complete reconciliation passes, and
+an indexed native aggregate EXPLAIN. All five environment records remain present.
+Each generated fixture database was dropped. The initial test's zero-valued
+counter was correctly rejected by the existing validator; the fixture was fixed
+to represent zero usage as the absent field without changing the adapter/schema.
+Strict Mongo maintenance-target Clippy with --locked -j1 -- -D warnings passed.
+
+Commands used the existing task-owned METRIC_TEST_MONGODB_URI:
+`cargo test -p metric-mongo --test maintenance_store --locked -j1 -- --ignored --test-threads=1`
+and `cargo clippy -p metric-mongo --test maintenance_store --locked -j1 -- -D warnings`.
+PostgreSQL's exact quota reconciliation already passed its Docker boundary case;
+the remaining PostgreSQL binary/lifecycle stores and application gates resume next.

@@ -438,30 +438,21 @@ impl MongoMaintenanceStore {
                 .ok()
                 .and_then(|usage| usage.get_i32("ec").ok())
                 .unwrap_or(0);
-            let mut stored = environments
-                .find(doc! { "project_id": project_id })
-                .projection(doc! { "_id": 1 })
+            // A row page is not the catalog cardinality. Bound the indexed
+            // aggregate by time instead, and preserve concurrent reservations.
+            let actual = environments
+                .count_documents(doc! { "project_id": project_id })
                 .hint(Hint::Name("environment_project_timeline".to_owned()))
-                .limit(limit(request.batch_size)?)
+                .max_time(Duration::from_secs(10))
                 .await
                 .map_err(|_| MaintenanceStoreError::Unavailable)?;
-            let mut actual = 0_i32;
-            while stored
-                .try_next()
-                .await
-                .map_err(|_| MaintenanceStoreError::Unavailable)?
-                .is_some()
-            {
-                actual = actual.saturating_add(1);
-            }
-            if actual != current {
-                let update = if actual == 0 {
-                    doc! { "$unset": { "catalog_usage.ec": "" } }
-                } else {
-                    doc! { "$set": { "catalog_usage.ec": actual } }
-                };
+            let actual = i32::try_from(actual).map_err(|_| MaintenanceStoreError::InvalidData)?;
+            if actual > current {
                 let result = projects
-                    .update_one(doc! { "_id": project_id }, update)
+                    .update_one(
+                        doc! { "_id": project_id },
+                        doc! { "$max": { "catalog_usage.ec": actual } },
+                    )
                     .await
                     .map_err(|_| MaintenanceStoreError::Unavailable)?;
                 changed += usize::try_from(result.modified_count)
