@@ -1258,3 +1258,54 @@ authorization covered the notification Metrics decoder only and does not authori
 these Mongo validator, index or migration changes. Completed notification work is
 committed on feat/postgres; PostgreSQL remains generation 17 with 131/164 methods,
 33 pending, and no exposed incomplete runtime backend. Mongo remains the default.
+
+## Authorized minimal Metrics archive schema repair
+
+After reviewing the two validator failures and the existing configuration gates,
+the user authorized this separate, narrowly scoped Mongo exception. Metrics
+archival remains optional: both archive.enabled and retention.metric_archive must
+be enabled. All supplied profiles retain their disabled archive defaults.
+
+The manifest validator now admits metric. The Metrics validator preserves the
+ordinary z-date retention representation and also admits a committed archive
+source with a 16-byte binary z segment, date x expiry and no h archive hold.
+Malformed segment lengths, missing/invalid expiry and simultaneous archive holds
+are rejected by Mongo itself. The ordinary z TTL index is retained; a separate
+partial x TTL index applies only to binary-z archive hot copies. Ordinary metrics
+with an incidental expired x are not captured by that new index.
+
+A registered schema-only generation 21 to 22 migration installs those two
+validators and the new index. Existing generation 19 to 20 and 20 to 21 production
+steps are unchanged. Preflight accepts only the known legacy/current validator
+shapes and a compatible named index, blocking unknown validators or conflicting
+indexes before modifying the schema. DDL steps can be replayed after interruption;
+the migration does not read, transform or replace user metric payloads. Fresh
+databases bootstrap generation 22, and current operational/update documentation
+now describes that generation and the complete transition chain.
+
+A new storage-independent Testkit fixture exercises the public MetricStore and
+ArchiveStore lifecycle on fresh and upgraded Mongo databases: persistence, claim
+retry, refusal to commit before completion, idempotent completion, checksum/source
+identity conflicts, complete-manifest resume, idempotent source commit and blob
+reference preservation. The upgrade test also preserves ordinary/held metric
+documents and unrelated DSN data, retains all previous metric index names and
+checks startup after partially applied DDL. The real TTL-monitor case expires
+both an ordinary metric and an archived hot copy, preserving an archive hold and
+an ordinary metric with future z expiry; it does not change global Mongo settings.
+The existing server archive E2E now includes Metrics alongside events, logs, spans
+and sessions, checking publication to the real local BlobStore and Parquet bytes.
+
+The selected Mongo Docker regression suite passed 28/28 cases, including all
+three new cases and registered migrations from supported older generations.
+The focused fresh Metrics lifecycle/validator/TTL run also passed separately
+(1/1, 22.51 seconds); the complete-suite TTL rerun passed in 44.81 seconds.
+The real server archive E2E passed (1/1, 1.95 seconds), publishing all five telemetry
+families through ArchiveService and LocalBlobStore. Mongo's catalog contains no
+remaining databases owned by these Metrics archive/migration or server E2E cases.
+The ordinary Mongo library suite passed 32/32 cases; its five Docker-only cases
+were exercised by the selected infrastructure run above.
+Strict Clippy passed for Mongo, Testkit and Server with all targets/features and
+warnings denied. Formatting, ADR-0034 dependency graph, documentation, deployment profiles, compatibility
+and the regenerated PostgreSQL source inventory passed.
+PostgreSQL remains generation 17 with 131/164 methods and 33 pending. This repair
+does not expose an incomplete runtime backend or change the default Mongo choice.

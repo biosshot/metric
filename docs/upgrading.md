@@ -11,9 +11,9 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
-The current Metric binary requires MongoDB schema generation **21 exactly** before
-starting application workers. It automatically migrates complete generation-19 and generation-20
-databases to generation 21 before ordinary startup.
+The current Metric binary requires MongoDB schema generation **22 exactly** before
+starting application workers. It automatically migrates complete generation-19, generation-20 and generation-21
+databases to generation 22 before ordinary startup.
 
 ::: danger Protect existing data
 You must never drop or recreate a data-bearing MongoDB database to make another
@@ -54,9 +54,9 @@ High as part of an ordinary version update.
 
 | Database state | What Metric does | What you should do |
 | --- | --- | --- |
-| Empty | Creates schema generation 21 | Wait for `/ready` |
-| Complete generation 21 | Starts normally | No schema action |
-| Complete generation 19 or 20 | Migrates automatically to generation 21, then starts | Keep the browser or logs open and wait for `/ready` |
+| Empty | Creates schema generation 22 | Wait for `/ready` |
+| Complete generation 22 | Starts normally | No schema action |
+| Complete generation 19, 20 or 21 | Migrates automatically to generation 22, then starts | Keep the browser or logs open and wait for `/ready` |
 | Older generation with a complete transition chain in the new image | Migrates automatically, then starts | Keep the browser or logs open and wait for `/ready` |
 | Older generation without a complete transition chain | Exits with a stable error | Stop and keep the data unchanged |
 | Newer or different generation | Refuses to start | Use the matching Metric version |
@@ -76,7 +76,10 @@ nonzero exit instead of guessing or deleting data.
 Generation 19 to 20 adds the default Telegram Bot API configuration in bounded,
 resumable batches. Generation 20 to 21 creates the `dsn_maps` collection and index
 for [existing Sentry DSNs](migrate-from-sentry.md), without rewriting existing
-project, key or event documents. A generation older than 19 still fails closed because the
+project, key or event documents. Generation 21 to 22 repairs the Metrics archive
+validators and adds the archive hot-copy expiry index. It preserves existing metric
+payloads and the ordinary metric TTL index; the transition contains schema changes
+only. Archive defaults remain disabled. A generation older than 19 still fails closed because the
 required earlier link is absent. An empty-database setup is not a migration.
 
 Migrations are forward-only. Changing back to an older image is safe only when that

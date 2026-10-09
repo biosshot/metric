@@ -11,6 +11,7 @@ use metric_domain::{
     AcceptedEvent, EventId, EventKey, ProjectId, ScrubbedEventPayload, SecretBytes, Timestamp,
     blob::BlobKey,
     finalization::{EnvironmentId, ReleaseId},
+    metrics::{MetricAggregate, MetricDelta, MetricDeltaBatch, MetricKind, MetricSeries},
     sessions::{SessionId, SessionState, SessionUpdate},
     signals::{
         LogId, LogRecord, LogSeverity, SignalBody, SpanId, SpanOperationClass, SpanRecord,
@@ -21,7 +22,9 @@ use metric_mongo::{
     EventCodecConfig, MongoEventStore, MongoProjectStore, MongoSignalStore, SessionRetention,
     SignalRetention,
 };
-use metric_ports::{BlobStore, Clock, EventStore, EventWriteStatus, SessionStore, SignalStore};
+use metric_ports::{
+    BlobStore, Clock, EventStore, EventWriteStatus, MetricStore, SessionStore, SignalStore,
+};
 use mongodb::{
     Client, Database,
     bson::{Binary, Document, doc, spec::BinarySubtype},
@@ -163,6 +166,31 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
             body: SignalBody::new(br#"{"transaction":"GET /archive"}"#.as_slice()),
         }])
         .await?;
+    let delta = MetricDelta {
+        series: MetricSeries {
+            project_id: ProjectId::new(7)?,
+            name: "archive_counter".into(),
+            kind: MetricKind::Counter,
+            unit: "none".into(),
+            tags: Default::default(),
+        },
+        bucket_start: Timestamp::from_unix_millis(now.unix_millis() - 2 * 86_400_000)?,
+        bucket_width_seconds: 60,
+        received_at: now,
+        trace_id: None,
+        aggregate: MetricAggregate::from_measurement(MetricKind::Counter, 2.0),
+    };
+    let metric_bucket_id = delta.bucket_id();
+    let mut metric_batch = MetricDeltaBatch::default();
+    metric_batch.push(delta);
+    control
+        .metric_store(metric_mongo::MetricRetention {
+            days: 1,
+            max_series_per_project: 16,
+            archive: true,
+        })
+        .persist_metrics(metric_batch)
+        .await?;
     let blobs = Arc::new(
         LocalBlobStore::new(
             root,
@@ -190,8 +218,8 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
         },
     )?;
     let report = service.run_once().await?;
-    assert_eq!(report.claimed_records, 4);
-    assert_eq!(report.archived_records, 4);
+    assert_eq!(report.claimed_records, 5);
+    assert_eq!(report.archived_records, 5);
     assert!(report.stored_bytes > 0);
 
     let mut manifests = database
@@ -217,6 +245,7 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
         std::collections::BTreeSet::from([
             "event".to_owned(),
             "log".to_owned(),
+            "metric".to_owned(),
             "session".to_owned(),
             "span".to_owned(),
         ])
@@ -237,6 +266,7 @@ async fn exercise(database: &Database, root: &std::path::Path) -> Result<(), Box
         ("logs", log_id.as_bytes()),
         ("spans", span_record_id.as_bytes()),
         ("sessions", session_id.as_bytes()),
+        ("metric_buckets", metric_bucket_id),
     ] {
         let hot = database
             .collection::<Document>(collection)

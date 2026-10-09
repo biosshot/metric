@@ -37,6 +37,13 @@ Limit Mongo production changes to this decoder fallback; no schema/data migratio
 The user then authorized the missing Metrics aggregate-rule decoder arm. Add only
 that existing dataset variant to Mongo and cover all four datasets in a shared
 rule round-trip/claim/completion fixture; keep schemas and migrations unchanged.
+The user subsequently authorized the confirmed Metrics archive schema repair:
+allow Metric manifests and binary segment identities with a valid hot-copy expiry,
+retain legacy date-based metric TTL and add the scoped archive-expiry index. Install
+these schema-only changes through a new 21-to-22 Mongo migration; preserve installed
+migration steps and metric payloads. Cover fresh/upgraded lifecycle, retry/integrity,
+native TTL deletion and preserved holds. This exception does not authorize other
+Mongo behavior changes or enabling archive defaults.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 

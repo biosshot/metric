@@ -24,8 +24,10 @@ use tokio::{
 };
 
 mod dsn_maps;
+mod metric_archive;
 mod telegram_configuration;
 pub(crate) use dsn_maps::DSN_MAPS_MIGRATION;
+pub(crate) use metric_archive::METRIC_ARCHIVE_MIGRATION;
 
 pub(crate) use telegram_configuration::TELEGRAM_CONFIGURATION_MIGRATION;
 

@@ -80,12 +80,13 @@ use mongodb::{
 };
 use thiserror::Error;
 
-static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 2] = [
+static PRODUCTION_MIGRATIONS: [&dyn MongoMigration; 3] = [
     &migrations::TELEGRAM_CONFIGURATION_MIGRATION,
     &migrations::DSN_MAPS_MIGRATION,
+    &migrations::METRIC_ARCHIVE_MIGRATION,
 ];
 
-pub const SCHEMA_GENERATION: i32 = 21;
+pub const SCHEMA_GENERATION: i32 = 22;
 const SCHEMA_ID: &str = "metric.schema";
 const SCHEMA_MODULES: [&str; 22] = [
     "project_identity_v1",
