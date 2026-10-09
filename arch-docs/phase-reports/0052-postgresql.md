@@ -565,7 +565,7 @@ existing task-owned PostgreSQL/TLS/Mongo fixture containers were started; their
 images remained available. Native/authenticated fixture connections succeeded.
 No image prune, volume removal or Docker credential changes were performed.
 
-## Mongo Replay regression gate awaiting a fixture decision
+## Mongo Replay regression fixture correction
 
 After the Session correction, the complete real Mongo integration/migration run
 executed 21 cases: 20 passed, including both Session tests; the existing Replay
@@ -580,10 +580,16 @@ native TTL monitor reported deleted documents. These observations support a TTL
 race as the cause; the original failing operation was not instrumented, so they
 do not prove which exact monitor deletion coincided with the assertion.
 
-The proposed correction is limited to test data: capture one current timestamp
-per exercise and derive every segment timestamp from it. Keep the production
-Replay adapter, TTL index, retention behavior and assertions unchanged. Because
-the user explicitly required stopping for unexpected findings and restricts Mongo
-edits, this additional test-file correction awaits their decision. No Replay
-source or test changes have been made. PostgreSQL runtime selection and the
-remaining 80 capability methods and acceptance gates are still unfinished.
+The user authorized a minimal test-only correction on 2026-10-09. The fixture
+now captures one current timestamp per exercise and derives every segment from
+it, including the duplicate submission and archive case. The production Replay
+adapter, TTL index, retention behavior and assertions remain unchanged. The
+isolated real Mongo Replay test passed with the corrected fixture. PostgreSQL
+runtime selection and the remaining 80 capability methods and acceptance gates
+are still unfinished.
+
+The complete selected real Mongo integration/migration suite then passed 21/21
+with no failed or ignored selected cases, using the unchanged Docker fixture and
+native TTL behavior. Retained performance baselines were excluded as before.
+Formatting and documentation validation passed. Clippy for the modified Replay
+integration target passed with all features and warnings denied.

@@ -23,6 +23,9 @@ Session-statistics rebuild bounds to all intersected whole hours, preserving an
 already aligned exclusive upper edge. Apply identical range semantics in both
 adapters and run one shared real-adapter regression. Keep Mongo schema, migrations,
 deployment topology and delete/insert mechanics unchanged for this correction.
+The user also authorized fixing only the Replay integration fixture's stale
+timestamps: derive its synthetic segments from one current timestamp without
+changing the Mongo Replay adapter, TTL policy or assertions.
 Do not introduce another SQL backend, cross-database migration, new installation
 profiles or a PostgreSQL release/Helm deployment in this implementation.
 
