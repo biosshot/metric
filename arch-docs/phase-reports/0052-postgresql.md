@@ -1072,3 +1072,39 @@ adapter cases, excluding performance_/reports_rps, one test thread), including t
 new terminal-history fixture. Strict Clippy for Mongo/Testkit, formatting,
 documentation, deployment profiles, compatibility and source inventory passed.
 PostgreSQL source/runtime remained unchanged at generation 16 and 113/164 methods.
+
+## Metrics aggregate rule decoder: awaiting a separate Mongo exception
+
+Review of the next notification-rule capability found one missing supported enum
+arm in Mongo decode_rule. Domain AggregateAlert::validate accepts Metrics without
+environment/release filters; the application aggregate evaluator also explicitly
+maps Metrics to QuerySource::Metrics. Mongo encode_rule writes dataset.as_str(),
+so a valid Metrics rule is acknowledged and stored with g.d="metrics". The reader
+only recognizes errors/logs/spans and rejects the stored value as InvalidData.
+This makes list_rules fail for a page containing the rule and prevents the aggregate
+scheduler from obtaining its claimed rule. Mongo's validator already accepts the
+aggregate object, so this is a decoder defect, not a migration requirement.
+
+An isolated public-port Rust Docker probe verified valid domain input, successful
+upsert_rule acknowledgement, the stored native Metrics dataset, and InvalidData
+from both list_rules and claim_due_aggregate_rule. All expected-defect assertions
+passed (1/1 case, 1.05 seconds). It used only its generated current-time
+metric_pg_notification_metrics_<pid>_<nonce> database, dropped it before checking
+captured outcomes, and removed the temporary target after the process ended. The
+Docker catalog confirmed no such databases remain. No production rule code was
+modified; the previous terminal-history fix is committed separately.
+
+The proposed Mongo production correction is one additional existing-enum arm:
+
+```rust
+"metrics" => ExploreDataset::Metrics,
+```
+
+Add a shared real-adapter rule round-trip/claim regression for all four datasets.
+Implement the PostgreSQL rule codec with those existing four variants; no new
+feature, domain/port change, Mongo schema or data migration is needed. Work on the
+PostgreSQL notification adapter is stopped for the user's separate authorization,
+following the explicit instruction to stop on newly discovered discrepancies.
+The terminal-history decoder exception does not cover this rule decoder change.
+Coverage remains 113/164 at PostgreSQL generation 16; the overall backend and
+end-to-end acceptance gates are still incomplete and Mongo remains the default.
