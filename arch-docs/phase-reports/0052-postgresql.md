@@ -996,3 +996,53 @@ Formatting, ADR-0034 dependency graph, documentation, deployment profiles,
 compatibility matrix and the regenerated source inventory also passed. After the
 lint-only boolean simplification, the real deadline/alert/fence/retention case was
 rerun successfully (1/1); broad testing was not repeated for that equivalent edit.
+
+## Notification delivery history: awaiting a separate Mongo exception
+
+While inspecting the next capability family, a real public-port Docker Mongo
+probe confirmed an existing terminal-delivery read defect. Enqueue a valid pending
+delivery, read its history successfully, then call mark_delivered or mark_dead.
+Both terminal methods acknowledge success and persist the corresponding final
+status and terminal timestamp (field l). Their shared terminal_update removes the
+next-attempt field n. The validator permits that absence, but decode_delivery still
+requires timestamp(document, "n") for every status. Subsequent list_delivery_history
+returns NotificationStoreError::InvalidData. One such row fails its entire history
+page; delivery finalization itself succeeded and no stored payload was lost.
+The existing authorized HTTP service uses this same history port.
+
+The isolated Rust probe tested both delivered and dead in separate synthetic
+project scopes: readable pending history, successful terminal acknowledgement,
+correct persisted final status, missing native n and failed typed history read.
+It passed all expected-defect assertions (1/1 real case, 1.96 seconds). The test
+generated current times and created only its own
+metric_pg_notification_terminal_<pid>_<nonce> database. It dropped that database
+before asserting the captured outcomes. After the process ended, the temporary
+test target was removed and the Docker catalog confirmed no such databases remain.
+Mongo notification production source, schemas, migrations and installation data
+were not changed by this probe.
+
+Suggested minimal repair: when decoding a delivered/dead row with no n, use its
+persisted terminal timestamp l to satisfy the existing non-optional domain field.
+Keep pending rows strict and reject malformed present fields. This also repairs
+reading already-written final rows, without a data migration or schema change:
+
+```rust
+let next_attempt_at = if document.contains_key("n")
+    || status == NotificationDeliveryStatus::Pending
+{
+    timestamp(document, "n")?
+} else {
+    timestamp(document, "l")?
+};
+```
+
+PostgreSQL NotificationStore should implement readable terminal history with the
+same domain representation and share a real-adapter regression for both terminal
+outcomes, retry/duplicate immutability and scoped pages. The notification adapter
+has not yet been implemented; no defect-compatible behavior or port/domain change
+was introduced. Implementation is stopped for the user's separate decision on this
+new minimal Mongo exception, as explicitly requested for newly found discrepancies.
+The earlier exception covered monitor-run time ordering only. Monitors are committed
+and verified at generation 16, with 113/164 signatures implemented; Mongo remains
+the default/current runtime backend and the remaining 51 signatures and full
+end-to-end acceptance gates are pending.
