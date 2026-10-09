@@ -802,3 +802,73 @@ and all eight Signal cases. The two disposable databases left by the initial
 test-fixture failures were inspected and removed by their exact generated names
 only after that test process ended. Successful test fixtures cleaned themselves;
 no installation data, volumes, images or credentials were removed.
+
+## PostgreSQL Explore
+
+Schema generation 15 adds `PostgresExploreStore` through the existing ExploreStore
+port. Errors, Logs, Spans and Metrics use one closed typed SQL compiler; adapter
+constants select tables, columns and operators, and bounded ordinal output slots
+replace SQL aliases. Caller aliases are only output-map keys. Every filter value,
+scope, interval, cursor and limit is bound. No application, domain, port or Mongo
+production change is needed. Raw reads use native projections, not payload decoding
+or a Rust scan of stored sources; aggregates and percentiles execute in PostgreSQL.
+
+Queries retain finalized-only Errors, project scope outside boolean expressions,
+legacy AND predicates, expression precedence, nested AND/OR/NOT, missing-field
+semantics, case-sensitive literal substring/prefix/suffix matching and lossless NUL
+metadata. Positive predicates remain native index conditions; only NOT converts
+SQL unknown to the contract's false missing-field value. An initial EXPLAIN test
+identified that wrapping every predicate in coalesce prevented the exact Metric
+name index from being used. The compiler was corrected, without planner forcing,
+and the real query then used its scoped hash-plus-full-name index.
+
+Native bigint time/identity keysets retain the public 20-byte Error key and 16-byte
+signal/Metric keys. Errors order by the native indexed event identity internally;
+the external project prefix is handled without widening the trusted query scope.
+Generation 15 adds only the descending Metric time/identity index; existing Error,
+Log and Span timeline indexes are reused. Raw result rows preserve integer versus
+floating types, coded labels, binary identities and nullable projections. Metric
+count predicates use numeric comparison to avoid rounding bigint source values
+above 2^53. Native integer sums retain integers when possible and promote overflow
+to a finite floating result instead of truncating or rejecting valid counters.
+
+UTC interval grouping first converts source nanoseconds to millisecond dates with
+truncation toward zero, then floors the interval. A read-only Mongo `$documents`
+probe verified negative sub-millisecond behavior without writing any data. A second
+read-only probe verified suffix matching before a final LF; PostgreSQL preserves
+that existing anchor behavior using binary equality. PostgreSQL percentiles use
+native percentile_cont interpolation; Mongo retains approximate percentiles. The
+common port specifies percentile selection, not identical approximation samples.
+Tests check finite values and the PostgreSQL native interpolation result.
+
+One read-only transaction owns each query and its local statement_timeout; an
+outer cancellable deadline also bounds pool acquisition and completion. Neither
+timeouts nor cancellation leave transaction settings in the pool. Defensive
+validation bounds expression nodes, OR alternatives, predicates, output rows,
+groups, aggregates, identifiers and typed values before recursive SQL compilation.
+Fixed aliases and no free-form expressions prevent SQL injection. Errors remain
+stable/redacted; query values and stored payloads are not logged.
+
+At most 501 raw projections or 500 aggregate rows are selected. A native cumulative
+8 MiB projection-byte budget suppresses oversized field transfer before decoding.
+Raw pages return a continuation cursor at the last delivered record; an oversized
+aggregate result fails explicitly rather than silently returning partial totals.
+No unbounded body transfer, decompression or client-side grouping is introduced.
+
+The targeted suite passed eight cases (one compiler unit case and seven real Docker
+cases): all four datasets and stable scoped keysets; literal/boolean/null/number
+filters; native aggregates, all five percentiles, UTC intervals and empty sources;
+large-result budgets; native blocked-query cancellation/pool recovery; exact bigint
+comparison and sum promotion; and real compiled Metric timeline/name index plans.
+PostgreSQL strict Clippy, formatting, dependency graph, compatibility/deployment
+profile validators and source inventory passed. Coverage is 102/164 signatures;
+62 signatures plus complete runtime selection and remaining acceptance gates are
+still pending. Mongo remains the default and current runtime backend.
+
+The complete generation-15 PostgreSQL suite passed 111/111 with no ignored cases
+in 103.84 seconds, including TLS, migrations, previous capabilities and all eight
+Explore cases. The initial invalid synthetic Event fixture was corrected before
+the successful run. Its database and the failed initial index-plan fixture were
+inspected and dropped by their exact generated names after their test processes
+ended and no connections remained. Successful fixtures cleaned themselves. No
+installation database, persistent volume, image or credential was removed.

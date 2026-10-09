@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 101/164. Delivery requires every row
+Implemented signatures: 102/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -76,7 +76,7 @@ and its conformance evidence, including signatures added after this snapshot.
 | `InvestigationStore::list_releases` | `crates/postgres/src/api.rs` |
 | `InvestigationStore::load_event` | `crates/postgres/src/api.rs` |
 | `InvestigationStore::search_candidates` | `crates/postgres/src/api.rs` |
-| `ExploreStore::execute` | Pending |
+| `ExploreStore::execute` | `crates/postgres/src/explore.rs` |
 | `DashboardStore::delete_dashboard` | `crates/postgres/src/dashboards.rs` |
 | `DashboardStore::delete_saved_query` | `crates/postgres/src/dashboards.rs` |
 | `DashboardStore::insert_dashboard` | `crates/postgres/src/dashboards.rs` |
