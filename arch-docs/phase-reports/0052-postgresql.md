@@ -1545,3 +1545,52 @@ production source was changed. No new SQL migration is needed; generation stays
 18. Source capability count is 136/164 with 28 pending: ProjectDeletionStore (4),
 DebugFileStore (10) and ArtifactStore (14). Whole-application composition and final
 container/SDK/offline/soak delivery gates remain pending.
+
+## 2026-10-09 — Confirmed Mongo catalog-counter truncation; stopped for scope decision
+
+After the approved TLS repair and the PostgreSQL Maintenance implementation,
+boundary parity review found a pre-existing Mongo Maintenance quota bug.
+MongoMaintenanceStore::reconcile_environment_quota limits a project's environment
+read to request.batch_size, counts only that prefix, then writes the prefix count
+as catalog_usage.ec. That value is subsequently used by MongoFinalizationStore's
+reserve_environment admission guard against max_implicit_environments_per_project.
+The row-page limit is therefore incorrectly treated as the full cardinality.
+
+A temporary isolated real Docker diagnostic invoked the actual public Mongo
+MaintenanceStore and its normal continuation loop. It bootstrapped a fresh
+generated metric_phase14_maintenance_test_<ObjectId> database, inserted one valid
+synthetic project and five schema-valid distinct environments, and initialized
+the correct stored counter to five. A full CounterReconciliation pass with
+batch_size=1 left all five environments present but changed catalog_usage.ec to
+one. The expected-defect diagnostic passed 1/1 in 1.24 seconds; this is proof of
+the bug, not a correctness pass. Command:
+`cargo test -p metric-mongo --test maintenance_store diagnostic_catalog_reconciliation_above_page_size --locked -j1 -- --ignored --exact --nocapture --test-threads=1`
+with the existing task-owned Mongo Docker fixture URI.
+
+This does not demonstrate removal of user environments or an incident in the
+user's database. Its demonstrated effect is corruption of the quota counter;
+because foreground environment admission reads that counter, exceeding the
+configured cardinality limit becomes possible. Trigger condition is that a
+project has more environments than the maintenance row-page size. PostgreSQL's
+exact project-scoped quota repair already passes the analogous above-page-size
+test. The native Mongo counter's truncation behavior is not an intended backend
+contract to duplicate.
+
+The generated diagnostic database was dropped successfully before final
+assertions. The temporary test function was removed after its Cargo process
+finished, restoring the Mongo test file to its committed contents. No Mongo
+production code, schema, migration or deployment configuration was changed.
+Implementation is stopped for the user's requested decision before any additional
+Mongo exception. Proposed scope is a minimal repair of this counter behavior
+with explicit bounded-query and foreground-admission concurrency checks; do not
+introduce a broad Mongo refactor or replace the counter with a truncated result.
+No repair or new exception has yet been authorized.
+
+Completed implementation commits are b84c2a9 (ArchiveStore and compatible TLS
+initialization) and cc2e92d (native MaintenanceStore/expiry), both on feat/postgres.
+PostgreSQL remains generation 18, source signatures 136/164 with 28 pending.
+The most recent full PostgreSQL Docker run passed 145/145; strict adapter/testkit
+Clippy, formatting, dependency graph, documentation, compatibility and deployment
+profile checks passed. Ordinary PostgreSQL tests passed 6/6 and explicitly skipped
+the 145 real cases already executed separately. Only this diagnostic report
+remains as an additional documentation change.
