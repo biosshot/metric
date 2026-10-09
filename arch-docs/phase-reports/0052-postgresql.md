@@ -488,9 +488,9 @@ Clippy passed with warnings denied.
 Current source coverage is 79/164. PostgreSQL runtime selection and the remaining
 backend acceptance gates are still pending.
 
-## Pending Session rebuild boundary decision
+## Session rebuild boundary decision
 
-Implementation is stopped before the Session capability family for an explicit
+Implementation was stopped before the Session capability family for an explicit
 user decision, as requested for newly discovered behavioral disagreements.
 Mongo's `sessions.rs::rebuild_inner` selects Session starts in the raw `[from,until)`
 range, deletes hourly rows whose bucket starts lie in that same raw range, then
@@ -508,10 +508,82 @@ to `[2,1]`. This is an algorithm reproduction, not an invocation of the Rust por
 Its generated fixture database was dropped in finally; Mongo code and real data
 were not modified.
 
-Proposed PostgreSQL behavior: expand a rebuild range to all intersected whole
+Proposed PostgreSQL behavior was to expand a rebuild range to all intersected whole
 hours, derive counters and sketches from all Sessions in those hours, and replace
 the corresponding statistics transactionally while excluding concurrent Session
 mutations for that project. Keep Mongo unchanged. This avoids reproducing a data
 consistency defect but differs from the existing adapter for unaligned bounds;
-authorization for that specific difference is pending. No Session schema or
-implementation has been added yet.
+On 2026-10-09 the user authorized correcting the range semantics in both adapters,
+with a minimal Mongo change. Mongo's existing method now rounds the lower bound
+down and the exclusive upper bound up, retaining an exactly aligned upper edge.
+Both source selection and deletion use these same bounds, including negative
+timestamps and the last exclusive hour boundary of the domain. No Mongo schema,
+migration, deployment or write-mechanics changes were made. A shared Testkit
+fixture exercises half-hour boundaries, an exact upper hour, a raw interval
+containing no Sessions, whole-hour bounds, pre-epoch dates and repeated repair.
+The real Mongo Rust Session suite passed both its existing case and the new
+shared five-range fixture in Docker, with no ignored cases.
+
+## Transactional PostgreSQL Sessions
+
+Schema generation 10 adds compact scoped Sessions, fixed 1024-bit health sketches,
+hourly counters and project-local Session coordination. All five SessionStore
+methods use existing domain merge semantics. Session updates and authoritative
+counter changes commit together; retries after an actual lost COMMIT reply observe
+the merged record and avoid applying counters twice. Unsigned sequence numbers
+retain their full domain range through eight-byte encoding. TTL and archive holds
+remain distinct; project fences block mutations while disabled projects remain
+processable. An optional Release/Environment catalog record is not required for
+Session admission, and health reads retain the existing environment-ID fallback.
+
+Project shared locks precede separate Session coordination locks and Session
+identities. Rebuild holds that same project-local coordination lock, replaces all
+intersected hours in one transaction, and aggregates counters and user sketches
+natively from Sessions without transferring an unbounded source list into Rust.
+The supported domain sketch bit index is preserved by fixed native bit aggregation.
+Stale terminalization is bounded to 10,000 candidates and rechecks their state and
+last update under locks; a refreshed Session cannot be terminalized from an old
+worker snapshot. Concurrent Event/Issue traffic uses its existing separate locks.
+
+Eight new real Docker cases plus one static timestamp-boundary case passed: the
+shared Mongo/Postgres five-range regression; lifecycle ordering, duplicates,
+scope, full unsigned sequence and retention; concurrent retries, merges and
+repairs; injected counter/update and rebuild rollback with subsequent recovery;
+real lost COMMIT reply; stale-state rechecks and project fences; invalid identity,
+input limits and counter overflow; and selective Session range/stale indexes
+over 10,000 unrelated rows. Rebuild also removes orphaned statistics when no
+source remains and repairs injected count/sketch drift. Current source coverage
+is 84/164; full runtime selection and the remaining acceptance gates are pending.
+
+The complete generation-10 PostgreSQL Docker suite passed 75/75 with no ignored
+cases, including native TLS checks. Strict workspace Clippy passed for all targets
+and features with warnings denied; formatting, dependency boundaries and repository
+documentation validation also passed.
+
+Docker Desktop had stopped after a crash before these checks. Only the three
+existing task-owned PostgreSQL/TLS/Mongo fixture containers were started; their
+images remained available. Native/authenticated fixture connections succeeded.
+No image prune, volume removal or Docker credential changes were performed.
+
+## Mongo Replay regression gate awaiting a fixture decision
+
+After the Session correction, the complete real Mongo integration/migration run
+executed 21 cases: 20 passed, including both Session tests; the existing Replay
+case failed at `crates/mongo/tests/replays.rs:56`, observing segment IDs `[0]`
+instead of `[0,2]`. An isolated unchanged rerun passed. This is not a passing
+complete Mongo gate and is not attributed to the Session correction.
+
+The Replay fixture hardcodes November 2023 timestamps and uses a native TTL index
+with a 30-day retention period. Its records are already expired at the current
+Docker clock. The failed fixture subsequently contained zero Replays, and the
+native TTL monitor reported deleted documents. These observations support a TTL
+race as the cause; the original failing operation was not instrumented, so they
+do not prove which exact monitor deletion coincided with the assertion.
+
+The proposed correction is limited to test data: capture one current timestamp
+per exercise and derive every segment timestamp from it. Keep the production
+Replay adapter, TTL index, retention behavior and assertions unchanged. Because
+the user explicitly required stopping for unexpected findings and restricts Mongo
+edits, this additional test-file correction awaits their decision. No Replay
+source or test changes have been made. PostgreSQL runtime selection and the
+remaining 80 capability methods and acceptance gates are still unfinished.

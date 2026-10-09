@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 79/164. Delivery requires every row
+Implemented signatures: 84/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -104,11 +104,11 @@ and its conformance evidence, including signatures added after this snapshot.
 | `SignalStore::rebuild_span_stats` | Pending |
 | `SignalStore::trace` | Pending |
 | `MetricStore::persist_metrics` | Pending |
-| `SessionStore::load_session` | Pending |
-| `SessionStore::persist_sessions` | Pending |
-| `SessionStore::rebuild_session_stats` | Pending |
-| `SessionStore::release_health` | Pending |
-| `SessionStore::terminalize_stale_sessions` | Pending |
+| `SessionStore::load_session` | `crates/postgres/src/sessions.rs` |
+| `SessionStore::persist_sessions` | `crates/postgres/src/sessions.rs` |
+| `SessionStore::rebuild_session_stats` | `crates/postgres/src/sessions.rs` |
+| `SessionStore::release_health` | `crates/postgres/src/sessions.rs` |
+| `SessionStore::terminalize_stale_sessions` | `crates/postgres/src/sessions.rs` |
 | `ReplayStore::list_replays` | Pending |
 | `ReplayStore::load_replay` | Pending |
 | `ReplayStore::persist_replay_segment` | Pending |
