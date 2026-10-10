@@ -262,10 +262,10 @@ impl PostgresArtifactStore {
             .collect();
         if existing.is_some() {
             if reserve {
-                sqlx::query("UPDATE metric.artifact_bundles SET state=0,due_at=NULL,claim=NULL,bundle_debug_id=$3,debug_tokens=$4,checksum=$5,size=$6,uploaded_at=$7 WHERE organization_id=$1 AND bundle_id=$2")
+                sqlx::query("UPDATE metric.artifact_bundles SET state=0,due_at=NULL,claim=NULL,deletion_operation=NULL,bundle_debug_id=$3,debug_tokens=$4,checksum=$5,size=$6,uploaded_at=$7 WHERE organization_id=$1 AND bundle_id=$2")
                     .bind(bundle.organization_id.get() as i64).bind(bundle.id.as_bytes().as_slice()).bind(bundle.bundle_debug_id.encode().into_vec()).bind(tokens).bind(bundle.checksum.as_slice()).bind(size).bind(bundle.uploaded_at.unix_millis()).execute(&mut *tx).await.map_err(error)?;
             } else {
-                sqlx::query("UPDATE metric.artifact_bundles SET due_at=NULL WHERE organization_id=$1 AND bundle_id=$2").bind(bundle.organization_id.get() as i64).bind(bundle.id.as_bytes().as_slice()).execute(&mut *tx).await.map_err(error)?;
+                sqlx::query("UPDATE metric.artifact_bundles SET due_at=NULL,deletion_operation=NULL WHERE organization_id=$1 AND bundle_id=$2").bind(bundle.organization_id.get() as i64).bind(bundle.id.as_bytes().as_slice()).execute(&mut *tx).await.map_err(error)?;
             }
         } else {
             sqlx::query("INSERT INTO metric.artifact_bundles(bundle_id,organization_id,sha1,bundle_debug_id,debug_tokens,checksum,size,uploaded_at,generation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
@@ -576,7 +576,7 @@ impl PostgresArtifactStore {
         }
         sqlx::query("UPDATE metric.organizations SET artifact_count=artifact_count-1,artifact_bytes=artifact_bytes-$2 WHERE id=$1").bind(org.get() as i64).bind(size as i64).execute(&mut *tx).await.map_err(error)?;
         sqlx::query(
-            "UPDATE metric.artifact_bundles SET state=2,claim=NULL,due_at=$2 WHERE bundle_id=$1",
+            "UPDATE metric.artifact_bundles SET state=2,claim=NULL,deletion_operation=NULL,due_at=$2 WHERE bundle_id=$1",
         )
         .bind(id.as_bytes().as_slice())
         .bind(until.unix_millis())

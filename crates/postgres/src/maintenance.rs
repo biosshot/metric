@@ -531,6 +531,13 @@ const EVENT_TABLES: &[ExpiryTable] = &[
         guard: " AND state=2",
         references: None,
     },
+    ExpiryTable {
+        table: "metric.project_deletions",
+        expiry: "expire_at",
+        order: "expire_at,operation_id",
+        guard: " AND phase IN(2,3)",
+        references: None,
+    },
 ];
 const HOURLY_TABLES: &[ExpiryTable] = &[
     ExpiryTable {

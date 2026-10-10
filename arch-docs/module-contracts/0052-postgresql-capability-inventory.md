@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 160/164. Delivery requires every row
+Implemented signatures: 164/164. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -24,10 +24,10 @@ and its conformance evidence, including signatures added after this snapshot.
 | `ProjectStore::set_project_acceptance` | `crates/postgres/src/projects.rs` |
 | `ProjectStore::set_project_key_state` | `crates/postgres/src/projects.rs` |
 | `ProjectStore::update_project_policy` | `crates/postgres/src/projects.rs` |
-| `ProjectDeletionStore::cancel_deletion` | Pending |
-| `ProjectDeletionStore::deletion_status` | Pending |
-| `ProjectDeletionStore::purge_next` | Pending |
-| `ProjectDeletionStore::request_deletion` | Pending |
+| `ProjectDeletionStore::cancel_deletion` | `crates/postgres/src/deletion.rs` |
+| `ProjectDeletionStore::deletion_status` | `crates/postgres/src/deletion.rs` |
+| `ProjectDeletionStore::purge_next` | `crates/postgres/src/deletion.rs` |
+| `ProjectDeletionStore::request_deletion` | `crates/postgres/src/deletion.rs` |
 | `AuthStore::append_audit` | `crates/postgres/src/auth.rs` |
 | `AuthStore::consume_bootstrap` | `crates/postgres/src/auth.rs` |
 | `AuthStore::consume_password_setup` | `crates/postgres/src/auth.rs` |

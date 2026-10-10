@@ -1824,3 +1824,48 @@ and bounded maintenance case. Strict Mongo library/maintenance-target Clippy wit
 all features, --locked -j1 and -D warnings passed. The correction is scoped to
 Mongo Artifact publication and its regression; PostgreSQL remains at 160/164
 methods, with ProjectDeletionStore and final runtime/acceptance gates pending.
+
+
+## 2026-10-10 — Complete PostgreSQL project-deletion lifecycle
+
+Generation 21 appends project deletion jobs, a scrubbed project tombstone with
+independent slug reservation, bounded purge indexes and an Artifact GC operation
+marker. Installed migrations are unchanged. The 20-to-21 upgrade is tested twice
+and preserves existing project/Artifact rows and associations.
+
+PostgresProjectDeletionStore implements all four current operations. Requests
+atomically fence the project and suspend active keys; pending cancellation restores
+its previous state and keys. Project-before-job locking serializes cancellation,
+purge and ingest. Dataset mutation and progress commit together; definite failures
+roll back and record only a static error category with bounded exponential delay.
+Unknown commit results are observable through the same operation/status identity.
+Native table/column names come only from the adapter-owned append-only registry;
+request values are bound. Owned data uses project-scoped ctid batches. Shared
+Artifact/Release/Deploy associations use bounded parent-ID batches and preserve
+other projects. A second full pass catches remaining records. Artifact orphans
+retain quota until fenced GC finishes, and project deletion waits for that marker.
+Tombstones remove user-facing names/policy payloads; slug release remains possible
+when the completed job has already expired. Terminal job expiry is appended to
+the existing PostgreSQL maintenance registry. Mongo files are unchanged.
+
+Seven real Docker cases cover lifecycle/cancellation/key states, every registered
+project FK, existing archive source families/dependencies, shared binary metadata
+and Release/Deploy links, concurrent request/cancel/purge and ingest fencing,
+actual COMMIT-reply loss, transactional failure/redacted retry, restart/rescan and
+slug release independent of job history. A representative native EXPLAIN
+(ANALYZE, BUFFERS) verifies project-indexed bounded Event selection. Two initial
+synthetic direct SQL fixtures violated existing Event constraints; their fixtures
+were corrected, without changing those adapter constraints. Failed-test databases
+were individually inspected and removed; successful fixtures clean themselves.
+
+Strict PostgreSQL all-target/all-feature Clippy with --locked -j1 -D warnings
+passed. Targeted deletion tests passed 7/7 in 13.07 seconds. The complete native
+PostgreSQL Docker library suite, including local TLS and schema upgrades, passed
+171/171 in 186.52 seconds using --all-features --locked -j1 -- --ignored
+--test-threads=1. The six ordinary tests also passed. The generated fixture
+DB listing is empty. Source signatures pass --require-complete at 164/164;
+documentation, compatibility and deployment-profile validators passed.
+
+This completes adapter capability implementation. Server backend selection,
+maintenance startup progress, CLI/container/offline/SDK and resource/soak
+acceptance remain in progress; this entry does not claim finished delivery.

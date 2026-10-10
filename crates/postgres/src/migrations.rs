@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 20;
+const SCHEMA_GENERATION: i64 = 21;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 // This is application-owned static SQL, never configurable or derived from input.
@@ -271,6 +271,13 @@ fn registry() -> Migrator {
                 include_str!("../migrations/0020_artifacts.sql").into_sql_str(),
                 false,
             ),
+            Migration::new(
+                21,
+                Cow::Borrowed("durable bounded project deletion"),
+                MigrationType::Simple,
+                include_str!("../migrations/0021_project_deletion.sql").into_sql_str(),
+                false,
+            ),
         ]),
         locking: false, // The dedicated connection already owns MIGRATION_LOCK.
         table_name: Cow::Borrowed(MIGRATION_TABLE),
@@ -514,6 +521,71 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Docker PostgreSQL"]
+    async fn deletion_upgrade_from_twenty_preserves_existing_artifact_and_project() {
+        let fixture = Fixture::new().await;
+        let mut legacy = registry();
+        legacy.migrations.to_mut().retain(|step| step.version <= 20);
+        PostgresSchemaManager::ensure_registry(
+            &fixture.uri,
+            &fixture.policy,
+            &MigrationPolicy::default(),
+            &legacy,
+            &[],
+            20,
+        )
+        .await
+        .unwrap();
+        let db = crate::PostgresDatabase::connect(&fixture.uri, &fixture.policy)
+            .await
+            .unwrap();
+        crate::test_support::seed_projects(db.clone(), 32).await;
+        sqlx::query("INSERT INTO metric.artifact_bundles(bundle_id,organization_id,sha1,bundle_debug_id,debug_tokens,checksum,size,uploaded_at) VALUES($1,1,$2,$3,'{}',$4,3,1800000000000)")
+            .bind([1_u8;16].as_slice()).bind([1_u8;20].as_slice()).bind([9_u8;16].as_slice()).bind([1_u8;32].as_slice()).execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO metric.artifact_bundle_bindings(organization_id,bundle_id,project_id) VALUES(1,$1,1)").bind([1_u8;16].as_slice()).execute(&db.pool).await.unwrap();
+        let project: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(p) FROM metric.projects p WHERE id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        let bundle: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(b) FROM metric.artifact_bundles b")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        bootstrap(&fixture).await;
+        bootstrap(&fixture).await;
+        assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(p)-'deleted_at'-'deletion_operation'-'slug_reserved_until' FROM metric.projects p WHERE id=1").fetch_one(&db.pool).await.unwrap(),project);
+        assert_eq!(
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT to_jsonb(b)-'deletion_operation' FROM metric.artifact_bundles b"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+            bundle
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM metric.project_deletions")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM metric.artifact_bundle_bindings WHERE project_id=1"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+            1
+        );
+        db.pool.close().await;
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
     async fn artifact_upgrade_from_nineteen_preserves_debug_metadata_and_counters() {
         use metric_domain::{
             OrganizationId, ProjectId, Timestamp,
@@ -589,7 +661,7 @@ mod tests {
         assert_eq!(store.load_debug_file(pid, file.id).await.unwrap(), file);
         assert_eq!(
             sqlx::query_scalar::<_, serde_json::Value>(
-                "SELECT to_jsonb(p) FROM metric.projects p WHERE id=1"
+                "SELECT to_jsonb(p)-'deleted_at'-'deletion_operation'-'slug_reserved_until' FROM metric.projects p WHERE id=1"
             )
             .fetch_one(&db.pool)
             .await
@@ -637,7 +709,7 @@ mod tests {
                 .unwrap();
         bootstrap(&fixture).await;
         bootstrap(&fixture).await;
-        let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p)-'debug_file_bytes'-'debug_file_count' FROM metric.projects p WHERE id=1").fetch_one(&database.pool).await.unwrap();
+        let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p)-'debug_file_bytes'-'debug_file_count'-'deleted_at'-'deletion_operation'-'slug_reserved_until' FROM metric.projects p WHERE id=1").fetch_one(&database.pool).await.unwrap();
         assert_eq!(before, after);
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM metric._sqlx_migrations")
             .fetch_one(&database.pool)
