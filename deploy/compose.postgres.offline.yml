@@ -1,0 +1,4 @@
+# Apply after building/loading the images. Only this fixture network is isolated.
+networks:
+  default:
+    internal: true

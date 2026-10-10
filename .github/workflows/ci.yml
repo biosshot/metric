@@ -107,6 +107,85 @@ jobs:
           npm ci
           npm run versions
 
+  postgres:
+    name: Native PostgreSQL adapter and composed runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk-tests/node/package-lock.json
+            sdk-tests/browser/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.1
+          cache-dependency-path: sdk-tests/go/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Prepare existing real SDK and browser fixtures
+        run: |
+          npm ci --prefix sdk-tests/node
+          npm ci --prefix sdk-tests/browser
+          npm run build --prefix sdk-tests/browser
+          npm ci --prefix web
+          npm run build --prefix web
+          cd sdk-tests/browser
+          npx playwright install --with-deps chromium
+          cd ../..
+          python -m pip install -r sdk-tests/python/requirements.lock.txt
+          node sdk-tests/java/prepare.mjs
+          dotnet restore --locked-mode sdk-tests/dotnet/MetricSdkCompatibility.csproj
+          dotnet build --configuration Release --no-restore sdk-tests/dotnet/MetricSdkCompatibility.csproj
+          cargo build --locked -j1 --manifest-path sdk-tests/rust/Cargo.toml
+      - name: Start isolated native TCP and local-CA TLS fixtures
+        run: |
+          docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile tls up -d --wait postgres postgres-tls
+          mkdir -p target/postgres-test-tls
+          for file in ca.crt wrong-ca.crt client.crt client.key; do
+            docker cp "metric-pg-dev-postgres-tls-1:/run/metric-test-tls/${file}" "target/postgres-test-tls/${file}"
+          done
+      - run: python scripts/validate-postgres-coverage.py --require-complete
+      - name: Require nonzero real-adapter cases, including TLS and wire faults
+        run: python scripts/test-postgres.py --suite adapter
+      - name: Require the ignored PostgreSQL runtime group
+        run: cargo test -p metric-server --test postgres_runtime_e2e --all-features --locked -j1 -- --ignored --test-threads=1
+      - name: Require all seven SDKs, real Web UI, signals, Blob and Replay readback
+        run: python scripts/test-postgres.py --suite server --binary target/debug/metric-server --sdk --browser
+      - name: Stop only this job's synthetic fixture
+        if: always()
+        run: docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile tls down --volumes
+
+  postgres-containers:
+    name: PostgreSQL container restart and offline transports
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Preload the pinned synthetic PostgreSQL image
+        run: docker pull postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+      - name: Build current source and require container durability/shutdown
+        run: python scripts/test-postgres.py --suite container --build-image
+      - name: Require internal-only native TCP and locally verified TLS
+        run: python scripts/test-postgres.py --suite offline
+
   browser:
     name: Browser SDK
     runs-on: ubuntu-latest
@@ -174,48 +253,6 @@ jobs:
       - name: Stop isolated MongoDB
         if: always()
         run: docker compose -f deploy/compose.dev.yml down
-
-  postgres:
-    name: PostgreSQL integration and TLS
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      METRIC_TEST_POSTGRES_URI: postgres://metric_test:metric-postgres-local-only@127.0.0.1:54329/metric_test
-      METRIC_TEST_POSTGRES_TLS_URI: postgres://metric_test:metric-postgres-local-only@127.0.0.1:54330/metric_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.94.0
-      - uses: Swatinem/rust-cache@v2
-      - name: Start isolated PostgreSQL and local test CA
-        run: >-
-          docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml
-          --profile tls up -d --wait postgres postgres-tls
-      - name: Prepare ephemeral local certificates
-        shell: bash
-        run: |
-          set -euo pipefail
-          certs="$GITHUB_WORKSPACE/target/postgres-test-tls"
-          mkdir -p "$certs"
-          fixture="$(docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml --profile tls ps --all --quiet postgres-test-certs)"
-          for file in ca.crt wrong-ca.crt client.crt client.key; do
-            docker cp "${fixture}:/certs/${file}" "${certs}/${file}"
-          done
-          {
-            echo "METRIC_TEST_POSTGRES_TLS_ROOT=${certs}/ca.crt"
-            echo "METRIC_TEST_POSTGRES_TLS_WRONG_ROOT=${certs}/wrong-ca.crt"
-            echo "METRIC_TEST_POSTGRES_TLS_CLIENT_CERT=${certs}/client.crt"
-            echo "METRIC_TEST_POSTGRES_TLS_CLIENT_KEY=${certs}/client.key"
-          } >> "$GITHUB_ENV"
-      - name: Run real storage, migration and TLS gates
-        run: >-
-          cargo test -p metric-postgres --all-targets --all-features --locked --no-fail-fast
-          -- --include-ignored --test-threads=1
-      - name: Inspect PostgreSQL after failure
-        if: failure()
-        run: docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml --profile tls logs postgres postgres-tls
-      - name: Stop isolated PostgreSQL
-        if: always()
-        run: docker compose -p metric-postgres-ci -f deploy/compose.postgres.dev.yml --profile tls down --volumes
 
   container:
     name: Container build
