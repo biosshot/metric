@@ -40,6 +40,21 @@ async fn terminal_merge_keeps_original_start_and_readable_history() {
 }
 
 #[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn definition_after_terminal_in_same_batch_is_resolved() {
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await.unwrap();
+    let store = control.monitor_store(MonitorRetention { runs_days: 30 });
+    metric_testkit::monitor_conformance::definition_order_in_batch(
+        &store,
+        ProjectId::new(42).unwrap(),
+    )
+    .await;
+    database.drop().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "performance evidence; requires METRIC_TEST_MONGODB_URI"]
 async fn durable_monitor_run_writer_reports_rps() {
     const RUNS: u128 = 2_000;

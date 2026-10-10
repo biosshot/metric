@@ -113,6 +113,15 @@ async fn history(store: &PostgresMonitorStore, def: &MonitorDefinition) -> Vec<M
 
 #[tokio::test]
 #[ignore = "requires Docker PostgreSQL"]
+async fn definition_after_terminal_in_same_batch_is_resolved() {
+    let (fixture, database, store) = setup().await;
+    metric_testkit::monitor_conformance::definition_order_in_batch(&store, project(1)).await;
+    database.close().await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires Docker PostgreSQL"]
 async fn shared_merge_order_and_native_constraint_keep_history_readable() {
     let (fixture, database, store) = setup().await;
     metric_testkit::monitor_conformance::terminal_merge_order(&store, project(1)).await;

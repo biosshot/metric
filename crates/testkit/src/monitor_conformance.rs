@@ -10,6 +10,126 @@ use metric_domain::{
 use metric_ports::{DurableOutcome, MonitorStore, SignalStoreError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A definition later in the same batch must resolve an earlier terminal update.
+pub async fn definition_order_in_batch(store: &dyn MonitorStore, project: ProjectId) {
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let at = |value| Timestamp::from_unix_millis(value).unwrap();
+    for reversed in [true, false] {
+        let slug = if reversed {
+            "definition-after-terminal"
+        } else {
+            "definition-before-terminal"
+        };
+        let monitor = MonitorId::derive(project, slug, "production");
+        let definition = MonitorDefinition {
+            id: monitor,
+            project_id: project,
+            slug: slug.into(),
+            name: "Synthetic definition ordering".into(),
+            environment_id: derive_environment_id(project, "production"),
+            environment: "production".into(),
+            enabled: true,
+            managed_by_web: false,
+            revision: 1,
+            config: MonitorConfig {
+                schedule: MonitorSchedule::interval(1).unwrap(),
+                checkin_margin_seconds: 5,
+                max_runtime_seconds: 30,
+            },
+            uptime: None,
+            next_expected_at: at(now + 60_000),
+            last_run_id: None,
+            last_status: None,
+            last_check_in_at: None,
+            created_at: at(now),
+            updated_at: at(now),
+        };
+        let start = MonitorUpdate {
+            definition: Some(definition),
+            run: MonitorRun {
+                id: MonitorRunId::sdk(monitor, [5; 16]),
+                project_id: project,
+                monitor_id: monitor,
+                check_in_id: Some([5; 16]),
+                status: MonitorRunStatus::InProgress,
+                source: MonitorRunSource::Sdk,
+                scheduled_for: None,
+                started_at: at(now),
+                finished_at: None,
+                duration_ms: None,
+                received_at: at(now),
+                release_id: None,
+                timeout_at: None,
+                delete_at: Some(at(now + 30 * 86_400_000)),
+                http_status: None,
+                uptime_failure: None,
+            },
+        };
+        let mut terminal = start.clone();
+        terminal.definition = None;
+        terminal.run.status = MonitorRunStatus::Success;
+        terminal.run.finished_at = Some(at(now + 2000));
+        terminal.run.duration_ms = Some(2000);
+        terminal.run.received_at = at(now + 2000);
+        // An unknown monitor without a definition remains invalid, even after the fix.
+        assert_eq!(
+            store.persist_monitors(vec![terminal.clone()]).await,
+            Err(SignalStoreError::NotFound)
+        );
+        let batch = if reversed {
+            vec![terminal.clone(), start.clone()]
+        } else {
+            vec![start.clone(), terminal.clone()]
+        };
+        let expected = if reversed {
+            vec![DurableOutcome::Accepted, DurableOutcome::Duplicate]
+        } else {
+            vec![DurableOutcome::Accepted; 2]
+        };
+        assert_eq!(store.persist_monitors(batch).await.unwrap(), expected);
+        let history = store
+            .list_monitor_runs(project, monitor, None, None, None, 100)
+            .await
+            .unwrap();
+        assert_eq!(history.items.len(), 1);
+        assert_eq!(history.items[0].status, MonitorRunStatus::Success);
+        assert_eq!(history.items[0].finished_at, terminal.run.finished_at);
+        assert_eq!(
+            store
+                .load_monitor(project, monitor)
+                .await
+                .unwrap()
+                .last_status,
+            Some(MonitorRunStatus::Success)
+        );
+        assert_eq!(
+            store.persist_monitors(vec![start, terminal]).await.unwrap(),
+            vec![DurableOutcome::Duplicate; 2]
+        );
+        assert_eq!(
+            store
+                .list_monitor_runs(project, monitor, None, None, None, 100)
+                .await
+                .unwrap(),
+            history
+        );
+        assert_eq!(
+            store
+                .load_monitor(project, monitor)
+                .await
+                .unwrap()
+                .last_status,
+            Some(MonitorRunStatus::Success)
+        );
+    }
+}
+
 pub async fn terminal_merge_order(store: &dyn MonitorStore, project: ProjectId) {
     let now = i64::try_from(
         SystemTime::now()
