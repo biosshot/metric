@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed Docker/native PostgreSQL acceptance coordinator; synthetic data only."""
+"""Docker/native PostgreSQL gates and shared Mongo functional checks; synthetic data only."""
 from __future__ import annotations
 
 import argparse
@@ -26,8 +26,12 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = "metric-pg-dev-postgres-1"
+MONGO_CONTAINER = "metric-pg-baseline-mongodb-1"
 ADMIN_URI = "postgres://metric_test:metric-postgres-local-only@127.0.0.1:54329/metric_test"
 HMAC = "07" * 32
+CRUD_CASES = ["API token create/list/scoped access/revoke", "DSN key create/list/use/disable",
+    "Issue resolve/idempotent retry/reopen", "Saved query create/read/update/delete/scope/revision",
+    "Dashboard create/read/update/delete/scope/revision", "Project deletion request/cancel"]
 
 
 def run(args, *, env=None, timeout=600, capture=False, cwd=ROOT, combine=False):
@@ -44,6 +48,16 @@ def run(args, *, env=None, timeout=600, capture=False, cwd=ROOT, combine=False):
 def psql(database, statement):
     return run(["docker", "exec", CONTAINER, "psql", "-U", "metric_test", "-d",
                 database, "-v", "ON_ERROR_STOP=1", "-Atc", statement], capture=True).strip()
+
+
+def mongo(database, statement):
+    # Only UUID namespaces owned by this coordinator may be inspected/removed.
+    if not re.fullmatch(r"metric_mongo_runtime_[0-9a-f]{32}", database):
+        raise RuntimeError("unowned Mongo test namespace")
+    script = f"const fixture = db.getSiblingDB({json.dumps(database)}); " + statement
+    return run(["docker", "exec", MONGO_CONTAINER, "mongosh", "--quiet",
+        "--username", "metric", "--password", "metric-local-only",
+        "--authenticationDatabase", "admin", "--eval", script], capture=True, timeout=40).strip()
 
 
 def require_docker(fixture=True):
@@ -183,11 +197,11 @@ class NativeServer:
         until = time.monotonic() + 90
         while time.monotonic() < until:
             if self.process.poll() is not None:
-                raise RuntimeError("native PostgreSQL server exited during startup; captured diagnostics withheld")
+                raise RuntimeError("native server exited during startup; captured diagnostics withheld")
             if http.ready():
                 return
             time.sleep(0.1)
-        raise RuntimeError("native PostgreSQL readiness deadline exceeded")
+        raise RuntimeError("native server readiness deadline exceeded")
 
     def stop(self):
         if self.process is not None:
@@ -213,6 +227,8 @@ def sdk_events(http, project, use_browser=False):
                     "--configuration", "Release", "--no-build", "--no-restore", "--", dsn], ROOT),
         "go": (["go", "run", ".", dsn], ROOT / "sdk-tests/go"),
         "rust": (["cargo", "run", "--quiet", "--locked", "-j1", "--manifest-path", "sdk-tests/rust/Cargo.toml", "--", dsn], ROOT),
+        "ruby": (["ruby", "sdk-tests/ruby/send_error.rb", dsn], ROOT),
+        "php": ([sys.executable, "sdk-tests/php/run.py", dsn], ROOT),
     }
     evidence = []
     for name, (command, cwd) in senders.items():
@@ -388,7 +404,7 @@ def migration_owner(database):
         owner.wait(timeout=10)
 
 
-def exercise_http(http, setup_token, use_sdk=False, use_browser=False):
+def exercise_http(http, setup_token, use_sdk=False, use_browser=False, backend="postgres"):
     context = http.request("/api/v1/auth/bootstrap", {"setup_token": setup_token,
         "email": "postgres-test@example.invalid", "display_name": "Synthetic Owner",
         "password": "synthetic correct horse battery staple", "organization_slug": "pg-test",
@@ -397,8 +413,9 @@ def exercise_http(http, setup_token, use_sdk=False, use_browser=False):
         "password": "synthetic correct horse battery staple", "organization_id": context["organization_id"]})
     http.headers.update({"x-metric-organization-id": context["organization_id"], "x-csrf-token": login["csrf_token"]})
     status = http.request("/api/v1/status")
-    if status["components"].get("postgres") != "available" or "mongodb" in status["components"]:
-        raise RuntimeError("component status did not identify the selected PostgreSQL backend")
+    inactive = "mongodb" if backend == "postgres" else "postgres"
+    if status["components"].get(backend) != "available" or inactive in status["components"]:
+        raise RuntimeError("component status did not identify the selected storage backend")
     if use_browser:
         run(["node", "web/tests/e2e/real-session.mjs", http.base,
              "postgres-test@example.invalid", "synthetic correct horse battery staple",
@@ -434,6 +451,7 @@ def exercise_http(http, setup_token, use_sdk=False, use_browser=False):
     query = {"source": "errors", "query": "", "result": {"kind": "records"}, "limit": 10}
     http.request(f"/api/v1/projects/{project['project_id']}/query", query)
     sdk = sdk_events(http, project, use_browser) if use_sdk else []
+    exercise_crud(http, project, event, other)
     return project, event, sdk
 
 
@@ -446,12 +464,153 @@ def server_binary(args):
     return binary
 
 
+def exercise_migration_wait(http, database):
+    until = time.monotonic() + 10
+    while True:
+        try:
+            http.request("/live")
+            break
+        except OSError:
+            if time.monotonic() >= until:
+                raise RuntimeError("maintenance listener did not start")
+            time.sleep(0.1)
+    until = time.monotonic() + 10
+    while True:
+        progress = http.request("/api/v1/projects", expected=503)
+        if progress["status"] == "waiting_for_migration":
+            break
+        if time.monotonic() >= until:
+            raise RuntimeError("migration ownership wait was not reported")
+        time.sleep(0.1)
+    http.request("/ready", expected=503)
+    if psql(database, "SELECT to_regclass('metric._sqlx_migrations') IS NOT NULL") != "f":
+        raise RuntimeError("waiting application changed the schema without ownership")
+
+
+def exercise_crud(http, project, event, other):
+    prefix = f"/api/v1/projects/{project['project_id']}"
+    foreign = f"/api/v1/projects/{other['project_id']}"
+    expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).isoformat()
+    token = http.request("/api/v1/auth/tokens", {"name": "functional-token",
+        "scopes": ["event:read", "issue:read"], "expires_at": expires}, expected=201)
+    listed = http.request("/api/v1/auth/tokens")["items"]
+    if not any(row["id"] == token["id"] for row in listed) or token["token"] in json.dumps(listed):
+        raise RuntimeError("API token list lost metadata or exposed its secret")
+    client = Http(http.base) if not isinstance(http, ContainerHttp) else ContainerHttp(http.container)
+    client.headers["Authorization"] = "Bearer " + token["token"]
+    client.request(prefix + "/events/" + event["event_id"])
+    client.request(prefix + "/keys", {"label": "must-be-forbidden"}, expected=403)
+    http.request("/api/v1/auth/tokens/" + token["id"], method="DELETE", expected=204)
+    client.request(prefix + "/events/" + event["event_id"], expected=401)
+
+    key = http.request(prefix + "/keys", {"label": "functional-key"}, expected=201)["dsn_key"]
+    if not any(row["dsn_key"] == key for row in http.request(prefix + "/keys")["items"]):
+        raise RuntimeError("new DSN key was not listed")
+    payload = {"event_id": event["event_id"], "platform": "python", "message": "duplicate fixture"}
+    path = f"/api/{project['project_id']}/store/?sentry_key={key}"
+    http.request(path, payload)
+    http.request(prefix + "/keys/" + key, method="DELETE", expected=204)
+    http.request(path, payload, expected=401)
+    http.request(prefix + "/events/" + event["event_id"])
+
+    issue_path = prefix + "/issues/" + event["issue_id"]
+    command = {"action": "resolve", "idempotency_key": uuid.uuid4().hex}
+    first = http.request(issue_path + "/lifecycle", command)
+    again = http.request(issue_path + "/lifecycle", command)
+    if not first["applied"] or again["applied"] or again["issue"]["status"] != "resolved":
+        raise RuntimeError("Issue lifecycle retry was not idempotent")
+    http.request(issue_path + "/lifecycle", {"action": "reopen", "idempotency_key": uuid.uuid4().hex})
+    if http.request(issue_path)["status"] != "open":
+        raise RuntimeError("Issue reopen did not persist")
+
+    now = int(time.time() * 1000)
+    query = {"dataset": "errors", "from": now - 3_600_000, "until": now + 60_000,
+        "limit": 10, "query": "level:error"}
+    saved = http.request(prefix + "/saved-queries", {"name": "functional query ' Ж", "query": query}, expected=201)
+    saved_path = prefix + "/saved-queries/" + saved["id"]
+    if http.request(saved_path)["query"] != saved["query"]:
+        raise RuntimeError("saved query changed after persistence")
+    http.request(foreign + "/saved-queries/" + saved["id"], expected=404)
+    updated = {"revision": saved["revision"], "name": "updated query", "query": query}
+    saved = http.request(saved_path, updated, method="PATCH")
+    http.request(saved_path, updated, method="PATCH", expected=409)
+    dashboard_input = {"name": "functional dashboard", "widgets": [{"title": "Errors",
+        "saved_query_id": saved["id"], "shape": "table"}], "refresh_interval": "manual"}
+    dashboard = http.request(prefix + "/dashboards", dashboard_input, expected=201)
+    dashboard_path = prefix + "/dashboards/" + dashboard["id"]
+    if http.request(dashboard_path)["widgets"] != dashboard["widgets"]:
+        raise RuntimeError("dashboard widgets changed after persistence")
+    http.request(foreign + "/dashboards/" + dashboard["id"], expected=404)
+    dashboard_input.update(revision=dashboard["revision"], name="updated dashboard", widgets=dashboard["widgets"])
+    http.request(dashboard_path, dashboard_input, method="PATCH")
+    http.request(dashboard_path, dashboard_input, method="PATCH", expected=409)
+    http.request(dashboard_path, method="DELETE", expected=204)
+    http.request(dashboard_path, expected=404)
+    http.request(saved_path, method="DELETE", expected=204)
+    http.request(saved_path, expected=404)
+
+    operation = uuid.uuid4().hex
+    http.request(foreign, {"confirm_slug": http.request(foreign)["slug"]}, method="DELETE", expected=202,
+        headers={"idempotency-key": operation})
+    http.request(foreign + "/deletion/cancel", {"operation_id": operation})
+    http.request(foreign)
+
+
+def lifecycle_counts(database, backend, project_id):
+    project_id = int(project_id)
+    # Static fixture-owned identifiers, generated numeric project identity only.
+    names = ("error_events", "issues", "logs", "spans", "sessions", "feedback",
+        "monitors", "monitor_runs", "metric_buckets", "replays", "project_keys")
+    if backend == "postgres":
+        pairs = ",".join(f"'{name}',(SELECT count(*) FROM metric.{name} WHERE project_id={project_id})" for name in names)
+        return json.loads(psql(database, f"SELECT json_build_object({pairs})"))
+    script = "const counts={}; "
+    for name in names:
+        field = "project_id" if name == "project_keys" else "p"
+        script += f"counts.{name}=fixture.{name}.countDocuments({{{field}:{project_id}}}); "
+    return json.loads(mongo(database, script + "print(JSON.stringify(counts))"))
+
+
+def exercise_purge(http, project, database, backend, all_sdk):
+    prefix = f"/api/v1/projects/{project['project_id']}"
+    before = lifecycle_counts(database, backend, project["project_id"])
+    required = ("error_events", "issues", "project_keys")
+    if all_sdk:
+        required = tuple(before)
+    if any(before[name] == 0 for name in required):
+        raise RuntimeError("purge fixture did not populate each required record family")
+    slug = http.request(prefix)["slug"]
+    http.request(prefix, {"confirm_slug": slug}, method="DELETE", expected=202,
+        headers={"idempotency-key": uuid.uuid4().hex})
+    until = time.monotonic() + 60
+    while True:
+        status = http.request(prefix + "/deletion")
+        if status["phase"] == "deleted":
+            break
+        if time.monotonic() >= until:
+            raise RuntimeError("project purge did not complete before its functional deadline")
+        time.sleep(0.2)
+    after = lifecycle_counts(database, backend, project["project_id"])
+    if any(after.values()):
+        raise RuntimeError("project purge left owned records: " + json.dumps(after))
+    # A tombstone may remain visible to administrators; no authoritative payload survives.
+    event_id = uuid.uuid4().hex
+    http.request(f"/api/{project['project_id']}/store/?sentry_key={project['dsn_key']}",
+        {"event_id": event_id, "message": "must not survive deletion"}, expected=401)
+    return {"populated": before, "remaining": after}
+
+
 def server_suite(args):
     binary = server_binary(args)
-    database = "metric_pg_runtime_" + uuid.uuid4().hex
+    backend = args.backend
+    database = ("metric_pg_runtime_" if backend == "postgres" else "metric_mongo_runtime_") + uuid.uuid4().hex
     # Only an identifier generated in this invocation is interpolated into DDL.
-    assert re.fullmatch(r"metric_pg_runtime_[0-9a-f]{32}", database)
-    psql("metric_test", f"CREATE DATABASE {database}")
+    if backend == "postgres":
+        assert re.fullmatch(r"metric_pg_runtime_[0-9a-f]{32}", database)
+        psql("metric_test", f"CREATE DATABASE {database}")
+    else:
+        if mongo(database, "print(fixture.getCollectionNames().length)") != "0":
+            raise RuntimeError("synthetic Mongo namespace already exists")
     temp_root = ROOT / "target/postgres-runtime-tests"
     temp_root.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix="runtime-", dir=temp_root))
@@ -461,11 +620,14 @@ def server_suite(args):
             del env[name]
     env["METRIC_POSTGRES_TEST_URI"] = ADMIN_URI.rsplit("/", 1)[0] + "/" + database
     env["METRIC_POSTGRES_TEST_HMAC"] = HMAC
+    env["METRIC_MONGO_TEST_URI"] = "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000"
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     config = directory / "metric.toml"
-    config.write_text((ROOT / "deploy/metric.postgres.test.toml").read_text(encoding="utf-8")
+    source = (ROOT / "deploy/metric.postgres.test.toml").read_text(encoding="utf-8")
+    source = source.replace('backend = "postgres"', f'backend = "{backend}"', 1)
+    config.write_text(source
         .replace('http_address = "0.0.0.0:4001"', f'http_address = "127.0.0.1:{port}"')
         .replace('root = "/var/lib/metric/blobs"', f'root = "{directory.as_posix()}/blobs"'), encoding="utf-8")
     server = NativeServer(binary, config, env)
@@ -473,40 +635,27 @@ def server_suite(args):
         # Explicit selection must not resolve unused Mongo secrets; CLI performs
         # no network connection and must redact both selected URI/HMAC values.
         with config.open("a", encoding="utf-8") as f:
-            f.write('\n[mongodb]\nuri={env="METRIC_TEST_UNUSED_MONGO_MUST_NOT_RESOLVE"}\n')
+            if backend == "postgres":
+                f.write('\n[mongodb]\nuri={env="METRIC_TEST_UNUSED_MONGO_MUST_NOT_RESOLVE"}\n')
+            else:
+                f.write(f'\n[mongodb]\nuri={{env="METRIC_MONGO_TEST_URI"}}\ndatabase="{database}"\n')
             if args.suite == "load":
                 f.write('\n[scheduler]\nmaintenance_interval="2s"\n')
+            if args.verify_purge:
+                f.write('\n[project_deletion]\ngrace_period="3s"\npoll_interval="100ms"\ndelete_batch_documents=32\n')
         run([str(binary), "--config", str(config), "--check-config"], env=env, capture=True)
         effective = run([str(binary), "--config", str(config), "--print-effective-config"], env=env, capture=True)
-        if HMAC in effective or "metric-postgres-local-only" in effective:
+        if any(secret in effective for secret in (HMAC, "metric-postgres-local-only", "metric-local-only")):
             raise RuntimeError("effective configuration exposed fixture secrets")
         http = Http(f"http://127.0.0.1:{port}")
-        with migration_owner(database):
+        with migration_owner(database) if backend == "postgres" else contextlib.nullcontext():
             server.start()
-            until = time.monotonic() + 10
-            while True:
-                try:
-                    http.request("/live")
-                    break
-                except OSError:
-                    if time.monotonic() >= until:
-                        raise RuntimeError("maintenance listener did not start")
-                    time.sleep(0.1)
-            until = time.monotonic() + 10
-            while True:
-                progress = http.request("/api/v1/projects", expected=503)
-                if progress["status"] == "waiting_for_migration":
-                    break
-                if time.monotonic() >= until:
-                    raise RuntimeError("migration ownership wait was not reported")
-                time.sleep(0.1)
-            http.request("/ready", expected=503)
-            if psql(database, "SELECT to_regclass('metric._sqlx_migrations') IS NOT NULL") != "f":
-                raise RuntimeError("waiting application changed the schema without ownership")
+            if backend == "postgres":
+                exercise_migration_wait(http, database)
         server.wait_ready(http)
         if not server.token:
             raise RuntimeError("empty synthetic installation did not emit bootstrap token")
-        project, event, sdk = exercise_http(http, server.token, args.sdk, args.browser)
+        project, event, sdk = exercise_http(http, server.token, args.sdk, args.browser, backend)
         # Real process replacement, same native DB and Blob directory.
         server.stop()
         server.start()
@@ -516,16 +665,21 @@ def server_suite(args):
             raise RuntimeError("restart changed authoritative Event")
         if args.suite == "load":
             return load_suite(args, http, project, event, database, server)
-        return {"suite": "server", "passed": 10, "sdk": sdk, "schema_generation": int(psql(database, "SELECT generation FROM metric.schema_state"))}
+        purge = exercise_purge(http, project, database, backend, args.sdk and args.browser) if args.verify_purge else None
+        generation = psql(database, "SELECT generation FROM metric.schema_state") if backend == "postgres" else mongo(database, 'print(fixture.schema_meta.findOne({_id:"metric.schema"}).generation)')
+        return {"suite": "server", "backend": backend, "passed": 10, "sdk": sdk, "schema_generation": int(generation), "crud": CRUD_CASES, "purge": purge}
     except RuntimeError as error:
-        if "Sessions health" in str(error):
+        if backend == "postgres" and "Sessions health" in str(error):
             counts = psql(database, "SELECT json_build_object('session_rows',(SELECT count(*) FROM metric.sessions),'session_states',(SELECT json_agg(x) FROM (SELECT state,count(*) FROM metric.sessions GROUP BY state ORDER BY state) x),'health_sessions',(SELECT sum(sessions) FROM metric.session_stats_hourly),'health_crashed',(SELECT sum(crashed) FROM metric.session_stats_hourly))")
             raise RuntimeError(f"{error}; synthetic DB counters: {counts}") from error
         raise
     finally:
         server.stop()
         # The exact generated DB and directory are owned by this invocation.
-        psql("metric_test", f"DROP DATABASE {database} WITH (FORCE)")
+        if backend == "postgres":
+            psql("metric_test", f"DROP DATABASE {database} WITH (FORCE)")
+        else:
+            mongo(database, "fixture.dropDatabase()")
         resolved = directory.resolve()
         if resolved.parent == temp_root.resolve() and resolved.name.startswith("runtime-"):
             shutil.rmtree(resolved)
@@ -831,12 +985,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", required=True, choices=("adapter", "server", "startup", "security", "migrations", "faults", "container", "offline", "load"))
     parser.add_argument("--binary", help="already-built server binary; avoids a nested Cargo build")
-    parser.add_argument("--sdk", action="store_true", help="require installed real Node/Python/Java/.NET/Go/Rust SDK fixtures")
+    parser.add_argument("--backend", default="postgres", choices=("postgres", "mongodb"), help="real server functional gates may also select the independent Mongo fixture")
+    parser.add_argument("--verify-purge", action="store_true", help="server suite: verify real project deletion and zero remaining owned records after readback/restart")
+    parser.add_argument("--sdk", action="store_true", help="require installed real Node/Python/Java/.NET/Go/Rust/Ruby/PHP SDK fixtures")
     parser.add_argument("--browser", action="store_true", help="require installed Playwright and built Web/browser SDK fixtures")
     parser.add_argument("--build-image", action="store_true", help="build the current source image with serialized Cargo before container gates")
     parser.add_argument("--soak-duration", default="30m", help="bounded load interval; short diagnostics do not satisfy the 30 minute gate")
     args = parser.parse_args()
-    require_docker(args.suite not in ("container", "offline"))
+    if args.verify_purge and args.suite != "server":
+        raise RuntimeError("purge verification is a functional server gate")
+    if args.backend == "mongodb":
+        if args.suite != "server":
+            raise RuntimeError("Mongo selection supports only the functional server suite")
+        run(["docker", "info", "--format", "{{.ServerVersion}}"], capture=True, timeout=20)
+        if run(["docker", "inspect", "--format", "{{.State.Health.Status}}", MONGO_CONTAINER], capture=True).strip() != "healthy":
+            raise RuntimeError("isolated Mongo fixture must be healthy; no silent skip")
+    else:
+        require_docker(args.suite not in ("container", "offline"))
     if args.build_image:
         build_image()
     if args.suite in ("server", "load"):
@@ -860,5 +1025,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"PostgreSQL acceptance failed: {error}", file=sys.stderr)
+        print(f"Storage acceptance failed: {error}", file=sys.stderr)
         sys.exit(1)

@@ -3,6 +3,11 @@
 Metric works with official Sentry SDKs. You normally only need to replace the
 Sentry DSN with the DSN shown by Metric.
 
+The automated Error Event gates also verify PHP `sentry/sentry` 4.34.0 on PHP 8.3
+and Ruby `sentry-ruby` 7.1.0 on Ruby 3.1. Their exact fixture versions and tested
+features are listed in [SDK compatibility](compatibility.md). Framework samples
+below may use a separately verified SDK version.
+
 To keep installed applications' existing DSNs, follow
 [Move from Sentry without changing client DSNs](migrate-from-sentry.md).
 

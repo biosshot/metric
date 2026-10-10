@@ -20,6 +20,40 @@ immutable captured-fixture gate passes. Validate the inventory and evidence with
 - Keep performance and compatibility tests separate.
 - Add a new directory for each SDK family; do not share package dependency graphs.
 
+## Ruby and PHP SDKs
+
+Ruby pins `sentry-ruby` 7.1.0 and Bundler 2.3.27; install on Ruby 3.1.7 with
+`BUNDLE_PATH=.deps BUNDLE_FROZEN=true bundle install` from `sdk-tests/ruby`.
+PHP pins `sentry/sentry` 4.34.0; use PHP 8.3 with curl, mbstring, OpenSSL and zip,
+then run `python sdk-tests/php/prepare.py` from the repository root. Composer
+2.10.3 is downloaded into the fixture and checked against its published SHA256;
+the install uses the committed lockfile, with plugins and scripts disabled.
+The Windows PHP sender supplies its own extension settings and does not edit php.ini.
+
+Both real-process Error Event gates are in `sdk_compatibility_e2e`, named
+`real_ruby_sdk_sends_an_error_event` and `real_php_sdk_sends_an_error_event`.
+They verify accepted identity, SDK metadata, exception, environment/release and
+absence of unexpected blobs. Ruby closes its worker before returning; the Go
+sender also joins its telemetry worker with Client.Close after Flush to prevent
+process exit while a scheduler-owned batch is still in flight.
+
+The composed-server coordinator can execute the same 16 SDK paths and six CRUD
+groups against either database:
+
+```text
+python scripts/test-postgres.py --suite server --backend postgres --sdk --browser --verify-purge
+python scripts/test-postgres.py --suite server --backend mongodb --sdk --browser --verify-purge
+```
+
+Supply `--binary` to reuse a built server. Start the selected synthetic Docker
+fixture first. Run each backend sequentially; the Mongo fixture is the existing
+`metric-pg-baseline` project using `deploy/compose.dev.yml`. Each invocation owns
+a fresh UUID database and Blob directory, verifies restart/readback, and drops
+only that namespace after terminating its server. Purge checks run after SDK
+readback with a fixture-only three-second grace, then require zero owned records
+in all eleven populated primary families. Physical orphan Blob deletion follows
+the configured GC grace and is tested separately by storage/service gates.
+
 ## Node SDK
 
 Install its isolated dependencies:

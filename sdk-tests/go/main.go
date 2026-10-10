@@ -40,6 +40,8 @@ func main() {
 
 	eventID := sentry.CaptureException(errors.New("Metric real Go SDK compatibility event"))
 	flushed := sentry.Flush(8 * time.Second)
+	// Join the telemetry worker before this short-lived sender exits.
+	sentry.CurrentHub().Client().Close()
 	if !flushed || eventID == nil {
 		fmt.Fprintln(os.Stderr, "the real Go SDK did not flush the captured Event")
 		os.Exit(2)
