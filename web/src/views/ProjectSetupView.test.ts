@@ -73,7 +73,7 @@ describe('ProjectSetupView', () => {
     expect(container.textContent).not.toContain('internal-key@');
   });
 
-  it('shows all seven supported SDKs to a project administrator', async () => {
+  it('shows all supported SDKs to a project administrator', async () => {
     permissions.add('project:admin');
     api.keys.mockResolvedValue({
       items: [{ dsn_key: 'current-key', label: 'Default', state: 'active' }],
@@ -83,8 +83,17 @@ describe('ProjectSetupView', () => {
     await screen.findByText('Installation');
     await fireEvent.click(screen.getByRole('combobox', { name: 'SDK' }));
 
-    expect(screen.getAllByRole('option')).toHaveLength(7);
-    for (const label of ['JavaScript Browser', 'Node.js', 'Python', 'Java', '.NET', 'Go', 'Rust']) {
+    expect(screen.getAllByRole('option')).toHaveLength(8);
+    for (const label of [
+      'JavaScript Browser',
+      'Node.js',
+      'PHP',
+      'Python',
+      'Java',
+      '.NET',
+      'Go',
+      'Rust',
+    ]) {
       expect(screen.getByRole('option', { name: label })).toBeVisible();
     }
   });
@@ -103,6 +112,13 @@ describe('ProjectSetupView', () => {
 
     expect(container.textContent).toContain('cargo add sentry@0.48.5');
     expect(container.textContent).toContain('sentry::capture_message');
+
+    await fireEvent.click(screen.getByRole('combobox', { name: 'SDK' }));
+    await fireEvent.click(screen.getByRole('option', { name: 'PHP' }));
+    expect(container.textContent).toContain('composer require sentry/sentry:4.19.1');
+    expect(container.textContent).toContain('\\Sentry\\captureException');
+    const expectedDsn = `${window.location.protocol}//current-key@${window.location.host}/42`;
+    expect(container.textContent).toContain(expectedDsn);
   });
 
   it('injects the current project DSN into the minimal example', async () => {
