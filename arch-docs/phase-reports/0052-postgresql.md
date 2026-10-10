@@ -1777,3 +1777,50 @@ active-content update guard, including the empty/orphan case, so a stale publish
 receives the existing Busy/retry outcome instead of acknowledging an overwrite.
 Prove concurrent preservation and orphan rescue on Docker. No repair of this race
 has been implemented or authorized, and no broader Mongo refactor is proposed.
+
+
+## 2026-10-10 — Approved minimal Mongo Artifact association repair
+
+The user approved guarding the active-content replacement with its previously
+read association array. The guard uses the original BSON value; absent b uses
+$exists:false so an active orphan can be rescued. Native ID/state guards and the
+existing reserved-generation/quota path remain intact. No schema, shared service,
+HTTP, configuration or PostgreSQL changes are part of this exception.
+
+Publication now permits at most 16 attempts (one initial attempt and 15 retries),
+matching existing Mongo association merge/removal bounds. Only a definite active
+association CAS miss is retried: re-read the document, validate content identity,
+and merge the original incoming associations into the latest stored list. A
+candidate from an earlier failed attempt is never carried forward; otherwise an
+association concurrently removed by another caller could be restored. Driver
+errors, unavailable/claimed/tombstoned content and reserved-generation misses
+retain existing outcomes; ambiguous writes and post-publication revision/upload
+errors are not replayed by this loop. Exhaustion returns ArtifactStoreError::Busy,
+not a success. No sleeps or new TOML controls are introduced.
+
+Existing application behavior is unchanged: Busy from incomplete assembly is
+transient and restores Pending. Recovery processes at most 100 eligible uploads
+per cleanup tick; the server uses artifacts.gc_interval (default 15m). There is
+no global attempt limit for that pre-existing background recovery. Complete-upload
+fast-path Busy propagates to the caller; completed uploads are not picked by the
+Pending/Assembling recovery scan. The current HTTP mapping returns 409 for Busy,
+so this report does not claim an automatic client retry or guaranteed completion.
+
+A permanent real Mongo Docker regression bootstraps a fresh synthetic database,
+publishes one association, then starts 32 public-port publishers together. Callers
+may retry Busy at most eight calls in the regression; every successful addition
+must remain observable. All 33 associations survive, each new association advances
+one project revision, and duplicate publication changes neither revision nor
+organization quota. Detaching all associations removes field b; re-publication
+rescues that orphan, removes its due deadline, blocks GC selection and retains
+one quota charge. Every worker is joined before cleanup. The generated database
+is dropped before final error propagation; no user data or Blob files are involved.
+
+Command: cargo test -p metric-mongo --test maintenance_store --locked -j1 --
+--ignored --test-threads=1 --nocapture, with METRIC_TEST_MONGODB_URI pointing to
+the isolated metric-pg-baseline Docker fixture. All three tests passed 3/3 in
+3.52 seconds, including the previously approved exact catalog-counter regression
+and bounded maintenance case. Strict Mongo library/maintenance-target Clippy with
+all features, --locked -j1 and -D warnings passed. The correction is scoped to
+Mongo Artifact publication and its regression; PostgreSQL remains at 160/164
+methods, with ProjectDeletionStore and final runtime/acceptance gates pending.

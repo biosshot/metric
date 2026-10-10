@@ -483,3 +483,178 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
 }
+
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn artifact_publication_preserves_concurrent_bindings_and_orphan_rescue() {
+    let database = test_database().await.unwrap();
+    let result = exercise_artifact_publication(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn exercise_artifact_publication(database: &Database) -> Result<(), Box<dyn Error>> {
+    use metric_domain::{
+        artifacts::{ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactUpload},
+        debug_files::DebugId,
+        finalization::ReleaseId,
+    };
+    use metric_mongo::{ArtifactQuota, MongoArtifactStore};
+    use metric_ports::{ArtifactStore, ArtifactStoreError};
+    use std::sync::Arc;
+
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
+    let store = MongoArtifactStore::from_database(database.clone(), ArtifactQuota::default());
+    let now = Timestamp::from_unix_millis(i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+    )?)?;
+    let original = ArtifactBinding::new(ProjectId::new(7)?, None, None)?;
+    let upload = ArtifactUpload {
+        id: [1; 16],
+        organization_id: OrganizationId::new(1)?,
+        sha1: [1; 20],
+        chunks: vec![[1; 20]],
+        bindings: vec![original.clone()],
+        created_at: now,
+        updated_at: now,
+    };
+    store.upsert_upload(upload.clone()).await?;
+    let bundle = ArtifactBundle {
+        id: ArtifactBundleId::from_bytes([1; 16]),
+        organization_id: upload.organization_id,
+        bindings: upload.bindings.clone(),
+        bundle_debug_id: DebugId::Uuid {
+            uuid: [9; 16],
+            appendix: 0,
+        },
+        debug_id_tokens: Vec::new(),
+        checksum: [1; 32],
+        sha1: upload.sha1,
+        size: 3,
+        uploaded_at: now,
+        generation: 0,
+    };
+    store.publish_bundle(upload.id, bundle.clone()).await?;
+    let start = Arc::new(tokio::sync::Barrier::new(32));
+    let mut publishers = Vec::new();
+    for seed in 1..=32_u8 {
+        let store = store.clone();
+        let mut candidate = bundle.clone();
+        candidate.bindings = vec![ArtifactBinding::new(
+            original.project_id,
+            Some(ReleaseId::from_bytes([seed; 16])),
+            None,
+        )?];
+        let start = start.clone();
+        publishers.push(tokio::spawn(async move {
+            start.wait().await;
+            // A caller may retry Busy after the adapter's bounded CAS attempts.
+            for _ in 0..8 {
+                match store.publish_bundle([1; 16], candidate.clone()).await {
+                    Err(ArtifactStoreError::Busy) => tokio::task::yield_now().await,
+                    result => return result,
+                }
+            }
+            Err(ArtifactStoreError::Busy)
+        }));
+    }
+    let mut revisions = std::collections::BTreeSet::new();
+    let mut failure = None;
+    // Join every worker before cleanup, including when one fails.
+    for publisher in publishers {
+        match publisher.await {
+            Ok(Ok(values)) => {
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].0, original.project_id);
+                revisions.insert(values[0].1);
+            }
+            result => failure = Some(format!("publication failed: {result:?}")),
+        }
+    }
+    if let Some(failure) = failure {
+        return Err(failure.into());
+    }
+    assert_eq!(revisions.len(), 32);
+    let stored = store
+        .load_for_project(original.project_id, bundle.id)
+        .await?;
+    assert_eq!(stored.bindings.len(), 33);
+    assert!(stored.bindings.contains(&original));
+    for seed in 1..=32_u8 {
+        assert!(stored.bindings.contains(&ArtifactBinding::new(
+            original.project_id,
+            Some(ReleaseId::from_bytes([seed; 16])),
+            None,
+        )?));
+    }
+    // Duplicate publication must not advance revisions or charge a second bundle.
+    assert!(
+        store
+            .publish_bundle(upload.id, bundle.clone())
+            .await?
+            .is_empty()
+    );
+    let projects = database.collection::<Document>("projects");
+    assert_eq!(
+        projects
+            .find_one(doc! { "_id": 7_i32 })
+            .await?
+            .unwrap()
+            .get_i64("ar")?,
+        33
+    );
+    let organizations = database.collection::<Document>("organizations");
+    let quota = organizations
+        .find_one(doc! { "_id": 1_i64 })
+        .await?
+        .unwrap();
+    assert_eq!(quota.get_i64("ab")?, 3);
+    assert_eq!(quota.get_i64("ac")?, 1);
+
+    // Remove every association through the port: the final one removes field b.
+    for binding in stored.bindings {
+        assert!(
+            store
+                .remove_binding(bundle.organization_id, bundle.id, binding, now)
+                .await?
+                .is_some()
+        );
+    }
+    let bundles = database.collection::<Document>("artifact_bundles");
+    let orphan = bundles
+        .find_one(doc! { "_id": binary(bundle.id.as_bytes()) })
+        .await?
+        .unwrap();
+    assert!(!orphan.contains_key("b"));
+    assert!(orphan.contains_key("e"));
+    // The upload cache was removed with its final binding, so recreate it normally.
+    store.upsert_upload(upload.clone()).await?;
+    assert_eq!(
+        store.publish_bundle(upload.id, bundle.clone()).await?.len(),
+        1
+    );
+    let rescued = bundles
+        .find_one(doc! { "_id": binary(bundle.id.as_bytes()) })
+        .await?
+        .unwrap();
+    assert!(!rescued.contains_key("e"));
+    assert_eq!(
+        store
+            .load_for_project(original.project_id, bundle.id)
+            .await?
+            .bindings,
+        bundle.bindings
+    );
+    assert!(store.claim_gc(now, now, [2; 16], 1).await?.is_empty());
+    let quota = organizations
+        .find_one(doc! { "_id": 1_i64 })
+        .await?
+        .unwrap();
+    assert_eq!(quota.get_i64("ab")?, 3);
+    assert_eq!(quota.get_i64("ac")?, 1);
+    Ok(())
+}
