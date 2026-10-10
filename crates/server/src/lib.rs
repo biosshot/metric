@@ -103,6 +103,8 @@ pub enum ServerError {
     #[error(transparent)]
     Mongo(#[from] MongoBootstrapError),
     #[error(transparent)]
+    Postgres(#[from] metric_postgres::PostgresError),
+    #[error(transparent)]
     Projects(#[from] ProjectServiceError),
     #[error("initial MongoDB connection exceeded its deadline")]
     MongoConnectTimeout,
@@ -338,7 +340,109 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         private_source_signer: runtime_private_source_signer,
         debug_file_cleanup_task,
         artifact_cleanup_task,
-    } = if let Some(uri) = secrets.mongodb_uri.take() {
+    } = if config.storage.backend == config::StorageBackend::Postgres {
+        let uri = secrets
+            .postgres_uri
+            .take()
+            .expect("validated PostgreSQL mode has a URI");
+        let migration_uri = secrets.postgres_migration_uri.take();
+        let hmac = secrets
+            .scrub_hmac_key
+            .take()
+            .expect("validated database mode has a scrub HMAC key");
+        let webhook_secret_box = webhook::WebhookSecretBox::new(&hmac);
+        startup_gate.report(http::StartupProgress {
+            phase: http::StartupPhase::InspectingSchema,
+            ..Default::default()
+        });
+        let prepare = async {
+            let reporter = |progress: metric_postgres::MigrationProgress| {
+                startup_gate.report(http::StartupProgress {
+                    phase: match progress.phase {
+                        metric_postgres::MigrationPhase::Inspecting => {
+                            http::StartupPhase::InspectingSchema
+                        }
+                        metric_postgres::MigrationPhase::Waiting => {
+                            http::StartupPhase::WaitingForMigration
+                        }
+                        metric_postgres::MigrationPhase::Running => http::StartupPhase::Migrating,
+                        metric_postgres::MigrationPhase::Complete => {
+                            http::StartupPhase::StartingServices
+                        }
+                    },
+                    completed_steps: progress.completed_steps,
+                    total_steps: progress.total_steps,
+                    ..Default::default()
+                });
+            };
+            let mut delay = std::time::Duration::from_millis(250);
+            let database = loop {
+                let attempt = async {
+                    metric_postgres::PostgresSchemaManager::ensure_with_reporter(
+                        migration_uri.as_ref().map_or(uri.expose(), |s| s.expose()),
+                        &config.postgres.connection,
+                        &config.postgres.migrations,
+                        &reporter,
+                    )
+                    .await?;
+                    metric_postgres::PostgresDatabase::connect(
+                        uri.expose(),
+                        &config.postgres.connection,
+                    )
+                    .await
+                }
+                .await;
+                match attempt {
+                    Ok(database) => break database,
+                    Err(error)
+                        if matches!(
+                            error,
+                            metric_postgres::PostgresError::MigrationBusy
+                                | metric_postgres::PostgresError::Unavailable
+                                | metric_postgres::PostgresError::Timeout
+                        ) =>
+                    {
+                        startup_gate.report(http::StartupProgress {
+                            phase: http::StartupPhase::WaitingForMigration,
+                            ..Default::default()
+                        });
+                        warn!(operation = "postgres.startup", category = %error, "PostgreSQL startup will retry while in maintenance");
+                        tokio::time::sleep(delay).await;
+                        delay = delay
+                            .saturating_mul(2)
+                            .min(std::time::Duration::from_secs(5));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            storage::StorageBundle::from_postgres(database, hmac, &config)
+        };
+        let stores = tokio::select! {
+            result=prepare=>result?,
+            ()=os_shutdown.cancelled()=>{
+                shutdown.begin();
+                server_task.await.map_err(|e|ServerError::Http(io::Error::other(e)))??;
+                return Ok(ExitCode::SUCCESS);
+            }
+        };
+        startup_gate.report(http::StartupProgress {
+            phase: http::StartupPhase::StartingServices,
+            ..Default::default()
+        });
+        assemble_runtime(
+            stores,
+            RuntimeAssembly {
+                config: &config,
+                clock: clock.clone(),
+                random: random.clone(),
+                blob_store: blob_store.clone(),
+                shutdown: &shutdown,
+                webhook_secret_box,
+                private_source_signer,
+            },
+        )
+        .await?
+    } else if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
             .take()

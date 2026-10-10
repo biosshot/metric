@@ -1869,3 +1869,63 @@ documentation, compatibility and deployment-profile validators passed.
 This completes adapter capability implementation. Server backend selection,
 maintenance startup progress, CLI/container/offline/SDK and resource/soak
 acceptance remain in progress; this entry does not claim finished delivery.
+
+
+## 2026-10-10 — Native backend selection and shared server composition
+
+The composition root now selects storage.backend (mongodb by default, postgres
+explicitly). PostgreSQL resolves only its selected URI/migration credentials,
+validates the same migration target, ensures the schema and constructs the complete
+StorageBundle<PostgresEventStore>. It reuses the existing generic service assembly,
+EventWriter, dispatcher, scheduler, signal writers, identity and HTTP services.
+No EventStore::Prepared/port change, Mongo factory change or implicit fallback is
+introduced. The no-Mongo-URI legacy mode and original shipped profiles remain.
+Archive configuration accepts the selected PostgreSQL URI instead of requiring
+an unused Mongo URI.
+
+Typed PostgreSQL TOML covers native TCP, verified/acknowledged weaker TLS, CA path,
+pool bounds, bootstrap/acquire/statement/lock/idle deadlines, migration auto/check
+mode and separate credentials. URI policy rejects unknown/conflicting options
+before driver parsing. Only selected database secret references are validated and
+resolved; shared scrub HMAC remains required. Effective config and Debug redact
+both URIs and CA locations. Existing approved driver environment inputs remain
+operator-controlled; their values are not logged.
+
+The native schema manager publishes a driver-free bounded phase/step report under
+its existing dedicated ownership. It uses SQLx transactional apply/ledger for each
+validated immutable SQL step and reports completion only after SQL/data verification
+and generation publication. It retains checkpointed Rust data-step recovery.
+Waiting ownership is cancellable and performs no schema mutation. Server startup
+maps that report into the existing maintenance listener; unavailable/timeout/busy
+attempts retry with 250ms-to-5s capped delay. Permanent incompatibility/permission/
+invalid-data categories exit redacted. SQL syntax/data migration faults are not
+classified as indefinite temporary startup errors. Runtime workers start only
+after verification. Shutdown cancels ownership/retry waits.
+
+Six new ordinary config tests cover native selection without Mongo, inactive secret
+references, URI/HMAC requirements, weak-mode acknowledgement/bounds/unknown keys,
+redaction/separate target and archive enablement. The first draft fixtures used
+unsupported bare literal strings; they were corrected to the existing shared
+{ literal = value } representation. No shared secret contract was expanded.
+
+Gates: strict PostgreSQL/server all-target/all-feature Clippy --locked -j1
+-D warnings passed. All server library tests passed 69/69, original CLI tests
+passed 7/7 (including all production Mongo profiles). Real Docker migration tests
+passed 12/12 in 11.34 seconds, including monotonic progress, no Complete on failed
+DDL, cancellable ownership and the existing checkpoint/upgrade suite.
+
+The new acceptance coordinator is being developed separately. Its current actual
+server case passed 10 checks: CLI selected secrets/redaction, ownership maintenance
+(live 200, readiness/routes 503, schema untouched), auth/bootstrap, native Event
+write/scrub/finalization, duplicate counter preservation, scope/anonymous denial,
+query and same-DB process restart. The explicit ignored postgres_runtime_e2e target
+passed 1/1 in 9.55 seconds. Real Node/Python/Java/.NET/Go/Rust sender fixtures also
+flushed and finalized through the PostgreSQL-composed server; their records were
+read back through the authenticated API. Printed SDK UUIDs are normalized by the
+test coordinator to the native API's hex32 representation. These checks use newly
+generated synthetic DBs and Blob directories and clean them after joined workers;
+the fixture DB listing is empty. No Mongo source edit is included.
+
+Container/offline/browser SDK/UI, CI registration and 30-minute resource/load
+acceptance remain pending. The coordinator/Docker fixtures are not yet advertised
+as completed by this server composition stage.

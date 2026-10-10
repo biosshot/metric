@@ -41,6 +41,24 @@ pub struct SchemaStatus {
     pub generation: i64,
 }
 
+/// Bounded, driver-free progress. Contains no URI, SQL, row or checkpoint values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationPhase {
+    Inspecting,
+    Waiting,
+    Running,
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationProgress {
+    pub phase: MigrationPhase,
+    pub completed_steps: u32,
+    pub total_steps: u32,
+}
+
+type Reporter<'a> = &'a (dyn Fn(MigrationProgress) + Send + Sync);
+
 type StepFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, PostgresError>> + Send + 'a>>;
 
 /// Internal adapter extension point: future Rust migrations use bounded batches.
@@ -73,18 +91,29 @@ impl PostgresSchemaManager {
         connection_policy: &ConnectionPolicy,
         migration_policy: &MigrationPolicy,
     ) -> Result<SchemaStatus, PostgresError> {
+        Self::ensure_with_reporter(uri, connection_policy, migration_policy, &|_| {}).await
+    }
+
+    pub async fn ensure_with_reporter(
+        uri: &str,
+        connection_policy: &ConnectionPolicy,
+        migration_policy: &MigrationPolicy,
+        reporter: Reporter<'_>,
+    ) -> Result<SchemaStatus, PostgresError> {
         let migrator = registry();
-        Self::ensure_registry(
+        Self::ensure_registry_reported(
             uri,
             connection_policy,
             migration_policy,
             &migrator,
             &[],
             SCHEMA_GENERATION,
+            reporter,
         )
         .await
     }
 
+    #[cfg(test)]
     async fn ensure_registry(
         uri: &str,
         connection_policy: &ConnectionPolicy,
@@ -93,6 +122,35 @@ impl PostgresSchemaManager {
         data_steps: &[Box<dyn DataMigration>],
         generation: i64,
     ) -> Result<SchemaStatus, PostgresError> {
+        Self::ensure_registry_reported(
+            uri,
+            connection_policy,
+            policy,
+            migrator,
+            data_steps,
+            generation,
+            &|_| {},
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn ensure_registry_reported(
+        uri: &str,
+        connection_policy: &ConnectionPolicy,
+        policy: &MigrationPolicy,
+        migrator: &Migrator,
+        data_steps: &[Box<dyn DataMigration>],
+        generation: i64,
+        reporter: Reporter<'_>,
+    ) -> Result<SchemaStatus, PostgresError> {
+        let progress = MigrationProgress {
+            phase: MigrationPhase::Inspecting,
+            completed_steps: 0,
+            total_steps: u32::try_from(migrator.iter().count() + data_steps.len())
+                .map_err(|_| PostgresError::InvalidPolicy)?,
+        };
+        reporter(progress);
         if policy.lock_timeout < Duration::from_millis(1)
             || policy.lock_timeout > Duration::from_secs(300)
             || policy.statement_timeout < Duration::from_millis(1)
@@ -112,13 +170,16 @@ impl PostgresSchemaManager {
             .bind(policy.statement_timeout.as_millis().to_string())
             .bind(policy.lock_timeout.as_millis().to_string())
             .execute(&mut connection).await?;
-        acquire_ownership(&mut connection, policy.lock_timeout).await?;
+        acquire_ownership_reported(&mut connection, policy.lock_timeout, reporter, progress)
+            .await?;
         let result = ensure_owned(
             &mut connection,
             policy.mode,
             migrator,
             data_steps,
             generation,
+            reporter,
+            progress,
         )
         .await;
         // Close instead of returning a session advisory lock to a pool. Cancellation also
@@ -285,11 +346,32 @@ fn registry() -> Migrator {
     }
 }
 
+#[cfg(test)]
 async fn acquire_ownership(
     connection: &mut PgConnection,
     budget: Duration,
 ) -> Result<(), PostgresError> {
+    acquire_ownership_reported(
+        connection,
+        budget,
+        &|_| {},
+        MigrationProgress {
+            phase: MigrationPhase::Inspecting,
+            completed_steps: 0,
+            total_steps: 0,
+        },
+    )
+    .await
+}
+
+async fn acquire_ownership_reported(
+    connection: &mut PgConnection,
+    budget: Duration,
+    reporter: Reporter<'_>,
+    progress: MigrationProgress,
+) -> Result<(), PostgresError> {
     tokio::time::timeout(budget, async {
+        let mut reported_waiting = false;
         loop {
             let owned: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
                 .bind(MIGRATION_LOCK)
@@ -298,6 +380,13 @@ async fn acquire_ownership(
             if owned {
                 return Ok(());
             }
+            if !reported_waiting {
+                reporter(MigrationProgress {
+                    phase: MigrationPhase::Waiting,
+                    ..progress
+                });
+                reported_waiting = true;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     })
@@ -305,12 +394,15 @@ async fn acquire_ownership(
     .map_err(|_| PostgresError::MigrationBusy)?
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ensure_owned(
     connection: &mut PgConnection,
     mode: MigrationMode,
     migrator: &Migrator,
     data_steps: &[Box<dyn DataMigration>],
     generation: i64,
+    reporter: Reporter<'_>,
+    mut progress: MigrationProgress,
 ) -> Result<SchemaStatus, PostgresError> {
     let schema_exists: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'metric')")
@@ -356,15 +448,38 @@ async fn ensure_owned(
     } else if mode == MigrationMode::Check {
         return Err(PostgresError::MigrationRequired);
     }
+    let applied = connection
+        .list_applied_migrations(MIGRATION_TABLE)
+        .await
+        .map_err(migration_error)?;
+    progress.phase = MigrationPhase::Running;
+    progress.completed_steps =
+        u32::try_from(applied.len()).map_err(|_| PostgresError::InvalidData)?;
+    reporter(progress);
     if mode == MigrationMode::Auto {
-        migrator
-            .run(&mut *connection)
-            .await
-            .map_err(migration_error)?;
+        // Use SQLx's native transactional apply/ledger primitive under the same
+        // dedicated ownership. Registry/checksum/dirty validation happened above.
+        for migration in migrator.iter() {
+            if migration.migration_type.is_down_migration()
+                || applied
+                    .iter()
+                    .any(|installed| installed.version == migration.version)
+            {
+                continue;
+            }
+            connection
+                .apply(MIGRATION_TABLE, migration)
+                .await
+                .map_err(migration_error)?;
+            progress.completed_steps += 1;
+            reporter(progress);
+        }
     }
     validate_data_registry(connection, data_steps).await?;
     for step in data_steps {
         run_data_step(connection, step.as_ref(), mode).await?;
+        progress.completed_steps += 1;
+        reporter(progress);
     }
     if mode == MigrationMode::Auto {
         sqlx::query("UPDATE metric.schema_state SET generation=$1 WHERE singleton=true AND format_id='metric-postgres-v1'")
@@ -373,6 +488,10 @@ async fn ensure_owned(
     if read_state(connection).await? != generation {
         return Err(PostgresError::MigrationRequired);
     }
+    reporter(MigrationProgress {
+        phase: MigrationPhase::Complete,
+        ..progress
+    });
     Ok(SchemaStatus { generation })
 }
 
@@ -498,7 +617,22 @@ async fn run_data_step(
 
 fn migration_error(error: MigrateError) -> PostgresError {
     match error {
-        MigrateError::Execute(error) | MigrateError::ExecuteMigration(error, _) => error.into(),
+        MigrateError::Execute(error) | MigrateError::ExecuteMigration(error, _) => {
+            if let sqlx::Error::Database(database) = &error
+                && let Some(code) = database.code()
+            {
+                if code == "42501" {
+                    return PostgresError::PermissionDenied;
+                }
+                if code.starts_with("42") {
+                    return PostgresError::MigrationMismatch;
+                }
+                if code.starts_with("22") {
+                    return PostgresError::InvalidData;
+                }
+            }
+            error.into()
+        }
         MigrateError::VersionMissing(_) => PostgresError::NewerSchema,
         _ => PostgresError::MigrationMismatch,
     }
@@ -517,6 +651,99 @@ mod tests {
         PostgresSchemaManager::ensure(&fixture.uri, &fixture.policy, &MigrationPolicy::default())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
+    async fn reported_sql_progress_is_monotonic_and_complete_only_after_verification() {
+        let fixture = Fixture::new().await;
+        let reports = std::sync::Mutex::new(Vec::new());
+        let reporter = |p| reports.lock().unwrap().push(p);
+        PostgresSchemaManager::ensure_with_reporter(
+            &fixture.uri,
+            &fixture.policy,
+            &MigrationPolicy::default(),
+            &reporter,
+        )
+        .await
+        .unwrap();
+        let values = reports.lock().unwrap().clone();
+        assert_eq!(values.first().unwrap().phase, MigrationPhase::Inspecting);
+        assert_eq!(values.last().unwrap().phase, MigrationPhase::Complete);
+        assert_eq!(
+            values.last().unwrap().completed_steps,
+            SCHEMA_GENERATION as u32
+        );
+        assert!(values.iter().all(
+            |p| p.total_steps == SCHEMA_GENERATION as u32 && p.completed_steps <= p.total_steps
+        ));
+        assert!(
+            values
+                .windows(2)
+                .all(|p| p[0].completed_steps <= p[1].completed_steps)
+        );
+        reports.lock().unwrap().clear();
+        let bad = upgraded_registry("CREATE TABLE metric.report_rollback(id integer); SELECT 1/0;");
+        assert!(
+            PostgresSchemaManager::ensure_registry_reported(
+                &fixture.uri,
+                &fixture.policy,
+                &MigrationPolicy::default(),
+                &bad,
+                &[],
+                SCHEMA_GENERATION + 1,
+                &reporter
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !reports
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p.phase == MigrationPhase::Complete)
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
+    async fn reported_ownership_wait_is_cancellable_without_schema_mutation() {
+        let fixture = Fixture::new().await;
+        let mut owner = fixture.connection().await;
+        acquire_ownership(&mut owner, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let waiting = AtomicBool::new(false);
+        let reporter = |p: MigrationProgress| {
+            if p.phase == MigrationPhase::Waiting {
+                waiting.store(true, Ordering::SeqCst);
+            }
+        };
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(300),
+                PostgresSchemaManager::ensure_with_reporter(
+                    &fixture.uri,
+                    &fixture.policy,
+                    &MigrationPolicy::default(),
+                    &reporter
+                )
+            )
+            .await
+            .is_err()
+        );
+        assert!(waiting.load(Ordering::SeqCst));
+        let exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('metric._sqlx_migrations') IS NOT NULL")
+                .fetch_one(&mut owner)
+                .await
+                .unwrap();
+        assert!(!exists);
+        owner.close().await.unwrap();
+        bootstrap(&fixture).await;
+        fixture.cleanup().await;
     }
 
     #[tokio::test]

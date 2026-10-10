@@ -42,7 +42,10 @@ pub use finalization::PostgresFinalizationStore;
 pub use issues::{IssueCodecConfig, PostgresIssueStore};
 pub use maintenance::PostgresMaintenanceStore;
 pub use metrics::{MetricRetention, PostgresMetricStore};
-pub use migrations::{MigrationMode, MigrationPolicy, PostgresSchemaManager, SchemaStatus};
+pub use migrations::{
+    MigrationMode, MigrationPhase, MigrationPolicy, MigrationProgress, PostgresSchemaManager,
+    SchemaStatus,
+};
 pub use monitors::{MonitorRetention, PostgresMonitorStore};
 pub use notifications::PostgresNotificationStore;
 pub use projects::PostgresProjectStore;

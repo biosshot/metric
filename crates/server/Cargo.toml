@@ -17,6 +17,7 @@ metric-application = { path = "../application" }
 metric-blob = { path = "../blob" }
 metric-domain = { path = "../domain" }
 metric-mongo = { path = "../mongo" }
+metric-postgres = { path = "../postgres" }
 metric-ports = { path = "../ports" }
 metric-sentry-protocol = { path = "../sentry-protocol" }
 metric-symbolication = { path = "../symbolication" }
