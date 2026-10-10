@@ -84,7 +84,7 @@ describe('ProjectSettingsView inbound filters', () => {
       expect(screen.getByRole('heading', { name: 'Inbound filters' })).toBeVisible();
     });
     expect(
-      screen.getByText(/discarded before MongoDB, attachments, or BlobStore writes/i),
+      screen.getByText(/discarded before database, attachment, or BlobStore writes/i),
     ).toBeVisible();
     expect(screen.getByText(/No inbound filters/i)).toBeVisible();
 

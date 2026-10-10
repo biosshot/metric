@@ -738,7 +738,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             identity_service.clone(),
             release_service,
         ))
-        .merge(web_http::router());
+        .merge(web_http::router())
+        .layer(axum::Extension(config.storage.backend));
     let gate_readiness = readiness.clone();
     let application =
         http::router_with_probe(shutdown.signal(), metrics, application_routes, readiness);

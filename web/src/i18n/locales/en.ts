@@ -833,7 +833,7 @@ export default {
     beforeStorage: 'Before durable storage',
     inboundFilters: 'Inbound filters',
     inboundFiltersHelp:
-      'Matching signals are acknowledged and discarded before MongoDB, attachments, or BlobStore writes.',
+      'Matching signals are acknowledged and discarded before database, attachment, or BlobStore writes.',
     addFilter: 'Add filter',
     noFilters: 'No inbound filters. Every enabled signal follows its normal durable path.',
     signal: 'Signal',
@@ -945,7 +945,7 @@ export default {
     destination: 'Destination',
     addChannel: 'Add a delivery channel',
     credentialsHelp:
-      'Credentials are encrypted before MongoDB storage and never returned by the API.',
+      'Credentials are encrypted before database storage and never returned by the API.',
     telegram: 'Telegram',
     telegramHelp: 'Send a concise alert through your bot.',
     email: 'Email via SMTP',

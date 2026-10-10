@@ -5262,12 +5262,17 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
 async fn component_status(
     State(state): State<NativeHttpState>,
     headers: HeaderMap,
+    backend: Option<Extension<crate::config::StorageBackend>>,
 ) -> Result<Json<Value>, HttpApiError> {
     let _ = authenticate(&state, &headers, false).await?;
+    let database_name = match backend.map(|Extension(value)| value).unwrap_or_default() {
+        crate::config::StorageBackend::MongoDb => "mongodb",
+        crate::config::StorageBackend::Postgres => "postgres",
+    };
     Ok(Json(json!({
         "status": if state.required_ready { "ready" } else { "degraded" },
         "components": {
-            "mongodb": if state.required_ready { "available" } else { "unavailable" },
+            (database_name): if state.required_ready { "available" } else { "unavailable" },
             "writer": if state.required_ready { "running" } else { "stopped" },
             "dispatcher": if state.required_ready { "running" } else { "stopped" },
             "processor": if state.required_ready { "running" } else { "stopped" },
