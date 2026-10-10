@@ -417,11 +417,10 @@ mod tests {
             ssl_root_cert: Some(wrong.clone().into()),
             ..policy.clone()
         };
-        assert!(
-            PostgresDatabase::connect(&uri, &wrong_policy)
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            PostgresDatabase::connect(&uri, &wrong_policy).await,
+            Err(PostgresError::TlsFailure)
+        ));
         let mut bad_host = url::Url::parse(&uri).unwrap();
         bad_host.set_host(Some("localhost")).unwrap();
         // Prove an actual certificate-name rejection rather than accepting a DNS
@@ -436,11 +435,18 @@ mod tests {
         assert!(matches!(hostname_result, Err(sqlx::Error::Io(ref error))
             if error.kind() == std::io::ErrorKind::InvalidData
                 && error.to_string().contains("not valid for name")));
+        assert_eq!(
+            PostgresError::from(hostname_result.unwrap_err()),
+            PostgresError::TlsFailure
+        );
         let no_root = ConnectionPolicy {
             ssl_root_cert: None,
             ..policy.clone()
         };
-        assert!(PostgresDatabase::connect(&uri, &no_root).await.is_err());
+        assert!(matches!(
+            PostgresDatabase::connect(&uri, &no_root).await,
+            Err(PostgresError::TlsFailure)
+        ));
         let ca_only = ConnectionPolicy {
             ssl_mode: SslMode::VerifyCa,
             allow_insecure_connection: true,
@@ -454,7 +460,10 @@ mod tests {
             ssl_root_cert: Some(wrong.clone().into()),
             ..ca_only
         };
-        assert!(PostgresDatabase::connect(&uri, &bad_ca_only).await.is_err());
+        assert!(matches!(
+            PostgresDatabase::connect(&uri, &bad_ca_only).await,
+            Err(PostgresError::TlsFailure)
+        ));
         let require_ca = ConnectionPolicy {
             ssl_mode: SslMode::Require,
             allow_insecure_connection: true,
@@ -466,7 +475,10 @@ mod tests {
             ssl_root_cert: Some(wrong.into()),
             ..require_ca
         };
-        assert!(PostgresDatabase::connect(&uri, &bad_require).await.is_err());
+        assert!(matches!(
+            PostgresDatabase::connect(&uri, &bad_require).await,
+            Err(PostgresError::TlsFailure)
+        ));
     }
 
     #[tokio::test]
@@ -519,6 +531,43 @@ mod tests {
             status.success(),
             "isolated operator-provider TLS probe failed"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL without TLS"]
+    async fn required_tls_on_plain_server_is_permanent_without_schema_mutation() {
+        let fixture = Fixture::new().await;
+        for ssl_mode in [SslMode::Require, SslMode::VerifyCa, SslMode::VerifyFull] {
+            let policy = ConnectionPolicy {
+                ssl_mode,
+                allow_insecure_connection: ssl_mode != SslMode::VerifyFull,
+                ..fixture.policy.clone()
+            };
+            assert!(matches!(
+                PostgresDatabase::connect(&fixture.uri, &policy).await,
+                Err(PostgresError::TlsFailure)
+            ));
+            assert_eq!(
+                crate::PostgresSchemaManager::ensure(
+                    &fixture.uri,
+                    &policy,
+                    &crate::MigrationPolicy::default()
+                )
+                .await,
+                Err(PostgresError::TlsFailure)
+            );
+        }
+        let database = PostgresDatabase::connect(&fixture.uri, &fixture.policy)
+            .await
+            .unwrap();
+        database.ping().await.unwrap();
+        let schema: bool = sqlx::query_scalar("SELECT to_regnamespace('metric') IS NOT NULL")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert!(!schema, "failed TLS negotiation must not mutate the schema");
+        database.close().await;
+        fixture.cleanup().await;
     }
 
     #[tokio::test]
