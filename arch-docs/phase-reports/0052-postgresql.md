@@ -1929,3 +1929,348 @@ the fixture DB listing is empty. No Mongo source edit is included.
 Container/offline/browser SDK/UI, CI registration and 30-minute resource/load
 acceptance remain pending. The coordinator/Docker fixtures are not yet advertised
 as completed by this server composition stage.
+
+
+## 2026-10-10 — Composed runtime, SDK, container and offline acceptance
+
+Added the fail-closed standard-library coordinator `scripts/test-postgres.py` and
+an explicit ignored `postgres_runtime_e2e` group. Docker availability and healthy
+native fixtures are required; Cargo results must contain nonzero executed cases.
+Each native invocation creates a UUID-named synthetic database and Blob directory,
+joins its own workers and cleans only those exact resources. Container runs use
+UUID-named Compose projects; volume labels and name ownership are verified before
+project-scoped deletion. No user database, installation volume or global Docker
+prune is involved. Captured server/sender diagnostics, tokens and DSNs are withheld;
+resource reports contain only bounded synthetic counters and resource metadata.
+
+The authenticated status response now uses the selected database name. A private
+composition-root Extension preserves existing HTTP constructors and Mongo's
+`mongodb` response key. Two explanatory UI strings now say database rather than
+MongoDB. The dependency graph explicitly permits the server's PostgreSQL edge.
+There are no new Mongo source/schema/migration changes in this stage.
+
+The complete real native adapter suite passed 173/173, including local-CA TLS,
+wrong CA/hostname, driver-environment policy, pool/deadlines, immutable SQL/Rust
+upgrades, COMMIT reply faults, scope/privacy, all current capabilities and project
+purge. Source inventory remains 164/164 with --require-complete. Workspace strict
+all-target/all-feature Clippy --locked -j1 -D warnings, rustfmt, dependency graph,
+Web changed-file formatting and documentation/deployment/compatibility validators
+passed. Existing ProjectSettingsView tests passed 2/2.
+
+Actual native and Docker-composed servers both passed their core checks and all
+seven real SDKs: Node, Python, Java, .NET, Go, Rust and Browser. The reused Node
+fixtures additionally prove attachment metadata and exact Blob download bytes,
+Session health, cron run history, Metric buckets, Logs and Traces. Reused Browser
+fixtures prove Feedback metadata/attachment bytes and Replay metadata, masked
+recording retrieval and rrweb playback. Real Web UI login, project creation and
+privacy-policy mutation persist through the selected PostgreSQL backend.
+
+Test-only assumptions corrected during expansion: Sessions need an explicitly
+registered release before the management API exposes its health; the installed
+Node SDK sends three unique Session identities (an implicit exited Session plus
+the explicit healthy lifecycle and crash). A separate synthetic HTTP collector
+confirmed those identities; persisted Session rows and health counters agree.
+The SDK's `ok` cron status is exposed as the domain API's `success`. Replay must
+be explicitly enabled on the synthetic project. These are fixture corrections,
+not adapter or shared production behavior changes. The existing login policy
+revokes this user's previous sessions, so the coordinator reauthenticates after
+its independent browser login.
+
+The current production Dockerfile was reused in full, with only the generated
+ignored test copy serializing Cargo with -j1. Current image manifest:
+`sha256:8d706bd780145191e1f8760710517f96489a2a5683aad2ae036d9e284729906f`.
+The container suite passed 12 checks, including authenticated ingest/readback,
+native DB restart, same-volume app restart and graceful SIGTERM exit 0 (4.171s
+in the full-SDK run). The offline suite passed 24 checks: 12 each for explicitly
+acknowledged plaintext TCP and verify-full TLS with a local synthetic CA. All app
+networks were inspected as internal-only; neither runtime transport requires
+external HTTP, paid certificate services or Mongo. On Docker Desktop, offline API
+probes run through container loopback because published host ports are unavailable
+on this internal network. App restart targets the exact container, avoiding a
+Compose dependency restart that would regenerate the ephemeral CA during the test.
+
+Developer fixtures are `deploy/metric.postgres.test.toml`, the app profile in
+`deploy/compose.postgres.dev.yml` and `deploy/compose.postgres.offline.yml`.
+The developer app selects the fixture's existing `metric_test` database; coordinator
+runs override this with a fresh project-owned `metric_app_test` database. Production
+Compose, installers, bundled profile defaults and production Dockerfile remain
+unchanged. CI now has separate bounded native adapter/runtime/all-SDK and
+container/offline jobs, including the source completeness gate. They are registered
+but have not been executed by GitHub Actions in this local unpushed branch.
+
+Reproduce the completed gates:
+
+```powershell
+python scripts/test-postgres.py --suite adapter
+cargo test -p metric-server --test postgres_runtime_e2e --all-features --locked -j1 -- --ignored --test-threads=1
+python scripts/test-postgres.py --suite server --binary target/debug/metric-server.exe --sdk --browser
+python scripts/test-postgres.py --suite container --build-image
+python scripts/test-postgres.py --suite container --sdk --browser
+python scripts/test-postgres.py --suite offline
+```
+
+The coordinator requires existing SDK/browser installations for --sdk/--browser;
+it does not silently skip missing senders. The native adapter suite also requires
+four local test certificate files under target/postgres-test-tls. CI prepares the
+same existing fixtures and copies their certificates explicitly.
+
+A short load diagnostic passed (136 unique Events, 17 duplicate requests, concurrent
+Explore, accepted-backlog drain, exact Issue counts and Scheduler expiry under
+write load). Its 10-second target and 37.171-second total do not satisfy the required
+30-minute acceptance gate. Full workspace/Mongo regression and measured 30-minute
+load acceptance remain pending; this entry does not declare delivery complete.
+
+
+## 2026-10-10 — Acceptance pause: permanent connection errors during startup
+
+The ordinary all-target/all-feature locked workspace run completed: 363 passed in
+48 test groups, 264 intentionally ignored cases. PostgreSQL's 173 ignored native
+adapter cases were executed separately above. Mongo's final ignored Docker
+regression and the 30-minute measured load gate have not yet run.
+
+Read-through of ADR-0052's bounded wrong-certificate error requirement found a
+startup discrepancy. `PostgresError::from(sqlx::Error)` currently maps TLS errors
+and authentication SQLSTATEs into Unavailable. The composition root retries
+Unavailable/Timeout/Busy indefinitely while in maintenance. A real composed-server
+reproduction against the local TLS fixture with wrong-ca.crt confirmed six startup
+retries in 10 seconds, a still-running process and closed readiness. The connection
+continues to reject the certificate; no downgrade, accepted Event or schema write
+occurred. The synthetic reproduction was stopped and its own directory removed.
+
+Implementation is paused under the user's instruction to stop and ask when a
+confirmed discrepancy is found. Proposed correction, not yet implemented: keep
+redacted permanent native connection categories inside crates/postgres for verified
+TLS/configuration failures, invalid credentials (SQLSTATE class 28) and missing
+configured database (3D000). Those categories must exit the existing server startup
+loop through its permanent-error branch. Retain bounded cancellable maintenance
+retry for actual temporary network outages and migration ownership contention.
+Add real adapter and composed-server regressions proving wrong CA/hostname/auth
+fail without repeated retries and preserve plaintext acknowledgement, valid local
+CA startup and temporary availability recovery. No Mongo edit, port change, TLS
+fallback or confidential driver-message logging is proposed. Resume the remaining
+Mongo/30-minute gates only after the user resolves this pause.
+
+## 2026-10-10 — Approved permanent TLS startup errors
+
+The user approved immediate startup failure when an explicitly protected native
+connection cannot negotiate TLS or verify its certificate. Implementation resumed
+with this narrower TLS/configuration correction; the proposed authentication and
+missing-database classification changes above are not included.
+
+`crates/postgres` now exposes a redacted TlsFailure category. SQLx's explicit TLS
+errors and IO errors carrying a concrete rustls::Error map to it; ordinary network
+IO errors remain temporary. Error-message matching is deliberately avoided.
+Malformed driver configuration maps to InvalidPolicy. The existing server startup
+loop already exits for permanent categories, so neither server startup logic nor
+Mongo needs a production edit. No plaintext fallback is introduced.
+
+Seven ordinary PostgreSQL tests and all 174 real Docker adapter cases passed.
+The additional case requires TLS against a plaintext server, checks both runtime
+connection and migration entry points, and proves failed negotiation performs no
+schema mutation. Existing wrong-CA and wrong-hostname cases now assert the permanent
+category. Composed-server exit checks and final acceptance gates are in progress.
+
+The updated real-server integration group passed 2/2. Its protected-startup case
+executes five actual process runs: wrong CA, wrong hostname, server without TLS,
+malformed CA PEM and malformed inherited client private key. Each exits nonzero
+within 15 seconds, exposes only its permanent boundary category, performs no
+startup retry, and excludes credentials and certificate/key paths from diagnostics.
+The original native-server auth/ingest/scope/restart case also passes.
+
+TLS correction commit: `e5fee13`. Acceptance coordinator/fixtures/CI commit:
+`ea1b22a`. Strict workspace all-target/all-feature Clippy, rustfmt and dependency
+graph passed after the correction. The locked ordinary workspace run passed
+364 tests in 48 groups; 266 intentionally ignored cases are accounted for by
+separate real-DB groups. The original Mongo Docker regression passed 30 adapter
+tests in 19 groups and 13 server cases in nine groups, using its existing URI and
+test targets (performance/reporting cases excluded as in the existing CI policy).
+No additional Mongo file was changed. Coverage, compatibility, deployment-profile
+and documentation validators passed. Updated-image and measured load gates remain
+in progress.
+
+## 2026-10-10 — Updated-image acceptance pause: Go SDK readback
+
+The release Docker rebuild succeeded with the pinned Rust compiler in 9m40s.
+Updated image manifest list:
+`sha256:32514fd19368623ec3346cd3130e4a755b7f616bac98c06c8c3f546644c63111`.
+The subsequent full-SDK container gate failed at Go Event readback:
+`go did not finalize before deadline`. The real Go sender returned flushed=true;
+the coordinator could not observe its Event through the authenticated API within
+the configured gate deadline. Node, Python, Java and .NET Event readback preceded
+this failure successfully. Flush success alone does not prove server acceptance
+or durable finalization. Neither an adapter defect nor a fixture defect has been
+confirmed. The earlier full-SDK container/native passes above used the previous
+image/source revision and do not replace this failed updated-image gate.
+
+The coordinator removed only its exact synthetic Compose project and verified
+disposable volumes. The shell stopped on the failed gate, so updated-image offline
+and native full-SDK reruns did not execute. The actual 30-minute load gate is still
+pending. Implementation is paused under the user's explicit stop-on-discrepancy
+instruction; an isolated Go transport/finalization diagnostic was proposed before
+any new fix. The separately verified permanent TLS correction remains committed.
+
+## 2026-10-10 — Upstream PHP compatibility fix integrated
+
+The user identified an already merged upstream correction rather than authorizing
+a duplicate implementation. Fetching origin located PR #11, merged as `4485ebc`,
+with implementation commit `7317c5c` (`fix: improve PHP and browser SDK compatibility`).
+It was merged into feat/postgres as `9509117` without conflicts. All existing
+uncommitted PostgreSQL documentation and Ruby/PHP harness work was restored and
+verified against the temporary Git snapshot before removing that snapshot.
+
+The upstream shared ingest accepts Event IDs from the body, item header or envelope
+header, injects the canonical ID into the stored body and still rejects missing,
+malformed or conflicting IDs. The same PR includes bounded indexed span-name
+normalization, compatibility documentation and browser setup/detail corrections.
+Neither database adapter was changed by this merge.
+
+The real PHP 8.3.33 / sentry/sentry 4.34.0 process gate now passes, including accepted
+Event ID, exception, release/environment, SDK metadata and absence of unexpected
+blobs. This gate uses the actual public HTTP router with the test sink, not the
+PostgreSQL database. The equivalent Ruby 3.1.7 / sentry-ruby 7.1.0 process gate also
+passes after correcting the new sender to read event.event_id from the Event returned
+by capture_exception. Expanded harnesses remain work in progress; CI preparation,
+the evidence matrix and actual PostgreSQL readback must be completed before making
+new release or database compatibility claims.
+
+All application tests passed on a serial rerun: 139 passed, 11 intentionally ignored.
+The first parallel run had one timing-sensitive EventWriter cancellation-test
+failure at its fixed 40ms wait; that test passed in isolation and in the complete
+serial rerun without a writer code change. The five new upstream ingest regressions
+passed in both runs. The two changed browser test files passed all 11 tests.
+Rustfmt and git diff --check passed. No new PostgreSQL image has been built after
+this merge, and the expanded Docker/offline and measured 30-minute gates remain
+pending. This entry does not declare PostgreSQL delivery complete.
+
+## 2026-10-10 — Expanded functional parity; load testing deferred
+
+The user explicitly deferred load testing and requested broad ordinary functional
+coverage of both backends. No soak or performance gate was run for this request.
+The current real PostgreSQL adapter suite passed all 174 cases. The independent
+Mongo fixture passed 30 ordinary adapter cases in 19 groups, excluding performance
+and RPS reporting cases. Logs are in the ignored target directory:
+`postgres-comprehensive-adapter.log` and `mongo-comprehensive-adapter.log`.
+
+The native PostgreSQL server passed all 16 real SDK paths across nine SDK families,
+including Ruby/PHP errors, Node attachments/sessions/cron/metrics/logs/traces and
+browser error/feedback/replay recording and playback. The same run passed six
+management lifecycle groups: API token creation/scope/revocation; DSN key
+creation/use/disabling; Issue resolution/idempotency/reopening; saved-query CRUD
+with scope/revision checks; dashboard CRUD with scope/revision checks; project
+deletion request/cancellation. It verified scrubbing, duplicate finalization,
+authentication/scope isolation and authoritative Event readback after process
+replacement. Five permanent TLS startup rejection cases also passed. These native
+server results do not replace the pending updated shipping-image gates.
+
+The full Mongo SDK run stopped at cron. An isolated diagnostic using three actual
+Node SDK check-in payloads confirmed a deterministic ordering defect without any
+adapter modification. Sending one envelope with `[ok, in_progress, error]` returns
+HTTP 503 / `signal_storage_unavailable` and creates no monitors; sending the same
+payloads as `[in_progress, ok, error]` returns HTTP 200, with one success run and
+one error run readable through the API. Delaying only the terminal request in an
+independent transport diagnostic also makes all three check-ins succeed.
+
+`MongoMonitorStore::persist_inner` resolves definitions and checks each run's
+monitor existence in the same loop, so a terminal check-in preceding its defining
+update rejects the whole micro-batch before the later definition is considered.
+PostgreSQL already resolves all definitions before processing runs. A proposed
+minimal Mongo correction is a separate existence-validation pass after all batch
+definitions have been resolved, with a shared regression for reversed definition
+ordering. Production changes are paused pending the user's explicit approval for
+this additional Mongo exception. Diagnostic evidence:
+`target/mongo-cron-batch-diagnostic.log` and
+`target/mongo-cron-ordered-diagnostic.log`.
+
+The isolated successful Mongo ordering run also passed the six management groups
+and restart readback, but is not a substitute for the failed unmodified full SDK
+gate. Later Mongo SDK scenarios, the new runtime physical project-purge gate for
+both backends, and the final complete regression remain pending. A concurrent
+server-test compilation was cancelled before tests started to free memory; it
+must be rerun serially and is not counted as a test failure or a successful gate.
+
+## 2026-10-10 — Approved Mongo cron correction and functional rerun
+
+The user approved the additional minimal Mongo exception after reviewing the
+ordering defect and the limits of the proposed correction. The production change
+adds a separate monitor-existence validation loop after all in-batch definitions
+are merged. No additional database read, migration, retry policy, public contract
+or run-order change is introduced. PostgreSQL production code is unchanged.
+
+The new shared `definition_order_in_batch` conformance test failed on the original
+Mongo code with `NotFound` and passed after the correction. It checks both batch
+orders, terminal run/projection preservation after duplicate starts, and rejection
+when a definition is absent from both the database and batch. Mongo's complete
+ordinary adapter rerun passed 31 cases in 19 groups; explicit performance and RPS
+cases were excluded. Evidence: `target/mongo-cron-regression-before.log`,
+`target/mongo-cron-regression-after.log`, `target/mongo-comprehensive-adapter.log`.
+
+The actual Mongo-backed executable passed all 16 SDK paths across nine families,
+all six common HTTP CRUD groups and authoritative Event readback after process
+replacement. The real deletion worker completed its normal lifecycle with a
+three-second synthetic grace. All 11 previously populated families had zero
+remaining project-owned documents: 12 errors, 8 issues, 3 logs, 6 spans, 9 sessions,
+1 feedback, 2 monitors, 2 runs, 3 metric buckets, 1 replay and 2 DSN keys were
+present before deletion. The old DSN rejected subsequent ingest. Evidence:
+`target/mongo-comprehensive-sdk-http.log`. This is not a physical-blob immediate
+erasure claim; existing reference GC retains its normal grace and retry lifecycle.
+
+Ruby/PHP sender dependencies are locked and fixture-local. The Go sender now joins
+the official SDK telemetry worker with `Client.Close()` after `Flush()` before its
+short-lived process exits. Prior isolated diagnosis found 10 lost deliveries in
+50 original sender executions and zero in 50 with the worker joined; a reported
+Flush success alone was insufficient while worker requests were still in flight.
+This changes the test sender only, without a SDK fork or application adapter fix.
+The successful native Mongo and PostgreSQL SDK runs use that corrected sender.
+
+Final fresh PostgreSQL, server/router SDK and ordinary workspace gates are still
+in progress. The detailed record/lifecycle matrix is in
+`0052-postgresql-functional-parity.md`. Load remains deferred by the user.
+
+The subsequent fresh PostgreSQL adapter run passed 175 cases, including the new
+shared cron test. All 16 native SDK paths and six HTTP CRUD groups passed, as did
+the real-worker physical purge of the same 11 families with identical populated
+counts to Mongo and zero remaining records. Five permanent TLS startup rejection
+cases passed with regenerated two-day local fixture certificates. The dedicated
+PostgreSQL runtime Cargo group passed both tests. The ordinary locked workspace
+run passed 369 tests in 48 groups, with 270 intentionally ignored cases accounted
+for by explicit real-DB/SDK gates or deferred performance scope. Strict all-target,
+all-feature Clippy, rustfmt, dependency direction, coverage, compatibility,
+deployment-profile and documentation validators passed. Correction commit:
+`5adfbbf`; expanded SDK/functional coordinator and CI commit: `3c2aa93`.
+
+The current-source release Docker image is being rebuilt for the remaining
+ordinary container restart/shutdown and offline TCP/TLS gates. Those are functional
+checks, not a capacity or load measurement; their results remain pending until
+the new image passes. No load test is scheduled or run for this request.
+
+The subsequent current-source image build succeeded: release compilation took
+10m28s with pinned Rust 1.94.0 and serialized Cargo. Image manifest list:
+`sha256:1090447f52eff0d724f2307bbf059c7eed68e6d1a8676d8de9d799ddedf5f68f`;
+image config: `sha256:82b154878d7cbacb80af5ceb408679af0ebfb2750ad529cc8b741f3bef08321d`.
+The new image's full SDK Compose gate passed all 16 paths, six shared CRUD groups,
+all 12 baseline container assertions, native database restart, authoritative Event
+readback after application restart and clean SIGTERM shutdown (exit zero, 4.156s).
+Its independent Compose runtime has no Mongo service. This successful current-image
+gate supersedes the earlier Go readback failure recorded above, with the official
+SDK worker joined before its sender exits. Evidence:
+`target/postgres-comprehensive-container.log`. Offline TCP passed; the separate
+internal-only verified TLS gate is still finishing.
+
+Both updated-image offline gates then passed: 24 total baseline assertions across
+acknowledged plain TCP and verify-full TLS with a generated local CA, in Docker
+networks explicitly verified as internal/outbound-blocked. Each includes native
+database restart, exact acknowledged Event readback after app restart, six common
+CRUD groups and graceful SIGTERM shutdown (0.797s TCP, 0.828s TLS, exit zero).
+These probes execute curl on container loopback; database communication remains
+native SQL over the isolated network. No HTTP/REST database gateway, remote CA
+download or outbound integration is required during runtime. Evidence:
+`target/postgres-comprehensive-offline.log`.
+
+The current functional verification request is complete: all executed adapter,
+native HTTP/SDK, original Mongo server, PostgreSQL runtime, ordinary workspace,
+strict lint/structure/docs and updated Docker/offline gates passed. Load remains
+explicitly deferred, with no capacity or 30-minute stability claim. The accepted
+late-Metrics archival loss window and missing-definition-across-separate-batches
+cron boundary remain documented. Default downloaded profiles/installers still
+select Mongo. Expanded test/coordinator/SDK evidence is committed as `3c2aa93`.
+No branch is pushed, no PR is created and no production deployment is performed.

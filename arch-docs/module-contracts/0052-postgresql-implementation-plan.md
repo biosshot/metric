@@ -216,14 +216,17 @@ Validate the following against real Docker databases, not only mocks:
 | Archive/Blob | Verify-before-source-expiry, references and orphans, interrupted publication, retention holds and manual restore consistency |
 | Deletion | Project fencing, concurrent ingest, cancellation/retry, all datasets and blob namespaces, bounded batches |
 | Regression | Original Mongo Docker path, original TOML profiles, schema/migration behavior and default installer behavior |
-| Resource/load | Sustained and burst writes, duplicates, concurrent Explore, cleanup under ingest, connection count, memory, p95/p99, DB/index size and vacuum impact |
+| Resource/load | Deferred by the user on 2026-10-10; future sustained/burst writes, concurrent Explore/cleanup, connection count, memory, latency, size and vacuum measurements |
 
 For Archive/Blob evidence, report the accepted late-Metrics snapshot/expiry
 limitation explicitly; it does not fail the parity gate or authorize implementing
 the deferred revision/re-archival design. Preserve all other archive guarantees.
 
-Run a finite reproducible soak (initial target: 30 minutes) on the measured test
-hardware and workload. Capture actual limits before claiming parity with Mongo.
+The user deferred load testing on 2026-10-10 and requested broad ordinary
+functional checks for both backends. Do not execute the previously selected
+30-minute soak as part of the current run. When separately resumed, use a finite
+reproducible workload and capture actual limits before claiming performance parity
+with Mongo. Functional results do not establish capacity or sustained stability.
 Do not reuse ADR-0044's closed historical production gate as a new acceptance claim.
 Require SQL `EXPLAIN (ANALYZE, BUFFERS)` evidence for hot query shapes on disposable
 representative data. Execute write explains only in explicitly disposable/rolled-back
@@ -253,23 +256,31 @@ them, performs TLS/fault/container scenarios and records results. Reuse shared
 server/SDK test helpers parameterized by backend. Register an explicit ignored
 PostgreSQL integration target group and fail if zero expected cases ran.
 
-The following commands are the intended implementation-time procedure. The new
-files/targets do not exist at the planning boundary; finalize exact target names
-with the harness and record the actual commands in the verification report.
+The following commands are implemented by the acceptance coordinator. Start the
+TLS profile and copy its four client certificate files before the full adapter
+suite. SDK/browser flags require the existing installed sender and built Web
+fixtures. Actual outcomes and remaining gates are recorded in the phase report.
 
 ```powershell
 docker version
 docker compose version
 docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml config --quiet
-docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml up -d --wait postgres
+docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile tls up -d --wait postgres postgres-tls
+New-Item -ItemType Directory -Force target/postgres-test-tls
+foreach ($certFixtureName in @('ca.crt', 'wrong-ca.crt', 'client.crt', 'client.key')) {
+  docker cp "metric-pg-dev-postgres-tls-1:/run/metric-test-tls/$certFixtureName" "target/postgres-test-tls/$certFixtureName"
+}
 python scripts/test-postgres.py --suite adapter
-python scripts/test-postgres.py --suite server
+python scripts/test-postgres.py --suite server --sdk --browser --verify-purge
+python scripts/test-postgres.py --suite startup
 python scripts/test-postgres.py --suite security
 python scripts/test-postgres.py --suite migrations
 python scripts/test-postgres.py --suite faults
-python scripts/test-postgres.py --suite load --soak-duration 30m
-docker build -t metric-postgres:local .
-docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml up -d --wait metric-postgres
+# Deferred by the user; run only when load testing is resumed:
+# python scripts/test-postgres.py --suite load --soak-duration 30m
+python scripts/test-postgres.py --suite container --build-image
+# Optional standalone developer app uses the existing metric_test database:
+docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile app up -d --wait metric-postgres
 python scripts/test-postgres.py --suite container
 python scripts/test-postgres.py --suite offline
 ```
@@ -284,6 +295,18 @@ Run original Mongo regression targets using the existing Docker fixture and URI
 convention in `.github/workflows/ci.yml`; do not alter Mongo setup to accommodate
 PostgreSQL. The PostgreSQL CI job is separate, bounded, and explicitly executes the
 ignored real-adapter tests. CI must not report success by omitting these gates.
+
+The shared functional coordinator additionally supports Mongo using that same
+Docker file, URI and schema, with explicit project name `metric-pg-baseline`:
+
+```powershell
+docker compose -p metric-pg-baseline -f deploy/compose.dev.yml up -d --wait mongodb
+python scripts/test-postgres.py --suite server --backend mongodb --sdk --browser --verify-purge
+```
+
+Run the backend gates sequentially on the developer machine. The latest record
+and lifecycle coverage and actual outcomes are in
+`../phase-reports/0052-postgresql-functional-parity.md`.
 
 At completion, stop only task-created Compose projects using the exact project/file
 arguments. Keep persistent volumes unless their disposable ownership has been

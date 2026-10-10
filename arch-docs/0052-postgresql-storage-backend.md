@@ -262,6 +262,12 @@ promise support for arbitrary obsolete PostgreSQL versions or insecure TLS ciphe
 Emit one redacted startup warning for an acknowledged weaker mode, not one per
 connection or query. Tests must cover the actual selected SQLx TLS semantics.
 
+When a selected protected connection fails TLS negotiation or certificate
+verification, startup exits with a redacted permanent error. It does not remain
+in the temporary-availability retry loop. Malformed TLS client configuration also
+fails startup. Ordinary network unavailability retains the cancellable maintenance
+retry policy; failure to verify TLS never enables plaintext fallback.
+
 ## Data and query safety
 
 - Bind all values using SQLx parameters, including search text, IDs, timestamps,
