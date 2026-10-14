@@ -1,6 +1,7 @@
 # Docker
 
-Metric uses one `compose.yml` for every resource profile. The selected `.env`
+Metric uses one installed `compose.yml` for every resource profile. The installer
+selects bundled MongoDB, bundled PostgreSQL or an existing database. The selected `.env`
 controls container memory, MongoDB cache, log rotation and whether Symbolicator
 is active. The selected `metric.toml` controls application limits and retention.
 BlobStore receives about one third of the recommended disk for each profile; see
@@ -11,7 +12,7 @@ BlobStore receives about one third of the recommended disk for each profile; see
 | Container | Min | Low | Medium | High |
 | --- | --- | --- | --- | --- |
 | Metric | Yes | Yes | Yes | Yes |
-| MongoDB | Yes | Yes | Yes | Yes |
+| Bundled database (MongoDB or PostgreSQL) | If selected | If selected | If selected | If selected |
 | Symbolicator | No | No | Yes | Yes |
 | Symbolicator cache cleanup | No | No | Yes | Yes |
 
@@ -21,8 +22,9 @@ The web interface is included in the Metric image.
 
 | Service | Image |
 | --- | --- |
-| Metric | `ghcr.io/biosshot/metric:0.1.7` |
+| Metric | `ghcr.io/biosshot/metric:0.1.8` |
 | MongoDB | `mongo:8.0.12` |
+| PostgreSQL | `postgres:18.6-bookworm`, pinned by digest in the generated template |
 | Symbolicator | `ghcr.io/getsentry/symbolicator:26.6.0` |
 
 Use exact image versions. Symbolicator is an independent third-party image under
@@ -39,6 +41,16 @@ docker compose down
 Run these commands from the directory containing `compose.yml`, `metric.toml`,
 `symbolicator.yml` and `.env`. Do not pass a profile flag manually: the installer
 has already stored the correct `COMPOSE_PROFILES` value in `.env`.
+
+Keep generated `connection.env` beside these files. External deployments start
+only Metric and the profile's optional Symbolicator; the installer does not operate
+the external database server. Supplied certificates are copied under `certs/` and
+mounted as individual read-only files into Metric. The host certificate directory
+is private; the unprivileged app can read only the files explicitly mounted there.
+
+The selected HTTP port is published on all host interfaces by default. Restrict
+it in Compose if needed, for example `127.0.0.1:4001:4001`. This differs from the
+app's `server.http_address`, which refers to its container network namespace.
 
 Check the selected profile:
 
@@ -60,6 +72,7 @@ Select-String '^METRIC_PROFILE=' .env
 | `COMPOSE_PROFILES` | Starts Symbolicator for Medium and High. |
 | `METRIC_MONGO_CACHE_GB` | MongoDB WiredTiger cache. |
 | `METRIC_MONGO_MEMORY_LIMIT` | MongoDB container memory ceiling. |
+| `METRIC_POSTGRES_MEMORY_LIMIT` | Bundled PostgreSQL container memory ceiling; a starting limit, not a benchmark guarantee. |
 | `METRIC_APP_MEMORY_LIMIT` | Metric container memory ceiling. |
 | `METRIC_SYMBOLICATOR_MEMORY_LIMIT` | Symbolicator memory ceiling when active. |
 | `METRIC_LOG_MAX_SIZE` | Size of one rotated container log. |

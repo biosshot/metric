@@ -185,6 +185,8 @@ Current limits are stated directly in `docs/known-limits.md`.
 - [module-contracts/0052-installer-and-documentation-plan.md](module-contracts/0052-installer-and-documentation-plan.md):
   follow-up installer design with an explicit minimal wizard, compatible unattended
   shell/PowerShell interfaces, database selection and wizard-first Getting Started.
+- [phase-reports/0052-installer-and-documentation.md](phase-reports/0052-installer-and-documentation.md):
+  0.1.8 installer delivery, Docker/terminal/TLS verification and unpublished release boundary.
 - `phase-reports/0051-helm-chart.md`: Helm implementation and verification evidence;
   public release publication remains pending.
 - `verification/2026-09-05-manual-backup-restore.md`: database-scoped manual MongoDB

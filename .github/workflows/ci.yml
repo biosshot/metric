@@ -39,6 +39,7 @@ jobs:
       - run: cargo dep-graph --locked
       - run: python scripts/validate-compatibility.py
       - run: python scripts/validate-deployment-profiles.py
+      - run: python scripts/sync-installer-assets.py --check
       - run: python scripts/validate-documentation.py
       - name: Verify Linux installer syntax
         run: sh -n deploy/install.sh
@@ -201,7 +202,7 @@ jobs:
   postgres-containers:
     name: PostgreSQL container restart and offline transports
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -213,6 +214,20 @@ jobs:
         run: python scripts/test-postgres.py --suite container --build-image
       - name: Require internal-only native TCP and locally verified TLS
         run: python scripts/test-postgres.py --suite offline
+      - name: Preload installer database and profile images
+        run: |
+          docker pull mongo:8.0.12
+          docker pull ghcr.io/getsentry/symbolicator:26.6.0
+      - name: Verify compatible unattended shell and PowerShell installers
+        run: python scripts/test-installer.py --profiles-only
+      - name: Verify installer argument errors and non-terminal behavior
+        run: python scripts/test-installer.py --negative-only
+      - name: Verify real unattended shell and PowerShell installation lifecycles
+        run: python scripts/test-installer.py
+      - name: Verify minimal terminal wizards and visible URI entry
+        run: python scripts/test-installer.py --wizard
+      - name: Verify external databases requiring client certificates
+        run: python scripts/test-installer.py --transport tls
 
   browser:
     name: Browser SDK

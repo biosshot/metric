@@ -1,0 +1,221 @@
+# Generated from the shared resource profile; PostgreSQL sizing is not benchmarked.
+# Medium profile: 4 vCPU, 8 GiB RAM, 100 GiB SSD.
+# Recommended default with Symbolicator, attachments and optional Replay.
+# Minidumps and cold archive remain disabled until explicitly reviewed.
+
+role = "all"
+
+[server]
+http_address = "0.0.0.0:4001"
+shutdown_grace = "30s"
+max_active_requests = 512
+request_timeout = "30s"
+
+[storage]
+backend = "postgres"
+
+[postgres]
+uri = { env = "METRIC_POSTGRES_URI" }
+bootstrap_timeout = "30s"
+ssl_mode = "verify-full"
+max_connections = 10
+
+[postgres.migrations]
+mode = "auto"
+
+[projects]
+scrub_hmac_key = { env = "SCRUB_HMAC_KEY" }
+identity_collision_retries = 16
+max_keys_per_project = 32
+
+[development]
+allow_insecure_cookies = true
+
+[auth]
+secure_cookie = false
+
+[blob]
+backend = "local"
+root = "/var/lib/metric/blobs"
+capacity = "33 GiB"
+reserve = "2 GiB"
+max_object_bytes = "256 MiB"
+
+[archive]
+enabled = false
+maximum_events = 500
+target_uncompressed_bytes = "64 MiB"
+write_chunk_bytes = "256 KiB"
+poll_interval = "30s"
+hot_copy_delay = "0s"
+orphan_grace = "24h"
+cleanup_max_pages = 4
+
+[native_crash.minidump]
+enabled = false
+max_bytes = "100 MiB"
+chunk_bytes = "64 KiB"
+
+[symbolicator]
+endpoint = "http://symbolicator:3021/symbolicate"
+callback_base_url = "http://metric:4001/"
+request_timeout = "20s"
+maximum_concurrency = 4
+circuit_failure_threshold = 5
+circuit_cooldown = "30s"
+maximum_response_bytes = "4 MiB"
+
+[artifacts]
+maximum_bundle_bytes = "128 MiB"
+maximum_logical_bytes = "1 GiB"
+maximum_entries = 20000
+maximum_entry_bytes = "32 MiB"
+maximum_concurrent_assemblies = 2
+parse_timeout = "30s"
+orphan_grace = "24h"
+claim_lease = "5m"
+blob_operation_timeout = "30s"
+tombstone_retention = "24h"
+gc_interval = "15m"
+gc_batch_size = 100
+gc_max_concurrency = 2
+maximum_bytes_per_organization = "12 GiB"
+maximum_bundles_per_organization = 2500
+
+[incident_capsule]
+max_events = 10
+max_activities = 100
+max_total_uncompressed_bytes = "100 MiB"
+max_entry_bytes = "16 MiB"
+generation_timeout = "30s"
+max_concurrency = 2
+stream_chunk_bytes = "64 KiB"
+stream_buffer_chunks = 4
+
+[ingest]
+max_compressed_request_bytes = "32 MiB"
+max_decompressed_request_bytes = "128 MiB"
+max_event_bytes = "2 MiB"
+max_envelope_items = 250
+max_active_requests = 1024
+max_parsing_tasks = 8
+max_waiting_for_storage = 2048
+request_timeout = "10s"
+unsupported_backoff_seconds = 3600
+
+[ingest.attachments]
+enabled = true
+max_count = 10
+max_item_bytes = "15 MiB"
+max_total_bytes = "30 MiB"
+chunk_bytes = "64 KiB"
+orphan_grace = "24h"
+cleanup_interval = "15m"
+cleanup_batch_size = 256
+cleanup_max_pages = 16
+
+[ingest.replay]
+max_segment_bytes = "10 MiB"
+max_decompressed_segment_bytes = "40 MiB"
+max_events_per_segment = 250000
+queue_capacity = 32
+max_queued_bytes = "64 MiB"
+orphan_grace = "1h"
+cleanup_interval = "5m"
+cleanup_batch_size = 100
+
+[ingest.project_cache]
+capacity = 50000
+max_inflight = 512
+positive_ttl = "60s"
+negative_ttl = "5s"
+
+[ingest.batch]
+max_wait = "20ms"
+max_documents = 500
+max_bytes = "32 MiB"
+
+[ingest.backlog]
+max_pending_events = 2000000
+max_oldest_pending_age = "1h"
+
+[dispatcher]
+queue_capacity = 4096
+worker_concurrency = 16
+low_watermark = 1024
+refill_target = 3072
+refill_batch_size = 512
+poll_interval = "100ms"
+metrics_interval = "5s"
+source_timeout = "5s"
+
+[scheduler]
+poll_interval = "1s"
+maintenance_interval = "1m"
+reconciliation_interval = "5m"
+backlog_interval = "5s"
+task_timeout = "10s"
+retry_base = "1s"
+retry_max = "1m"
+batch_size = 1000
+
+[retention]
+events_days = 90
+feedback_days = 365
+issue_stats_hourly_days = 1095
+logs_days = 30
+spans_days = 30
+span_stats_hourly_days = 730
+sessions_days = 60
+session_stats_hourly_days = 1095
+session_active_max_hours = 24
+monitor_runs_days = 365
+metrics_days = 180
+metric_max_series_per_project = 10000
+metric_archive = false
+replays_days = 30
+replay_archive = false
+
+[project_deletion]
+grace_period = "24h"
+delete_batch_documents = 5000
+completed_job_retention = "30d"
+slug_reservation = "30d"
+poll_interval = "1s"
+operation_timeout = "10s"
+drain_timeout = "10s"
+retry_base = "1s"
+retry_max = "1m"
+
+[processor]
+max_concurrency = 16
+max_attempts = 5
+retry_base = "1s"
+retry_max = "5m"
+stage_timeout = "15s"
+total_timeout = "1m"
+state_timeout = "5s"
+
+[auth.password]
+memory_kib = 19456
+iterations = 2
+parallelism = 1
+max_concurrency = 2
+
+[auth.login]
+max_attempts = 5
+window = "1m"
+capacity = 20000
+
+[notifications]
+transition_batch_size = 100
+due_scan_limit = 100
+poll_interval = "250ms"
+
+[notifications.queue]
+capacity = 2000
+worker_concurrency = 8
+
+[notifications.retention]
+delivered_days = 90
+dead_days = 365

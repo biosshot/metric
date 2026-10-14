@@ -1,7 +1,7 @@
 # Installer and Getting Started implementation plan
 
 - Date: 2026-10-14
-- Status: Final design plan for review; installer implementation has not started
+- Status: Implemented and locally verified; see [delivery evidence](../phase-reports/0052-installer-and-documentation.md)
 - Related decision: [PostgreSQL backend](../0052-postgresql-storage-backend.md)
 - Backend evidence: [Functional parity report](../phase-reports/0052-postgresql-functional-parity.md)
 - Implementation branch: `feat/postgres`; preserve unrelated working tree changes
@@ -10,7 +10,7 @@
 Extend the existing shell and PowerShell installers with an explicitly selected
 interactive wizard and PostgreSQL installation. Keep existing unattended commands
 and MongoDB defaults working. Present the wizard first in Getting Started and keep
-its questions limited to the database, connection and resource profile.
+its questions limited to the database, connection, resource profile and Metric HTTP port.
 
 This is a distribution and documentation follow-up to the completed backend work.
 It does not change database adapters, schemas or installed migrations. The original
@@ -71,8 +71,9 @@ configuration language, mandatory `--non-interactive`, or an advanced-settings m
 Unattended mode is already the default. Ordinary application settings remain TOML.
 
 For a fresh install, precedence is command-line option, environment, then default.
-The wizard displays resolved non-secret settings as initial answers and uses accepted
-answers as the final choices. Supplied passwords are reused without displaying them.
+The wizard displays resolved settings as initial answers and uses accepted answers
+as the final choices. URI entry is deliberately visible; generated output and errors
+still redact credentials instead of printing the full URI again.
 Only explicitly selected backend secrets are required and passed to the application.
 Invalid enums, ports, certificate paths or missing external URI fail unattended mode
 with a nonzero exit status and an actionable error; never prompt there.
@@ -83,7 +84,9 @@ in the configuration reference, rather than becoming extra wizard choices.
 
 ## Minimal interactive wizard
 
-The ordinary path has three choices, each with a visible default:
+The ordinary path has four choices, each with a visible default. External database
+connection uses one visibly entered URI, as agreed on 2026-10-14. Metric's HTTP port
+is separate from the database port embedded in that URI.
 
 ```text
 Metric setup
@@ -91,33 +94,34 @@ Metric setup
 Database:          MongoDB [default] / PostgreSQL
 Database location: Start a database with Metric [default] / Use an existing database
 Resource profile:  Min / Low / Medium [default] / High
+Metric HTTP port:  4001 [default]
 ```
 
 Ask connection questions only when the existing-database choice is selected:
 
-1. Server location: this computer or another server. Ask hostname/IP only for
-   another server; accept `localhost` as this-computer input as well.
-2. Port, with the backend's standard port shown.
-3. Database name, username and password; hide password input.
-4. TLS with server identity verification or explicitly selected plain TCP.
-5. With TLS enabled, offer an optional CA file and an optional client certificate.
-   Ask for a separate private key only when needed by the chosen backend/file format.
+1. Connection URI, entered visibly so the operator can inspect and edit it.
+2. Mongo database name only if the URI does not contain one; default `metric`.
+3. TLS only if not determined by the URI; default verified TLS, with an explicit
+   plain TCP choice. Mongo SRV already implies TLS unless explicitly disabled.
+4. With TLS enabled, optional CA and client certificate files when needed. Ask for
+   a separate private key only when needed by the chosen backend/file format.
 
-An environment-supplied complete URI is an advanced input path: preserve driver
-options such as Mongo replica-set/SRV/authentication options. Do not force it through
-the single-host/password form. Show a redacted connection summary and allow reuse.
+An environment-supplied complete URI is reused without reconstructing host/password
+fields. Preserve driver options such as Mongo replica-set/SRV/authentication options.
+Show a redacted generated summary; actual URI input remains visible.
 Do not silently erase URI TLS choices; reject an explicit contradiction between URI
 and wizard/CLI policy and explain which setting to change.
 
 Do not ask about retention, queues, pool sizes, migration mode, archive, disk quotas,
-Symbolicator internals, bind addresses or telemetry features. The selected profile
+Symbolicator internals, bind addresses or telemetry features. Ask the Metric HTTP
+port alongside the profile. The selected profile
 supplies those settings. After successful setup, show the actual interface URL,
 selected backend/profile, installation directory, TOML location and setup-token
 retrieval command. Show no password, private key or full credential-bearing URI.
 
 On shell download pipelines, wizard input must come from the controlling terminal,
-not from the stream containing the script. Use a terminal-backed hidden password
-reader and restore terminal state on error/interruption. PowerShell must support
+not from the stream containing the script. URI input uses ordinary visible terminal
+reading; do not disable echo. PowerShell must support
 both direct script invocation and the existing `irm | iex` environment route. If
 interactive mode is explicitly requested without an interactive terminal, fail
 clearly and suggest supplying environment values instead.
@@ -164,6 +168,10 @@ check actual reachability; do not promise that a loopback-only host listener is
 accessible from a Linux container. Give a concrete diagnostic without changing
 the database's bind address or firewall. Inside a container, `localhost` denotes
 that container. Preserve named Docker-service addresses when explicitly supplied.
+Publish Metric's port on all host interfaces by default, preserving existing
+behavior. Do not ask a wizard bind-address question. Host publication is a Compose
+setting; changing the app's TOML bind address inside its container does not restrict
+the host port. Document optional Compose edits for loopback-only publication.
 
 ## Configuration generation and startup
 
@@ -288,7 +296,7 @@ Detailed existing migration evidence stays in the functional report.
 1. Add argument parsing and normalized installer settings to both scripts while
    preserving the current unattended path. Test `--help`, invalid/missing arguments,
    environment precedence and PowerShell download-and-execute binding.
-2. Add the minimal terminal wizard with hidden secrets and cancellation handling.
+2. Add the minimal terminal wizard with visible URI input and cancellation handling.
    Feed its answers into the same settings/config generation as CLI mode.
 3. Add backend/placement assets and checked generation, certificate handling and
    secret persistence. Validate resulting TOML through the actual Metric image.
@@ -318,5 +326,5 @@ unrelated volumes or databases are changed. Run doc/link/profile/version validat
 and the docs build. Never test destructive behavior on a user's existing database.
 Load/soak testing remains deferred; no measured PostgreSQL capacity claim is added.
 
-Only plan documentation is delivered now. Implementation, new public examples,
-publication and deployment remain separate subsequent work.
+Installer implementation and documentation are delivered for 0.1.8 as
+explicitly authorized. Publication and deployment remain separate subsequent work.

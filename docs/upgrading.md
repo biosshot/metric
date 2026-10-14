@@ -1,19 +1,31 @@
 # Update Metric
 
 Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
-`0.1.7`.
+`0.1.8`.
 
 ## Before updating
 
-1. Read the [0.1.7 release notes](releases/0.1.7.md), including the 19 → 20 migration.
-2. Check which MongoDB schema generation it requires.
-3. [Back up MongoDB, file storage and secrets together](backup-restore.md).
+1. Read the [0.1.8 release notes](releases/0.1.8.md).
+2. Check the schema requirement for your selected backend.
+3. [Back up the database, file storage and secrets together](backup-restore.md).
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
 The current Metric binary requires MongoDB schema generation **22 exactly** before
 starting application workers. It automatically migrates complete generation-19, generation-20 and generation-21
 databases to generation 22 before ordinary startup.
+
+PostgreSQL requires schema generation **21**. It applies missing SQL migrations in
+order and records them in `metric._sqlx_migrations`. Each SQL migration and its
+successful journal entry are one transaction. On failure, successful earlier steps
+remain; the failed step rolls back and is retried after the cause is corrected.
+Changed checksums and newer/unknown schemas stop startup. Never edit the journal or
+generation number to bypass a compatibility error.
+
+Installer reruns preserve existing files and permanent secrets. An ordinary update
+does not change the backend or move data. Keep `.env`, `connection.env`, certificate
+copies and the selected Compose alongside TOML; do not replace them wholesale with
+new templates. The new wizard is for first installation, not a database migration.
 
 ::: danger Protect existing data
 You must never drop or recreate a data-bearing MongoDB database to make another

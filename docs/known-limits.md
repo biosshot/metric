@@ -1,6 +1,6 @@
 # Known limits
 
-Metric 0.1.7 is an early release. Read these limits before using it for important
+Metric 0.1.8 is an early release. Read these limits before using it for important
 production data.
 
 ## Updates
@@ -13,6 +13,11 @@ There are no reverse migrations or mixed-version rolling upgrades. Read
 [Update Metric](upgrading.md) before changing versions.
 
 ## Deployment
+
+PostgreSQL is an independent alternative to MongoDB. It requires generation 21;
+switching backends does not migrate data. PostgreSQL functional and TLS checks
+are documented, but load/soak testing remains deferred. MongoDB performance
+figures and measured minimum-machine claims do not establish PostgreSQL capacity.
 
 - Metric currently runs as one application container.
 - The supplied MongoDB deployment is a single server, not a high-availability

@@ -9,6 +9,10 @@ The simplest procedure pauses **Metric**, not MongoDB. Other applications using
 different databases can continue working. Backups still consume database, disk and
 network resources; no global lock does not mean zero performance impact.
 
+For PostgreSQL use the [PostgreSQL procedure](#postgresql-backup-and-restore) below;
+MongoDB Database Tools do not back up PostgreSQL. Both backends require the
+database, BlobStore and permanent HMAC/secrets together.
+
 ## Scope and consistency
 
 ::: warning Not a point-in-time snapshot
@@ -351,6 +355,60 @@ can disappear as MongoDB rebuilds TTL indexes or runs cleanup. This is not evide
 that `mongorestore` silently dropped unexpired data. `/ready` alone is also not a
 backup-integrity check: a missing attachment can return HTTP 503 while Metric stays
 ready and the associated event remains readable.
+
+## PostgreSQL backup and restore
+
+Stop every Metric app connected to this installation and finish migrations before
+copying data. Keep the app stopped until both database and BlobStore copies finish.
+Do not let another process edit Metric's schema during the backup. PostgreSQL
+`pg_dump` provides a consistent database snapshot; stopping Metric also keeps the
+file copy aligned with its database references. Saving only the database omits
+attachments, Replay recordings and other BlobStore payloads.
+
+For a bundled database, create a custom-format dump of the complete `metric` schema,
+including its migration journals, identities, counters, triggers and indexes:
+
+```bash
+docker compose stop metric
+docker compose exec -T postgres pg_dump -U metric -d metric --schema=metric --format=custom --file=/tmp/metric.dump
+```
+
+Copy the dump as a binary file. On Linux/macOS:
+
+```bash
+mkdir -p backup
+docker cp "$(docker compose ps -q postgres):/tmp/metric.dump" ./backup/metric.dump
+docker cp "$(docker compose ps -a -q metric):/var/lib/metric/blobs" ./backup/blobs
+```
+
+On PowerShell, avoid redirecting binary dump output through older PowerShell versions:
+
+```powershell
+New-Item -ItemType Directory -Path ./backup -Force | Out-Null
+$pgContainer = docker compose ps -q postgres
+$appContainer = docker compose ps -a -q metric
+docker cp "${pgContainer}:/tmp/metric.dump" ./backup/metric.dump
+docker cp "${appContainer}:/var/lib/metric/blobs" ./backup/blobs
+```
+
+Also privately copy `.env`, `connection.env`, `metric.toml`, `compose.yml`, optional
+certificates and Symbolicator config. Keep the HMAC key unchanged. Record exact
+PostgreSQL/Metric versions. For S3, copy objects and user metadata as described in
+the Mongo backup procedure above.
+
+Restore into a separate empty database/installation with the app still stopped.
+Copy the dump into its database container and use `pg_restore -U metric -d metric
+--no-owner --no-privileges --single-transaction /tmp/metric.dump`. The destination
+role must have the required schema/table permissions. Restore the BlobStore and
+original secrets before starting the matching Metric version. Verify login, stored
+events and actual attachment/Replay reads; `/ready` alone is not a backup check.
+Do not add `--clean` to overwrite a live database. Global database roles are not
+included in a schema-scoped dump and must be provisioned on the destination.
+
+For an external PostgreSQL server, use compatible PostgreSQL tools with the actual
+host/port, verified TLS and credentials supplied via a protected password file or
+environment. Restrict the dump to `--schema=metric`; do not back up unrelated schemas
+in a shared database. PostgreSQL TLS protects transport, not backup files or disks.
 
 ## External MongoDB and other deployment layouts
 

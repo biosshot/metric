@@ -1,5 +1,11 @@
 role = "all"
 
+# MongoDB remains the default. For PostgreSQL use the generated installer profile
+# or https://biosshot.github.io/metric/configuration#postgresql. Select
+# [storage] backend = "postgres", replace the Mongo URI reference with
+# [postgres] uri = { env = "METRIC_POSTGRES_URI" }, and choose its TLS policy.
+# The existing database must be created before starting Metric.
+
 [server]
 http_address = "127.0.0.1:4001"
 shutdown_grace = "10s"
