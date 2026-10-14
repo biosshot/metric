@@ -134,11 +134,15 @@ Phase 37 and Session Replay Phase 38, and keeps Profiling deferred.
 ## Current deployment boundary
 
 The supported application shape remains one active `--role=all` process. NATS,
-split roles, multiple active application replicas, sharding, disk spool, MCP and a
-second storage backend are not implemented. PostgreSQL is now planned in ADR-0052;
-the shipped default remains MongoDB. ADR-0044 is a closed historical program, not a
-current production declaration gate. Current limits are stated directly in
-`docs/known-limits.md`.
+split roles, multiple active application replicas, sharding, disk spool and MCP
+are not implemented. The independent PostgreSQL backend is implemented on
+`feat/postgres`; its functional evidence is recorded in the
+[parity report](phase-reports/0052-postgresql-functional-parity.md). Shipped default
+profiles and installers still select MongoDB. Public PostgreSQL setup and the
+explicit interactive wizard are defined in the
+[installer follow-up plan](module-contracts/0052-installer-and-documentation-plan.md).
+ADR-0044 is a closed historical program, not a current production declaration gate.
+Current limits are stated directly in `docs/known-limits.md`.
 
 ## Key documents
 
@@ -171,12 +175,16 @@ current production declaration gate. Current limits are stated directly in
   policy and the first production migration from generation 19 to 20.
 - `0051-helm-chart-and-release-versioning.md`: single-instance Kubernetes deployment,
   persistent storage and exact agreement between Metric, image and chart versions.
-- [0052-postgresql-storage-backend.md](0052-postgresql-storage-backend.md): planned
+- [0052-postgresql-storage-backend.md](0052-postgresql-storage-backend.md): implemented
   independent PostgreSQL adapter, EventWriter naming, native TCP/TLS configuration,
-  security, migration interfaces and minimal Mongo changes; not yet implemented.
+  security, migration interfaces and minimal Mongo changes; see the functional
+  parity report for verification and deferred load testing.
 - [module-contracts/0052-postgresql-implementation-plan.md](module-contracts/0052-postgresql-implementation-plan.md):
   implementation stages, `feat/postgres`, Conventional Commits and mandatory Docker,
   security, migration, fault and regression gates.
+- [module-contracts/0052-installer-and-documentation-plan.md](module-contracts/0052-installer-and-documentation-plan.md):
+  follow-up installer design with an explicit minimal wizard, compatible unattended
+  shell/PowerShell interfaces, database selection and wizard-first Getting Started.
 - `phase-reports/0051-helm-chart.md`: Helm implementation and verification evidence;
   public release publication remains pending.
 - `verification/2026-09-05-manual-backup-restore.md`: database-scoped manual MongoDB
