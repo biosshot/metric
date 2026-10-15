@@ -122,7 +122,19 @@ Release assessment: the agreed fixes are implemented and locally validated.
 Successful hosted CI on the final release commit is still required before
 publication; this local review does not claim that hosted run has occurred.
 
-## Publication remains a separate action
+## Authorized publication attempt
+
+The user subsequently authorized merging into main and publishing 0.1.8, with a
+stop on substantive CI failures. PR #12 ran all seven CI jobs. Six succeeded;
+the remaining job passed container lifecycle, offline TCP/TLS and eight profile
+checks, then exposed an overly specific negative-test exit-code assertion.
+Ubuntu dash exits 2 when its special `exec` builtin cannot open `/dev/tty`;
+Bash exits 1. Both refuse installation before creating secrets. The test now
+accepts 1 or 2 only for that no-terminal shell case. Other negative cases retain
+their exact exit-code assertions. Reproduced on Ubuntu dash, and repeated negative
+checks passed on Git Bash and PowerShell. Production code was unchanged.
+
+## Publication state at the original readiness review
 
 No Git tag, push, remote image/chart publication or GitHub Release was performed.
 The new release workflow will require the exact release commit to pass reusable

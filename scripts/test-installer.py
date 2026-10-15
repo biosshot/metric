@@ -37,7 +37,8 @@ def run(args, *, env=None, cwd=ROOT, timeout=180, expected=0):
                 env.pop(key)
     result = subprocess.run(args, env=env, cwd=cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace', timeout=timeout)
-    if result.returncode != expected:
+    expected_codes = (expected,) if isinstance(expected, int) else expected
+    if result.returncode not in expected_codes:
         # Installer output can contain the visibly entered URI in an interactive test.
         output = re.sub(r'METRIC_BOOTSTRAP_TOKEN=\S+', 'METRIC_BOOTSTRAP_TOKEN=<redacted>', result.stdout)
         output = output.replace(PASSWORD, '<fixture-secret>').replace(urllib.parse.quote(PASSWORD, safe=''), '<fixture-secret>')
@@ -191,9 +192,12 @@ def main():
                 raise RuntimeError('Installer help omits public options')
             for flags in ([option('profile'), 'invalid'], [option('http-port'), '65536'],
                           [option('http-port'), 'abc'], [option('backend'), 'invalid'],
-                          [option('backend'), 'postgres', option('database'), 'external'],
-                          [option('interactive')]):
+                          [option('backend'), 'postgres', option('database'), 'external']):
                 run([*prefix, *flags], env=env, expected=1, timeout=20)
+            # POSIX shells may exit 2 on the exec redirection to an unavailable
+            # /dev/tty; Bash and PowerShell use 1. Both must refuse installation.
+            run([*prefix, option('interactive')], env=env,
+                expected=(1, 2) if engine == 'shell' else 1, timeout=20)
             env['METRIC_POSTGRES_URI'] = 'postgres://metric:fixture@db.example:5432/metric?sslmode=disable'
             run([*prefix, option('backend'), 'postgres', option('database'), 'external', option('tls'), 'on'], env=env, expected=1)
             if (scratch / engine / '.env').exists():
