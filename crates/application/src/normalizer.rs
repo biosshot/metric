@@ -340,10 +340,10 @@ fn truncate_utf8(value: &str, maximum: usize) -> String {
 }
 
 fn normalize_message(root: &Map<String, Value>, context: &mut Context) -> Option<Box<str>> {
-    if let Some(message) = root.get("message") {
-        if let Some(message) = value_string(message, MAX_MESSAGE_BYTES, "message", context) {
-            return Some(message);
-        }
+    if let Some(message) = root.get("message")
+        && let Some(message) = value_string(message, MAX_MESSAGE_BYTES, "message", context)
+    {
+        return Some(message);
     }
     root.get("logentry")
         .and_then(Value::as_object)

@@ -643,6 +643,22 @@ impl ArchiveStore for MongoArchiveStore {
 }
 
 pub(crate) fn archive_manifest_validator() -> Document {
+    let mut validator = archive_manifest_validator_v21();
+    validator
+        .get_document_mut("$jsonSchema")
+        .unwrap()
+        .get_document_mut("properties")
+        .unwrap()
+        .get_document_mut("kind")
+        .unwrap()
+        .get_array_mut("enum")
+        .unwrap()
+        .push("metric".into());
+    validator
+}
+
+// Frozen schema shape used to recognize installed databases during migration.
+pub(crate) fn archive_manifest_validator_v21() -> Document {
     doc! {
         "$jsonSchema": {
             "bsonType": "object",

@@ -1,0 +1,14 @@
+{
+  "name": "metric/sdk-compatibility-php",
+  "description": "Isolated official Sentry PHP SDK compatibility fixture",
+  "type": "project",
+  "require": {
+    "php": "^8.3",
+    "sentry/sentry": "4.34.0"
+  },
+  "config": {
+    "vendor-dir": ".deps/vendor",
+    "allow-plugins": false,
+    "sort-packages": true
+  }
+}

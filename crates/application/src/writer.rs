@@ -23,7 +23,7 @@ use tokio::{
 use crate::shutdown::ShutdownSignal;
 
 #[derive(Debug, Clone, Copy)]
-pub struct MongoWriterConfig {
+pub struct EventWriterConfig {
     pub channel_capacity: usize,
     pub max_wait: Duration,
     pub max_documents: usize,
@@ -32,7 +32,7 @@ pub struct MongoWriterConfig {
     pub shutdown_drain: Duration,
 }
 
-impl Default for MongoWriterConfig {
+impl Default for EventWriterConfig {
     fn default() -> Self {
         Self {
             channel_capacity: 512,
@@ -46,8 +46,8 @@ impl Default for MongoWriterConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum MongoWriterStartError {
-    #[error("MongoWriter configuration is invalid")]
+pub enum EventWriterStartError {
+    #[error("EventWriter configuration is invalid")]
     InvalidConfiguration,
 }
 
@@ -81,7 +81,7 @@ impl<P: PreparedEvent> Batch<P> {
         self
     }
 
-    fn can_push(&self, command: &Command<P>, config: MongoWriterConfig) -> bool {
+    fn can_push(&self, command: &Command<P>, config: EventWriterConfig) -> bool {
         self.events.len() < config.max_documents
             && (self.events.is_empty()
                 || self
@@ -99,20 +99,20 @@ impl<P: PreparedEvent> Batch<P> {
     }
 }
 
-pub struct MongoWriter<S: EventStore> {
+pub struct EventWriter<S: EventStore> {
     store: Arc<S>,
     sender: mpsc::Sender<Command<S::Prepared>>,
     accepting: Arc<AtomicBool>,
     shutdown: ShutdownSignal,
 }
 
-impl<S: EventStore> MongoWriter<S> {
+impl<S: EventStore> EventWriter<S> {
     pub fn start(
         store: Arc<S>,
         handoff: Arc<dyn AcceptedEventHandoff>,
-        config: MongoWriterConfig,
+        config: EventWriterConfig,
         shutdown: ShutdownSignal,
-    ) -> Result<(Arc<Self>, MongoWriterTask), MongoWriterStartError> {
+    ) -> Result<(Arc<Self>, EventWriterTask), EventWriterStartError> {
         validate_config(config)?;
         let (sender, receiver) = mpsc::channel(config.channel_capacity);
         let accepting = Arc::new(AtomicBool::new(true));
@@ -125,7 +125,7 @@ impl<S: EventStore> MongoWriter<S> {
         let join = tokio::spawn(run_writer(
             store, receiver, handoff, config, accepting, shutdown,
         ));
-        Ok((writer, MongoWriterTask { join }))
+        Ok((writer, EventWriterTask { join }))
     }
 
     #[must_use]
@@ -134,7 +134,7 @@ impl<S: EventStore> MongoWriter<S> {
     }
 }
 
-impl<S: EventStore> EventSink for MongoWriter<S> {
+impl<S: EventStore> EventSink for EventWriter<S> {
     fn persist(
         &self,
         event: AcceptedEvent,
@@ -172,11 +172,11 @@ impl<S: EventStore> EventSink for MongoWriter<S> {
     }
 }
 
-pub struct MongoWriterTask {
+pub struct EventWriterTask {
     join: JoinHandle<()>,
 }
 
-impl MongoWriterTask {
+impl EventWriterTask {
     pub fn abort_handle(&self) -> tokio::task::AbortHandle {
         self.join.abort_handle()
     }
@@ -186,7 +186,7 @@ impl MongoWriterTask {
     }
 }
 
-fn validate_config(config: MongoWriterConfig) -> Result<(), MongoWriterStartError> {
+fn validate_config(config: EventWriterConfig) -> Result<(), EventWriterStartError> {
     let valid = config.channel_capacity > 0
         && (100..=500).contains(&config.max_documents)
         && config.max_bytes > 0
@@ -196,7 +196,7 @@ fn validate_config(config: MongoWriterConfig) -> Result<(), MongoWriterStartErro
     if valid {
         Ok(())
     } else {
-        Err(MongoWriterStartError::InvalidConfiguration)
+        Err(EventWriterStartError::InvalidConfiguration)
     }
 }
 
@@ -204,7 +204,7 @@ async fn run_writer<S: EventStore>(
     store: Arc<S>,
     mut receiver: mpsc::Receiver<Command<S::Prepared>>,
     handoff: Arc<dyn AcceptedEventHandoff>,
-    config: MongoWriterConfig,
+    config: EventWriterConfig,
     accepting: Arc<AtomicBool>,
     shutdown: ShutdownSignal,
 ) {
@@ -266,7 +266,7 @@ async fn drain_writer<S: EventStore>(
     store: &Arc<S>,
     receiver: &mut mpsc::Receiver<Command<S::Prepared>>,
     handoff: &Arc<dyn AcceptedEventHandoff>,
-    config: MongoWriterConfig,
+    config: EventWriterConfig,
 ) {
     let deadline = TokioInstant::now() + config.shutdown_drain;
     let mut carry = None;
@@ -315,13 +315,13 @@ async fn flush_batch<S: EventStore>(
     mut batch: Batch<S::Prepared>,
 ) {
     let documents = batch.events.len();
-    metrics::histogram!("metric_mongo_writer_batch_documents").record(documents as f64);
-    metrics::histogram!("metric_mongo_writer_batch_bytes").record(batch.encoded_bytes as f64);
-    metrics::histogram!("metric_mongo_writer_batch_wait_seconds")
+    metrics::histogram!("metric_event_writer_batch_documents").record(documents as f64);
+    metrics::histogram!("metric_event_writer_batch_bytes").record(batch.encoded_bytes as f64);
+    metrics::histogram!("metric_event_writer_batch_wait_seconds")
         .record(batch.opened_at.elapsed().as_secs_f64());
     let started = Instant::now();
     let result = timeout(operation_timeout, store.insert_batch(&batch.events)).await;
-    metrics::histogram!("metric_mongo_writer_batch_latency_seconds")
+    metrics::histogram!("metric_event_writer_batch_latency_seconds")
         .record(started.elapsed().as_secs_f64());
     match result {
         Ok(Ok(statuses)) if statuses.len() == documents => {
@@ -339,7 +339,7 @@ async fn flush_batch<S: EventStore>(
                             "rejected"
                         };
                         metrics::counter!(
-                            "metric_mongo_writer_handoff_total",
+                            "metric_event_writer_handoff_total",
                             "outcome" => handoff_outcome
                         )
                         .increment(1);
@@ -378,7 +378,7 @@ fn reject_command<P>(command: Command<P>, error: EventSinkError) {
 }
 
 fn record_outcome(outcome: &'static str) {
-    metrics::counter!("metric_mongo_writer_events_total", "outcome" => outcome).increment(1);
+    metrics::counter!("metric_event_writer_events_total", "outcome" => outcome).increment(1);
 }
 
 #[cfg(test)]
@@ -486,8 +486,8 @@ mod tests {
         }
     }
 
-    fn config() -> MongoWriterConfig {
-        MongoWriterConfig {
+    fn config() -> EventWriterConfig {
+        EventWriterConfig {
             channel_capacity: 256,
             max_wait: Duration::from_millis(20),
             max_documents: 100,
@@ -503,7 +503,7 @@ mod tests {
         let store = Arc::new(FakeStore::new(Duration::ZERO, 20));
         let handoff = Arc::new(CapturingHandoff::default());
         let (writer, task) =
-            MongoWriter::start(Arc::clone(&store), handoff.clone(), config(), root.signal())
+            EventWriter::start(Arc::clone(&store), handoff.clone(), config(), root.signal())
                 .unwrap();
         assert_eq!(writer.persist(event(1)).await, Ok(DurableOutcome::Accepted));
         assert_eq!(store.batches.lock().unwrap()[0].len(), 1);
@@ -516,7 +516,7 @@ mod tests {
     async fn full_dispatcher_handoff_does_not_undo_durable_acceptance() {
         let root = crate::shutdown::ShutdownRoot::new();
         let store = Arc::new(FakeStore::new(Duration::ZERO, 20));
-        let (writer, task) = MongoWriter::start(
+        let (writer, task) = EventWriter::start(
             Arc::clone(&store),
             Arc::new(RejectingHandoff),
             config(),
@@ -533,10 +533,10 @@ mod tests {
     async fn document_threshold_flushes_one_full_batch() {
         let root = crate::shutdown::ShutdownRoot::new();
         let store = Arc::new(FakeStore::new(Duration::ZERO, 8));
-        let (writer, task) = MongoWriter::start(
+        let (writer, task) = EventWriter::start(
             Arc::clone(&store),
             Arc::new(CapturingHandoff::default()),
-            MongoWriterConfig {
+            EventWriterConfig {
                 max_wait: Duration::from_secs(1),
                 ..config()
             },
@@ -562,10 +562,10 @@ mod tests {
     async fn encoded_byte_threshold_splits_batches() {
         let root = crate::shutdown::ShutdownRoot::new();
         let store = Arc::new(FakeStore::new(Duration::ZERO, 60));
-        let (writer, task) = MongoWriter::start(
+        let (writer, task) = EventWriter::start(
             Arc::clone(&store),
             Arc::new(CapturingHandoff::default()),
-            MongoWriterConfig {
+            EventWriterConfig {
                 max_bytes: 100,
                 ..config()
             },
@@ -599,7 +599,7 @@ mod tests {
         let store = Arc::new(FakeStore::new(Duration::from_millis(25), 20));
         let handoff = Arc::new(CapturingHandoff::default());
         let (writer, task) =
-            MongoWriter::start(Arc::clone(&store), handoff.clone(), config(), root.signal())
+            EventWriter::start(Arc::clone(&store), handoff.clone(), config(), root.signal())
                 .unwrap();
         let request = {
             let writer = Arc::clone(&writer);
@@ -618,7 +618,7 @@ mod tests {
     async fn shutdown_drains_queued_work_and_rejects_new_submissions() {
         let root = crate::shutdown::ShutdownRoot::new();
         let store = Arc::new(FakeStore::new(Duration::from_millis(10), 20));
-        let (writer, task) = MongoWriter::start(
+        let (writer, task) = EventWriter::start(
             store,
             Arc::new(CapturingHandoff::default()),
             config(),

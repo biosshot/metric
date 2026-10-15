@@ -8,6 +8,7 @@ pub mod native_http;
 pub mod notification_delivery;
 mod outbound_network;
 pub mod release_http;
+mod storage;
 pub mod telegram;
 pub mod uptime;
 pub mod web_http;
@@ -72,19 +73,16 @@ use metric_application::{
     span_writer::{SpanWriter, SpanWriterConfig, SpanWriterStartError, SpanWriterTask},
     symbolication::{BaselineSymbolicationService, SymbolicationConfig, SymbolicationService},
     uptime::{UptimeScheduler, UptimeSchedulerConfig, UptimeSchedulerError},
-    writer::{MongoWriter, MongoWriterConfig, MongoWriterStartError, MongoWriterTask},
+    writer::{EventWriter, EventWriterConfig, EventWriterStartError, EventWriterTask},
 };
 use metric_blob::{LocalBlobConfig, LocalBlobStore, S3BlobConfig, S3BlobStore};
 use metric_domain::Timestamp;
-use metric_mongo::{
-    EventCodecConfig, IssueCodecConfig, MongoBootstrapError, MongoProjectStore,
-    SchemaMigrationProgress,
-};
+use metric_mongo::{MongoBootstrapError, MongoProjectStore, SchemaMigrationProgress};
 use metric_ports::{
     BlobReferenceStore, BlobStore, BlobStoreError, Clock, EventBacklog, EventSink, EventSinkError,
-    FeedbackSink, FeedbackStore, LogSink, MetricSink, MetricStore, MonitorSink, MonitorStore,
-    OutcomeSink, PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource,
-    SessionSink, SessionStore, SignalStore, SpanSink,
+    FeedbackSink, LogSink, MetricSink, MetricStore, MonitorSink, MonitorStore, OutcomeSink,
+    PortFuture, ProjectResolveError, ProjectResolver, RandomError, RandomSource, SessionSink,
+    SessionStore, SignalStore, SpanSink,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -105,11 +103,13 @@ pub enum ServerError {
     #[error(transparent)]
     Mongo(#[from] MongoBootstrapError),
     #[error(transparent)]
+    Postgres(#[from] metric_postgres::PostgresError),
+    #[error(transparent)]
     Projects(#[from] ProjectServiceError),
     #[error("initial MongoDB connection exceeded its deadline")]
     MongoConnectTimeout,
     #[error(transparent)]
-    Writer(#[from] MongoWriterStartError),
+    Writer(#[from] EventWriterStartError),
     #[error(transparent)]
     LogWriter(#[from] LogWriterStartError),
     #[error(transparent)]
@@ -171,7 +171,7 @@ struct RuntimeModules {
     session_sink: Option<std::sync::Arc<dyn SessionSink>>,
     monitor_sink: Option<std::sync::Arc<dyn MonitorSink>>,
     feedback_sink: Option<std::sync::Arc<dyn FeedbackSink>>,
-    writer_task: Option<MongoWriterTask>,
+    writer_task: Option<EventWriterTask>,
     log_writer_task: Option<LogWriterTask>,
     metric_writer_task: Option<MetricWriterTask>,
     replay_writer_task: Option<ReplayWriterTask>,
@@ -340,13 +340,114 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         private_source_signer: runtime_private_source_signer,
         debug_file_cleanup_task,
         artifact_cleanup_task,
-    } = if let Some(uri) = secrets.mongodb_uri.take() {
+    } = if config.storage.backend == config::StorageBackend::Postgres {
+        let uri = secrets
+            .postgres_uri
+            .take()
+            .expect("validated PostgreSQL mode has a URI");
+        let migration_uri = secrets.postgres_migration_uri.take();
+        let hmac = secrets
+            .scrub_hmac_key
+            .take()
+            .expect("validated database mode has a scrub HMAC key");
+        let webhook_secret_box = webhook::WebhookSecretBox::new(&hmac);
+        startup_gate.report(http::StartupProgress {
+            phase: http::StartupPhase::InspectingSchema,
+            ..Default::default()
+        });
+        let prepare = async {
+            let reporter = |progress: metric_postgres::MigrationProgress| {
+                startup_gate.report(http::StartupProgress {
+                    phase: match progress.phase {
+                        metric_postgres::MigrationPhase::Inspecting => {
+                            http::StartupPhase::InspectingSchema
+                        }
+                        metric_postgres::MigrationPhase::Waiting => {
+                            http::StartupPhase::WaitingForMigration
+                        }
+                        metric_postgres::MigrationPhase::Running => http::StartupPhase::Migrating,
+                        metric_postgres::MigrationPhase::Complete => {
+                            http::StartupPhase::StartingServices
+                        }
+                    },
+                    completed_steps: progress.completed_steps,
+                    total_steps: progress.total_steps,
+                    ..Default::default()
+                });
+            };
+            let mut delay = std::time::Duration::from_millis(250);
+            let database = loop {
+                let attempt = async {
+                    metric_postgres::PostgresSchemaManager::ensure_with_reporter(
+                        migration_uri.as_ref().map_or(uri.expose(), |s| s.expose()),
+                        &config.postgres.connection,
+                        &config.postgres.migrations,
+                        &reporter,
+                    )
+                    .await?;
+                    metric_postgres::PostgresDatabase::connect(
+                        uri.expose(),
+                        &config.postgres.connection,
+                    )
+                    .await
+                }
+                .await;
+                match attempt {
+                    Ok(database) => break database,
+                    Err(error)
+                        if matches!(
+                            error,
+                            metric_postgres::PostgresError::MigrationBusy
+                                | metric_postgres::PostgresError::Unavailable
+                                | metric_postgres::PostgresError::Timeout
+                        ) =>
+                    {
+                        startup_gate.report(http::StartupProgress {
+                            phase: http::StartupPhase::WaitingForMigration,
+                            ..Default::default()
+                        });
+                        warn!(operation = "postgres.startup", category = %error, "PostgreSQL startup will retry while in maintenance");
+                        tokio::time::sleep(delay).await;
+                        delay = delay
+                            .saturating_mul(2)
+                            .min(std::time::Duration::from_secs(5));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            storage::StorageBundle::from_postgres(database, hmac, &config)
+        };
+        let stores = tokio::select! {
+            result=prepare=>result?,
+            ()=os_shutdown.cancelled()=>{
+                shutdown.begin();
+                server_task.await.map_err(|e|ServerError::Http(io::Error::other(e)))??;
+                return Ok(ExitCode::SUCCESS);
+            }
+        };
+        startup_gate.report(http::StartupProgress {
+            phase: http::StartupPhase::StartingServices,
+            ..Default::default()
+        });
+        assemble_runtime(
+            stores,
+            RuntimeAssembly {
+                config: &config,
+                clock: clock.clone(),
+                random: random.clone(),
+                blob_store: blob_store.clone(),
+                shutdown: &shutdown,
+                webhook_secret_box,
+                private_source_signer,
+            },
+        )
+        .await?
+    } else if let Some(uri) = secrets.mongodb_uri.take() {
         let hmac_key = secrets
             .scrub_hmac_key
             .take()
             .expect("validated MongoDB configuration has a scrub HMAC key");
         let webhook_secret_box = webhook::WebhookSecretBox::new(&hmac_key);
-        let notification_secret_box = webhook_secret_box.clone();
         startup_gate.report(http::StartupProgress {
             phase: http::StartupPhase::InspectingSchema,
             ..http::StartupProgress::default()
@@ -389,646 +490,20 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             phase: http::StartupPhase::StartingServices,
             ..http::StartupProgress::default()
         });
-        let project_service = std::sync::Arc::new(ProjectService::new(
-            std::sync::Arc::new(store.clone()),
-            std::sync::Arc::clone(&clock),
-            std::sync::Arc::clone(&random),
-            config.projects.identity_collision_retries,
-            ProjectCacheConfig {
-                capacity: config.ingest.project_cache.capacity,
-                max_inflight: config.ingest.project_cache.max_inflight,
-                positive_ttl: config.ingest.project_cache.positive_ttl.get(),
-                negative_ttl: config.ingest.project_cache.negative_ttl.get(),
-            },
-        )?);
-        let notification_store: std::sync::Arc<dyn metric_ports::NotificationStore> =
-            std::sync::Arc::new(store.notification_store());
-        let webhook_adapter = webhook::ReqwestWebhookAdapter::new(
-            webhook_secret_box.clone(),
-            webhook::WebhookAdapterConfig {
-                timeout: config.notifications.timeout.get(),
-                max_response_bytes: config.notifications.maximum_response_bytes,
-                max_retry_after: config.notifications.maximum_retry_after.get(),
-                allow_http: config.notifications.allow_http,
-                allow_private_networks: config.notifications.allow_private_networks,
+        let stores = storage::StorageBundle::from_mongo(store, &config);
+        assemble_runtime(
+            stores,
+            RuntimeAssembly {
+                config: &config,
+                clock: clock.clone(),
+                random: random.clone(),
+                blob_store: blob_store.clone(),
+                shutdown: &shutdown,
+                webhook_secret_box,
+                private_source_signer,
             },
         )
-        .map_err(|_| NotificationError::InvalidConfiguration)?;
-        let telegram_api = std::sync::Arc::new(
-            telegram::TelegramApiClient::new(telegram::TelegramApiConfig {
-                timeout: config.notifications.timeout.get(),
-                maximum_response_bytes: config.notifications.maximum_response_bytes,
-                allow_private_networks: config.notifications.telegram_allow_private_networks,
-            })
-            .map_err(|_| NotificationError::InvalidConfiguration)?,
-        );
-        let notification_adapter: std::sync::Arc<dyn metric_ports::NotificationDeliveryAdapter> =
-            std::sync::Arc::new(
-                notification_delivery::ProviderDeliveryAdapter::new(
-                    webhook_adapter,
-                    webhook_secret_box.clone(),
-                    std::sync::Arc::clone(&telegram_api),
-                    notification_delivery::ProviderAdapterConfig {
-                        timeout: config.notifications.timeout.get(),
-                        max_response_bytes: config.notifications.maximum_response_bytes,
-                        max_retry_after: config.notifications.maximum_retry_after.get(),
-                        allow_private_networks: config.notifications.allow_private_networks,
-                    },
-                )
-                .map_err(|_| NotificationError::InvalidConfiguration)?,
-            );
-        let notification_dispatcher = std::sync::Arc::new(NotificationDispatcher::new(
-            std::sync::Arc::clone(&notification_store),
-            notification_adapter,
-            std::sync::Arc::clone(&clock),
-            NotificationConfig {
-                queue_capacity: config.notifications.queue_capacity,
-                worker_concurrency: config.notifications.worker_concurrency,
-                transition_batch_size: config.notifications.transition_batch_size,
-                due_scan_limit: config.notifications.due_scan_limit,
-                poll_interval: config.notifications.poll_interval.get(),
-                attempt_timeout: config.notifications.timeout.get(),
-                attempt_lease: config.notifications.attempt_lease.get(),
-                max_attempts: config.notifications.max_attempts,
-                initial_delay: config.notifications.initial_delay.get(),
-                max_delay: config.notifications.max_delay.get(),
-                delivered_retention: config.notifications.delivered_retention.get(),
-                dead_retention: config.notifications.dead_retention.get(),
-            },
-        )?);
-        let notification_signal: std::sync::Arc<
-            dyn metric_application::notifications::NotificationSignal,
-        > = notification_dispatcher.clone();
-        let notification_task = notification_dispatcher.start(shutdown.signal())?;
-        let project_resolver: std::sync::Arc<dyn ProjectResolver> = project_service.clone();
-        let project_work = std::sync::Arc::new(ProjectWorkRegistry::default());
-        let deletion_config = ProjectDeletionConfig {
-            grace_period: config.project_deletion.grace_period.get(),
-            delete_batch_documents: config.project_deletion.delete_batch_documents,
-            completed_job_retention: config.project_deletion.completed_job_retention.get(),
-            slug_reservation: config.project_deletion.slug_reservation.get(),
-            poll_interval: config.project_deletion.poll_interval.get(),
-            operation_timeout: config.project_deletion.operation_timeout.get(),
-            drain_timeout: config.project_deletion.drain_timeout.get(),
-            retry_base: config.project_deletion.retry_base.get(),
-            retry_max: config.project_deletion.retry_max.get(),
-        };
-        let deletion_store: std::sync::Arc<dyn metric_ports::ProjectDeletionStore> =
-            std::sync::Arc::new(store.clone());
-        let deletion_service = ProjectDeletionService::new(
-            std::sync::Arc::clone(&deletion_store),
-            std::sync::Arc::clone(&project_service),
-            std::sync::Arc::clone(&clock),
-            std::sync::Arc::clone(&project_work),
-            deletion_config,
-        )?;
-        let identity_service = std::sync::Arc::new(IdentityService::new(
-            std::sync::Arc::new(store.auth_store()),
-            std::sync::Arc::clone(&clock),
-            std::sync::Arc::clone(&random),
-            AuthConfig {
-                identity_collision_retries: config.auth.identity_collision_retries,
-                session_idle_timeout: config.auth.session_idle_timeout.get(),
-                session_absolute_timeout: config.auth.session_absolute_timeout.get(),
-                activity_touch_interval: config.auth.activity_touch_interval.get(),
-                setup_token_timeout: config.auth.setup_token_timeout.get(),
-                max_api_token_lifetime: config.auth.max_api_token_lifetime.get(),
-                store_timeout: config.auth.store_timeout.get(),
-                password: PasswordConfig {
-                    memory_kib: config.auth.password_memory_kib,
-                    iterations: config.auth.password_iterations,
-                    parallelism: config.auth.password_parallelism,
-                    max_concurrency: config.auth.password_max_concurrency,
-                },
-                login_rate_limit: LoginRateLimitConfig {
-                    max_attempts: config.auth.login_max_attempts,
-                    window: config.auth.login_window.get(),
-                    capacity: config.auth.login_capacity,
-                },
-            },
-        )?);
-        let notification_admin_service = std::sync::Arc::new(
-            metric_application::notifications::NotificationAdminService::new(
-                identity_service.clone(),
-                std::sync::Arc::clone(&notification_store),
-            ),
-        );
-        if let Some(token) =
-            startup_bootstrap_token(identity_service.ensure_bootstrap_token().await)?
-        {
-            eprintln!(
-                "METRIC_BOOTSTRAP_TOKEN={} (shown once; store it securely)",
-                token.encode_hex()
-            );
-        }
-        let event_codec = EventCodecConfig {
-            compression_level: config.ingest.event_codec.compression_level,
-            compression_min_savings: config.ingest.event_codec.compression_min_savings,
-            max_decoded_body_bytes: config.ingest.max_event_bytes,
-            max_encoded_document_bytes: config.ingest.max_event_bytes.saturating_add(64 * 1024),
-        };
-        let archive_task = if config.archive.enabled {
-            let service = ArchiveService::new(
-                std::sync::Arc::new(store.archive_store(event_codec)),
-                std::sync::Arc::clone(&blob_store),
-                std::sync::Arc::clone(&clock),
-                ArchiveConfig {
-                    maximum_events: config.archive.maximum_events,
-                    target_uncompressed_bytes: config.archive.target_uncompressed_bytes,
-                    write_chunk_bytes: config.archive.write_chunk_bytes,
-                    poll_interval: config.archive.poll_interval.get(),
-                    hot_copy_delay: config.archive.hot_copy_delay.get(),
-                    orphan_grace: config.archive.orphan_grace.get(),
-                    cleanup_max_pages: config.archive.cleanup_max_pages,
-                },
-            )?;
-            Some(start_archive_worker(service, shutdown.signal()))
-        } else {
-            None
-        };
-        let issue_codec = IssueCodecConfig::default();
-        let issue_service = std::sync::Arc::new(metric_application::issues::IssueService::new(
-            std::sync::Arc::new(store.issue_store(issue_codec)),
-        ));
-        let investigation: std::sync::Arc<dyn metric_ports::InvestigationStore> =
-            std::sync::Arc::new(store.investigation_store(event_codec, issue_codec));
-        let release_store: std::sync::Arc<dyn metric_ports::ReleaseStore> =
-            std::sync::Arc::new(store.release_store(issue_codec));
-        let release_service = std::sync::Arc::new(ReleaseService::new(
-            release_store,
-            std::sync::Arc::clone(&clock),
-        ));
-        let search = std::sync::Arc::new(
-            SearchService::new(
-                std::sync::Arc::clone(&investigation),
-                std::sync::Arc::clone(&clock),
-                SearchConfig::default(),
-            )
-            .map_err(|_| ServerError::Auth(AuthError::InvalidConfiguration))?,
-        );
-        let capsule_access: std::sync::Arc<dyn IncidentCapsuleAccess> = identity_service.clone();
-        let incident_capsule_service = std::sync::Arc::new(IncidentCapsuleService::new(
-            capsule_access,
-            std::sync::Arc::clone(&issue_service),
-            std::sync::Arc::clone(&investigation),
-            std::sync::Arc::clone(&clock),
-            IncidentCapsuleConfig {
-                max_events: config.incident_capsule.max_events,
-                max_activities: config.incident_capsule.max_activities,
-                max_total_uncompressed_bytes: config.incident_capsule.max_total_uncompressed_bytes,
-                max_entry_bytes: config.incident_capsule.max_entry_bytes,
-                generation_timeout: config.incident_capsule.generation_timeout.get(),
-                max_concurrency: config.incident_capsule.max_concurrency,
-                stream_chunk_bytes: config.incident_capsule.stream_chunk_bytes,
-                stream_buffer_chunks: config.incident_capsule.stream_buffer_chunks,
-            },
-            shutdown.signal(),
-        )?);
-        let signal_store: std::sync::Arc<dyn SignalStore> = std::sync::Arc::new(
-            store.signal_store_with_retention(metric_mongo::SignalRetention {
-                logs_days: config.retention.logs_days,
-                spans_days: config.retention.spans_days,
-                span_stats_hourly_days: config.retention.span_stats_hourly_days,
-                archive: config.archive.enabled,
-            }),
-        );
-        let (log_writer, log_writer_task) = LogWriter::start(
-            std::sync::Arc::clone(&signal_store),
-            LogWriterConfig {
-                channel_capacity: config.ingest.max_waiting_for_storage,
-                max_wait: config.ingest.batch.max_wait.get(),
-                max_documents: config.ingest.batch.max_documents,
-                max_bytes: config.ingest.batch.max_bytes,
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-            },
-            shutdown.signal(),
-        )?;
-        let log_sink: std::sync::Arc<dyn LogSink> = log_writer;
-        let metric_store: std::sync::Arc<dyn MetricStore> =
-            std::sync::Arc::new(store.metric_store(metric_mongo::MetricRetention {
-                days: config.retention.metrics_days,
-                max_series_per_project: config.retention.metric_max_series_per_project,
-                archive: config.archive.enabled && config.retention.metric_archive,
-            }));
-        let (metric_writer, metric_writer_task) = MetricWriter::start(
-            metric_store,
-            MetricWriterConfig {
-                channel_capacity: config.ingest.max_waiting_for_storage,
-                max_wait: config.ingest.batch.max_wait.get(),
-                max_deltas: config.ingest.batch.max_documents.saturating_mul(8),
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-            },
-            shutdown.signal(),
-        )?;
-        let metric_sink: std::sync::Arc<dyn MetricSink> = metric_writer;
-        let replay_store: std::sync::Arc<dyn metric_ports::ReplayStore> =
-            std::sync::Arc::new(store.replay_store(metric_mongo::ReplayRetention {
-                days: config.retention.replays_days,
-                archive: config.retention.replay_archive,
-            }));
-        let (replay_writer, replay_writer_task) = ReplayWriter::start(
-            std::sync::Arc::clone(&replay_store),
-            std::sync::Arc::clone(&blob_store),
-            std::sync::Arc::clone(&clock),
-            ReplayWriterConfig {
-                channel_capacity: config.ingest.replay.queue_capacity,
-                max_queued_bytes: config.ingest.replay.max_queued_bytes,
-                max_segment_bytes: config.ingest.replay.max_segment_bytes,
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-                orphan_grace: config.ingest.replay.orphan_grace.get(),
-                cleanup_interval: config.ingest.replay.cleanup_interval.get(),
-                cleanup_batch_size: config.ingest.replay.cleanup_batch_size,
-            },
-            shutdown.signal(),
-        )?;
-        let replay_sink: std::sync::Arc<dyn metric_ports::ReplaySink> = replay_writer;
-        let (span_writer, span_writer_task) = SpanWriter::start(
-            std::sync::Arc::clone(&signal_store),
-            SpanWriterConfig {
-                channel_capacity: config.ingest.max_waiting_for_storage,
-                max_wait: config.ingest.batch.max_wait.get(),
-                max_documents: config.ingest.batch.max_documents,
-                max_bytes: config.ingest.batch.max_bytes,
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-            },
-            shutdown.signal(),
-        )?;
-        let span_sink: std::sync::Arc<dyn SpanSink> = span_writer;
-        let session_store: std::sync::Arc<dyn SessionStore> =
-            std::sync::Arc::new(store.session_store(metric_mongo::SessionRetention {
-                sessions_days: config.retention.sessions_days,
-                session_stats_hourly_days: config.retention.session_stats_hourly_days,
-                archive: config.archive.enabled,
-            }));
-        let (session_writer, session_writer_task) = SessionWriter::start(
-            std::sync::Arc::clone(&session_store),
-            SessionWriterConfig {
-                channel_capacity: config.ingest.max_waiting_for_storage,
-                max_wait: config.ingest.batch.max_wait.get(),
-                max_updates: config.ingest.batch.max_documents,
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-            },
-            shutdown.signal(),
-        )?;
-        let session_sink: std::sync::Arc<dyn SessionSink> = session_writer;
-        let session_maintenance_task = start_session_maintenance(
-            std::sync::Arc::clone(&session_store),
-            std::sync::Arc::clone(&clock),
-            std::time::Duration::from_secs(
-                u64::from(config.retention.session_active_max_hours) * 60 * 60,
-            ),
-            config.scheduler.maintenance_interval.get(),
-            shutdown.signal(),
-        );
-        let monitor_store: std::sync::Arc<dyn MonitorStore> =
-            std::sync::Arc::new(store.monitor_store(metric_mongo::MonitorRetention {
-                runs_days: config.retention.monitor_runs_days,
-            }));
-        let (monitor_writer, monitor_writer_task) = MonitorWriter::start(
-            std::sync::Arc::clone(&monitor_store),
-            MonitorWriterConfig {
-                channel_capacity: config.ingest.max_waiting_for_storage,
-                max_wait: config.ingest.batch.max_wait.get(),
-                max_updates: config.ingest.batch.max_documents,
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-            },
-            shutdown.signal(),
-        )?;
-        let monitor_sink: std::sync::Arc<dyn MonitorSink> = monitor_writer;
-        let uptime_task = Some(
-            UptimeScheduler::new(
-                std::sync::Arc::clone(&monitor_store),
-                std::sync::Arc::new(uptime::ReqwestUptimeExecutor::new(
-                    webhook_secret_box.clone(),
-                )),
-                std::sync::Arc::clone(&clock),
-                UptimeSchedulerConfig {
-                    poll_interval: config.scheduler.backlog_interval.get(),
-                    retention_days: config.retention.monitor_runs_days,
-                    ..UptimeSchedulerConfig::default()
-                },
-            )?
-            .start(shutdown.signal()),
-        );
-        let feedback = std::sync::Arc::new(store.feedback_store());
-        let feedback_sink: std::sync::Arc<dyn FeedbackSink> = feedback.clone();
-        let feedback_store: std::sync::Arc<dyn FeedbackStore> = feedback;
-        let explore_store: std::sync::Arc<dyn metric_ports::ExploreStore> =
-            std::sync::Arc::new(store.explore_store());
-        let explore_service = std::sync::Arc::new(ExploreService::new(
-            explore_store,
-            ExploreConfig::default(),
-        )?);
-        let aggregate_alert_task = Some(
-            std::sync::Arc::new(AggregateAlertEvaluator::new(
-                std::sync::Arc::clone(&notification_store),
-                std::sync::Arc::clone(&explore_service),
-                std::sync::Arc::clone(&clock),
-                config.scheduler.poll_interval.get(),
-                config.notifications.attempt_lease.get(),
-                config.notifications.transition_batch_size.min(1_000),
-            )?)
-            .start(shutdown.signal()),
-        );
-        let monitor_alert_task = Some(
-            std::sync::Arc::new(MonitorAlertEvaluator::new(
-                std::sync::Arc::clone(&notification_store),
-                std::sync::Arc::clone(&monitor_store),
-                std::sync::Arc::clone(&clock),
-                config.scheduler.poll_interval.get(),
-                config.notifications.transition_batch_size.min(1_000),
-            )?)
-            .start(shutdown.signal()),
-        );
-        let dashboard_store: std::sync::Arc<dyn metric_ports::DashboardStore> =
-            std::sync::Arc::new(store.dashboard_store());
-        let dashboard_service = std::sync::Arc::new(DashboardService::new(
-            dashboard_store,
-            std::sync::Arc::clone(&explore_service),
-            std::sync::Arc::clone(&clock),
-            std::sync::Arc::clone(&random),
-            DashboardConfig::default(),
-        )?);
-        let native_api_service = std::sync::Arc::new(
-            NativeApiService::new(
-                std::sync::Arc::clone(&identity_service),
-                project_service,
-                issue_service,
-                std::sync::Arc::clone(&investigation),
-                search,
-                std::sync::Arc::clone(&clock),
-            )
-            .with_project_deletion(deletion_service)
-            .with_blob_store(std::sync::Arc::clone(&blob_store))
-            .with_signal_store(std::sync::Arc::clone(&signal_store))
-            .with_session_store(session_store)
-            .with_monitor_store(monitor_store)
-            .with_feedback_store(feedback_store)
-            .with_replay_store(replay_store)
-            .with_explore(explore_service)
-            .with_dashboards(dashboard_service)
-            .with_release_service(std::sync::Arc::clone(&release_service)),
-        );
-        let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> =
-            std::sync::Arc::new(store.debug_file_store(metric_mongo::DebugFileQuota::default()));
-        let debug_file_service = std::sync::Arc::new(DebugFileService::new(
-            debug_metadata,
-            std::sync::Arc::clone(&blob_store),
-            std::sync::Arc::clone(&clock),
-            DebugFileConfig {
-                max_file_bytes: config
-                    .blob
-                    .max_object_bytes
-                    .min(metric_application::debug_files::SENTRY_CLI_MAX_FILE_BYTES),
-                ..DebugFileConfig::default()
-            },
-        )?);
-        debug_file_service.recover(100).await?;
-        let _ = debug_file_service.cleanup_once().await;
-        let debug_file_cleanup_task = start_debug_file_cleanup(
-            std::sync::Arc::clone(&debug_file_service),
-            config.ingest.attachments.cleanup_interval.get(),
-            shutdown.signal(),
-        )?;
-        let artifact_metadata: std::sync::Arc<dyn metric_ports::ArtifactStore> =
-            std::sync::Arc::new(store.artifact_store(metric_mongo::ArtifactQuota {
-                maximum_bytes_per_organization: config.artifacts.maximum_bytes_per_organization,
-                maximum_bundles_per_organization: config.artifacts.maximum_bundles_per_organization,
-            }));
-        let artifact_service = std::sync::Arc::new(ArtifactService::new(
-            artifact_metadata,
-            std::sync::Arc::clone(&blob_store),
-            std::sync::Arc::clone(&clock),
-            std::sync::Arc::clone(&random),
-            ArtifactConfig {
-                maximum_bundle_bytes: config
-                    .blob
-                    .max_object_bytes
-                    .min(config.artifacts.maximum_bundle_bytes),
-                maximum_logical_bytes: config.artifacts.maximum_logical_bytes,
-                maximum_entries: config.artifacts.maximum_entries,
-                maximum_entry_bytes: config.artifacts.maximum_entry_bytes,
-                maximum_concurrent_assemblies: config.artifacts.maximum_concurrent_assemblies,
-                parse_timeout: config.artifacts.parse_timeout.get(),
-                orphan_grace: config.artifacts.orphan_grace.get(),
-                claim_lease: config.artifacts.claim_lease.get(),
-                blob_operation_timeout: config.artifacts.blob_operation_timeout.get(),
-                tombstone_retention: config.artifacts.tombstone_retention.get(),
-                gc_batch_size: config.artifacts.gc_batch_size,
-                gc_max_concurrency: config.artifacts.gc_max_concurrency,
-                ..ArtifactConfig::default()
-            },
-        )?);
-        artifact_service.recover(100).await?;
-        let _ = artifact_service.gc_once().await;
-        let artifact_cleanup_task = start_artifact_cleanup(
-            std::sync::Arc::clone(&artifact_service),
-            config.artifacts.gc_interval.get(),
-            shutdown.signal(),
-        )?;
-        let event_store = std::sync::Arc::new(store.event_store(event_codec));
-        let blob_references: std::sync::Arc<dyn BlobReferenceStore> = event_store.clone();
-        let blob_cleanup_task = start_blob_cleanup_worker(
-            std::sync::Arc::new(BlobCleanupService::new(
-                std::sync::Arc::clone(&blob_store),
-                blob_references,
-                std::sync::Arc::clone(&clock),
-                BlobCleanupConfig {
-                    orphan_grace: config.ingest.attachments.orphan_grace.get(),
-                    interval: config.ingest.attachments.cleanup_interval.get(),
-                    batch_size: config.ingest.attachments.cleanup_batch_size,
-                    max_pages_per_run: config.ingest.attachments.cleanup_max_pages,
-                },
-            )?),
-            shutdown.signal(),
-        );
-        let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
-        let finalizer = std::sync::Arc::new(
-            Finalizer::new(
-                std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
-                FinalizerConfig {
-                    event_retention: config.retention.event_duration(),
-                    hourly_retention: config.retention.hourly_duration(),
-                    archive_events: config.archive.enabled,
-                    ..FinalizerConfig::default()
-                },
-            )?
-            .with_notification_signal(notification_signal),
-        );
-        let (finalizer_batcher, finalizer_batch_task) = FinalizerBatcher::start(
-            finalizer,
-            FinalizerBatchConfig {
-                shutdown_drain: config.server.shutdown_grace.get(),
-                ..FinalizerBatchConfig::default()
-            },
-        )?;
-        let symbolicator: std::sync::Arc<dyn metric_application::processor::SymbolicationStage> =
-            if let Some(endpoint) = config.symbolicator.endpoint.clone() {
-                let signer = private_source_signer
-                    .clone()
-                    .ok_or(ServerError::Symbolicator)?;
-                let backend = metric_symbolication::ExternalSymbolicator::new(
-                    metric_symbolication::ExternalSymbolicatorConfig {
-                        endpoint,
-                        callback_base_url: config.symbolicator.callback_base_url.clone(),
-                        request_timeout: config.symbolicator.request_timeout.get(),
-                        maximum_concurrency: config.symbolicator.maximum_concurrency,
-                        circuit_failure_threshold: config.symbolicator.circuit_failure_threshold,
-                        circuit_cooldown: config.symbolicator.circuit_cooldown.get(),
-                        maximum_response_bytes: config.symbolicator.maximum_response_bytes,
-                    },
-                    signer,
-                )
-                .map_err(|_| ServerError::Symbolicator)?;
-                std::sync::Arc::new(
-                    SymbolicationService::new(
-                        std::sync::Arc::new(backend),
-                        SymbolicationConfig::default(),
-                    )
-                    .map_err(|_| ServerError::Symbolicator)?,
-                )
-            } else {
-                std::sync::Arc::new(BaselineSymbolicationService)
-            };
-        let processor = std::sync::Arc::new(Processor::new(
-            event_store.clone(),
-            event_store.clone(),
-            std::sync::Arc::new(Normalizer::new(NormalizerLimits::default())?),
-            symbolicator,
-            std::sync::Arc::new(GrouperStage),
-            std::sync::Arc::new(IssuePreparerStage),
-            finalizer_batcher.clone(),
-            std::sync::Arc::clone(&clock),
-            ProcessorConfig {
-                max_concurrency: config.processor.max_concurrency,
-                max_attempts: config.processor.max_attempts,
-                retry_base: config.processor.retry_base.get(),
-                retry_max: config.processor.retry_max.get(),
-                stage_timeout: config.processor.stage_timeout.get(),
-                total_timeout: config.processor.total_timeout.get(),
-                state_timeout: config.processor.state_timeout.get(),
-            },
-        )?);
-        let (dispatcher, dispatcher_task) = Dispatcher::start(
-            backlog,
-            processor,
-            std::sync::Arc::clone(&clock),
-            DispatcherConfig {
-                queue_capacity: config.dispatcher.queue_capacity,
-                worker_concurrency: config.dispatcher.worker_concurrency,
-                low_watermark: config.dispatcher.low_watermark,
-                refill_target: config.dispatcher.refill_target,
-                refill_batch_size: config.dispatcher.refill_batch_size,
-                poll_interval: config.dispatcher.poll_interval.get(),
-                metrics_interval: config.dispatcher.metrics_interval.get(),
-                source_timeout: config.dispatcher.source_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-                max_pending_events: config.ingest.backlog.max_pending_events,
-                max_oldest_pending_age: Some(config.ingest.backlog.max_oldest_pending_age.get()),
-            },
-            shutdown.signal(),
-        )
-        .await?;
-        let backlog_guard = dispatcher.backlog_guard();
-        let (writer, writer_task) = MongoWriter::start(
-            event_store,
-            dispatcher,
-            MongoWriterConfig {
-                channel_capacity: config.ingest.max_waiting_for_storage,
-                max_wait: config.ingest.batch.max_wait.get(),
-                max_documents: config.ingest.batch.max_documents,
-                max_bytes: config.ingest.batch.max_bytes,
-                operation_timeout: config.ingest.request_timeout.get(),
-                shutdown_drain: config.server.shutdown_grace.get(),
-            },
-            shutdown.signal(),
-        )?;
-        let writer: std::sync::Arc<dyn EventSink> = writer;
-        let event_sink: std::sync::Arc<dyn EventSink> =
-            std::sync::Arc::new(BacklogGuardedEventSink::new(writer, backlog_guard));
-        let event_sink: std::sync::Arc<dyn EventSink> =
-            std::sync::Arc::new(ProjectFencedEventSink::new(event_sink, project_work));
-        let project_deletion_task = start_project_deletion_worker(
-            deletion_store,
-            std::sync::Arc::clone(&clock),
-            deletion_config,
-            shutdown.signal(),
-        )?;
-        let (_scheduler, scheduler_task) = Scheduler::start(
-            std::sync::Arc::new(store.maintenance_store()),
-            std::sync::Arc::clone(&clock),
-            SchedulerConfig {
-                poll_interval: config.scheduler.poll_interval.get(),
-                maintenance_interval: config.scheduler.maintenance_interval.get(),
-                reconciliation_interval: config.scheduler.reconciliation_interval.get(),
-                backlog_interval: config.scheduler.backlog_interval.get(),
-                task_timeout: config.scheduler.task_timeout.get(),
-                retry_base: config.scheduler.retry_base.get(),
-                retry_max: config.scheduler.retry_max.get(),
-                batch_size: config.scheduler.batch_size,
-                event_retention: config.retention.event_duration(),
-                hourly_retention: config.retention.hourly_duration(),
-                archive_events: config.archive.enabled,
-            },
-            shutdown.signal(),
-        )
-        .await?;
-        RuntimeModules {
-            readiness_dependency: Some(std::sync::Arc::new(MongoReadiness {
-                store: store.clone(),
-                timeout: config
-                    .server
-                    .request_timeout
-                    .get()
-                    .min(std::time::Duration::from_secs(2)),
-            })),
-            project_resolver,
-            event_sink,
-            log_sink: Some(log_sink),
-            metric_sink: Some(metric_sink),
-            replay_sink: Some(replay_sink),
-            span_sink: Some(span_sink),
-            session_sink: Some(session_sink),
-            monitor_sink: Some(monitor_sink),
-            feedback_sink: Some(feedback_sink),
-            writer_task: Some(writer_task),
-            log_writer_task: Some(log_writer_task),
-            metric_writer_task: Some(metric_writer_task),
-            replay_writer_task: Some(replay_writer_task),
-            span_writer_task: Some(span_writer_task),
-            session_writer_task: Some(session_writer_task),
-            monitor_writer_task: Some(monitor_writer_task),
-            session_maintenance_task: Some(session_maintenance_task),
-            dispatcher_task: Some(dispatcher_task),
-            scheduler_task: Some(scheduler_task),
-            archive_task,
-            finalizer_batcher: Some(finalizer_batcher),
-            finalizer_batch_task: Some(finalizer_batch_task),
-            identity_service: Some(identity_service),
-            native_api_service: Some(native_api_service),
-            release_service: Some(release_service),
-            incident_capsule_service: Some(incident_capsule_service),
-            notification_admin_service: Some(notification_admin_service),
-            notification_secret_box: Some(notification_secret_box),
-            telegram_api: Some(telegram_api),
-            notification_task: Some(notification_task),
-            aggregate_alert_task,
-            monitor_alert_task,
-            uptime_task,
-            project_deletion_task: Some(project_deletion_task),
-            blob_cleanup_task: Some(blob_cleanup_task),
-            debug_file_service: Some(debug_file_service),
-            artifact_service: Some(artifact_service),
-            private_source_signer,
-            debug_file_cleanup_task: Some(debug_file_cleanup_task),
-            artifact_cleanup_task: Some(artifact_cleanup_task),
-        }
+        .await?
     } else {
         RuntimeModules {
             readiness_dependency: None,
@@ -1155,7 +630,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         && monitor_alert_task.is_some()
         && (!config.archive.enabled || archive_task.is_some());
     let mut required_tasks = Vec::new();
-    required_tasks.extend(writer_task.as_ref().map(MongoWriterTask::abort_handle));
+    required_tasks.extend(writer_task.as_ref().map(EventWriterTask::abort_handle));
     required_tasks.extend(log_writer_task.as_ref().map(LogWriterTask::abort_handle));
     required_tasks.extend(
         metric_writer_task
@@ -1178,6 +653,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .as_ref()
             .map(MonitorWriterTask::abort_handle),
     );
+    let writers = required_tasks.clone();
     required_tasks.extend(
         session_maintenance_task
             .as_ref()
@@ -1201,7 +677,85 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .as_ref()
             .map(tokio::task::JoinHandle::abort_handle),
     );
-    let readiness = http::Readiness::new(required_ready, required_tasks, readiness_dependency);
+    let worker = |handles: Vec<tokio::task::AbortHandle>| {
+        http::Readiness::new(!handles.is_empty(), handles, None)
+    };
+    let dispatcher_health = worker(
+        dispatcher_task
+            .as_ref()
+            .map(DispatcherTask::abort_handle)
+            .into_iter()
+            .collect(),
+    );
+    let workers = std::collections::BTreeMap::from([
+        (
+            "writer",
+            http::Readiness::new(writers.len() == 7, writers, None),
+        ),
+        ("dispatcher", dispatcher_health.clone()),
+        // Processor workers are owned by the dispatcher supervisor.
+        ("processor", dispatcher_health),
+        (
+            "scheduler",
+            worker(
+                scheduler_task
+                    .as_ref()
+                    .map(SchedulerTask::abort_handle)
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+        (
+            "notifications",
+            worker(
+                notification_task
+                    .as_ref()
+                    .map(|task| task.abort_handles())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "project_deletion",
+            worker(
+                project_deletion_task
+                    .as_ref()
+                    .map(ProjectDeletionTask::abort_handle)
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+        (
+            "blob_cleanup",
+            worker(
+                blob_cleanup_task
+                    .as_ref()
+                    .map(BlobCleanupTask::abort_handle)
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+    ]);
+    required_tasks.extend(
+        project_deletion_task
+            .as_ref()
+            .map(ProjectDeletionTask::abort_handle),
+    );
+    required_tasks.extend(
+        blob_cleanup_task
+            .as_ref()
+            .map(BlobCleanupTask::abort_handle),
+    );
+    let readiness =
+        http::Readiness::new(required_ready, required_tasks, readiness_dependency.clone());
+    let component_health = native_http::ComponentHealth {
+        readiness: readiness.clone(),
+        database: http::Readiness::new(
+            readiness_dependency.is_some(),
+            Vec::new(),
+            readiness_dependency,
+        ),
+        workers,
+    };
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router_with_limits(
             identity_service.clone(),
@@ -1263,7 +817,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             identity_service.clone(),
             release_service,
         ))
-        .merge(web_http::router());
+        .merge(web_http::router())
+        .layer(axum::Extension(config.storage.backend))
+        .layer(axum::Extension(component_health));
     let gate_readiness = readiness.clone();
     let application =
         http::router_with_probe(shutdown.signal(), metrics, application_routes, readiness);
@@ -1353,6 +909,627 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     metrics.increment(Metric::Shutdowns, Outcome::Ok);
     info!(operation = "runtime.stopped", "graceful shutdown complete");
     Ok(ExitCode::SUCCESS)
+}
+
+struct RuntimeAssembly<'a> {
+    config: &'a config::AppConfig,
+    clock: std::sync::Arc<dyn Clock>,
+    random: std::sync::Arc<dyn RandomSource>,
+    blob_store: std::sync::Arc<dyn BlobStore>,
+    shutdown: &'a ShutdownRoot,
+    webhook_secret_box: webhook::WebhookSecretBox,
+    private_source_signer: Option<metric_symbolication::PrivateSourceSigner>,
+}
+
+async fn assemble_runtime<E>(
+    stores: storage::StorageBundle<E>,
+    context: RuntimeAssembly<'_>,
+) -> Result<RuntimeModules, ServerError>
+where
+    E: metric_ports::EventStore
+        + metric_ports::EventBacklog
+        + metric_ports::ProcessingProjectStore
+        + metric_ports::ProcessingStateStore
+        + metric_ports::BlobReferenceStore,
+{
+    let RuntimeAssembly {
+        config,
+        clock,
+        random,
+        blob_store,
+        shutdown,
+        webhook_secret_box,
+        private_source_signer,
+    } = context;
+    let notification_secret_box = webhook_secret_box.clone();
+    let project_service = std::sync::Arc::new(ProjectService::new(
+        stores.projects,
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::clone(&random),
+        config.projects.identity_collision_retries,
+        ProjectCacheConfig {
+            capacity: config.ingest.project_cache.capacity,
+            max_inflight: config.ingest.project_cache.max_inflight,
+            positive_ttl: config.ingest.project_cache.positive_ttl.get(),
+            negative_ttl: config.ingest.project_cache.negative_ttl.get(),
+        },
+    )?);
+    let notification_store: std::sync::Arc<dyn metric_ports::NotificationStore> =
+        stores.notification;
+    let webhook_adapter = webhook::ReqwestWebhookAdapter::new(
+        webhook_secret_box.clone(),
+        webhook::WebhookAdapterConfig {
+            timeout: config.notifications.timeout.get(),
+            max_response_bytes: config.notifications.maximum_response_bytes,
+            max_retry_after: config.notifications.maximum_retry_after.get(),
+            allow_http: config.notifications.allow_http,
+            allow_private_networks: config.notifications.allow_private_networks,
+        },
+    )
+    .map_err(|_| NotificationError::InvalidConfiguration)?;
+    let telegram_api = std::sync::Arc::new(
+        telegram::TelegramApiClient::new(telegram::TelegramApiConfig {
+            timeout: config.notifications.timeout.get(),
+            maximum_response_bytes: config.notifications.maximum_response_bytes,
+            allow_private_networks: config.notifications.telegram_allow_private_networks,
+        })
+        .map_err(|_| NotificationError::InvalidConfiguration)?,
+    );
+    let notification_adapter: std::sync::Arc<dyn metric_ports::NotificationDeliveryAdapter> =
+        std::sync::Arc::new(
+            notification_delivery::ProviderDeliveryAdapter::new(
+                webhook_adapter,
+                webhook_secret_box.clone(),
+                std::sync::Arc::clone(&telegram_api),
+                notification_delivery::ProviderAdapterConfig {
+                    timeout: config.notifications.timeout.get(),
+                    max_response_bytes: config.notifications.maximum_response_bytes,
+                    max_retry_after: config.notifications.maximum_retry_after.get(),
+                    allow_private_networks: config.notifications.allow_private_networks,
+                },
+            )
+            .map_err(|_| NotificationError::InvalidConfiguration)?,
+        );
+    let notification_dispatcher = std::sync::Arc::new(NotificationDispatcher::new(
+        std::sync::Arc::clone(&notification_store),
+        notification_adapter,
+        std::sync::Arc::clone(&clock),
+        NotificationConfig {
+            queue_capacity: config.notifications.queue_capacity,
+            worker_concurrency: config.notifications.worker_concurrency,
+            transition_batch_size: config.notifications.transition_batch_size,
+            due_scan_limit: config.notifications.due_scan_limit,
+            poll_interval: config.notifications.poll_interval.get(),
+            attempt_timeout: config.notifications.timeout.get(),
+            attempt_lease: config.notifications.attempt_lease.get(),
+            max_attempts: config.notifications.max_attempts,
+            initial_delay: config.notifications.initial_delay.get(),
+            max_delay: config.notifications.max_delay.get(),
+            delivered_retention: config.notifications.delivered_retention.get(),
+            dead_retention: config.notifications.dead_retention.get(),
+        },
+    )?);
+    let notification_signal: std::sync::Arc<
+        dyn metric_application::notifications::NotificationSignal,
+    > = notification_dispatcher.clone();
+    let notification_task = notification_dispatcher.start(shutdown.signal())?;
+    let project_resolver: std::sync::Arc<dyn ProjectResolver> = project_service.clone();
+    let project_work = std::sync::Arc::new(ProjectWorkRegistry::default());
+    let deletion_config = ProjectDeletionConfig {
+        grace_period: config.project_deletion.grace_period.get(),
+        delete_batch_documents: config.project_deletion.delete_batch_documents,
+        completed_job_retention: config.project_deletion.completed_job_retention.get(),
+        slug_reservation: config.project_deletion.slug_reservation.get(),
+        poll_interval: config.project_deletion.poll_interval.get(),
+        operation_timeout: config.project_deletion.operation_timeout.get(),
+        drain_timeout: config.project_deletion.drain_timeout.get(),
+        retry_base: config.project_deletion.retry_base.get(),
+        retry_max: config.project_deletion.retry_max.get(),
+    };
+    let deletion_store: std::sync::Arc<dyn metric_ports::ProjectDeletionStore> = stores.deletion;
+    let deletion_service = ProjectDeletionService::new(
+        std::sync::Arc::clone(&deletion_store),
+        std::sync::Arc::clone(&project_service),
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::clone(&project_work),
+        deletion_config,
+    )?;
+    let identity_service = std::sync::Arc::new(IdentityService::new(
+        stores.auth,
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::clone(&random),
+        AuthConfig {
+            identity_collision_retries: config.auth.identity_collision_retries,
+            session_idle_timeout: config.auth.session_idle_timeout.get(),
+            session_absolute_timeout: config.auth.session_absolute_timeout.get(),
+            activity_touch_interval: config.auth.activity_touch_interval.get(),
+            setup_token_timeout: config.auth.setup_token_timeout.get(),
+            max_api_token_lifetime: config.auth.max_api_token_lifetime.get(),
+            store_timeout: config.auth.store_timeout.get(),
+            password: PasswordConfig {
+                memory_kib: config.auth.password_memory_kib,
+                iterations: config.auth.password_iterations,
+                parallelism: config.auth.password_parallelism,
+                max_concurrency: config.auth.password_max_concurrency,
+            },
+            login_rate_limit: LoginRateLimitConfig {
+                max_attempts: config.auth.login_max_attempts,
+                window: config.auth.login_window.get(),
+                capacity: config.auth.login_capacity,
+            },
+        },
+    )?);
+    let notification_admin_service = std::sync::Arc::new(
+        metric_application::notifications::NotificationAdminService::new(
+            identity_service.clone(),
+            std::sync::Arc::clone(&notification_store),
+        ),
+    );
+    if let Some(token) = startup_bootstrap_token(identity_service.ensure_bootstrap_token().await)? {
+        eprintln!(
+            "METRIC_BOOTSTRAP_TOKEN={} (shown once; store it securely)",
+            token.encode_hex()
+        );
+    }
+    let archive_task = if config.archive.enabled {
+        let service = ArchiveService::new(
+            stores.archive,
+            std::sync::Arc::clone(&blob_store),
+            std::sync::Arc::clone(&clock),
+            ArchiveConfig {
+                maximum_events: config.archive.maximum_events,
+                target_uncompressed_bytes: config.archive.target_uncompressed_bytes,
+                write_chunk_bytes: config.archive.write_chunk_bytes,
+                poll_interval: config.archive.poll_interval.get(),
+                hot_copy_delay: config.archive.hot_copy_delay.get(),
+                orphan_grace: config.archive.orphan_grace.get(),
+                cleanup_max_pages: config.archive.cleanup_max_pages,
+            },
+        )?;
+        Some(start_archive_worker(service, shutdown.signal()))
+    } else {
+        None
+    };
+    let issue_service =
+        std::sync::Arc::new(metric_application::issues::IssueService::new(stores.issues));
+    let investigation: std::sync::Arc<dyn metric_ports::InvestigationStore> = stores.investigation;
+    let release_store: std::sync::Arc<dyn metric_ports::ReleaseStore> = stores.releases;
+    let release_service = std::sync::Arc::new(ReleaseService::new(
+        release_store,
+        std::sync::Arc::clone(&clock),
+    ));
+    let search = std::sync::Arc::new(
+        SearchService::new(
+            std::sync::Arc::clone(&investigation),
+            std::sync::Arc::clone(&clock),
+            SearchConfig::default(),
+        )
+        .map_err(|_| ServerError::Auth(AuthError::InvalidConfiguration))?,
+    );
+    let capsule_access: std::sync::Arc<dyn IncidentCapsuleAccess> = identity_service.clone();
+    let incident_capsule_service = std::sync::Arc::new(IncidentCapsuleService::new(
+        capsule_access,
+        std::sync::Arc::clone(&issue_service),
+        std::sync::Arc::clone(&investigation),
+        std::sync::Arc::clone(&clock),
+        IncidentCapsuleConfig {
+            max_events: config.incident_capsule.max_events,
+            max_activities: config.incident_capsule.max_activities,
+            max_total_uncompressed_bytes: config.incident_capsule.max_total_uncompressed_bytes,
+            max_entry_bytes: config.incident_capsule.max_entry_bytes,
+            generation_timeout: config.incident_capsule.generation_timeout.get(),
+            max_concurrency: config.incident_capsule.max_concurrency,
+            stream_chunk_bytes: config.incident_capsule.stream_chunk_bytes,
+            stream_buffer_chunks: config.incident_capsule.stream_buffer_chunks,
+        },
+        shutdown.signal(),
+    )?);
+    let signal_store: std::sync::Arc<dyn SignalStore> = stores.signals;
+    let (log_writer, log_writer_task) = LogWriter::start(
+        std::sync::Arc::clone(&signal_store),
+        LogWriterConfig {
+            channel_capacity: config.ingest.max_waiting_for_storage,
+            max_wait: config.ingest.batch.max_wait.get(),
+            max_documents: config.ingest.batch.max_documents,
+            max_bytes: config.ingest.batch.max_bytes,
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+        },
+        shutdown.signal(),
+    )?;
+    let log_sink: std::sync::Arc<dyn LogSink> = log_writer;
+    let metric_store: std::sync::Arc<dyn MetricStore> = stores.metrics;
+    let (metric_writer, metric_writer_task) = MetricWriter::start(
+        metric_store,
+        MetricWriterConfig {
+            channel_capacity: config.ingest.max_waiting_for_storage,
+            max_wait: config.ingest.batch.max_wait.get(),
+            max_deltas: config.ingest.batch.max_documents.saturating_mul(8),
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+        },
+        shutdown.signal(),
+    )?;
+    let metric_sink: std::sync::Arc<dyn MetricSink> = metric_writer;
+    let replay_store: std::sync::Arc<dyn metric_ports::ReplayStore> = stores.replays;
+    let (replay_writer, replay_writer_task) = ReplayWriter::start(
+        std::sync::Arc::clone(&replay_store),
+        std::sync::Arc::clone(&blob_store),
+        std::sync::Arc::clone(&clock),
+        ReplayWriterConfig {
+            channel_capacity: config.ingest.replay.queue_capacity,
+            max_queued_bytes: config.ingest.replay.max_queued_bytes,
+            max_segment_bytes: config.ingest.replay.max_segment_bytes,
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+            orphan_grace: config.ingest.replay.orphan_grace.get(),
+            cleanup_interval: config.ingest.replay.cleanup_interval.get(),
+            cleanup_batch_size: config.ingest.replay.cleanup_batch_size,
+        },
+        shutdown.signal(),
+    )?;
+    let replay_sink: std::sync::Arc<dyn metric_ports::ReplaySink> = replay_writer;
+    let (span_writer, span_writer_task) = SpanWriter::start(
+        std::sync::Arc::clone(&signal_store),
+        SpanWriterConfig {
+            channel_capacity: config.ingest.max_waiting_for_storage,
+            max_wait: config.ingest.batch.max_wait.get(),
+            max_documents: config.ingest.batch.max_documents,
+            max_bytes: config.ingest.batch.max_bytes,
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+        },
+        shutdown.signal(),
+    )?;
+    let span_sink: std::sync::Arc<dyn SpanSink> = span_writer;
+    let session_store: std::sync::Arc<dyn SessionStore> = stores.sessions;
+    let (session_writer, session_writer_task) = SessionWriter::start(
+        std::sync::Arc::clone(&session_store),
+        SessionWriterConfig {
+            channel_capacity: config.ingest.max_waiting_for_storage,
+            max_wait: config.ingest.batch.max_wait.get(),
+            max_updates: config.ingest.batch.max_documents,
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+        },
+        shutdown.signal(),
+    )?;
+    let session_sink: std::sync::Arc<dyn SessionSink> = session_writer;
+    let session_maintenance_task = start_session_maintenance(
+        std::sync::Arc::clone(&session_store),
+        std::sync::Arc::clone(&clock),
+        std::time::Duration::from_secs(
+            u64::from(config.retention.session_active_max_hours) * 60 * 60,
+        ),
+        config.scheduler.maintenance_interval.get(),
+        shutdown.signal(),
+    );
+    let monitor_store: std::sync::Arc<dyn MonitorStore> = stores.monitors;
+    let (monitor_writer, monitor_writer_task) = MonitorWriter::start(
+        std::sync::Arc::clone(&monitor_store),
+        MonitorWriterConfig {
+            channel_capacity: config.ingest.max_waiting_for_storage,
+            max_wait: config.ingest.batch.max_wait.get(),
+            max_updates: config.ingest.batch.max_documents,
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+        },
+        shutdown.signal(),
+    )?;
+    let monitor_sink: std::sync::Arc<dyn MonitorSink> = monitor_writer;
+    let uptime_task = Some(
+        UptimeScheduler::new(
+            std::sync::Arc::clone(&monitor_store),
+            std::sync::Arc::new(uptime::ReqwestUptimeExecutor::new(
+                webhook_secret_box.clone(),
+            )),
+            std::sync::Arc::clone(&clock),
+            UptimeSchedulerConfig {
+                poll_interval: config.scheduler.backlog_interval.get(),
+                retention_days: config.retention.monitor_runs_days,
+                ..UptimeSchedulerConfig::default()
+            },
+        )?
+        .start(shutdown.signal()),
+    );
+    let feedback_sink = stores.feedback_sink;
+    let feedback_store = stores.feedback;
+    let explore_store: std::sync::Arc<dyn metric_ports::ExploreStore> = stores.explore;
+    let explore_service = std::sync::Arc::new(ExploreService::new(
+        explore_store,
+        ExploreConfig::default(),
+    )?);
+    let aggregate_alert_task = Some(
+        std::sync::Arc::new(AggregateAlertEvaluator::new(
+            std::sync::Arc::clone(&notification_store),
+            std::sync::Arc::clone(&explore_service),
+            std::sync::Arc::clone(&clock),
+            config.scheduler.poll_interval.get(),
+            config.notifications.attempt_lease.get(),
+            config.notifications.transition_batch_size.min(1_000),
+        )?)
+        .start(shutdown.signal()),
+    );
+    let monitor_alert_task = Some(
+        std::sync::Arc::new(MonitorAlertEvaluator::new(
+            std::sync::Arc::clone(&notification_store),
+            std::sync::Arc::clone(&monitor_store),
+            std::sync::Arc::clone(&clock),
+            config.scheduler.poll_interval.get(),
+            config.notifications.transition_batch_size.min(1_000),
+        )?)
+        .start(shutdown.signal()),
+    );
+    let dashboard_store: std::sync::Arc<dyn metric_ports::DashboardStore> = stores.dashboards;
+    let dashboard_service = std::sync::Arc::new(DashboardService::new(
+        dashboard_store,
+        std::sync::Arc::clone(&explore_service),
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::clone(&random),
+        DashboardConfig::default(),
+    )?);
+    let native_api_service = std::sync::Arc::new(
+        NativeApiService::new(
+            std::sync::Arc::clone(&identity_service),
+            project_service,
+            issue_service,
+            std::sync::Arc::clone(&investigation),
+            search,
+            std::sync::Arc::clone(&clock),
+        )
+        .with_project_deletion(deletion_service)
+        .with_blob_store(std::sync::Arc::clone(&blob_store))
+        .with_signal_store(std::sync::Arc::clone(&signal_store))
+        .with_session_store(session_store)
+        .with_monitor_store(monitor_store)
+        .with_feedback_store(feedback_store)
+        .with_replay_store(replay_store)
+        .with_explore(explore_service)
+        .with_dashboards(dashboard_service)
+        .with_release_service(std::sync::Arc::clone(&release_service)),
+    );
+    let debug_metadata: std::sync::Arc<dyn metric_ports::DebugFileStore> = stores.debug_files;
+    let debug_file_service = std::sync::Arc::new(DebugFileService::new(
+        debug_metadata,
+        std::sync::Arc::clone(&blob_store),
+        std::sync::Arc::clone(&clock),
+        DebugFileConfig {
+            max_file_bytes: config
+                .blob
+                .max_object_bytes
+                .min(metric_application::debug_files::SENTRY_CLI_MAX_FILE_BYTES),
+            ..DebugFileConfig::default()
+        },
+    )?);
+    debug_file_service.recover(100).await?;
+    let _ = debug_file_service.cleanup_once().await;
+    let debug_file_cleanup_task = start_debug_file_cleanup(
+        std::sync::Arc::clone(&debug_file_service),
+        config.ingest.attachments.cleanup_interval.get(),
+        shutdown.signal(),
+    )?;
+    let artifact_metadata: std::sync::Arc<dyn metric_ports::ArtifactStore> = stores.artifacts;
+    let artifact_service = std::sync::Arc::new(ArtifactService::new(
+        artifact_metadata,
+        std::sync::Arc::clone(&blob_store),
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::clone(&random),
+        ArtifactConfig {
+            maximum_bundle_bytes: config
+                .blob
+                .max_object_bytes
+                .min(config.artifacts.maximum_bundle_bytes),
+            maximum_logical_bytes: config.artifacts.maximum_logical_bytes,
+            maximum_entries: config.artifacts.maximum_entries,
+            maximum_entry_bytes: config.artifacts.maximum_entry_bytes,
+            maximum_concurrent_assemblies: config.artifacts.maximum_concurrent_assemblies,
+            parse_timeout: config.artifacts.parse_timeout.get(),
+            orphan_grace: config.artifacts.orphan_grace.get(),
+            claim_lease: config.artifacts.claim_lease.get(),
+            blob_operation_timeout: config.artifacts.blob_operation_timeout.get(),
+            tombstone_retention: config.artifacts.tombstone_retention.get(),
+            gc_batch_size: config.artifacts.gc_batch_size,
+            gc_max_concurrency: config.artifacts.gc_max_concurrency,
+            ..ArtifactConfig::default()
+        },
+    )?);
+    artifact_service.recover(100).await?;
+    let _ = artifact_service.gc_once().await;
+    let artifact_cleanup_task = start_artifact_cleanup(
+        std::sync::Arc::clone(&artifact_service),
+        config.artifacts.gc_interval.get(),
+        shutdown.signal(),
+    )?;
+    let event_store = stores.events;
+    let blob_references: std::sync::Arc<dyn BlobReferenceStore> = event_store.clone();
+    let blob_cleanup_task = start_blob_cleanup_worker(
+        std::sync::Arc::new(BlobCleanupService::new(
+            std::sync::Arc::clone(&blob_store),
+            blob_references,
+            std::sync::Arc::clone(&clock),
+            BlobCleanupConfig {
+                orphan_grace: config.ingest.attachments.orphan_grace.get(),
+                interval: config.ingest.attachments.cleanup_interval.get(),
+                batch_size: config.ingest.attachments.cleanup_batch_size,
+                max_pages_per_run: config.ingest.attachments.cleanup_max_pages,
+            },
+        )?),
+        shutdown.signal(),
+    );
+    let backlog: std::sync::Arc<dyn EventBacklog> = event_store.clone();
+    let finalizer = std::sync::Arc::new(
+        Finalizer::new(
+            stores.finalization,
+            FinalizerConfig {
+                event_retention: config.retention.event_duration(),
+                hourly_retention: config.retention.hourly_duration(),
+                archive_events: config.archive.enabled,
+                ..FinalizerConfig::default()
+            },
+        )?
+        .with_notification_signal(notification_signal),
+    );
+    let (finalizer_batcher, finalizer_batch_task) = FinalizerBatcher::start(
+        finalizer,
+        FinalizerBatchConfig {
+            shutdown_drain: config.server.shutdown_grace.get(),
+            ..FinalizerBatchConfig::default()
+        },
+    )?;
+    let symbolicator: std::sync::Arc<dyn metric_application::processor::SymbolicationStage> =
+        if let Some(endpoint) = config.symbolicator.endpoint.clone() {
+            let signer = private_source_signer
+                .clone()
+                .ok_or(ServerError::Symbolicator)?;
+            let backend = metric_symbolication::ExternalSymbolicator::new(
+                metric_symbolication::ExternalSymbolicatorConfig {
+                    endpoint,
+                    callback_base_url: config.symbolicator.callback_base_url.clone(),
+                    request_timeout: config.symbolicator.request_timeout.get(),
+                    maximum_concurrency: config.symbolicator.maximum_concurrency,
+                    circuit_failure_threshold: config.symbolicator.circuit_failure_threshold,
+                    circuit_cooldown: config.symbolicator.circuit_cooldown.get(),
+                    maximum_response_bytes: config.symbolicator.maximum_response_bytes,
+                },
+                signer,
+            )
+            .map_err(|_| ServerError::Symbolicator)?;
+            std::sync::Arc::new(
+                SymbolicationService::new(
+                    std::sync::Arc::new(backend),
+                    SymbolicationConfig::default(),
+                )
+                .map_err(|_| ServerError::Symbolicator)?,
+            )
+        } else {
+            std::sync::Arc::new(BaselineSymbolicationService)
+        };
+    let processor = std::sync::Arc::new(Processor::new(
+        event_store.clone(),
+        event_store.clone(),
+        std::sync::Arc::new(Normalizer::new(NormalizerLimits::default())?),
+        symbolicator,
+        std::sync::Arc::new(GrouperStage),
+        std::sync::Arc::new(IssuePreparerStage),
+        finalizer_batcher.clone(),
+        std::sync::Arc::clone(&clock),
+        ProcessorConfig {
+            max_concurrency: config.processor.max_concurrency,
+            max_attempts: config.processor.max_attempts,
+            retry_base: config.processor.retry_base.get(),
+            retry_max: config.processor.retry_max.get(),
+            stage_timeout: config.processor.stage_timeout.get(),
+            total_timeout: config.processor.total_timeout.get(),
+            state_timeout: config.processor.state_timeout.get(),
+        },
+    )?);
+    let (dispatcher, dispatcher_task) = Dispatcher::start(
+        backlog,
+        processor,
+        std::sync::Arc::clone(&clock),
+        DispatcherConfig {
+            queue_capacity: config.dispatcher.queue_capacity,
+            worker_concurrency: config.dispatcher.worker_concurrency,
+            low_watermark: config.dispatcher.low_watermark,
+            refill_target: config.dispatcher.refill_target,
+            refill_batch_size: config.dispatcher.refill_batch_size,
+            poll_interval: config.dispatcher.poll_interval.get(),
+            metrics_interval: config.dispatcher.metrics_interval.get(),
+            source_timeout: config.dispatcher.source_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+            max_pending_events: config.ingest.backlog.max_pending_events,
+            max_oldest_pending_age: Some(config.ingest.backlog.max_oldest_pending_age.get()),
+        },
+        shutdown.signal(),
+    )
+    .await?;
+    let backlog_guard = dispatcher.backlog_guard();
+    let (writer, writer_task) = EventWriter::start(
+        event_store,
+        dispatcher,
+        EventWriterConfig {
+            channel_capacity: config.ingest.max_waiting_for_storage,
+            max_wait: config.ingest.batch.max_wait.get(),
+            max_documents: config.ingest.batch.max_documents,
+            max_bytes: config.ingest.batch.max_bytes,
+            operation_timeout: config.ingest.request_timeout.get(),
+            shutdown_drain: config.server.shutdown_grace.get(),
+        },
+        shutdown.signal(),
+    )?;
+    let writer: std::sync::Arc<dyn EventSink> = writer;
+    let event_sink: std::sync::Arc<dyn EventSink> =
+        std::sync::Arc::new(BacklogGuardedEventSink::new(writer, backlog_guard));
+    let event_sink: std::sync::Arc<dyn EventSink> =
+        std::sync::Arc::new(ProjectFencedEventSink::new(event_sink, project_work));
+    let project_deletion_task = start_project_deletion_worker(
+        deletion_store,
+        std::sync::Arc::clone(&clock),
+        deletion_config,
+        shutdown.signal(),
+    )?;
+    let (_scheduler, scheduler_task) = Scheduler::start(
+        stores.maintenance,
+        std::sync::Arc::clone(&clock),
+        SchedulerConfig {
+            poll_interval: config.scheduler.poll_interval.get(),
+            maintenance_interval: config.scheduler.maintenance_interval.get(),
+            reconciliation_interval: config.scheduler.reconciliation_interval.get(),
+            backlog_interval: config.scheduler.backlog_interval.get(),
+            task_timeout: config.scheduler.task_timeout.get(),
+            retry_base: config.scheduler.retry_base.get(),
+            retry_max: config.scheduler.retry_max.get(),
+            batch_size: config.scheduler.batch_size,
+            event_retention: config.retention.event_duration(),
+            hourly_retention: config.retention.hourly_duration(),
+            archive_events: config.archive.enabled,
+        },
+        shutdown.signal(),
+    )
+    .await?;
+    Ok(RuntimeModules {
+        readiness_dependency: Some(stores.readiness),
+        project_resolver,
+        event_sink,
+        log_sink: Some(log_sink),
+        metric_sink: Some(metric_sink),
+        replay_sink: Some(replay_sink),
+        span_sink: Some(span_sink),
+        session_sink: Some(session_sink),
+        monitor_sink: Some(monitor_sink),
+        feedback_sink: Some(feedback_sink),
+        writer_task: Some(writer_task),
+        log_writer_task: Some(log_writer_task),
+        metric_writer_task: Some(metric_writer_task),
+        replay_writer_task: Some(replay_writer_task),
+        span_writer_task: Some(span_writer_task),
+        session_writer_task: Some(session_writer_task),
+        monitor_writer_task: Some(monitor_writer_task),
+        session_maintenance_task: Some(session_maintenance_task),
+        dispatcher_task: Some(dispatcher_task),
+        scheduler_task: Some(scheduler_task),
+        archive_task,
+        finalizer_batcher: Some(finalizer_batcher),
+        finalizer_batch_task: Some(finalizer_batch_task),
+        identity_service: Some(identity_service),
+        native_api_service: Some(native_api_service),
+        release_service: Some(release_service),
+        incident_capsule_service: Some(incident_capsule_service),
+        notification_admin_service: Some(notification_admin_service),
+        notification_secret_box: Some(notification_secret_box),
+        telegram_api: Some(telegram_api),
+        notification_task: Some(notification_task),
+        aggregate_alert_task,
+        monitor_alert_task,
+        uptime_task,
+        project_deletion_task: Some(project_deletion_task),
+        blob_cleanup_task: Some(blob_cleanup_task),
+        debug_file_service: Some(debug_file_service),
+        artifact_service: Some(artifact_service),
+        private_source_signer,
+        debug_file_cleanup_task: Some(debug_file_cleanup_task),
+        artifact_cleanup_task: Some(artifact_cleanup_task),
+    })
 }
 
 struct UnavailableProjectResolver;

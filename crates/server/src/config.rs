@@ -1,3 +1,7 @@
+mod postgres;
+use postgres::RawPostgresSettings;
+pub use postgres::{PostgresSettings, StorageBackend, StorageSettings};
+
 use std::{
     env, fmt, fs,
     net::{IpAddr, SocketAddr},
@@ -128,6 +132,8 @@ pub struct AppConfig {
     pub role: Role,
     pub server: ServerConfig,
     pub mongodb: MongoConfig,
+    pub storage: StorageSettings,
+    pub postgres: PostgresSettings,
     pub projects: ProjectConfig,
     pub development: DevelopmentConfig,
     pub ingest: IngestConfig,
@@ -718,6 +724,8 @@ struct RawConfig {
     role: Role,
     server: RawServerConfig,
     mongodb: RawMongoConfig,
+    storage: StorageSettings,
+    postgres: RawPostgresSettings,
     projects: RawProjectConfig,
     development: RawDevelopmentConfig,
     ingest: RawIngestConfig,
@@ -742,6 +750,8 @@ impl Default for RawConfig {
             role: Role::All,
             server: RawServerConfig::default(),
             mongodb: RawMongoConfig::default(),
+            storage: StorageSettings::default(),
+            postgres: RawPostgresSettings::default(),
             projects: RawProjectConfig::default(),
             development: RawDevelopmentConfig::default(),
             ingest: RawIngestConfig::default(),
@@ -1588,6 +1598,12 @@ pub enum ConfigError {
     InvalidNotificationConfig,
     #[error("MongoDB configuration is invalid or outside supported bounds")]
     InvalidMongoConfig,
+    #[error("PostgreSQL configuration is invalid or outside supported bounds")]
+    InvalidPostgresConfig,
+    #[error("postgres.uri is required when storage.backend is postgres")]
+    MissingPostgresUri,
+    #[error(transparent)]
+    Postgres(#[from] metric_postgres::PostgresError),
     #[error("project identity configuration is invalid or outside supported bounds")]
     InvalidProjectConfig,
     #[error("dispatcher configuration is invalid or outside supported bounds")]
@@ -1596,6 +1612,10 @@ pub enum ConfigError {
     InvalidSchedulerConfig,
     #[error("retention configuration is invalid or outside supported bounds")]
     InvalidRetentionConfig,
+    #[error(
+        "retention.replay_archive=true is unsupported: replay archiving is not implemented; set it to false (existing archive-held replay data is not automatically released)"
+    )]
+    UnsupportedReplayArchive,
     #[error("project deletion configuration is invalid or outside supported bounds")]
     InvalidProjectDeletionConfig,
     #[error("processor configuration is invalid or outside supported bounds")]
@@ -1603,7 +1623,7 @@ pub enum ConfigError {
     #[error("auth configuration is invalid or outside supported bounds")]
     InvalidAuthConfig,
     #[error(
-        "projects.scrub_hmac_key is missing\n  reason: mongodb.uri is configured\n  expected: a secret reference resolving to exactly 64 hexadecimal characters (32 bytes)"
+        "projects.scrub_hmac_key is missing\n  reason: a database backend is configured\n  expected: a secret reference resolving to exactly 64 hexadecimal characters (32 bytes)"
     )]
     MissingScrubHmacKey,
     #[error(
@@ -1695,9 +1715,15 @@ impl TryFrom<RawConfig> for AppConfig {
         {
             return Err(ConfigError::InvalidServerConfig);
         }
-        if let Some(reference) = &raw.mongodb.uri {
+        if raw.storage.backend == StorageBackend::MongoDb
+            && let Some(reference) = &raw.mongodb.uri
+        {
             reference.validate(raw.development.allow_literal_secrets)?;
         }
+        let postgres = raw.postgres.validate(
+            raw.storage.backend == StorageBackend::Postgres,
+            raw.development.allow_literal_secrets,
+        )?;
         if let Some(reference) = &raw.projects.scrub_hmac_key {
             reference.validate(raw.development.allow_literal_secrets)?;
         }
@@ -1854,7 +1880,11 @@ impl TryFrom<RawConfig> for AppConfig {
             && archive_hot_copy_delay.get() <= Duration::from_secs(24 * 60 * 60)
             && !archive_orphan_grace.get().is_zero()
             && (1..=1_024).contains(&raw.archive.cleanup_max_pages)
-            && (!raw.archive.enabled || raw.mongodb.uri.is_some());
+            && (!raw.archive.enabled
+                || match raw.storage.backend {
+                    StorageBackend::MongoDb => raw.mongodb.uri.is_some(),
+                    StorageBackend::Postgres => postgres.uri.is_some(),
+                });
         if !valid_archive {
             return Err(ConfigError::InvalidArchiveConfig);
         }
@@ -1921,6 +1951,8 @@ impl TryFrom<RawConfig> for AppConfig {
         }
         Ok(Self {
             role: raw.role,
+            storage: raw.storage,
+            postgres,
             server: ServerConfig {
                 http_address,
                 shutdown_grace,
@@ -2032,12 +2064,39 @@ impl TryFrom<RawConfig> for AppConfig {
 
 impl AppConfig {
     pub fn validate_secrets(&self) -> Result<ResolvedSecrets, ConfigError> {
-        let mongodb_uri = self
-            .mongodb
-            .uri
-            .as_ref()
-            .map(SecretReference::resolve)
-            .transpose()?;
+        let mongodb_uri = if self.storage.backend == StorageBackend::MongoDb {
+            self.mongodb
+                .uri
+                .as_ref()
+                .map(SecretReference::resolve)
+                .transpose()?
+        } else {
+            None
+        };
+        let (postgres_uri, postgres_migration_uri) =
+            if self.storage.backend == StorageBackend::Postgres {
+                let uri = self
+                    .postgres
+                    .uri
+                    .as_ref()
+                    .ok_or(ConfigError::MissingPostgresUri)?
+                    .resolve()?;
+                self.postgres.connection.validate_uri(uri.expose())?;
+                let migration_uri = self
+                    .postgres
+                    .migration_uri
+                    .as_ref()
+                    .map(SecretReference::resolve)
+                    .transpose()?;
+                if let Some(migration) = migration_uri.as_ref() {
+                    self.postgres
+                        .connection
+                        .validate_migration_target(uri.expose(), migration.expose())?;
+                }
+                (Some(uri), migration_uri)
+            } else {
+                (None, None)
+            };
         let scrub_hmac_key = self
             .projects
             .scrub_hmac_key
@@ -2065,7 +2124,7 @@ impl AppConfig {
             .as_ref()
             .map(SecretReference::resolve)
             .transpose()?;
-        if mongodb_uri.is_some() && scrub_hmac_key.is_none() {
+        if (mongodb_uri.is_some() || postgres_uri.is_some()) && scrub_hmac_key.is_none() {
             return Err(ConfigError::MissingScrubHmacKey);
         }
         let scrub_hmac_key = scrub_hmac_key
@@ -2079,6 +2138,8 @@ impl AppConfig {
             .transpose()?;
         Ok(ResolvedSecrets {
             mongodb_uri,
+            postgres_uri,
+            postgres_migration_uri,
             scrub_hmac_key,
             s3_access_key_id,
             s3_secret_access_key,
@@ -2327,12 +2388,19 @@ impl AppConfig {
             humantime::format_duration(self.archive.hot_copy_delay.get()),
             humantime::format_duration(self.archive.orphan_grace.get()),
             self.archive.cleanup_max_pages,
-        )
+        ) + &self.postgres.effective_redacted(self.storage.backend)
     }
 
     #[must_use]
     pub fn has_literal_secret_warning(&self) -> bool {
-        matches!(self.mongodb.uri, Some(SecretReference::Literal(_)))
+        (self.storage.backend == StorageBackend::MongoDb
+            && matches!(self.mongodb.uri, Some(SecretReference::Literal(_))))
+            || (self.storage.backend == StorageBackend::Postgres
+                && (matches!(self.postgres.uri, Some(SecretReference::Literal(_)))
+                    || matches!(
+                        self.postgres.migration_uri,
+                        Some(SecretReference::Literal(_))
+                    )))
             || matches!(
                 self.projects.scrub_hmac_key,
                 Some(SecretReference::Literal(_))
@@ -2656,6 +2724,9 @@ impl TryFrom<RawRetentionSettings> for RetentionSettings {
     type Error = ConfigError;
 
     fn try_from(raw: RawRetentionSettings) -> Result<Self, Self::Error> {
+        if raw.replay_archive {
+            return Err(ConfigError::UnsupportedReplayArchive);
+        }
         let valid = (1..=3_650).contains(&raw.events_days)
             && (1..=3_650).contains(&raw.feedback_days)
             && (1..=3_650).contains(&raw.issue_stats_hourly_days)
@@ -2819,6 +2890,8 @@ impl TryFrom<RawAuthSettings> for AuthSettings {
 
 pub struct ResolvedSecrets {
     pub mongodb_uri: Option<SecretValue>,
+    pub postgres_uri: Option<SecretValue>,
+    pub postgres_migration_uri: Option<SecretValue>,
     pub scrub_hmac_key: Option<metric_domain::SecretBytes>,
     pub s3_access_key_id: Option<SecretValue>,
     pub s3_secret_access_key: Option<SecretValue>,
@@ -3076,6 +3149,13 @@ mod tests {
 
     #[test]
     fn scheduler_and_retention_bounds_fail_closed() {
+        assert!(matches!(
+            RetentionSettings::try_from(RawRetentionSettings {
+                replay_archive: true,
+                ..RawRetentionSettings::default()
+            }),
+            Err(ConfigError::UnsupportedReplayArchive)
+        ));
         let scheduler = RawConfig {
             scheduler: RawSchedulerSettings {
                 retry_base: "2m".to_owned(),

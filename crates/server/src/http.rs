@@ -61,12 +61,15 @@ impl Readiness {
     }
 
     pub async fn is_ready(&self) -> bool {
-        self.composed
-            && self.tasks.iter().all(|task| !task.is_finished())
+        self.workers_ready()
             && match &self.dependency {
                 Some(dependency) => dependency.check().await,
                 None => true,
             }
+    }
+
+    pub(crate) fn workers_ready(&self) -> bool {
+        self.composed && self.tasks.iter().all(|task| !task.is_finished())
     }
 }
 
@@ -551,15 +554,12 @@ async fn observe_request(
     let request_id = RequestId::from_bytes(*uuid::Uuid::new_v4().as_bytes());
     request.extensions_mut().insert(request_id);
     let method = request.method().clone();
-    let route = route_override.map_or_else(
-        || {
-            request
-                .extensions()
-                .get::<MatchedPath>()
-                .map_or_else(|| request.uri().path(), MatchedPath::as_str)
-        },
-        |route| route,
-    );
+    let route = route_override.unwrap_or_else(|| {
+        request
+            .extensions()
+            .get::<MatchedPath>()
+            .map_or_else(|| request.uri().path(), MatchedPath::as_str)
+    });
     let span = info_span!(
         "http.request",
         request_id = %request_id,

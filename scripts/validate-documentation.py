@@ -193,12 +193,12 @@ def main() -> int:
     installer_contract = {
         "deploy/install.sh": (
             'install_dir="."',
-            "docker volume inspect metric_mongo-data",
+            "has_volume metric_mongo-data",
             "The installer will not generate a different password for existing data.",
         ),
         "deploy/install.ps1": (
             "(Test-Path -LiteralPath './compose.yml')",
-            "docker volume inspect metric_mongo-data",
+            "$volumes -contains 'metric_mongo-data'",
             "The installer will not generate a different password",
         ),
     }

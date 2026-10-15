@@ -9,7 +9,7 @@ use metric_application::{
     scheduler::{Scheduler, SchedulerConfig},
     shutdown::ShutdownRoot,
     span_writer::{SpanWriter, SpanWriterConfig},
-    writer::{MongoWriter, MongoWriterConfig},
+    writer::{EventWriter, EventWriterConfig},
 };
 use metric_domain::{
     AcceptedEvent, DsnKey, IpScrubPolicy, ItemCapabilities, ProjectAcceptanceState, ProjectId,
@@ -104,10 +104,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     );
     let clock: Arc<dyn Clock> = Arc::new(BenchClock);
-    let (writer, writer_task) = MongoWriter::start(
+    let (writer, writer_task) = EventWriter::start(
         Arc::clone(&event_store),
         Arc::new(DiscardHandoff),
-        MongoWriterConfig {
+        EventWriterConfig {
             channel_capacity: config.max_waiting_for_storage,
             max_wait: config.batch.max_wait.get(),
             max_documents: config.batch.max_documents,

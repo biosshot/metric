@@ -268,55 +268,96 @@ impl MongoArtifactStore {
     ) -> Result<Vec<(ProjectId, u64)>, ArtifactStoreError> {
         bundle.bindings = canonical_bindings(bundle.bindings)?;
         let collection = self.database.collection::<Document>("artifact_bundles");
-        if let Some(document) = self
-            .raw_by_sha1(bundle.organization_id, bundle.sha1)
-            .await?
-        {
-            validate_content_identity(&document, &bundle)?;
-            let state = document.get_i32("s").ok();
-            if state == Some(1) || state == Some(2) {
-                return Err(ArtifactStoreError::Busy);
-            }
-            let existing = if state == Some(3) {
-                Vec::new()
-            } else {
-                decode_bindings(&document)?
-            };
-            let merged = canonical_bindings(
-                existing
-                    .iter()
-                    .cloned()
-                    .chain(bundle.bindings.iter().cloned()),
-            )?;
-            let affected = affected_projects(&existing, &merged);
-            bundle.bindings = merged;
-            let filter = if state == Some(3) {
-                doc! { "_id": binary(&bundle.id.as_bytes()), "s": 3_i32, "v": i32::try_from(bundle.generation).map_err(|_| ArtifactStoreError::InvalidData)? }
-            } else {
-                doc! { "_id": binary(&bundle.id.as_bytes()), "s": { "$exists": false } }
-            };
-            if state == Some(3) {
-                self.reserve_quota(bundle.organization_id, bundle.size)
-                    .await?;
-            }
-            let result = collection
-                .replace_one(filter, encode_bundle(&bundle)?)
-                .await
-                .map_err(|_| ArtifactStoreError::Unavailable);
-            if result.is_err() && state == Some(3) {
-                let _ = self
-                    .release_quota(bundle.organization_id, bundle.size)
-                    .await;
-            }
-            let result = result?;
-            if result.matched_count != 1 {
+        // Retry only a definite association CAS miss; never replay an ambiguous write.
+        for _ in 0..16 {
+            if let Some(document) = self
+                .raw_by_sha1(bundle.organization_id, bundle.sha1)
+                .await?
+            {
+                validate_content_identity(&document, &bundle)?;
+                let state = document.get_i32("s").ok();
+                if state == Some(1) || state == Some(2) {
+                    return Err(ArtifactStoreError::Busy);
+                }
+                let existing = if state == Some(3) {
+                    Vec::new()
+                } else {
+                    decode_bindings(&document)?
+                };
+                let merged = canonical_bindings(
+                    existing
+                        .iter()
+                        .cloned()
+                        .chain(bundle.bindings.iter().cloned()),
+                )?;
+                let affected = affected_projects(&existing, &merged);
+                let mut updated_bundle = bundle.clone();
+                updated_bundle.bindings = merged;
+                let mut filter = if state == Some(3) {
+                    doc! { "_id": binary(&bundle.id.as_bytes()), "s": 3_i32, "v": i32::try_from(bundle.generation).map_err(|_| ArtifactStoreError::InvalidData)? }
+                } else {
+                    doc! { "_id": binary(&bundle.id.as_bytes()), "s": { "$exists": false } }
+                };
+                if state != Some(3) {
+                    filter.insert(
+                        "b",
+                        document
+                            .get("b")
+                            .cloned()
+                            .unwrap_or_else(|| Bson::Document(doc! { "$exists": false })),
+                    );
+                }
                 if state == Some(3) {
+                    self.reserve_quota(bundle.organization_id, bundle.size)
+                        .await?;
+                }
+                let result = collection
+                    .replace_one(filter, encode_bundle(&updated_bundle)?)
+                    .await
+                    .map_err(|_| ArtifactStoreError::Unavailable);
+                if result.is_err() && state == Some(3) {
                     let _ = self
                         .release_quota(bundle.organization_id, bundle.size)
                         .await;
                 }
-                return Err(ArtifactStoreError::Busy);
+                let result = result?;
+                if result.matched_count != 1 {
+                    if state == Some(3) {
+                        let _ = self
+                            .release_quota(bundle.organization_id, bundle.size)
+                            .await;
+                        return Err(ArtifactStoreError::Busy);
+                    }
+                    continue;
+                }
+                let revisions = self.bump_revisions(&affected).await?;
+                self.update_upload(
+                    upload_id,
+                    ArtifactUploadState::Complete,
+                    bundle.uploaded_at,
+                    Some(bundle.id),
+                    None,
+                )
+                .await?;
+                return Ok(revisions);
             }
+
+            self.reserve_quota(bundle.organization_id, bundle.size)
+                .await?;
+            if let Err(error) = collection.insert_one(encode_bundle(&bundle)?).await {
+                let _ = self
+                    .release_quota(bundle.organization_id, bundle.size)
+                    .await;
+                if error.to_string().contains("E11000") {
+                    return Err(ArtifactStoreError::Conflict);
+                }
+                return Err(ArtifactStoreError::Unavailable);
+            }
+            let affected = bundle
+                .bindings
+                .iter()
+                .map(|binding| binding.project_id)
+                .collect::<BTreeSet<_>>();
             let revisions = self.bump_revisions(&affected).await?;
             self.update_upload(
                 upload_id,
@@ -328,33 +369,7 @@ impl MongoArtifactStore {
             .await?;
             return Ok(revisions);
         }
-
-        self.reserve_quota(bundle.organization_id, bundle.size)
-            .await?;
-        if let Err(error) = collection.insert_one(encode_bundle(&bundle)?).await {
-            let _ = self
-                .release_quota(bundle.organization_id, bundle.size)
-                .await;
-            if error.to_string().contains("E11000") {
-                return Err(ArtifactStoreError::Conflict);
-            }
-            return Err(ArtifactStoreError::Unavailable);
-        }
-        let affected = bundle
-            .bindings
-            .iter()
-            .map(|binding| binding.project_id)
-            .collect::<BTreeSet<_>>();
-        let revisions = self.bump_revisions(&affected).await?;
-        self.update_upload(
-            upload_id,
-            ArtifactUploadState::Complete,
-            bundle.uploaded_at,
-            Some(bundle.id),
-            None,
-        )
-        .await?;
-        Ok(revisions)
+        Err(ArtifactStoreError::Busy)
     }
 
     async fn reserve_quota(
@@ -468,16 +483,17 @@ impl MongoArtifactStore {
                 );
             }
         }
-        if candidates.len() < request.limit {
-            if let Some(release_id) = request.release_id {
-                let mut element =
-                    doc! { "p": request.project_id.get(), "r": binary(&release_id.as_bytes()) };
-                if let Some(dist) = &request.dist {
-                    element.insert("d", dist.as_ref());
-                } else {
-                    element.insert("d", doc! { "$exists": false });
-                }
-                let mut cursor = collection
+        if candidates.len() < request.limit
+            && let Some(release_id) = request.release_id
+        {
+            let mut element =
+                doc! { "p": request.project_id.get(), "r": binary(&release_id.as_bytes()) };
+            if let Some(dist) = &request.dist {
+                element.insert("d", dist.as_ref());
+            } else {
+                element.insert("d", doc! { "$exists": false });
+            }
+            let mut cursor = collection
                     .find(doc! {
                         "o": i64::try_from(request.organization_id.get()).map_err(|_| ArtifactStoreError::InvalidData)?,
                         "b": { "$elemMatch": element },
@@ -487,15 +503,14 @@ impl MongoArtifactStore {
                     .limit(i64::try_from(request.limit).unwrap_or(20))
                     .await
                     .map_err(unavailable)?;
-                while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
-                    let bundle = decode_bundle(&document)?;
-                    candidates.entry(bundle.id).or_insert(ArtifactCandidate {
-                        bundle,
-                        resolved_with: ArtifactResolution::Release,
-                    });
-                    if candidates.len() == request.limit {
-                        break;
-                    }
+            while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+                let bundle = decode_bundle(&document)?;
+                candidates.entry(bundle.id).or_insert(ArtifactCandidate {
+                    bundle,
+                    resolved_with: ArtifactResolution::Release,
+                });
+                if candidates.len() == request.limit {
+                    break;
                 }
             }
         }

@@ -30,7 +30,30 @@ docker compose run --rm --no-deps metric \
   --check-config
 ```
 
-Metric reports unknown settings and invalid values before starting.
+Metric reports unknown settings and invalid values before starting. This check
+does not connect to the database; successful validation does not prove reachability.
+
+## Existing database connection fails
+
+Check the selected backend and the installed connection secret without posting its
+password in logs or issue reports. For PostgreSQL the database must already exist
+and the role needs permission to create/migrate the `metric` schema. For Mongo,
+check the separate `authSource` and Metric data database.
+
+Inside a container `localhost` refers to that container. The installer maps a
+same-computer URI to the Docker host address. On Linux, a loopback-only database
+listener may remain inaccessible through the host gateway; configure the database
+listener/firewall yourself, or use a reachable named Docker service address.
+
+For TLS errors, check CA trust, hostname matching and certificate expiry. Check
+that certificate/key files are mounted read-only at the paths seen by Metric.
+PostgreSQL supports `sslmode` in its URI; arbitrary libpq query options are not
+accepted by Metric's URI policy. Correct the selected protected connection rather
+than disabling checks to hide an error. No TLS failure falls back to plaintext.
+
+For intentional local plain TCP, explicitly select installer TLS `off`, PostgreSQL
+`sslmode=disable` or Mongo `tls=false`. Changing a Docker database initialization
+password does not change credentials in an already populated database volume.
 
 ## MongoDB reports `Authentication failed` after restart
 

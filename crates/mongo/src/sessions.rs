@@ -205,22 +205,22 @@ impl MongoSessionStore {
                 "o": exited,
             }
         };
-        if delta > 0 {
-            if let Some(user) = record.user_digest {
-                let bit_index =
-                    usize::from(u16::from_be_bytes([user[0], user[1]])) % (USER_SKETCH_BYTES * 8);
-                let word = bit_index / 64;
-                let mask = 1_u64 << (bit_index % 64);
-                let mut bits =
-                    doc! { format!("u{word}"): { "or": i64::from_le_bytes(mask.to_le_bytes()) } };
-                if record.state == SessionState::Crashed {
-                    bits.insert(
-                        format!("v{word}"),
-                        doc! { "or": i64::from_le_bytes(mask.to_le_bytes()) },
-                    );
-                }
-                update.insert("$bit", bits);
+        if delta > 0
+            && let Some(user) = record.user_digest
+        {
+            let bit_index =
+                usize::from(u16::from_be_bytes([user[0], user[1]])) % (USER_SKETCH_BYTES * 8);
+            let word = bit_index / 64;
+            let mask = 1_u64 << (bit_index % 64);
+            let mut bits =
+                doc! { format!("u{word}"): { "or": i64::from_le_bytes(mask.to_le_bytes()) } };
+            if record.state == SessionState::Crashed {
+                bits.insert(
+                    format!("v{word}"),
+                    doc! { "or": i64::from_le_bytes(mask.to_le_bytes()) },
+                );
             }
+            update.insert("$bit", bits);
         }
         self.database
             .collection::<Document>("session_stats_hourly")
@@ -312,12 +312,23 @@ impl MongoSessionStore {
         if from >= until {
             return Err(SignalStoreError::InvalidData);
         }
+        // Source rows and replaced counters must cover the same complete hours.
+        // Keep an already aligned exclusive upper bound unchanged, including
+        // pre-epoch dates. Raw BSON bounds can represent the domain's final
+        // exclusive hour boundary without constructing an out-of-range Timestamp.
+        let hour_millis = 3_600_000;
+        let from = DateTime::from_millis(from.unix_millis().div_euclid(hour_millis) * hour_millis);
+        let upper = until.unix_millis();
+        let until = DateTime::from_millis(
+            upper.div_euclid(hour_millis) * hour_millis
+                + i64::from(upper.rem_euclid(hour_millis) != 0) * hour_millis,
+        );
         let mut cursor = self
             .database
             .collection::<Document>("sessions")
             .find(doc! {
                 "p": project_id.get(),
-                "s": { "$gte": date(from), "$lt": date(until) },
+                "s": { "$gte": from, "$lt": until },
             })
             .await
             .map_err(unavailable)?;
@@ -352,7 +363,7 @@ impl MongoSessionStore {
         stats
             .delete_many(doc! {
                 "p": project_id.get(),
-                "h": { "$gte": date(from), "$lt": date(until) },
+                "h": { "$gte": from, "$lt": until },
             })
             .await
             .map_err(unavailable)?;

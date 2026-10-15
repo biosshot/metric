@@ -6,7 +6,7 @@ behavior.
 
 ## Current execution status
 
-Status as of 2026-09-05:
+Status as of 2026-10-08:
 
 | Scope | Status | Canonical source |
 | --- | --- | --- |
@@ -32,7 +32,8 @@ Status as of 2026-09-05:
 | Phase 41 Web localization | Complete | ADR-0047 and Phase 41 report |
 | Phase 42 Cold archive search | Accepted after/reusing Phase 40 | ADR-0047 |
 | Unified Query v2 | Accepted, unnumbered cross-cutting replacement | ADR-0048 |
-| Automatic schema-migration framework | Complete; generation 19 to 20 Telegram and 20 to 21 DSN-map transitions registered | ADR-0049/0050 |
+| Automatic schema-migration framework | Complete; generation 19 to 20 Telegram and 20 to 21 DSN-map and 21 to 22 Metrics archive transitions registered | ADR-0049/0050 |
+| Independent PostgreSQL backend | Implementation in progress on `feat/postgres`; runtime parity pending; MongoDB remains default | ADR-0052, implementation plan and phase report |
 | Profiling | Desired, execution deferred and unnumbered | ADR-0040/0046 |
 | Later product capabilities | Deferred, unnumbered backlog | ADR-0040/0045/0046/0047 |
 
@@ -64,7 +65,7 @@ Existing Sentry DSNs are supported through an additive mapping collection; see
 
 ## Schema-generation safety
 
-The current binary requires schema generation **21 exactly** before starting
+The current binary requires schema generation **22 exactly** before starting
 application workers. The runtime constant
 [`SCHEMA_GENERATION`](../crates/mongo/src/lib.rs) is the implementation source of
 truth. Generation numbers in older ADR amendments, module contracts and phase
@@ -103,7 +104,7 @@ duplicate because its ID contains the server receive time.
 
 ## Current physical storage names
 
-The active schema generation is 21. The Error occurrence collection is
+The active schema generation is 22. The Error occurrence collection is
 `error_events`; `events` is only a legacy generation-7 physical name. Native HTTP
 routes may still contain `/events` because route names are product concepts, not
 MongoDB collection selectors.
@@ -133,10 +134,15 @@ Phase 37 and Session Replay Phase 38, and keeps Profiling deferred.
 ## Current deployment boundary
 
 The supported application shape remains one active `--role=all` process. NATS,
-split roles, multiple active application replicas, sharding, disk spool, MCP and a
-second storage backend are deferred. ADR-0044 is a closed historical program, not a
-current production declaration gate. Current limits are stated directly in
-`docs/known-limits.md`.
+split roles, multiple active application replicas, sharding, disk spool and MCP
+are not implemented. The independent PostgreSQL backend is implemented on
+`feat/postgres`; its functional evidence is recorded in the
+[parity report](phase-reports/0052-postgresql-functional-parity.md). Shipped default
+profiles and installers still select MongoDB. Public PostgreSQL setup and the
+explicit interactive wizard are defined in the
+[installer follow-up plan](module-contracts/0052-installer-and-documentation-plan.md).
+ADR-0044 is a closed historical program, not a current production declaration gate.
+Current limits are stated directly in `docs/known-limits.md`.
 
 ## Key documents
 
@@ -169,6 +175,18 @@ current production declaration gate. Current limits are stated directly in
   policy and the first production migration from generation 19 to 20.
 - `0051-helm-chart-and-release-versioning.md`: single-instance Kubernetes deployment,
   persistent storage and exact agreement between Metric, image and chart versions.
+- [0052-postgresql-storage-backend.md](0052-postgresql-storage-backend.md): implemented
+  independent PostgreSQL adapter, EventWriter naming, native TCP/TLS configuration,
+  security, migration interfaces and minimal Mongo changes; see the functional
+  parity report for verification and deferred load testing.
+- [module-contracts/0052-postgresql-implementation-plan.md](module-contracts/0052-postgresql-implementation-plan.md):
+  implementation stages, `feat/postgres`, Conventional Commits and mandatory Docker,
+  security, migration, fault and regression gates.
+- [module-contracts/0052-installer-and-documentation-plan.md](module-contracts/0052-installer-and-documentation-plan.md):
+  follow-up installer design with an explicit minimal wizard, compatible unattended
+  shell/PowerShell interfaces, database selection and wizard-first Getting Started.
+- [phase-reports/0052-installer-and-documentation.md](phase-reports/0052-installer-and-documentation.md):
+  0.1.8 installer delivery, Docker/terminal/TLS verification and unpublished release boundary.
 - `phase-reports/0051-helm-chart.md`: Helm implementation and verification evidence;
   public release publication remains pending.
 - `verification/2026-09-05-manual-backup-restore.md`: database-scoped manual MongoDB

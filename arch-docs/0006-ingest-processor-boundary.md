@@ -28,7 +28,7 @@ Before durable MongoDB insertion, Ingest performs only acceptance-critical work:
 - reject input that is clearly corrupt or cannot be represented safely;
 - apply server-side PII scrubbing;
 - preserve acceptable unknown SDK fields for compatibility;
-- create the `AcceptedEvent` passed to MongoWriter.
+- create the `AcceptedEvent` passed to EventWriter.
 
 Ingest does not perform final grouping, issue lookup, symbolication, source-map
 resolution, title/culprit derivation, alert evaluation, or complete platform-specific

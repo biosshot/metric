@@ -1,0 +1,35 @@
+[package]
+name = "metric-postgres"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+metric-domain = { path = "../domain" }
+metric-ports = { path = "../ports" }
+metrics.workspace = true
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+unicode-normalization = "0.1.25"
+zstd.workspace = true
+
+[dev-dependencies]
+metric-application = { path = "../application" }
+metric-blob = { path = "../blob" }
+metric-testkit = { path = "../testkit" }
+sha1.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

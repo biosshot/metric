@@ -75,9 +75,9 @@ try {
     $env:METRIC_HARDWARE = "$cpu; $ram GiB RAM; Windows"
     $env:METRIC_MONGO = 'MongoDB local standalone; direct connection'
     $env:METRIC_DURABILITY = if ($Maintenance) {
-        'MongoWriter plus concurrent Phase 14 Scheduler'
+        'EventWriter plus concurrent Phase 14 Scheduler'
     } else {
-        'MongoWriter unordered insert_many to MongoDB'
+        'EventWriter unordered insert_many to MongoDB'
     }
 
     & k6 run performance/k6/ingest-mongodb.js

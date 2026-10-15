@@ -183,6 +183,34 @@ impl MetricStore for MongoMetricStore {
 }
 
 pub(crate) fn metric_validator() -> Document {
+    let mut validator = metric_validator_v21();
+    let properties = validator
+        .get_document_mut("$jsonSchema")
+        .unwrap()
+        .get_document_mut("properties")
+        .unwrap();
+    properties.insert("z", doc! { "bsonType": ["date", "binData"] });
+    properties.insert("x", doc! { "bsonType": "date" });
+    // Legacy z dates keep their existing TTL meaning. A binary z is an archive
+    // segment only with a valid expiry and no outstanding archive hold. $cond
+    // avoids applying $binarySize to legacy dates or missing fields.
+    validator.insert(
+        "$expr",
+        doc! { "$cond": [
+            { "$eq": [{ "$type": "$z" }, "binData"] },
+            { "$and": [
+                { "$eq": [{ "$binarySize": "$z" }, 16] },
+                { "$eq": [{ "$type": "$x" }, "date"] },
+                { "$eq": [{ "$type": "$h" }, "missing"] },
+            ] },
+            true,
+        ] },
+    );
+    validator
+}
+
+// Frozen schema shape used to recognize installed databases during migration.
+pub(crate) fn metric_validator_v21() -> Document {
     doc! {
         "$jsonSchema": {
             "bsonType": "object",
@@ -230,14 +258,31 @@ pub(crate) fn metric_index_names() -> BTreeSet<&'static str> {
         "metric_project_time_name",
         "metric_project_series",
         "metric_retention",
+        "metric_archive_retention",
         "metric_archive_due",
     ])
 }
 
-fn metric_indexes() -> [IndexModel; 4] {
+pub(crate) fn metric_archive_retention_index() -> IndexModel {
+    IndexModel::builder()
+        .keys(doc! { "x": 1 })
+        .options(
+            IndexOptions::builder()
+                .name("metric_archive_retention".to_owned())
+                .expire_after(std::time::Duration::ZERO)
+                .partial_filter_expression(
+                    doc! { "z": { "$type": "binData" }, "x": { "$type": "date" } },
+                )
+                .build(),
+        )
+        .build()
+}
+
+fn metric_indexes() -> [IndexModel; 5] {
     [
         named_index(doc! { "p": 1, "t": -1, "n": 1 }, "metric_project_time_name"),
         named_index(doc! { "p": 1, "s": 1 }, "metric_project_series"),
+        metric_archive_retention_index(),
         IndexModel::builder()
             .keys(doc! { "z": 1 })
             .options(

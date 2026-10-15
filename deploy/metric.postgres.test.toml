@@ -1,0 +1,39 @@
+# Synthetic developer/Docker fixture. Shipped profiles still select MongoDB.
+role = "all"
+
+[storage]
+backend = "postgres"
+
+[server]
+http_address = "0.0.0.0:4001"
+shutdown_grace = "10s"
+request_timeout = "10s"
+
+[postgres]
+uri = { env = "METRIC_POSTGRES_TEST_URI" }
+ssl_mode = "disable"
+allow_insecure_connection = true
+max_connections = 10
+
+[postgres.migrations]
+mode = "auto"
+
+[projects]
+scrub_hmac_key = { env = "METRIC_POSTGRES_TEST_HMAC" }
+
+[development]
+allow_insecure_cookies = true
+
+[auth]
+secure_cookie = false
+
+[blob]
+root = "/var/lib/metric/blobs"
+capacity = "1 GiB"
+reserve = "64 MiB"
+max_object_bytes = "256 MiB"
+
+[archive]
+enabled = false
+
+# Leaving symbolicator.endpoint unset uses local baseline symbolication.

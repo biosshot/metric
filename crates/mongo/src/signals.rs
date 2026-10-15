@@ -420,22 +420,28 @@ impl MongoSignalStore {
         if from >= until {
             return Err(SignalStoreError::InvalidData);
         }
+        // Source Spans and replaced counters must cover the same complete hours.
+        // Preserve an already aligned exclusive upper bound, also before epoch.
+        let hour_millis = 3_600_000;
+        let lower = from.unix_millis().div_euclid(hour_millis) * hour_millis;
+        let upper = until.unix_millis();
+        let upper = upper.div_euclid(hour_millis) * hour_millis
+            + i64::from(upper.rem_euclid(hour_millis) != 0) * hour_millis;
+        // Validate nanosecond bounds before deleting any existing statistics.
+        let from_ns = lower
+            .checked_mul(1_000_000)
+            .ok_or(SignalStoreError::InvalidData)?;
+        let until_ns = upper
+            .checked_mul(1_000_000)
+            .ok_or(SignalStoreError::InvalidData)?;
         self.database
             .collection::<Document>("span_stats_hourly")
             .delete_many(doc! {
                 "p": project_id.get(),
-                "h": { "$gte": date(from), "$lt": date(until) },
+                "h": { "$gte": DateTime::from_millis(lower), "$lt": DateTime::from_millis(upper) },
             })
             .await
             .map_err(unavailable)?;
-        let from_ns = from
-            .unix_millis()
-            .checked_mul(1_000_000)
-            .ok_or(SignalStoreError::InvalidData)?;
-        let until_ns = until
-            .unix_millis()
-            .checked_mul(1_000_000)
-            .ok_or(SignalStoreError::InvalidData)?;
         let mut cursor = self
             .database
             .collection::<Document>("spans")

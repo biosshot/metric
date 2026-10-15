@@ -39,6 +39,8 @@ const JAVA_SDK_VERSION: &str = "8.50.1";
 const DOTNET_SDK_VERSION: &str = "6.7.0";
 const GO_SDK_VERSION: &str = "0.48.0";
 const RUST_SDK_VERSION: &str = "0.48.5";
+const RUBY_SDK_VERSION: &str = "7.1.0";
+const PHP_SDK_VERSION: &str = "4.34.0";
 
 #[derive(Deserialize)]
 struct SenderResult {
@@ -341,9 +343,21 @@ async fn real_go_sdk_sends_an_error_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Rust 1.88 and a locked sdk-tests/rust build"]
+#[ignore = "requires Rust 1.94 and a locked sdk-tests/rust build"]
 async fn real_rust_sdk_sends_an_error_event() {
     exercise_external_sdk(ExternalFixture::Rust).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Ruby 3.1 and locked sdk-tests/ruby dependencies"]
+async fn real_ruby_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Ruby).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires PHP 8.3 and locked sdk-tests/php dependencies"]
+async fn real_php_sdk_sends_an_error_event() {
+    exercise_external_sdk(ExternalFixture::Php).await.unwrap();
 }
 
 #[derive(Clone, Copy)]
@@ -359,6 +373,8 @@ enum ExternalFixture {
     Dotnet,
     Go,
     Rust,
+    Ruby,
+    Php,
 }
 
 async fn exercise_real_node_sdk(
@@ -854,6 +870,14 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
                 &dsn,
             ])
             .output(),
+        ExternalFixture::Ruby => Command::new("ruby")
+            .current_dir(&workspace)
+            .args(["sdk-tests/ruby/send_error.rb", &dsn])
+            .output(),
+        ExternalFixture::Php => Command::new("python")
+            .current_dir(&workspace)
+            .args(["sdk-tests/php/run.py", &dsn])
+            .output(),
     })
     .await;
     wait_for_sink(&harness.sink, output.as_ref().is_ok_and(Result::is_ok)).await;
@@ -866,6 +890,8 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
             ExternalFixture::Dotnet => ".NET",
             ExternalFixture::Go => "Go",
             ExternalFixture::Rust => "Rust",
+            ExternalFixture::Ruby => "Ruby",
+            ExternalFixture::Php => "PHP",
         };
         let sender_result = verify_process_output(&output, runtime)?;
         let event = one_event(
@@ -921,6 +947,24 @@ async fn exercise_external_sdk(fixture: ExternalFixture) -> Result<(), Box<dyn E
                     "metric-rust-sdk-test@1.0.0",
                 )?;
                 verify_exception_value(&payload, "Metric real Rust SDK compatibility event")?;
+            }
+            ExternalFixture::Ruby => {
+                verify_sdk(
+                    &payload,
+                    "sentry.ruby",
+                    RUBY_SDK_VERSION,
+                    "metric-ruby-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Metric real Ruby SDK compatibility event")?;
+            }
+            ExternalFixture::Php => {
+                verify_sdk(
+                    &payload,
+                    "sentry.php",
+                    PHP_SDK_VERSION,
+                    "metric-php-sdk-test@1.0.0",
+                )?;
+                verify_exception_value(&payload, "Metric real PHP SDK compatibility event")?;
             }
         }
         if payload.get("attachments").is_some() || harness.blob.capacity().used_bytes != 0 {

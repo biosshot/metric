@@ -278,6 +278,10 @@ pub struct ProjectDeletionTask {
 }
 
 impl ProjectDeletionTask {
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.join.abort_handle()
+    }
+
     pub async fn wait(self) {
         let _ = self.join.await;
     }

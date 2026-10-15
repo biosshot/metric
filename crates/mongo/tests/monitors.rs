@@ -19,12 +19,121 @@ use mongodb::{Client, Database, bson::doc};
 
 #[tokio::test]
 #[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn maintenance_uses_configured_retention_and_repairs_missed_runs_after_restart() {
+    use metric_ports::{MaintenanceRequest, MaintenanceStore, MaintenanceTask};
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await.unwrap();
+    let store = control.monitor_store(MonitorRetention { runs_days: 30 });
+    let base = timestamp(
+        i64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap(),
+    );
+    let project = ProjectId::new(42).unwrap();
+    for slug in ["repair-a", "repair-b"] {
+        store
+            .upsert_monitor(definition(
+                project,
+                MonitorId::derive(project, slug, "production"),
+                slug,
+                base,
+                5,
+            ))
+            .await
+            .unwrap();
+    }
+    let maintenance = control
+        .maintenance_store()
+        .with_monitor_retention(MonitorRetention { runs_days: 365 });
+    let mut request = MaintenanceRequest {
+        task: MaintenanceTask::MonitorMissed,
+        now: timestamp(base.unix_millis() + 600_000),
+        cursor: None,
+        batch_size: 2,
+        event_retention: std::time::Duration::from_secs(86400),
+        hourly_retention: std::time::Duration::from_secs(86400),
+        archive_events: false,
+    };
+    let created = maintenance.run(request.clone()).await.unwrap();
+    assert_eq!(created.changed, 2);
+    let collection = database.collection::<mongodb::bson::Document>("monitor_runs");
+    let row = collection.find_one(doc! {}).await.unwrap().unwrap();
+    assert_eq!(
+        row.get_datetime("x").unwrap().timestamp_millis()
+            - row.get_datetime("r").unwrap().timestamp_millis(),
+        365 * 86_400_000_i64
+    );
+    collection.update_many(doc! {}, vec![doc! { "$set": { "x": { "$add": ["$r", mongodb::bson::Bson::Int64(90 * 86_400_000_i64)] } } }]).await.unwrap();
+    request.batch_size = 1;
+    request.task = MaintenanceTask::MonitorRetention;
+    request.cursor = created.next_cursor;
+    let first = maintenance.run(request.clone()).await.unwrap();
+    assert_eq!((first.scanned, first.changed), (1, 1));
+    let restarted = control
+        .maintenance_store()
+        .with_monitor_retention(MonitorRetention { runs_days: 365 });
+    let repeat = restarted.run(request.clone()).await.unwrap();
+    assert_eq!((repeat.scanned, repeat.changed), (1, 0));
+    request.cursor = repeat.next_cursor;
+    let second = restarted.run(request.clone()).await.unwrap();
+    assert_eq!((second.scanned, second.changed), (1, 1));
+    request.cursor = second.next_cursor;
+    assert!(
+        restarted
+            .run(request.clone())
+            .await
+            .unwrap()
+            .next_cursor
+            .is_none()
+    );
+    collection.update_many(doc! {}, vec![doc! { "$set": { "s": 3, "x": { "$add": ["$r", mongodb::bson::Bson::Int64(90 * 86_400_000_i64)] } } }]).await.unwrap();
+    request.cursor = None;
+    request.batch_size = 2;
+    let untouched = restarted.run(request).await.unwrap();
+    assert_eq!((untouched.scanned, untouched.changed), (2, 0));
+    database.drop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
 async fn check_in_timeout_missed_and_compact_retention_are_durable() {
     let database = test_database().await.unwrap();
     let result = exercise(&database).await;
     let cleanup = database.drop().await;
     result.unwrap();
     cleanup.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn terminal_merge_keeps_original_start_and_readable_history() {
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await.unwrap();
+    let store = control.monitor_store(MonitorRetention { runs_days: 30 });
+    metric_testkit::monitor_conformance::terminal_merge_order(&store, ProjectId::new(42).unwrap())
+        .await;
+    database.drop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn definition_after_terminal_in_same_batch_is_resolved() {
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await.unwrap();
+    let store = control.monitor_store(MonitorRetention { runs_days: 30 });
+    metric_testkit::monitor_conformance::definition_order_in_batch(
+        &store,
+        ProjectId::new(42).unwrap(),
+    )
+    .await;
+    database.drop().await.unwrap();
 }
 
 #[tokio::test]

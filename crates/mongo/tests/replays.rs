@@ -28,6 +28,9 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     control.bootstrap_or_validate().await?;
     let project = ProjectId::new(42)?;
     let replay_id = EventId::from_bytes([3; 16]);
+    let started_at = Timestamp::from_unix_millis(i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+    )?)?;
     let store = control.replay_store(ReplayRetention {
         days: 30,
         archive: false,
@@ -35,19 +38,19 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
 
     assert_eq!(
         store
-            .persist_replay_segment(commit(project, replay_id, 2))
+            .persist_replay_segment(commit(project, replay_id, 2, started_at))
             .await?,
         DurableOutcome::Accepted
     );
     assert_eq!(
         store
-            .persist_replay_segment(commit(project, replay_id, 0))
+            .persist_replay_segment(commit(project, replay_id, 0, started_at))
             .await?,
         DurableOutcome::Accepted
     );
     assert_eq!(
         store
-            .persist_replay_segment(commit(project, replay_id, 0))
+            .persist_replay_segment(commit(project, replay_id, 0, started_at))
             .await?,
         DurableOutcome::Duplicate
     );
@@ -137,7 +140,12 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
             days: 30,
             archive: true,
         })
-        .persist_replay_segment(commit(archived_project, EventId::from_bytes([4; 16]), 0))
+        .persist_replay_segment(commit(
+            archived_project,
+            EventId::from_bytes([4; 16]),
+            0,
+            started_at,
+        ))
         .await?;
     assert_eq!(
         replays
@@ -155,9 +163,15 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn commit(project_id: ProjectId, replay_id: EventId, segment_id: u32) -> ReplaySegmentCommit {
-    let started_at = Timestamp::from_unix_millis(1_700_000_000_000).unwrap();
-    let ended_at = Timestamp::from_unix_millis(1_700_000_001_000 + i64::from(segment_id)).unwrap();
+fn commit(
+    project_id: ProjectId,
+    replay_id: EventId,
+    segment_id: u32,
+    started_at: Timestamp,
+) -> ReplaySegmentCommit {
+    let ended_at =
+        Timestamp::from_unix_millis(started_at.unix_millis() + 1_000 + i64::from(segment_id))
+            .unwrap();
     ReplaySegmentCommit {
         metadata: ReplayMetadata {
             project_id,

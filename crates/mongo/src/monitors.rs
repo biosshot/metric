@@ -93,6 +93,9 @@ impl MongoMonitorStore {
                     }
                 }
             }
+        }
+        // A terminal update may precede its definition in this micro-batch.
+        for update in &updates {
             if !monitors.contains_key(&update.run.monitor_id) {
                 return Err(SignalStoreError::NotFound);
             }
@@ -161,6 +164,12 @@ impl MongoMonitorStore {
                     if existing.status == MonitorRunStatus::InProgress
                         && incoming.status.is_terminal()
                     {
+                        if incoming
+                            .finished_at
+                            .is_some_and(|finish| finish < existing.started_at)
+                        {
+                            return Err(SignalStoreError::InvalidData);
+                        }
                         run_models.push(
                             UpdateOneModel::builder()
                                 .namespace(run_namespace.clone())

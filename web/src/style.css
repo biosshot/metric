@@ -3940,6 +3940,10 @@ label small,
   max-width: 72rem;
 }
 
+.release-workspace > .empty-state {
+  margin-bottom: 1rem;
+}
+
 .release-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(12rem, auto) auto;

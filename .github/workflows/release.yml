@@ -14,6 +14,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    name: Check release commit
+    uses: ./.github/workflows/ci.yml
+
   validate:
     name: Validate version
     runs-on: ubuntu-latest
@@ -48,7 +52,7 @@ jobs:
   # one multi-platform image. This avoids compiling Rust through QEMU.
   image:
     name: Publish container image
-    needs: validate
+    needs: [validate, checks]
     uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read

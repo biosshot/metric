@@ -48,7 +48,7 @@ services:
         hard: 64000
 
   metric:
-    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.7}
+    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.8}
     restart: unless-stopped
     mem_limit: ${METRIC_APP_MEMORY_LIMIT:-2g}
     depends_on:
@@ -67,6 +67,12 @@ services:
       - ./metric.toml:/etc/metric/metric.toml:ro
       - blob-data:/var/lib/metric/blobs
     read_only: true
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:4001/ready]
+      interval: 5s
+      timeout: 2s
+      start_period: 30s
+      retries: 24
     tmpfs:
       - /tmp:size=64m,mode=1777
     stop_grace_period: 40s

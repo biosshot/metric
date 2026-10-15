@@ -165,7 +165,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(marker.get_i32("generation").unwrap(), 21);
+        assert_eq!(
+            marker.get_i32("generation").unwrap(),
+            crate::SCHEMA_GENERATION
+        );
         database.drop().await.unwrap();
     }
 }

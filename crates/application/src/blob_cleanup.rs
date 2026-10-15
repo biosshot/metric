@@ -135,6 +135,10 @@ pub struct BlobCleanupTask {
 }
 
 impl BlobCleanupTask {
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.handle.abort_handle()
+    }
+
     pub async fn wait(self) {
         let _ = self.handle.await;
     }

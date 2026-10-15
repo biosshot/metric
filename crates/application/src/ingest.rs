@@ -2427,10 +2427,10 @@ fn scrub_string(text: &mut String) {
         *text = FILTERED.to_owned();
         return;
     }
-    if let Ok(url) = url::Url::parse(text) {
-        if !url.username().is_empty() || url.password().is_some() {
-            *text = "[Filtered URL Credentials]".to_owned();
-        }
+    if let Ok(url) = url::Url::parse(text)
+        && (!url.username().is_empty() || url.password().is_some())
+    {
+        *text = "[Filtered URL Credentials]".to_owned();
     }
 }
 

@@ -168,10 +168,10 @@ impl Finalizer {
             .finalize(FinalizeBatch { events }, self.config.policy())
             .await
             .map_err(map_store_error)?;
-        if result.finalized > 0 {
-            if let Some(signal) = &self.notification_signal {
-                signal.notify_transition();
-            }
+        if result.finalized > 0
+            && let Some(signal) = &self.notification_signal
+        {
+            signal.notify_transition();
         }
         Ok(result)
     }

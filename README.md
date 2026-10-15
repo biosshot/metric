@@ -21,17 +21,16 @@ same Rust binary.
 No SaaS account. No repository clone for Docker installation. No 65-service
 Compose stack. Your telemetry stays on infrastructure you control.
 
-> Metric 0.1.7 is an early release. Read the
+> Metric 0.1.8 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
 > for important production data.
 
-## New in 0.1.7
+## New in 0.1.8
 
-Existing Sentry DSNs can now be mapped to Metric projects without changing deployed
-client configuration, and personal API tokens now support fine-grained scopes including
-`artifact:write` for Sentry CLI and build-tool uploads. Existing generation-20 databases
-migrate automatically to schema generation 21. Read the
-[release notes](docs/releases/0.1.7.md) before updating an existing installation.
+PostgreSQL is available as an independent backend, with an explicit minimal setup
+wizard for shell and PowerShell. Existing unattended commands and MongoDB defaults
+are preserved. Read the
+[release notes](docs/releases/0.1.8.md) before updating an existing installation.
 
 ## Why Metric exists
 
@@ -61,9 +60,9 @@ data-residency questions or the operational weight of self-hosted Sentry.
 
 ## Metric vs. self-hosted Sentry
 
-| | **Metric 0.1.7** | **Self-hosted Sentry 26.7.2** |
+| | **Metric 0.1.8** | **Self-hosted Sentry 26.7.2** |
 | --- | --- | --- |
-| Core stack | One Rust application serving the bundled Vue UI, plus MongoDB | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
+| Core stack | One Rust application serving the bundled Vue UI, plus MongoDB or PostgreSQL | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
 | Compose footprint | **2 services** in Min/Low; **4 services** in Medium/High with Symbolicator and its cleanup companion | **65 service definitions** in the official release Compose file¹ |
 | Smallest documented machine | **1 vCPU, 1 GiB RAM, 15 GiB SSD** with the Min profile | **4 CPU, 16 GB RAM + 16 GB swap, 20 GB disk**; 32 GB RAM recommended² |
 | Installation | One `curl` command; no clone and no local Rust/Node toolchain | Clone a release, run its installer and operate the generated stack |
@@ -171,20 +170,25 @@ The exact supported, optional and unavailable capabilities are kept in
 
 ## Install with one command
 
+For a new installation, start with the
+[interactive setup](https://biosshot.github.io/metric/getting-started#interactive-installation).
+It selects a database, profile and HTTP port. The commands below preserve the
+unattended MongoDB defaults.
+
 Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.7/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.7/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.ps1 | iex
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
-`ghcr.io/biosshot/metric:0.1.7` and starts the recommended Medium profile.
+`ghcr.io/biosshot/metric:0.1.8` and starts the recommended Medium profile.
 Running the installer again reuses the existing `.env` and database password.
 You do not need to clone the repository.
 
@@ -215,7 +219,7 @@ storing important data.
 Install Min on a small Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.7/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
@@ -232,21 +236,24 @@ details, use the complete
 
 Metric is not yet feature-complete against Sentry. Profiling, SSO, SCIM, MFA and
 passkeys are not available. Apple/Cocoa, Flutter/Dart, Android/Kotlin, native
-C++, PHP, React Native and Ruby SDKs are not claimed until their release tests
+C++ and React Native SDKs are not claimed until their release tests
 exist.
+
+PHP and Ruby have pinned real-SDK compatibility tests; see the
+[compatibility matrix](https://biosshot.github.io/metric/compatibility).
 
 The supplied deployment is deliberately single-node:
 
-- one Metric process and one MongoDB server;
+- one Metric process and one MongoDB or PostgreSQL server;
 - no sharding, split processing roles or built-in high availability;
 - no built-in backup/restore command;
 - no reverse migrations, mixed-version rolling upgrades or currently published
   converter from a pre-19 schema;
 - cold archives cannot yet be searched or restored through Metric.
 
-The current binary requires MongoDB schema generation **21 exactly** before
-starting application workers. It automatically migrates complete generation-19 and generation-20
-databases to generation 21; earlier generations have no supported transition chain.
+The current binary requires MongoDB schema generation **22 exactly** before
+starting application workers. It automatically migrates complete generation-19, generation-20 and generation-21
+databases to generation 22; earlier generations have no supported transition chain.
 Never delete the database, Docker volumes or the
 `schema_meta` record to fix a version mismatch. Follow the
 [update guide](https://biosshot.github.io/metric/upgrading).
@@ -270,7 +277,7 @@ chart always has the same version as Metric and its Docker image.
 - [Configuration](https://biosshot.github.io/metric/configuration)
 - [Capacity and profiles](https://biosshot.github.io/metric/capacity)
 - [Updates and rollback](https://biosshot.github.io/metric/upgrading)
-- [0.1.7 release notes](docs/releases/0.1.7.md)
+- [0.1.8 release notes](docs/releases/0.1.8.md)
 - [Troubleshooting](https://biosshot.github.io/metric/troubleshooting)
 
 ## Support the project

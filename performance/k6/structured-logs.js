@@ -166,7 +166,7 @@ export function handleSummary(data) {
       hardware: __ENV.METRIC_HARDWARE || "unrecorded",
       mongo: __ENV.METRIC_MONGO || "MongoDB local standalone",
       durability:
-        "dedicated LogWriter and Event MongoWriter using unordered insert_many",
+        "dedicated LogWriter and Event EventWriter using unordered insert_many",
     },
     metrics: {
       log_requests: metricValues(data, "metric_log_requests").count || 0,

@@ -22,14 +22,19 @@ Most installations only need the values already created in `.env`:
 Advanced settings live in `metric.toml` beside `compose.yml`. Metric reads them
 once at startup, so restart the container after a change.
 
+The 0.1.8 [installer](getting-started.md) selects MongoDB (default) or PostgreSQL,
+bundled or existing. See [Installer options](installer-options.md) for CLI and
+environment names. PostgreSQL variants share application profile settings;
+Mongo-only sizing measurements do not establish PostgreSQL capacity guarantees.
+
 ## Supplied profiles
 
 | Profile file | Main purpose |
 | --- | --- |
-| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.7/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
-| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.7/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
-| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.7/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
-| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.7/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
+| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
+| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
+| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
+| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
 
 Profile settings are designed as a group. Copying only High queue sizes into Min
 can make a 1 GiB server run out of memory. Copying only High retention into a
@@ -48,9 +53,9 @@ docker compose run --rm --no-deps metric \
 
 Unknown names and invalid values stop startup instead of being ignored.
 
-The current Metric version requires MongoDB schema generation **21 exactly** before
+The current Metric version requires MongoDB schema generation **22 exactly** before
 starting application workers. An empty database is prepared automatically at
-generation 21, and complete generation-19 and generation-20 databases are migrated automatically.
+generation 22, and complete generation-19, generation-20 and generation-21 databases are migrated automatically.
 Earlier generations have no supported transition chain. Follow
 [Update Metric](upgrading.md) and do not delete data to bypass a compatibility error.
 
@@ -120,6 +125,83 @@ for that installation. The main profile differences are summarized in
 | `projects.identity_collision_retries` | `16` | Attempts to create a unique project identifier. |
 | `projects.max_keys_per_project` | `32` | Maximum DSN keys for one project. |
 
+## PostgreSQL
+
+Only the selected backend's database secrets are resolved. A verified TLS config:
+
+```toml
+[storage]
+backend = "postgres"
+
+[postgres]
+uri = { env = "METRIC_POSTGRES_URI" }
+ssl_mode = "verify-full"
+# ssl_root_cert = "/run/metric-certs/ca.pem"
+
+[postgres.migrations]
+mode = "auto"
+```
+
+PostgreSQL uses native TCP, not HTTP/REST. The URI includes credentials, host, port
+and an existing database. Its only supported query parameter is `sslmode`, which
+must agree with TOML. Configure other policy settings using the fields below.
+
+| Setting | Standalone default | Meaning |
+| --- | --- | --- |
+| `storage.backend` | `mongodb` | `mongodb` or `postgres` |
+| `postgres.uri` | Unset | Required secret reference for PostgreSQL |
+| `postgres.bootstrap_timeout` | `10s` | Initial connection limit; positive, at most 60s |
+| `postgres.acquire_timeout` | `5s` | Pool wait; positive, at most 60s |
+| `postgres.min_connections` | `0` | At most max connections |
+| `postgres.max_connections` | `10` | From 1 to 128 |
+| `postgres.statement_timeout` | `10s` | Positive, at most 5m |
+| `postgres.lock_timeout` | `2s` | Positive, at most statement timeout |
+| `postgres.idle_in_transaction_timeout` | `30s` | Positive, at most 5m |
+| `postgres.ssl_mode` | `verify-full` | `verify-full`, `verify-ca`, `require`, `disable` |
+| `postgres.allow_insecure_connection` | `false` | Required acknowledgement for modes other than `verify-full` |
+| `postgres.ssl_root_cert` | Unset | Local readable CA PEM; use its mounted container path |
+| `postgres.migrations.mode` | `auto` | Apply missing steps; `check` only verifies a current schema |
+| `postgres.migrations.lock_timeout` | `30s` | Ownership wait per attempt; positive, at most 5m |
+| `postgres.migrations.statement_timeout` | `60s` | Per-statement limit; positive, at most 30m |
+| `postgres.migrations.uri` | Unset | Optional migration secret for the same host/port/database |
+
+`verify-full` checks CA trust and hostname. `verify-ca` checks CA trust without the
+hostname. `require` requires TLS without hostname verification and checks CA trust
+when a CA is configured. `disable` uses plain TCP. To explicitly use TCP, set
+`ssl_mode = "disable"` and `allow_insecure_connection = true` in `[postgres]`.
+Bundled PostgreSQL uses this internal Docker connection and publishes no DB port.
+
+Protected TLS failures stop startup; they never enable plaintext fallback.
+Temporary unavailability can retry in startup maintenance. The driver defaults
+`PGOPTIONS`, `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY` remain operator-controlled;
+pass them explicitly into the container when needed. Certificate paths are local
+mounted files, with no external HTTP certificate download required.
+
+PostgreSQL requires schema generation **21**. Missing immutable migrations run
+sequentially with a transaction per SQL step and an ownership lock. The journal
+is `metric._sqlx_migrations`; successful steps are not rerun. Ordinary application
+workers start only after verification of the target schema. Switching a backend
+does not copy Mongo data into PostgreSQL.
+
+## MongoDB TLS and certificates
+
+Mongo TLS uses native URI options, for example:
+
+```text
+mongodb://user:password@db.example:27017/metric?authSource=admin&tls=true&tlsCAFile=/run/metric-certs/ca.pem
+```
+
+`tls=true` enables verified TLS; `tlsCAFile` supplies your own CA. Optional
+`tlsCertificateKeyFile` supplies a PEM with the client certificate and private key.
+Mongo SRV implies TLS unless explicitly disabled. `mongodb.database` selects data
+independently of `authSource`. A normal verified connection does not require
+`tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames`.
+
+The [installer](installer-options.md) copies and mounts supplied files read-only.
+For manual deployment, provide the mounts yourself and keep private keys protected.
+These settings configure the client; they do not enable server TLS or HTTPS for
+Metric's web interface.
+
 ## HTTP login and development settings
 
 The built-in defaults require HTTPS. The supplied Docker profiles deliberately
@@ -165,9 +247,14 @@ Cold archive is disabled by default.
 | `archive.target_uncompressed_bytes` | `64 MiB` | Target batch size before compression. |
 | `archive.write_chunk_bytes` | `256 KiB` | Streaming write chunk size. |
 | `archive.poll_interval` | `30s` | How often Metric looks for archive work. |
-| `archive.hot_copy_delay` | `0s` | Time data remains only in hot storage before archive work starts. |
+| `archive.hot_copy_delay` | `0s` | Delay added to the archive pass time when assigning hot-copy expiry after publication. Physical deletion is asynchronous. |
 | `archive.orphan_grace` | `24h` | Age required before an unused archive object can be deleted. |
 | `archive.cleanup_max_pages` | `4` | Maximum cleanup pages handled in one run. |
+
+Metrics archival also requires `retention.metric_archive = true`. Accepted late
+updates to an archived metric bucket may be lost when its hot copy is removed;
+see [Known limits](known-limits.md#backup-and-archive). A zero hot-copy delay does
+not make publication and deletion atomic or eliminate that known window.
 
 ## Native crashes and symbolication
 
@@ -328,7 +415,27 @@ These defaults are used when an `[artifacts]` section is not present.
 | `retention.metric_max_series_per_project` | `10000` | Maximum metric series per project. |
 | `retention.metric_archive` | `false` | Archives application metrics when archive storage is enabled. |
 | `retention.replays_days` | `30` | Days to keep Session Replays. |
-| `retention.replay_archive` | `false` | Archives replay data when archive storage is enabled. |
+| `retention.replay_archive` | `false` | Must remain `false`: Replay archiving is not implemented. Setting `true` fails configuration validation. |
+
+Retention deadlines do not guarantee immediate physical deletion. MongoDB removes
+expired records asynchronously through TTL indexes. PostgreSQL uses bounded
+scheduler batches; its event-retention task first traverses error events and then
+cleans expired records in the associated tables. Larger backlogs and restarts can
+delay cleanup. Leave disk headroom and monitor cleanup progress. At one million
+error events, the Min batch and polling settings alone imply roughly 5.6 hours
+per traversal; this is a calculation, not a throughput measurement.
+
+Scheduler-created missed monitor runs use `monitor_runs_days`. Surviving older
+missed runs are corrected in bounded background batches to the configured period
+from their original receipt time. The repair is safe to repeat after restart;
+until it reaches an old run, that run's previous deadline still applies. The
+repair cannot restore records already removed by expiry.
+
+If an older installation used `replay_archive=true`, back up its database and
+blob storage before upgrading, then set the flag to `false` to start this version.
+This changes retention for new replay data. Existing archive-held replays remain
+held; disabling the flag does not archive them or automatically make them eligible
+for deletion. Their migration or removal requires a separate reviewed procedure.
 
 ## Project deletion
 

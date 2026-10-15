@@ -13,6 +13,8 @@ optional SDK feature is tested on every platform.
 | .NET | `Sentry` 6.7.0 |
 | Go | `sentry-go` 0.48.0 |
 | Rust | `sentry` 0.48.5 |
+| PHP | `sentry/sentry` 4.34.0 |
+| Ruby | `sentry-ruby` 7.1.0 |
 | Sentry CLI | 3.6.2 and 2.58.6 |
 
 A version not listed here may work, but it has not passed the release tests.
@@ -63,9 +65,10 @@ The following SDK families are not part of the automated compatibility matrix:
 - Flutter and Dart;
 - Android and Kotlin;
 - native C++;
-- PHP;
 - React Native;
-- Ruby.
+
+The PHP and Ruby automated gates cover Error Events. The manual Laravel checks
+above are additional evidence and do not extend that automated feature claim.
 
 Profiling and legacy StatsD metric items are not supported.
 

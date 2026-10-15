@@ -25,6 +25,20 @@ async fn infrastructure_auth_bootstrap_revocation_final_owner_and_scope() {
     cleanup.unwrap();
 }
 
+#[tokio::test]
+#[ignore = "requires MongoDB 8.0.12 from deploy/compose.dev.yml"]
+async fn infrastructure_disabled_owners_do_not_satisfy_final_owner_guard() {
+    let database = test_database().await.unwrap();
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await.unwrap();
+    let now = timestamp(mongodb::bson::DateTime::now().timestamp_millis());
+    let result =
+        metric_testkit::auth_conformance::active_owner_guard(&control.auth_store(), now).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
 async fn exercise(database: &Database) -> Result<(), Box<dyn Error>> {
     let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
     control.bootstrap_or_validate().await?;

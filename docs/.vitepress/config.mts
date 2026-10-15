@@ -22,6 +22,7 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/' },
           { text: 'Install Metric', link: '/getting-started' },
+          { text: 'Installer options', link: '/installer-options' },
           { text: 'First setup', link: '/first-setup' },
           { text: 'Connect an SDK', link: '/sdk-setup' },
           { text: 'Move from Sentry', link: '/migrate-from-sentry' },
@@ -36,7 +37,7 @@ export default defineConfig({
           { text: 'Running Metric', link: '/operations' },
           { text: 'Backup and restore', link: '/backup-restore' },
           { text: 'Update Metric', link: '/upgrading' },
-          { text: 'Release notes', link: '/releases/0.1.7' },
+          { text: 'Release notes', link: '/releases/0.1.8' },
           { text: 'Troubleshooting', link: '/troubleshooting' },
         ],
       },

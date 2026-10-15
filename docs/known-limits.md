@@ -1,18 +1,23 @@
 # Known limits
 
-Metric 0.1.7 is an early release. Read these limits before using it for important
+Metric 0.1.8 is an early release. Read these limits before using it for important
 production data.
 
 ## Updates
 
-The current binary requires MongoDB schema generation **21 exactly** before
+The current binary requires MongoDB schema generation **22 exactly** before
 starting application workers. Its automatic, forward-only, crash-resumable migration
-runner supports generation 19 to 20 to 21. Earlier generations have no supported transition
+runner supports generation 19 to 20 to 21 to 22. Earlier generations have no supported transition
 chain, so those databases still fail closed.
 There are no reverse migrations or mixed-version rolling upgrades. Read
 [Update Metric](upgrading.md) before changing versions.
 
 ## Deployment
+
+PostgreSQL is an independent alternative to MongoDB. It requires generation 21;
+switching backends does not migrate data. PostgreSQL functional and TLS checks
+are documented, but load/soak testing remains deferred. MongoDB performance
+figures and measured minimum-machine claims do not establish PostgreSQL capacity.
 
 - Metric currently runs as one application container.
 - The supplied MongoDB deployment is a single server, not a high-availability
@@ -33,12 +38,28 @@ There are no reverse migrations or mixed-version rolling upgrades. Read
 
 ## Backup and archive
 
+- Replay archiving is not implemented. `retention.replay_archive=true` is rejected;
+  existing held data is preserved. See [retention configuration](configuration.md).
+- Component status reports current database readiness and whether background
+  tasks are still running. A running task can still encounter operation failures;
+  check metrics and logs as well. Blob storage is reported as `configured`, which
+  is not a read/write availability probe.
+
 - Metric does not provide its own backup and restore command; use external tooling.
 - [Manual backup and restore](backup-restore.md) covers a database-scoped dump and
   local/S3 copies without a global MongoDB lock. TTL cleanup continues; this is not
   a point-in-time snapshot.
 - MongoDB, file storage and installation secrets must be retained together.
 - Cold archives cannot be searched or restored through Metric.
+- With both `archive.enabled` and `retention.metric_archive` enabled, late
+  measurements for an old metric bucket can be accepted after its archive snapshot
+  has been created. These changes are not automatically re-archived and may be lost
+  when the hot copy is removed. Setting `archive.hot_copy_delay = "0s"` does not
+  eliminate the window: publication and source commitment are separate operations,
+  and MongoDB TTL deletion runs asynchronously. This is an accepted current
+  limitation to keep the implementation simple. Its frequency and volume under
+  production workloads have not been measured. Metrics archival remains disabled
+  in all supplied configurations.
 
 ## Features
 

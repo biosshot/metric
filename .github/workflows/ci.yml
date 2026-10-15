@@ -2,6 +2,7 @@
 name: Checks
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -10,12 +11,22 @@ permissions:
   contents: read
 
 jobs:
+  windows-installer:
+    name: PowerShell 5.1 and 7 volume guards
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python scripts/test-installer-volume-guard.py
+
   tests:
     name: Code and tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -39,7 +50,10 @@ jobs:
       - run: cargo dep-graph --locked
       - run: python scripts/validate-compatibility.py
       - run: python scripts/validate-deployment-profiles.py
+      - run: python scripts/sync-installer-assets.py --check
       - run: python scripts/validate-documentation.py
+      - run: python scripts/test-installer-volume-guard.py
+      - run: python scripts/test-installer-terminal.py
       - name: Verify Linux installer syntax
         run: sh -n deploy/install.sh
       - name: Verify PowerShell installer syntax
@@ -99,20 +113,141 @@ jobs:
           dotnet build --configuration Release --no-restore sdk-tests/dotnet/MetricSdkCompatibility.csproj
       - name: Verify real Rust SDK
         run: cargo build --locked --manifest-path sdk-tests/rust/Cargo.toml
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.1.7"
+          bundler: "2.3.27"
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: curl, mbstring, openssl, zip
+          coverage: none
+      - name: Prepare locked Ruby and PHP SDK fixtures
+        run: |
+          cd sdk-tests/ruby
+          BUNDLE_PATH=.deps BUNDLE_FROZEN=true bundle install
+          cd ../..
+          python sdk-tests/php/prepare.py
       - name: Run real SDK gates
-        run: cargo test -p metric-server --test sdk_compatibility_e2e -- --ignored --skip real_browser_sdk_ --nocapture
+        run: cargo test -p metric-server --test sdk_compatibility_e2e -- --ignored --skip real_browser_sdk_ --nocapture --test-threads=1
       - name: Verify pinned Sentry CLI versions
         working-directory: sdk-tests/sentry-cli
         run: |
           npm ci
           npm run versions
 
+  postgres:
+    name: Native PostgreSQL adapter and composed runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk-tests/node/package-lock.json
+            sdk-tests/browser/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.1
+          cache-dependency-path: sdk-tests/go/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.1.7"
+          bundler: "2.3.27"
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: curl, mbstring, openssl, zip
+          coverage: none
+      - name: Prepare existing real SDK and browser fixtures
+        run: |
+          npm ci --prefix sdk-tests/node
+          npm ci --prefix sdk-tests/browser
+          npm run build --prefix sdk-tests/browser
+          npm ci --prefix web
+          npm run build --prefix web
+          cd sdk-tests/browser
+          npx playwright install --with-deps chromium
+          cd ../..
+          python -m pip install -r sdk-tests/python/requirements.lock.txt
+          node sdk-tests/java/prepare.mjs
+          dotnet restore --locked-mode sdk-tests/dotnet/MetricSdkCompatibility.csproj
+          dotnet build --configuration Release --no-restore sdk-tests/dotnet/MetricSdkCompatibility.csproj
+          cargo build --locked -j1 --manifest-path sdk-tests/rust/Cargo.toml
+          cd sdk-tests/ruby
+          BUNDLE_PATH=.deps BUNDLE_FROZEN=true bundle install
+          cd ../..
+          python sdk-tests/php/prepare.py
+      - name: Start isolated native TCP and local-CA TLS fixtures
+        run: |
+          docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile tls up -d --wait postgres postgres-tls
+          mkdir -p target/postgres-test-tls
+          for file in ca.crt wrong-ca.crt client.crt client.key; do
+            docker cp "metric-pg-dev-postgres-tls-1:/run/metric-test-tls/${file}" "target/postgres-test-tls/${file}"
+          done
+      - run: python scripts/validate-postgres-coverage.py --require-complete
+      - name: Require nonzero real-adapter cases, including TLS and wire faults
+        run: python scripts/test-postgres.py --suite adapter
+      - name: Require the ignored PostgreSQL runtime group
+        run: cargo test -p metric-server --test postgres_runtime_e2e --all-features --locked -j1 -- --ignored --test-threads=1
+      - name: Require all nine SDKs, real Web UI, signals, Blob and Replay readback
+        run: python scripts/test-postgres.py --suite server --binary target/debug/metric-server --sdk --browser --verify-purge --verify-backup
+      - name: Stop only this job's synthetic fixture
+        if: always()
+        run: docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile tls down --volumes
+
+  postgres-containers:
+    name: PostgreSQL container restart and offline transports
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Preload the pinned synthetic PostgreSQL image
+        run: docker pull postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+      - name: Build current source and require container durability/shutdown
+        run: python scripts/test-postgres.py --suite container --build-image
+      - name: Require internal-only native TCP and locally verified TLS
+        run: python scripts/test-postgres.py --suite offline
+      - name: Preload installer database and profile images
+        run: |
+          docker pull mongo:8.0.12
+          docker pull ghcr.io/getsentry/symbolicator:26.6.0
+      - name: Verify compatible unattended shell and PowerShell installers
+        run: python scripts/test-installer.py --profiles-only
+      - name: Verify installer argument errors and non-terminal behavior
+        run: python scripts/test-installer.py --negative-only
+      - name: Verify real unattended shell and PowerShell installation lifecycles
+        run: python scripts/test-installer.py
+      - name: Verify minimal terminal wizards and visible URI entry
+        run: python scripts/test-installer.py --wizard
+      - name: Verify external databases requiring client certificates
+        run: python scripts/test-installer.py --transport tls
+
   browser:
     name: Browser SDK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -137,7 +272,7 @@ jobs:
       METRIC_TEST_MONGODB_URI: mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
@@ -156,7 +291,7 @@ jobs:
           npm ci --prefix sdk-tests/sentry-cli
           echo "$GITHUB_WORKSPACE/sdk-tests/sentry-cli/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Start isolated MongoDB
-        run: docker compose -f deploy/compose.dev.yml up -d --wait mongodb
+        run: docker compose -p metric-pg-baseline -f deploy/compose.dev.yml up -d --wait mongodb
       - name: Run storage and crash-resumable migration gates
         run: >-
           cargo test -p metric-mongo --all-targets --all-features --locked --no-fail-fast
@@ -168,12 +303,14 @@ jobs:
           --test native_api_e2e --test notifications_e2e --test project_identity_e2e
           --test web_e2e --test releases_e2e --test debug_files_e2e
           -- --ignored --skip performance_ --test-threads=1
+      - name: Require shared native HTTP lifecycle and physical project purge
+        run: python scripts/test-postgres.py --suite server --backend mongodb --binary target/debug/metric-server --verify-purge --verify-backup
       - name: Inspect MongoDB after failure
         if: failure()
-        run: docker compose -f deploy/compose.dev.yml logs mongodb
+        run: docker compose -p metric-pg-baseline -f deploy/compose.dev.yml logs mongodb
       - name: Stop isolated MongoDB
         if: always()
-        run: docker compose -f deploy/compose.dev.yml down
+        run: docker compose -p metric-pg-baseline -f deploy/compose.dev.yml down
 
   container:
     name: Container build
@@ -188,6 +325,7 @@ jobs:
         with:
           version: v3.19.0
       - run: python -m pip install -r scripts/helm-requirements.txt
+      - run: python scripts/test-release-workflow.py
       - name: Validate Helm configurations with the built binary
         run: python scripts/validate-helm-chart.py --image metric:ci
       - name: Verify immutable Helm publication gates

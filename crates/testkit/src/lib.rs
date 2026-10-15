@@ -1,6 +1,12 @@
 //! Reusable fakes implement the same narrow ports used by production composition.
 
+pub mod archive_conformance;
+pub mod auth_conformance;
 pub mod incident_capsule;
+pub mod monitor_conformance;
+pub mod notification_conformance;
+pub mod session_conformance;
+pub mod signal_conformance;
 
 use std::{
     sync::{Arc, Mutex},

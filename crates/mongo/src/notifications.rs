@@ -903,6 +903,7 @@ fn decode_rule(document: &Document) -> Result<AlertRule, NotificationStoreError>
                     "errors" => ExploreDataset::Errors,
                     "logs" => ExploreDataset::Logs,
                     "spans" => ExploreDataset::Spans,
+                    "metrics" => ExploreDataset::Metrics,
                     _ => return Err(NotificationStoreError::InvalidData),
                 },
                 lookback_minutes: u32::try_from(
@@ -1229,6 +1230,12 @@ fn decode_delivery(document: &Document) -> Result<NotificationDelivery, Notifica
         "dead" => NotificationDeliveryStatus::Dead,
         _ => return Err(NotificationStoreError::InvalidData),
     };
+    let next_attempt_at =
+        if document.contains_key("n") || status == NotificationDeliveryStatus::Pending {
+            timestamp(document, "n")?
+        } else {
+            timestamp(document, "l")?
+        };
     Ok(NotificationDelivery {
         id: NotificationDeliveryId::from_bytes(id16(document, "_id")?),
         project_id: ProjectId::new(
@@ -1256,7 +1263,7 @@ fn decode_delivery(document: &Document) -> Result<NotificationDelivery, Notifica
                 .map_err(|_| NotificationStoreError::InvalidData)?,
         )
         .map_err(|_| NotificationStoreError::InvalidData)?,
-        next_attempt_at: timestamp(document, "n")?,
+        next_attempt_at,
         last_error: document.get_str("z").ok().map(Into::into),
         created_at: timestamp(document, "c")?,
         delivered_at: if status == NotificationDeliveryStatus::Delivered {
@@ -1606,6 +1613,46 @@ fn named_index(keys: Document, name: &str, partial: Option<Document>) -> IndexMo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_history_fallback_does_not_accept_missing_pending_or_malformed_dates() {
+        let now = Timestamp::from_unix_millis(1000).unwrap();
+        let mut document = doc! {
+            "_id":binary([1;16]),"p":1,"u":binary([2;16]),"t":binary([3;16]),"r":binary([4;16]),"q":binary([5;16]),"d":binary([5;16]),
+            "v":binary([6;16]),"s":"pending","a":0_i64,"c":date(now),"n":date(now),"l":date(Timestamp::from_unix_millis(2000).unwrap()),
+        };
+        assert!(decode_delivery(&document).is_ok());
+        document.remove("n");
+        assert_eq!(
+            decode_delivery(&document),
+            Err(NotificationStoreError::InvalidData)
+        );
+        for status in ["delivered", "dead"] {
+            document.insert("s", status);
+            assert_eq!(
+                decode_delivery(&document).unwrap().next_attempt_at,
+                Timestamp::from_unix_millis(2000).unwrap()
+            );
+            document.insert("n", Bson::Null);
+            assert_eq!(
+                decode_delivery(&document),
+                Err(NotificationStoreError::InvalidData)
+            );
+            document.insert("n", "not-a-date");
+            assert_eq!(
+                decode_delivery(&document),
+                Err(NotificationStoreError::InvalidData)
+            );
+            document.insert("n", date(now));
+            assert_eq!(decode_delivery(&document).unwrap().next_attempt_at, now);
+            document.remove("n");
+        }
+        document.remove("l");
+        assert_eq!(
+            decode_delivery(&document),
+            Err(NotificationStoreError::InvalidData)
+        );
+    }
 
     #[test]
     fn due_selection_rotates_away_from_a_noisy_destination() {
