@@ -415,7 +415,27 @@ These defaults are used when an `[artifacts]` section is not present.
 | `retention.metric_max_series_per_project` | `10000` | Maximum metric series per project. |
 | `retention.metric_archive` | `false` | Archives application metrics when archive storage is enabled. |
 | `retention.replays_days` | `30` | Days to keep Session Replays. |
-| `retention.replay_archive` | `false` | Archives replay data when archive storage is enabled. |
+| `retention.replay_archive` | `false` | Must remain `false`: Replay archiving is not implemented. Setting `true` fails configuration validation. |
+
+Retention deadlines do not guarantee immediate physical deletion. MongoDB removes
+expired records asynchronously through TTL indexes. PostgreSQL uses bounded
+scheduler batches; its event-retention task first traverses error events and then
+cleans expired records in the associated tables. Larger backlogs and restarts can
+delay cleanup. Leave disk headroom and monitor cleanup progress. At one million
+error events, the Min batch and polling settings alone imply roughly 5.6 hours
+per traversal; this is a calculation, not a throughput measurement.
+
+Scheduler-created missed monitor runs use `monitor_runs_days`. Surviving older
+missed runs are corrected in bounded background batches to the configured period
+from their original receipt time. The repair is safe to repeat after restart;
+until it reaches an old run, that run's previous deadline still applies. The
+repair cannot restore records already removed by expiry.
+
+If an older installation used `replay_archive=true`, back up its database and
+blob storage before upgrading, then set the flag to `false` to start this version.
+This changes retention for new replay data. Existing archive-held replays remain
+held; disabling the flag does not archive them or automatically make them eligible
+for deletion. Their migration or removal requires a separate reviewed procedure.
 
 ## Project deletion
 

@@ -5259,28 +5259,59 @@ async fn capabilities(State(state): State<NativeHttpState>) -> Json<Value> {
     }))
 }
 
+#[derive(Clone)]
+pub(crate) struct ComponentHealth {
+    pub readiness: crate::http::Readiness,
+    pub database: crate::http::Readiness,
+    pub workers: std::collections::BTreeMap<&'static str, crate::http::Readiness>,
+}
+
+impl ComponentHealth {
+    async fn apply(&self, response: &mut Value, database_name: &str) {
+        let database_ready = self.database.is_ready().await;
+        response["status"] = json!(if self.readiness.workers_ready() && database_ready {
+            "ready"
+        } else {
+            "degraded"
+        });
+        response["components"][database_name] = json!(if database_ready {
+            "available"
+        } else {
+            "unavailable"
+        });
+        for (name, worker) in &self.workers {
+            response["components"][name] = json!(if worker.workers_ready() {
+                "running"
+            } else {
+                "stopped"
+            });
+        }
+    }
+}
+
 async fn component_status(
     State(state): State<NativeHttpState>,
     headers: HeaderMap,
     backend: Option<Extension<crate::config::StorageBackend>>,
+    health: Option<Extension<ComponentHealth>>,
 ) -> Result<Json<Value>, HttpApiError> {
     let _ = authenticate(&state, &headers, false).await?;
     let database_name = match backend.map(|Extension(value)| value).unwrap_or_default() {
         crate::config::StorageBackend::MongoDb => "mongodb",
         crate::config::StorageBackend::Postgres => "postgres",
     };
-    Ok(Json(json!({
-        "status": if state.required_ready { "ready" } else { "degraded" },
+    let mut response = json!({
+        "status": "unknown",
         "components": {
-            (database_name): if state.required_ready { "available" } else { "unavailable" },
-            "writer": if state.required_ready { "running" } else { "stopped" },
-            "dispatcher": if state.required_ready { "running" } else { "stopped" },
-            "processor": if state.required_ready { "running" } else { "stopped" },
-            "scheduler": if state.required_ready { "running" } else { "stopped" },
-            "notifications": if state.notifications { "running" } else { "stopped" },
-            "project_deletion": if state.project_deletion.is_some() { "running" } else { "stopped" },
-            "blob_store": "available",
-            "blob_cleanup": if state.required_ready { "running" } else { "stopped" },
+            (database_name): "unknown",
+            "writer": "unknown",
+            "dispatcher": "unknown",
+            "processor": "unknown",
+            "scheduler": "unknown",
+            "notifications": "unknown",
+            "project_deletion": "unknown",
+            "blob_store": "configured",
+            "blob_cleanup": "unknown",
             "debug_files": if state.debug_files.is_some() { "available" } else { "unavailable" },
             "symbolication": if state
                 .debug_files
@@ -5291,7 +5322,11 @@ async fn component_status(
                 "baseline"
             },
         }
-    })))
+    });
+    if let Some(Extension(health)) = health {
+        health.apply(&mut response, database_name).await;
+    }
+    Ok(Json(response))
 }
 
 async fn authenticate(
@@ -6142,6 +6177,45 @@ fn environment_value(environment: &EnvironmentView) -> Result<Value, HttpApiErro
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn component_health_tracks_dependency_recovery_and_worker_exit() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Dependency(AtomicBool);
+        impl crate::http::DependencyReadiness for Dependency {
+            fn check(&self) -> metric_ports::PortFuture<'_, bool> {
+                Box::pin(async { self.0.load(Ordering::SeqCst) })
+            }
+        }
+        let dependency = Arc::new(Dependency(AtomicBool::new(true)));
+        let task = tokio::spawn(std::future::pending::<()>());
+        let worker = crate::http::Readiness::new(true, vec![task.abort_handle()], None);
+        let health = super::ComponentHealth {
+            readiness: worker.clone(),
+            database: crate::http::Readiness::new(true, vec![], Some(dependency.clone())),
+            workers: std::collections::BTreeMap::from([("scheduler", worker)]),
+        };
+        let mut response = serde_json::json!({"components": {}});
+        health.apply(&mut response, "postgres").await;
+        assert_eq!(response["status"], "ready");
+        dependency.0.store(false, Ordering::SeqCst);
+        health.apply(&mut response, "postgres").await;
+        assert_eq!(response["status"], "degraded");
+        assert_eq!(response["components"]["postgres"], "unavailable");
+        assert_eq!(response["components"]["scheduler"], "running");
+        dependency.0.store(true, Ordering::SeqCst);
+        health.apply(&mut response, "postgres").await;
+        assert_eq!(response["status"], "ready");
+        task.abort();
+        let _ = task.await;
+        health.apply(&mut response, "postgres").await;
+        assert_eq!(response["status"], "degraded");
+        assert_eq!(response["components"]["postgres"], "available");
+        assert_eq!(response["components"]["scheduler"], "stopped");
+    }
+
     use super::*;
     use std::str::FromStr as _;
 

@@ -190,12 +190,13 @@ function Docker-Run([string[]]$Arguments) {
 Docker-Run @('compose', 'version')
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 if (-not $existing) {
-    docker volume inspect metric_mongo-data *> $null
-    if ($LASTEXITCODE -eq 0) { throw 'MongoDB data already exists, but .env is missing. Restore the original .env. The installer will not generate a different password for existing data.' }
+    # Listing succeeds for an empty daemon, unlike inspect of a missing volume.
+    # It also avoids PowerShell 5.1 treating expected native stderr as terminating.
+    $volumes = @(Docker-Run @('volume', 'ls', '--format', '{{.Name}}'))
+    if ($volumes -contains 'metric_mongo-data') { throw 'MongoDB data already exists, but .env is missing. Restore the original .env. The installer will not generate a different password for existing data.' }
     $project = if ($env:COMPOSE_PROJECT_NAME) { $env:COMPOSE_PROJECT_NAME } else { 'metric' }
     foreach ($volume in @('mongo-data', 'postgres-data', 'blob-data')) {
-        docker volume inspect "${project}_$volume" *> $null
-        if ($LASTEXITCODE -eq 0) { throw 'Installation data exists, but .env is missing. Restore the original secrets.' }
+        if ($volumes -contains "${project}_$volume") { throw 'Installation data exists, but .env is missing. Restore the original secrets.' }
     }
 }
 function Random-Hex([int]$Count) {
@@ -212,7 +213,7 @@ if (-not $existing) {
         $composeAsset = if ($Backend -eq 'mongodb' -and $Database -eq 'bundled') { 'compose.yml' } else { "compose.$Backend.$Database.yml" }
         $configAsset = if ($Backend -eq 'mongodb') { "profiles/$Profile.toml" } else { "profiles/postgres/$Profile.toml" }
         foreach ($asset in @(@($composeAsset, 'compose.yml'), @($configAsset, 'metric.toml'), @('symbolicator.yml', 'symbolicator.yml'), @("profiles/$Profile.env.example", 'template.env'))) {
-            Invoke-WebRequest -Uri "$downloadBase/$($asset[0])" -OutFile (Join-Path $stage $asset[1]) | Out-Null
+            Invoke-WebRequest -UseBasicParsing -Uri "$downloadBase/$($asset[0])" -OutFile (Join-Path $stage $asset[1]) | Out-Null
         }
         $hmac = if ($env:METRIC_SCRUB_HMAC_KEY) { $env:METRIC_SCRUB_HMAC_KEY } else { Random-Hex 32 }
         if ($hmac -cnotmatch '^[0-9a-f]{64}$') { throw 'HMAC key must contain 64 lowercase hexadecimal characters.' }

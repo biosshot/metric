@@ -92,7 +92,11 @@ impl StorageBundle<MongoEventStore> {
                 maximum_bundles_per_organization: config.artifacts.maximum_bundles_per_organization,
             })),
             finalization: std::sync::Arc::new(store.finalization_store(event_codec, issue_codec)),
-            maintenance: std::sync::Arc::new(store.maintenance_store()),
+            maintenance: std::sync::Arc::new(store.maintenance_store().with_monitor_retention(
+                metric_mongo::MonitorRetention {
+                    runs_days: config.retention.monitor_runs_days,
+                },
+            )),
         }
     }
 }
@@ -199,7 +203,11 @@ impl StorageBundle<metric_postgres::PostgresEventStore> {
                 event_codec,
                 issue_codec,
             )?),
-            maintenance: Arc::new(PostgresMaintenanceStore::new(db)),
+            maintenance: Arc::new(PostgresMaintenanceStore::new(db).with_monitor_retention(
+                metric_postgres::MonitorRetention {
+                    runs_days: config.retention.monitor_runs_days,
+                },
+            )),
             feedback_sink: feedback.clone(),
             feedback,
         })

@@ -1612,6 +1612,10 @@ pub enum ConfigError {
     InvalidSchedulerConfig,
     #[error("retention configuration is invalid or outside supported bounds")]
     InvalidRetentionConfig,
+    #[error(
+        "retention.replay_archive=true is unsupported: replay archiving is not implemented; set it to false (existing archive-held replay data is not automatically released)"
+    )]
+    UnsupportedReplayArchive,
     #[error("project deletion configuration is invalid or outside supported bounds")]
     InvalidProjectDeletionConfig,
     #[error("processor configuration is invalid or outside supported bounds")]
@@ -2720,6 +2724,9 @@ impl TryFrom<RawRetentionSettings> for RetentionSettings {
     type Error = ConfigError;
 
     fn try_from(raw: RawRetentionSettings) -> Result<Self, Self::Error> {
+        if raw.replay_archive {
+            return Err(ConfigError::UnsupportedReplayArchive);
+        }
         let valid = (1..=3_650).contains(&raw.events_days)
             && (1..=3_650).contains(&raw.feedback_days)
             && (1..=3_650).contains(&raw.issue_stats_hourly_days)
@@ -3142,6 +3149,13 @@ mod tests {
 
     #[test]
     fn scheduler_and_retention_bounds_fail_closed() {
+        assert!(matches!(
+            RetentionSettings::try_from(RawRetentionSettings {
+                replay_archive: true,
+                ..RawRetentionSettings::default()
+            }),
+            Err(ConfigError::UnsupportedReplayArchive)
+        ));
         let scheduler = RawConfig {
             scheduler: RawSchedulerSettings {
                 retry_base: "2m".to_owned(),

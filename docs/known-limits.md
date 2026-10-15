@@ -38,6 +38,13 @@ figures and measured minimum-machine claims do not establish PostgreSQL capacity
 
 ## Backup and archive
 
+- Replay archiving is not implemented. `retention.replay_archive=true` is rejected;
+  existing held data is preserved. See [retention configuration](configuration.md).
+- Component status reports current database readiness and whether background
+  tasks are still running. A running task can still encounter operation failures;
+  check metrics and logs as well. Blob storage is reported as `configured`, which
+  is not a read/write availability probe.
+
 - Metric does not provide its own backup and restore command; use external tooling.
 - [Manual backup and restore](backup-restore.md) covers a database-scoped dump and
   local/S3 copies without a global MongoDB lock. TTL cleanup continues; this is not

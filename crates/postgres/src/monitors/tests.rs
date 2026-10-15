@@ -113,6 +113,76 @@ async fn history(store: &PostgresMonitorStore, def: &MonitorDefinition) -> Vec<M
 
 #[tokio::test]
 #[ignore = "requires Docker PostgreSQL"]
+async fn maintenance_uses_configured_retention_and_repairs_missed_runs_after_restart() {
+    use metric_ports::{MaintenanceRequest, MaintenanceStore, MaintenanceTask};
+    let (fixture, database, store) = setup().await;
+    for slug in ["repair-a", "repair-b"] {
+        store
+            .upsert_monitor(definition(1, slug, false))
+            .await
+            .unwrap();
+    }
+    let maintenance = crate::PostgresMaintenanceStore::new(database.clone())
+        .with_monitor_retention(MonitorRetention { runs_days: 365 });
+    let mut request = MaintenanceRequest {
+        task: MaintenanceTask::MonitorMissed,
+        now: time(96_000),
+        cursor: None,
+        batch_size: 2,
+        event_retention: std::time::Duration::from_secs(86400),
+        hourly_retention: std::time::Duration::from_secs(86400),
+        archive_events: false,
+    };
+    let created = maintenance.run(request.clone()).await.unwrap();
+    assert_eq!(created.changed, 2);
+    let dates: Vec<i64> =
+        sqlx::query_scalar("SELECT delete_at-received_at FROM metric.monitor_runs")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(dates, vec![365 * 86_400_000_i64; 2]);
+    sqlx::query("UPDATE metric.monitor_runs SET delete_at=received_at+90::bigint*86400000")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    request.batch_size = 1;
+    request.task = MaintenanceTask::MonitorRetention;
+    request.cursor = created.next_cursor;
+    let first = maintenance.run(request.clone()).await.unwrap();
+    assert_eq!((first.scanned, first.changed), (1, 1));
+    // Simulate a lost in-memory cursor. The corrected first row is harmless.
+    let restarted = crate::PostgresMaintenanceStore::new(database.clone())
+        .with_monitor_retention(MonitorRetention { runs_days: 365 });
+    let repeat = restarted.run(request.clone()).await.unwrap();
+    assert_eq!((repeat.scanned, repeat.changed), (1, 0));
+    request.cursor = repeat.next_cursor;
+    let second = restarted.run(request.clone()).await.unwrap();
+    assert_eq!((second.scanned, second.changed), (1, 1));
+    request.cursor = second.next_cursor;
+    assert!(
+        restarted
+            .run(request.clone())
+            .await
+            .unwrap()
+            .next_cursor
+            .is_none()
+    );
+    sqlx::query(
+        "UPDATE metric.monitor_runs SET status=3,delete_at=received_at+90::bigint*86400000",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    request.cursor = None;
+    request.batch_size = 2;
+    let untouched = restarted.run(request).await.unwrap();
+    assert_eq!((untouched.scanned, untouched.changed), (2, 0));
+    database.close().await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires Docker PostgreSQL"]
 async fn definition_after_terminal_in_same_batch_is_resolved() {
     let (fixture, database, store) = setup().await;
     metric_testkit::monitor_conformance::definition_order_in_batch(&store, project(1)).await;

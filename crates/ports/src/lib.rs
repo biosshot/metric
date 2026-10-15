@@ -1073,6 +1073,7 @@ pub enum MaintenanceTask {
     BlobOrphanRegistration,
     MonitorTimeouts,
     MonitorMissed,
+    MonitorRetention,
 }
 
 impl MaintenanceTask {
@@ -1087,6 +1088,7 @@ impl MaintenanceTask {
             Self::BlobOrphanRegistration => "blob_orphan_registration",
             Self::MonitorTimeouts => "monitor_timeouts",
             Self::MonitorMissed => "monitor_missed",
+            Self::MonitorRetention => "monitor_retention",
         }
     }
 }

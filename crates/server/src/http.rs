@@ -61,12 +61,15 @@ impl Readiness {
     }
 
     pub async fn is_ready(&self) -> bool {
-        self.composed
-            && self.tasks.iter().all(|task| !task.is_finished())
+        self.workers_ready()
             && match &self.dependency {
                 Some(dependency) => dependency.check().await,
                 None => true,
             }
+    }
+
+    pub(crate) fn workers_ready(&self) -> bool {
+        self.composed && self.tasks.iter().all(|task| !task.is_finished())
     }
 }
 

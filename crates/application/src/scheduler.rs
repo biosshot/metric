@@ -18,8 +18,9 @@ use tokio::time::{MissedTickBehavior, interval, timeout};
 
 use crate::shutdown::ShutdownSignal;
 
-const TASKS: [MaintenanceTask; 8] = [
+const TASKS: [MaintenanceTask; 9] = [
     MaintenanceTask::RetryBacklog,
+    MaintenanceTask::MonitorRetention,
     MaintenanceTask::EventRetention,
     MaintenanceTask::HourlyRetention,
     MaintenanceTask::CounterReconciliation,
@@ -166,6 +167,7 @@ impl Scheduler {
             | MaintenanceTask::MonitorMissed => self.config.backlog_interval,
             MaintenanceTask::CounterReconciliation => self.config.reconciliation_interval,
             MaintenanceTask::EventRetention
+            | MaintenanceTask::MonitorRetention
             | MaintenanceTask::HourlyRetention
             | MaintenanceTask::UploadExpiry
             | MaintenanceTask::BlobOrphanRegistration => self.config.maintenance_interval,
@@ -460,6 +462,16 @@ mod tests {
         let clock = Arc::new(TestClock(AtomicI64::new(1_000)));
         let store = Arc::new(FakeStore::default());
         lock(&store.scripted).insert(
+            MaintenanceTask::MonitorRetention.name(),
+            VecDeque::from(vec![
+                Ok(MaintenanceResult {
+                    next_cursor: MaintenanceCursor::new(vec![1; 16]),
+                    ..FakeStore::completed()
+                });
+                4
+            ]),
+        );
+        lock(&store.scripted).insert(
             MaintenanceTask::EventRetention.name(),
             VecDeque::from([
                 Ok(MaintenanceResult {
@@ -482,6 +494,8 @@ mod tests {
         clock.set(1_060);
         scheduler.run_due_once().await;
         assert_eq!(store.calls(MaintenanceTask::RetryBacklog), 2);
+        assert_eq!(store.calls(MaintenanceTask::MonitorMissed), 2);
+        assert_eq!(store.calls(MaintenanceTask::MonitorRetention), 3);
         assert_eq!(store.calls(MaintenanceTask::CounterReconciliation), 1);
     }
 

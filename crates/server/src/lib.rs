@@ -653,6 +653,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .as_ref()
             .map(MonitorWriterTask::abort_handle),
     );
+    let writers = required_tasks.clone();
     required_tasks.extend(
         session_maintenance_task
             .as_ref()
@@ -676,7 +677,85 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             .as_ref()
             .map(tokio::task::JoinHandle::abort_handle),
     );
-    let readiness = http::Readiness::new(required_ready, required_tasks, readiness_dependency);
+    let worker = |handles: Vec<tokio::task::AbortHandle>| {
+        http::Readiness::new(!handles.is_empty(), handles, None)
+    };
+    let dispatcher_health = worker(
+        dispatcher_task
+            .as_ref()
+            .map(DispatcherTask::abort_handle)
+            .into_iter()
+            .collect(),
+    );
+    let workers = std::collections::BTreeMap::from([
+        (
+            "writer",
+            http::Readiness::new(writers.len() == 7, writers, None),
+        ),
+        ("dispatcher", dispatcher_health.clone()),
+        // Processor workers are owned by the dispatcher supervisor.
+        ("processor", dispatcher_health),
+        (
+            "scheduler",
+            worker(
+                scheduler_task
+                    .as_ref()
+                    .map(SchedulerTask::abort_handle)
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+        (
+            "notifications",
+            worker(
+                notification_task
+                    .as_ref()
+                    .map(|task| task.abort_handles())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "project_deletion",
+            worker(
+                project_deletion_task
+                    .as_ref()
+                    .map(ProjectDeletionTask::abort_handle)
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+        (
+            "blob_cleanup",
+            worker(
+                blob_cleanup_task
+                    .as_ref()
+                    .map(BlobCleanupTask::abort_handle)
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+    ]);
+    required_tasks.extend(
+        project_deletion_task
+            .as_ref()
+            .map(ProjectDeletionTask::abort_handle),
+    );
+    required_tasks.extend(
+        blob_cleanup_task
+            .as_ref()
+            .map(BlobCleanupTask::abort_handle),
+    );
+    let readiness =
+        http::Readiness::new(required_ready, required_tasks, readiness_dependency.clone());
+    let component_health = native_http::ComponentHealth {
+        readiness: readiness.clone(),
+        database: http::Readiness::new(
+            readiness_dependency.is_some(),
+            Vec::new(),
+            readiness_dependency,
+        ),
+        workers,
+    };
     let application_routes = ingest_http::router(ingest, config.ingest.clone(), shutdown.signal())
         .merge(native_http::router_with_limits(
             identity_service.clone(),
@@ -739,7 +818,8 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             release_service,
         ))
         .merge(web_http::router())
-        .layer(axum::Extension(config.storage.backend));
+        .layer(axum::Extension(config.storage.backend))
+        .layer(axum::Extension(component_health));
     let gate_readiness = readiness.clone();
     let application =
         http::router_with_probe(shutdown.signal(), metrics, application_routes, readiness);

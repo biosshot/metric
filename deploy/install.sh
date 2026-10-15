@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+
+# Parse the complete downloaded script before any child process can read stdin.
+# This also protects curl | sh when native Windows tools are reached through WSL.
+main() {
 case "$-" in *x*) set +x ;; esac
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 help() {
@@ -139,7 +143,7 @@ if [ "$mode" = external ] && [ "$existing" = 0 ]; then
   fi
 fi
 for program in docker curl awk sed; do command -v "$program" >/dev/null 2>&1 || fail "$program is required."; done
-docker compose version >/dev/null 2>&1 || fail 'Docker Compose is required.'
+docker compose version </dev/null >/dev/null 2>&1 || fail 'Docker Compose is required.'
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -hex "$1"
   elif command -v od >/dev/null 2>&1; then od -An -N "$1" -tx1 /dev/urandom | tr -d ' \n'
@@ -147,16 +151,18 @@ random_hex() {
 }
 mkdir -p "$install_dir"
 if [ "$existing" = 0 ]; then
-  if docker volume inspect metric_mongo-data >/dev/null 2>&1; then
+  volumes=$(docker volume ls --format '{{.Name}}' </dev/null) || fail 'Cannot list Docker volumes. Check Docker daemon availability.'
+  has_volume() { printf '%s\n' "$volumes" | grep -Fqx "$1"; }
+  if has_volume metric_mongo-data; then
     fail 'MongoDB data already exists, but .env is missing. Restore the original .env. The installer will not generate a different password for existing data.'
   fi
   project=${COMPOSE_PROJECT_NAME:-metric}
   for volume in mongo-data postgres-data blob-data; do
-    if docker volume inspect "${project}_${volume}" >/dev/null 2>&1; then fail 'Installation data exists, but .env is missing. Restore the original secrets.'; fi
+    if has_volume "${project}_${volume}"; then fail 'Installation data exists, but .env is missing. Restore the original secrets.'; fi
   done
 fi
 fetch() {
-  curl --fail --location --silent --show-error "$download_base/$1" --output "$2" || fail 'Failed to download an installer asset. Existing files were retained.'
+  curl --fail --location --silent --show-error "$download_base/$1" --output "$2" </dev/null || fail 'Failed to download an installer asset. Existing files were retained.'
 }
 env_line() {
   escaped=$(printf '%s' "$2" | sed "s/'/\\\\'/g")
@@ -237,7 +243,7 @@ if [ "$existing" = 0 ]; then
     uri=$(printf '%s\n' "$uri" | sed -E 's#([@/])localhost([:/?]|$)#\1host.docker.internal\2#g; s#([@/])127\.0\.0\.1([:/?]|$)#\1host.docker.internal\2#g')
     if [ "$backend" = postgres ]; then env_line METRIC_POSTGRES_URI "$uri" >> "$stage/.env"; else env_line MONGODB_URI "$uri" >> "$stage/.env"; fi
     case "$uri" in *host.docker.internal*)
-      if ! docker info --format '{{.OperatingSystem}}' | grep -qi 'docker desktop'; then
+      if ! docker info --format '{{.OperatingSystem}}' </dev/null | grep -qi 'docker desktop'; then
         awk '{print} $0=="  metric:" {print "    extra_hosts: [\"host.docker.internal:host-gateway\"]"}' "$stage/compose.yml" > "$stage/config.tmp"
         mv "$stage/config.tmp" "$stage/compose.yml"
       fi ;;
@@ -259,10 +265,13 @@ if [ "$active_profile" != "$profile" ]; then printf 'Existing installation keeps
   unset MONGODB_URI METRIC_POSTGRES_URI METRIC_HTTP_PORT METRIC_IMAGE METRIC_SCRUB_HMAC_KEY METRIC_MONGO_PASSWORD METRIC_POSTGRES_PASSWORD
   docker compose config --quiet || fail 'Generated Compose configuration is invalid.'
   docker compose pull
-  docker compose run --rm --no-deps metric --config /etc/metric/metric.toml --check-config
+  docker compose run -T --rm --no-deps metric --config /etc/metric/metric.toml --check-config
   docker compose up -d --wait --wait-timeout 120
   docker compose ps
-)
+) </dev/null # Docker must not consume the remaining installer in curl | sh.
 http_port=$(env_value "$install_dir/.env" METRIC_HTTP_PORT)
 printf '\nProfile: %s\nDatabase: %s (%s)\nMetric is ready at http://localhost:%s\nConfiguration: %s/metric.toml\n' "$active_profile" "$backend" "$mode" "$http_port" "$install_dir"
 printf 'First setup token: cd %s && docker compose logs metric\n' "$install_dir"
+}
+
+main "$@"

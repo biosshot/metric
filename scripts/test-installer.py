@@ -30,6 +30,11 @@ PASSWORD = "installer'quote$literal-only"
 
 
 def run(args, *, env=None, cwd=ROOT, timeout=180, expected=0):
+    if Path(str(args[0])).name.lower() in ('powershell', 'powershell.exe'):
+        env = (env or os.environ).copy()
+        for key in list(env):
+            if key.lower() == 'psmodulepath':
+                env.pop(key)
     result = subprocess.run(args, env=env, cwd=cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace', timeout=timeout)
     if result.returncode != expected:
@@ -168,7 +173,6 @@ def main():
     parser.add_argument('--negative-only', action='store_true')
     parser.add_argument('--wsl', help='Windows fixture: exercise native shell in this WSL distro without changing Docker integration')
     args = parser.parse_args()
-    run(['docker', 'image', 'inspect', args.image])
     if args.negative_only:
         scratch = ROOT / 'target' / ('installer-negative-' + RUN)
         scratch.mkdir(parents=True)
@@ -196,6 +200,7 @@ def main():
                 raise RuntimeError('Invalid request generated installation secrets')
             print(f'Passed invalid arguments, missing URI, no-terminal wizard, TLS conflict and help: {engine}', flush=True)
         return
+    run(['docker', 'image', 'inspect', args.image])
     if args.profiles_only:
         for backend in ('mongodb', 'postgres'):
             for profile in ('min', 'low', 'medium', 'high'):

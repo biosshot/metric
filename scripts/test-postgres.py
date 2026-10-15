@@ -600,6 +600,32 @@ def exercise_purge(http, project, database, backend, all_sdk):
     return {"populated": before, "remaining": after}
 
 
+def restore_owned_fixture(database, backend, directory):
+    """Round-trip only a UUID database created by this coordinator, while stopped."""
+    prefix = 'metric_pg_runtime_' if backend == 'postgres' else 'metric_mongo_runtime_'
+    if not re.fullmatch(prefix + r'[0-9a-f]{32}', database):
+        raise RuntimeError('Refusing backup/restore of a foreign database')
+    archive = directory / 'fixture-backup.archive'
+    if backend == 'postgres':
+        dump = ['docker', 'exec', CONTAINER, 'pg_dump', '-U', 'metric_test', '-d', database, '-Fc']
+        restore = ['docker', 'exec', '-i', CONTAINER, 'pg_restore', '-U', 'metric_test', '-d', database, '--exit-on-error']
+    else:
+        auth = ['--username', 'metric', '--password', 'metric-local-only', '--authenticationDatabase', 'admin']
+        dump = ['docker', 'exec', MONGO_CONTAINER, 'mongodump', *auth, '--db', database, '--archive', '--gzip']
+        restore = ['docker', 'exec', '-i', MONGO_CONTAINER, 'mongorestore', *auth, '--archive', '--gzip', '--stopOnError']
+    with archive.open('wb') as output:
+        subprocess.run(dump, stdout=output, stderr=subprocess.PIPE, check=True, timeout=120)
+    if not archive.stat().st_size:
+        raise RuntimeError('Empty synthetic backup')
+    if backend == 'postgres':
+        psql('metric_test', f'DROP DATABASE {database}')
+        psql('metric_test', f'CREATE DATABASE {database}')
+    else:
+        mongo(database, 'fixture.dropDatabase()')
+    with archive.open('rb') as source:
+        subprocess.run(restore, stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=120)
+
+
 def server_suite(args):
     binary = server_binary(args)
     backend = args.backend
@@ -658,6 +684,8 @@ def server_suite(args):
         project, event, sdk = exercise_http(http, server.token, args.sdk, args.browser, backend)
         # Real process replacement, same native DB and Blob directory.
         server.stop()
+        if args.verify_backup:
+            restore_owned_fixture(database, backend, directory)
         server.start()
         server.wait_ready(http)
         recovered = wait_event(http, project["project_id"], event["event_id"])
@@ -667,7 +695,7 @@ def server_suite(args):
             return load_suite(args, http, project, event, database, server)
         purge = exercise_purge(http, project, database, backend, args.sdk and args.browser) if args.verify_purge else None
         generation = psql(database, "SELECT generation FROM metric.schema_state") if backend == "postgres" else mongo(database, 'print(fixture.schema_meta.findOne({_id:"metric.schema"}).generation)')
-        return {"suite": "server", "backend": backend, "passed": 10, "sdk": sdk, "schema_generation": int(generation), "crud": CRUD_CASES, "purge": purge}
+        return {"suite": "server", "backend": backend, "passed": 10, "sdk": sdk, "schema_generation": int(generation), "crud": CRUD_CASES, "purge": purge, "backup_restore": args.verify_backup}
     except RuntimeError as error:
         if backend == "postgres" and "Sessions health" in str(error):
             counts = psql(database, "SELECT json_build_object('session_rows',(SELECT count(*) FROM metric.sessions),'session_states',(SELECT json_agg(x) FROM (SELECT state,count(*) FROM metric.sessions GROUP BY state ORDER BY state) x),'health_sessions',(SELECT sum(sessions) FROM metric.session_stats_hourly),'health_crashed',(SELECT sum(crashed) FROM metric.session_stats_hourly))")
@@ -987,11 +1015,14 @@ def main():
     parser.add_argument("--binary", help="already-built server binary; avoids a nested Cargo build")
     parser.add_argument("--backend", default="postgres", choices=("postgres", "mongodb"), help="real server functional gates may also select the independent Mongo fixture")
     parser.add_argument("--verify-purge", action="store_true", help="server suite: verify real project deletion and zero remaining owned records after readback/restart")
+    parser.add_argument("--verify-backup", action="store_true", help="server suite: dump and restore the owned database before restart/readback")
     parser.add_argument("--sdk", action="store_true", help="require installed real Node/Python/Java/.NET/Go/Rust/Ruby/PHP SDK fixtures")
     parser.add_argument("--browser", action="store_true", help="require installed Playwright and built Web/browser SDK fixtures")
     parser.add_argument("--build-image", action="store_true", help="build the current source image with serialized Cargo before container gates")
     parser.add_argument("--soak-duration", default="30m", help="bounded load interval; short diagnostics do not satisfy the 30 minute gate")
     args = parser.parse_args()
+    if args.verify_backup and args.suite != "server":
+        raise RuntimeError("backup verification is a functional server gate")
     if args.verify_purge and args.suite != "server":
         raise RuntimeError("purge verification is a functional server gate")
     if args.backend == "mongodb":

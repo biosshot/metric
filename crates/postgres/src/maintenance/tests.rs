@@ -13,6 +13,70 @@ use metric_ports::{ArchiveStore, EventStore, FinalizationStore};
 use std::sync::Arc;
 
 const DAY: i64 = 86_400_000;
+
+#[tokio::test]
+#[ignore = "requires real PostgreSQL; bounded retention diagnostic, not a soak test"]
+async fn populated_retention_cycle_allows_queries_and_restarts() {
+    let (fixture, database, _) = setup().await;
+    let rows: i64 = std::env::var("METRIC_RETENTION_PROBE_ROWS")
+        .ok()
+        .map(|value| value.parse().unwrap())
+        .unwrap_or(10_000);
+    assert!((1_000..=1_000_000).contains(&rows));
+    let time = now();
+    for first in (1..=rows).step_by(10_000) {
+        sqlx::query("INSERT INTO metric.error_events(project_id,event_id,received_at,policy_revision,body,processing_state) SELECT 1,pg_catalog.int8send(n)||pg_catalog.int8send(n),$1,1,'{}'::bytea,1 FROM generate_series($2::bigint,$3::bigint) n")
+            .bind(time.unix_millis() - 2 * DAY).bind(first).bind((first + 9_999).min(rows))
+            .execute(&database.pool).await.unwrap();
+    }
+    let mut store = PostgresMaintenanceStore::new(database.clone());
+    let mut req = request(MaintenanceTask::EventRetention, time, 100);
+    req.archive_events = false;
+    let started = Instant::now();
+    let mut batches = 0;
+    let mut maximum_probe_ms = 0;
+    loop {
+        let probe = async {
+            let start = Instant::now();
+            // A real concurrent write, to an unrelated row, rather than SELECT 1.
+            sqlx::query("UPDATE metric.projects SET policy_revision=policy_revision+1 WHERE id=2")
+                .execute(&database.pool)
+                .await
+                .unwrap();
+            start.elapsed().as_millis()
+        };
+        let (result, probe_ms) = tokio::join!(store.run(req.clone()), probe);
+        let result = result.unwrap();
+        assert!(result.scanned <= 100 && result.changed <= 100);
+        maximum_probe_ms = maximum_probe_ms.max(probe_ms);
+        batches += 1;
+        req.cursor = result.next_cursor;
+        if batches == 10 {
+            // Dropping the adapter and its cursor repeats the scan safely.
+            store = PostgresMaintenanceStore::new(database.clone());
+            req.cursor = None;
+            continue;
+        }
+        if req.cursor.is_none() {
+            break;
+        }
+        assert!(batches < 25_000);
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM metric.error_events")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    println!(
+        "retention_probe rows={rows} batch=100 calls={batches} elapsed_ms={} max_concurrent_write_ms={maximum_probe_ms}; polling sleeps omitted",
+        started.elapsed().as_millis()
+    );
+    database.pool.close().await;
+    fixture.cleanup().await;
+}
+
 fn table(kind: ArchiveKind) -> &'static str {
     match kind {
         ArchiveKind::Event => "metric.error_events",

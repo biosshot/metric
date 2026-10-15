@@ -2,6 +2,7 @@
 name: Checks
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -10,6 +11,16 @@ permissions:
   contents: read
 
 jobs:
+  windows-installer:
+    name: PowerShell 5.1 and 7 volume guards
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python scripts/test-installer-volume-guard.py
+
   tests:
     name: Code and tests
     runs-on: ubuntu-latest
@@ -41,6 +52,7 @@ jobs:
       - run: python scripts/validate-deployment-profiles.py
       - run: python scripts/sync-installer-assets.py --check
       - run: python scripts/validate-documentation.py
+      - run: python scripts/test-installer-volume-guard.py
       - name: Verify Linux installer syntax
         run: sh -n deploy/install.sh
       - name: Verify PowerShell installer syntax
@@ -194,7 +206,7 @@ jobs:
       - name: Require the ignored PostgreSQL runtime group
         run: cargo test -p metric-server --test postgres_runtime_e2e --all-features --locked -j1 -- --ignored --test-threads=1
       - name: Require all nine SDKs, real Web UI, signals, Blob and Replay readback
-        run: python scripts/test-postgres.py --suite server --binary target/debug/metric-server --sdk --browser --verify-purge
+        run: python scripts/test-postgres.py --suite server --binary target/debug/metric-server --sdk --browser --verify-purge --verify-backup
       - name: Stop only this job's synthetic fixture
         if: always()
         run: docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml --profile tls down --volumes
@@ -291,7 +303,7 @@ jobs:
           --test web_e2e --test releases_e2e --test debug_files_e2e
           -- --ignored --skip performance_ --test-threads=1
       - name: Require shared native HTTP lifecycle and physical project purge
-        run: python scripts/test-postgres.py --suite server --backend mongodb --binary target/debug/metric-server --verify-purge
+        run: python scripts/test-postgres.py --suite server --backend mongodb --binary target/debug/metric-server --verify-purge --verify-backup
       - name: Inspect MongoDB after failure
         if: failure()
         run: docker compose -p metric-pg-baseline -f deploy/compose.dev.yml logs mongodb
@@ -312,6 +324,7 @@ jobs:
         with:
           version: v3.19.0
       - run: python -m pip install -r scripts/helm-requirements.txt
+      - run: python scripts/test-release-workflow.py
       - name: Validate Helm configurations with the built binary
         run: python scripts/validate-helm-chart.py --image metric:ci
       - name: Verify immutable Helm publication gates

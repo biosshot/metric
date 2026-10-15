@@ -20,11 +20,20 @@ const CATALOGS: u8 = 81;
 #[derive(Clone)]
 pub struct PostgresMaintenanceStore {
     database: PostgresDatabase,
+    monitor_retention: MonitorRetention,
 }
 impl PostgresMaintenanceStore {
     #[must_use]
     pub fn new(database: PostgresDatabase) -> Self {
-        Self { database }
+        Self {
+            database,
+            monitor_retention: MonitorRetention::default(),
+        }
+    }
+    #[must_use]
+    pub fn with_monitor_retention(mut self, retention: MonitorRetention) -> Self {
+        self.monitor_retention = retention;
+        self
     }
     async fn run_inner(&self, request: MaintenanceRequest) -> Result<MaintenanceResult> {
         validate(&request)?;
@@ -76,12 +85,13 @@ impl PostgresMaintenanceStore {
                     self.reconcile_catalogs(&request, after).await
                 }
             }
+            MaintenanceTask::MonitorRetention => self.repair_missed_retention(&request).await,
             MaintenanceTask::MonitorTimeouts | MaintenanceTask::MonitorMissed => {
                 if request.cursor.is_some() {
                     return Err(MaintenanceStoreError::InvalidData);
                 }
                 let store =
-                    PostgresMonitorStore::new(self.database.clone(), MonitorRetention::default())
+                    PostgresMonitorStore::new(self.database.clone(), self.monitor_retention)
                         .map_err(invalid)?;
                 let changed = if request.task == MaintenanceTask::MonitorTimeouts {
                     store
@@ -114,6 +124,48 @@ impl PostgresMaintenanceStore {
                 })
             }
         }
+    }
+
+    // Keyset traversal bounds each repair and is safe to repeat after restart.
+    // Only scheduler-created Missed runs used the incorrect default retention.
+    async fn repair_missed_retention(
+        &self,
+        request: &MaintenanceRequest,
+    ) -> Result<MaintenanceResult> {
+        let after = request
+            .cursor
+            .as_ref()
+            .map_or(&[][..], MaintenanceCursor::as_bytes);
+        if !(1..=3650).contains(&self.monitor_retention.runs_days) {
+            return Err(MaintenanceStoreError::InvalidData);
+        }
+        if !after.is_empty() && after.len() != 16 {
+            return Err(MaintenanceStoreError::InvalidData);
+        }
+        // Traverse the primary key without a status filter: a sparse set of
+        // missed runs must not require an unbounded scan to fill one batch.
+        let keys: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT run_id FROM metric.monitor_runs WHERE run_id>$1 ORDER BY run_id LIMIT $2",
+        )
+        .bind(after)
+        .bind(request.batch_size as i64)
+        .fetch_all(&self.database.pool)
+        .await
+        .map_err(unavailable)?;
+        let days_ms = i64::from(self.monitor_retention.runs_days) * 86_400_000;
+        let changed = sqlx::query("UPDATE metric.monitor_runs SET delete_at=received_at+$2 WHERE run_id=ANY($1) AND status=4 AND source=1 AND delete_at IS DISTINCT FROM received_at+$2")
+            .bind(&keys).bind(days_ms).execute(&self.database.pool).await.map_err(unavailable)?.rows_affected();
+        let next = if keys.len() == request.batch_size {
+            keys.last()
+                .and_then(|key| MaintenanceCursor::new(key.clone()))
+        } else {
+            None
+        };
+        Ok(report(
+            keys.len(),
+            usize::try_from(changed).map_err(invalid)?,
+            next,
+        ))
     }
 
     async fn retain_events(

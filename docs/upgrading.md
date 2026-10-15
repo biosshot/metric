@@ -11,6 +11,11 @@ Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
 5. Note `METRIC_PROFILE` from `.env`.
 
+If you previously enabled `retention.replay_archive`, set it to `false` before
+starting this version. Replay archiving is not implemented, so `true` now causes
+a configuration error. Existing archive-held replay data remains held and is not
+automatically deleted. See the [retention upgrade details](configuration.md#data-retention).
+
 The current Metric binary requires MongoDB schema generation **22 exactly** before
 starting application workers. It automatically migrates complete generation-19, generation-20 and generation-21
 databases to generation 22 before ordinary startup.

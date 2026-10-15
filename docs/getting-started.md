@@ -26,6 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/insta
 
 ### Windows PowerShell
 
+Use Windows PowerShell 5.1 or PowerShell 7 with Docker Desktop running Linux
+containers and Docker Compose v2 available. An empty Docker volume list is normal
+on a fresh installation; an unreachable Docker daemon stops installation before
+secrets are generated.
+
 ```powershell
 $env:METRIC_INTERACTIVE = '1'
 try {

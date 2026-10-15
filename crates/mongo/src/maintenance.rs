@@ -24,12 +24,22 @@ const MAX_RETENTION: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
 #[derive(Clone)]
 pub struct MongoMaintenanceStore {
     database: Database,
+    monitor_retention: crate::MonitorRetention,
 }
 
 impl MongoMaintenanceStore {
     #[must_use]
     pub const fn from_database(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            monitor_retention: crate::MonitorRetention { runs_days: 90 },
+        }
+    }
+
+    #[must_use]
+    pub fn with_monitor_retention(mut self, retention: crate::MonitorRetention) -> Self {
+        self.monitor_retention = retention;
+        self
     }
 
     async fn run_inner(
@@ -43,23 +53,20 @@ impl MongoMaintenanceStore {
             MaintenanceTask::HourlyRetention => self.retain_hourly(request).await,
             MaintenanceTask::CounterReconciliation => self.reconcile_counters(request).await,
             MaintenanceTask::MonitorTimeouts => {
-                let changed = crate::MongoMonitorStore::new(
-                    self.database.clone(),
-                    crate::MonitorRetention::default(),
-                )
-                .terminalize_due_timeouts(request.now, request.batch_size)
-                .await
-                .map_err(map_monitor_error)?;
+                let changed =
+                    crate::MongoMonitorStore::new(self.database.clone(), self.monitor_retention)
+                        .terminalize_due_timeouts(request.now, request.batch_size)
+                        .await
+                        .map_err(map_monitor_error)?;
                 Ok(completed(changed))
             }
+            MaintenanceTask::MonitorRetention => self.repair_missed_retention(&request).await,
             MaintenanceTask::MonitorMissed => {
-                let changed = crate::MongoMonitorStore::new(
-                    self.database.clone(),
-                    crate::MonitorRetention::default(),
-                )
-                .materialize_due_missed(request.now, request.batch_size)
-                .await
-                .map_err(map_monitor_error)?;
+                let changed =
+                    crate::MongoMonitorStore::new(self.database.clone(), self.monitor_retention)
+                        .materialize_due_missed(request.now, request.batch_size)
+                        .await
+                        .map_err(map_monitor_error)?;
                 Ok(completed(changed))
             }
             MaintenanceTask::UploadExpiry | MaintenanceTask::BlobOrphanRegistration => {
@@ -71,6 +78,59 @@ impl MongoMaintenanceStore {
                 })
             }
         }
+    }
+
+    async fn repair_missed_retention(
+        &self,
+        request: &MaintenanceRequest,
+    ) -> Result<MaintenanceResult, MaintenanceStoreError> {
+        if !(1..=3650).contains(&self.monitor_retention.runs_days) {
+            return Err(MaintenanceStoreError::InvalidData);
+        }
+        // Page the _id index, then restrict updates to scheduler-created Missed
+        // runs. Filtering the scan by status would make sparse pages unbounded.
+        let mut filter = doc! {};
+        if let Some(cursor) = &request.cursor {
+            if cursor.as_bytes().len() != 16 {
+                return Err(MaintenanceStoreError::InvalidData);
+            }
+            filter.insert("_id", doc! { "$gt": Binary { subtype: BinarySubtype::Generic, bytes: cursor.as_bytes().to_vec() } });
+        }
+        let collection = self.database.collection::<Document>("monitor_runs");
+        let rows: Vec<Document> = collection
+            .find(filter)
+            .sort(doc! { "_id": 1 })
+            .projection(doc! { "_id": 1 })
+            .limit(request.batch_size as i64)
+            .await
+            .map_err(|_| MaintenanceStoreError::Unavailable)?
+            .try_collect()
+            .await
+            .map_err(|_| MaintenanceStoreError::Unavailable)?;
+        let ids: Vec<Bson> = rows
+            .iter()
+            .map(|row| {
+                row.get("_id")
+                    .cloned()
+                    .ok_or(MaintenanceStoreError::InvalidData)
+            })
+            .collect::<Result<_, _>>()?;
+        let changed = collection.update_many(doc! { "_id": { "$in": &ids }, "s": 4, "g": 1 },
+            vec![doc! { "$set": { "x": { "$add": ["$r", Bson::Int64(i64::from(self.monitor_retention.runs_days) * 86_400_000)] } } }])
+            .await.map_err(|_| MaintenanceStoreError::Unavailable)?.modified_count;
+        let next_cursor = if rows.len() == request.batch_size {
+            rows.last()
+                .and_then(|row| row.get_binary_generic("_id").ok())
+                .and_then(|id| MaintenanceCursor::new(id.clone()))
+        } else {
+            None
+        };
+        Ok(MaintenanceResult {
+            scanned: rows.len(),
+            changed: usize::try_from(changed).map_err(|_| MaintenanceStoreError::InvalidData)?,
+            next_cursor,
+            disposition: MaintenanceDisposition::Completed,
+        })
     }
 
     async fn observe_due_retry(

@@ -62,7 +62,7 @@ data-residency questions or the operational weight of self-hosted Sentry.
 
 | | **Metric 0.1.8** | **Self-hosted Sentry 26.7.2** |
 | --- | --- | --- |
-| Core stack | One Rust application serving the bundled Vue UI, plus MongoDB | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
+| Core stack | One Rust application serving the bundled Vue UI, plus MongoDB or PostgreSQL | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
 | Compose footprint | **2 services** in Min/Low; **4 services** in Medium/High with Symbolicator and its cleanup companion | **65 service definitions** in the official release Compose file¹ |
 | Smallest documented machine | **1 vCPU, 1 GiB RAM, 15 GiB SSD** with the Min profile | **4 CPU, 16 GB RAM + 16 GB swap, 20 GB disk**; 32 GB RAM recommended² |
 | Installation | One `curl` command; no clone and no local Rust/Node toolchain | Clone a release, run its installer and operate the generated stack |
@@ -236,12 +236,15 @@ details, use the complete
 
 Metric is not yet feature-complete against Sentry. Profiling, SSO, SCIM, MFA and
 passkeys are not available. Apple/Cocoa, Flutter/Dart, Android/Kotlin, native
-C++, PHP, React Native and Ruby SDKs are not claimed until their release tests
+C++ and React Native SDKs are not claimed until their release tests
 exist.
+
+PHP and Ruby have pinned real-SDK compatibility tests; see the
+[compatibility matrix](https://biosshot.github.io/metric/compatibility).
 
 The supplied deployment is deliberately single-node:
 
-- one Metric process and one MongoDB server;
+- one Metric process and one MongoDB or PostgreSQL server;
 - no sharding, split processing roles or built-in high availability;
 - no built-in backup/restore command;
 - no reverse migrations, mixed-version rolling upgrades or currently published
