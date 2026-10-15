@@ -29,7 +29,7 @@ Compose stack. Your telemetry stays on infrastructure you control.
 
 PostgreSQL is available as an independent backend, with an explicit minimal setup
 wizard for shell and PowerShell. Existing unattended commands and MongoDB defaults
-are preserved. Release 0.1.8 is being prepared and has not been published. Read the
+are preserved. Read the
 [release notes](docs/releases/0.1.8.md) before updating an existing installation.
 
 ## Why Metric exists
@@ -173,7 +173,7 @@ The exact supported, optional and unavailable capabilities are kept in
 For a new installation, start with the
 [interactive setup](https://biosshot.github.io/metric/getting-started#interactive-installation).
 It selects a database, profile and HTTP port. The commands below preserve the
-unattended MongoDB defaults. Versioned 0.1.8 downloads become available at publication.
+unattended MongoDB defaults.
 
 Linux or macOS:
 
