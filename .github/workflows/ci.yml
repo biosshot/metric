@@ -53,6 +53,7 @@ jobs:
       - run: python scripts/sync-installer-assets.py --check
       - run: python scripts/validate-documentation.py
       - run: python scripts/test-installer-volume-guard.py
+      - run: python scripts/test-installer-terminal.py
       - name: Verify Linux installer syntax
         run: sh -n deploy/install.sh
       - name: Verify PowerShell installer syntax

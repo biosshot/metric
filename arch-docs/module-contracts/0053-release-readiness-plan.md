@@ -134,6 +134,14 @@ accepts 1 or 2 only for that no-terminal shell case. Other negative cases retain
 their exact exit-code assertions. Reproduced on Ubuntu dash, and repeated negative
 checks passed on Git Bash and PowerShell. Production code was unchanged.
 
+The next CI run passed that assertion and all eight unattended installation
+scenarios, then exposed the POSIX terminal driver's missing console emulation in
+the PowerShell wizard case. A standalone three-`Read-Host` script reproduced the
+hang without any installer or Docker operations. Giving the PTY a 40x180 size and
+answering console cursor-position requests fixed the reproduction on actual Linux
+PowerShell 7.6.7. A fast CI regression exercises both file and pipeline invocation
+before the expensive builds. This correction also changes only test code.
+
 ## Publication state at the original readiness review
 
 No Git tag, push, remote image/chart publication or GitHub Release was performed.

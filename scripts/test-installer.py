@@ -66,10 +66,15 @@ def wizard_run(command, env, answers):
         finish = process.wait
         cancel = lambda: process.terminate(force=True)
     else:
+        import fcntl
         import pty
         import signal
+        import struct
+        import termios
         pid, descriptor = pty.fork()
         if pid == 0:
+            # Match the Windows PTY: a zero-sized terminal breaks Read-Host.
+            fcntl.ioctl(1, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 180, 0, 0))
             os.chdir(ROOT)
             os.execvpe(command[0], command, env)
         state = {'exit': None}
@@ -84,12 +89,20 @@ def wizard_run(command, env, answers):
         finish = lambda: state['exit']
         cancel = lambda: os.kill(pid, signal.SIGTERM)
     def reader():
+        query_tail = ''
         try:
             while True:
                 chunk = read()
                 if not chunk:
                     return
                 output.append(chunk)
+                if os.name != 'nt':
+                    # PowerShell's console reader queries its cursor position.
+                    # A raw PTY has no terminal emulator to answer that request.
+                    queries = query_tail + chunk
+                    for _ in range(queries.count('\x1b[6n')):
+                        os.write(descriptor, b'\x1b[1;1R')
+                    query_tail = queries[-3:]
         except (EOFError, OSError):
             return
     threading.Thread(target=reader, daemon=True).start()
