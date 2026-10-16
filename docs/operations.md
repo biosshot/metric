@@ -67,6 +67,11 @@ If the proxy sends `X-Forwarded-For`, add the proxy address or network to
 `server.trusted_proxies` in `metric.toml`. Configure the proxy to replace any
 `X-Forwarded-For` value received from the internet.
 
+When the proxy terminates HTTPS, Metric also takes `X-Forwarded-Proto` from
+the trusted proxies to build the chunk upload URL it returns to `sentry-cli`.
+Without that the URL starts with `http://`, and `sentry-cli` refuses to send
+its token there because it does not match the `https://` URL it was given.
+
 Restart Metric after changing the configuration:
 
 ```bash
