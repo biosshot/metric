@@ -812,6 +812,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             debug_file_service,
             artifact_service,
             runtime_private_source_signer,
+            config.symbolicator.callback_base_url.clone(),
             config.server.trusted_proxies.clone(),
         ))
         .merge(release_http::router(
