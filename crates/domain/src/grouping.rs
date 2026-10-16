@@ -332,12 +332,8 @@ fn exception_stack(
 
     for (index, exception) in body.exceptions.iter().enumerate().rev() {
         let origin = RawTraceOrigin::Exception { index };
-        let derived = derived_frames(symbolication, origin);
-        let frames = if let Some(derived) = derived {
-            significant_derived_frames(derived)
-        } else {
-            significant_raw_frames(&exception.stacktrace)
-        };
+        let frames =
+            significant_frames(&exception.stacktrace, derived_frames(symbolication, origin));
         if frames.is_empty() {
             continue;
         }
@@ -358,11 +354,10 @@ fn exception_stack(
         });
     }
 
-    let frames = if let Some(derived) = derived_frames(symbolication, RawTraceOrigin::Event) {
-        significant_derived_frames(derived)
-    } else {
-        significant_raw_frames(&body.stacktrace)
-    };
+    let frames = significant_frames(
+        &body.stacktrace,
+        derived_frames(symbolication, RawTraceOrigin::Event),
+    );
     if frames.is_empty() {
         return None;
     }
@@ -417,48 +412,59 @@ impl FrameIdentity {
     }
 }
 
-fn significant_raw_frames(frames: &[NormalizedFrame]) -> Vec<FrameIdentity> {
-    frames
-        .iter()
+/// Symbolicated frames stand in for the raw frames they came from. A derived trace
+/// may cover only some of them; the rest keep their raw identity and the raw
+/// selection rules, such as leaving out frames outside the application.
+fn significant_frames(
+    raw: &[NormalizedFrame],
+    derived: Option<&[SymbolicatedFrame]>,
+) -> Vec<FrameIdentity> {
+    let mut by_index = vec![None; raw.len()];
+    for frame in derived.unwrap_or_default() {
+        if let Some(slot) = by_index.get_mut(frame.original_index) {
+            *slot = Some(frame);
+        }
+    }
+    raw.iter()
+        .zip(by_index)
         .rev()
-        .filter(|frame| {
-            frame.instruction_address.is_none()
-                && frame.symbol_address.is_none()
-                && frame.in_app != Some(false)
-                && (frame.function.is_some()
-                    || frame.module.is_some()
-                    || frame.filename.is_some()
-                    || frame.absolute_path.is_some())
+        .filter_map(|(raw, derived)| match derived {
+            Some(derived) => derived_identity(derived),
+            None => raw_identity(raw),
         })
         .take(MAX_GROUPING_FRAMES)
-        .map(|frame| FrameIdentity::Raw {
-            function: frame.function.as_deref().map(normalize_identifier),
-            module: frame.module.as_deref().map(normalize_identifier),
-            path: frame
-                .filename
-                .as_deref()
-                .or(frame.absolute_path.as_deref())
-                .map(normalize_path),
-            line: frame.function.is_none().then_some(frame.line).flatten(),
-        })
         .collect()
 }
 
-fn significant_derived_frames(frames: &[SymbolicatedFrame]) -> Vec<FrameIdentity> {
-    frames
-        .iter()
-        .rev()
-        .filter(|frame| {
-            frame.function.is_some() || frame.module.is_some() || frame.filename.is_some()
-        })
-        .take(MAX_GROUPING_FRAMES)
-        .map(|frame| FrameIdentity::Derived {
-            function: frame.function.as_deref().map(normalize_identifier),
-            module: frame.module.as_deref().map(normalize_identifier),
-            path: frame.filename.as_deref().map(normalize_path),
-            line: frame.function.is_none().then_some(frame.line).flatten(),
-        })
-        .collect()
+fn raw_identity(frame: &NormalizedFrame) -> Option<FrameIdentity> {
+    let significant = frame.instruction_address.is_none()
+        && frame.symbol_address.is_none()
+        && frame.in_app != Some(false)
+        && (frame.function.is_some()
+            || frame.module.is_some()
+            || frame.filename.is_some()
+            || frame.absolute_path.is_some());
+    significant.then(|| FrameIdentity::Raw {
+        function: frame.function.as_deref().map(normalize_identifier),
+        module: frame.module.as_deref().map(normalize_identifier),
+        path: frame
+            .filename
+            .as_deref()
+            .or(frame.absolute_path.as_deref())
+            .map(normalize_path),
+        line: frame.function.is_none().then_some(frame.line).flatten(),
+    })
+}
+
+fn derived_identity(frame: &SymbolicatedFrame) -> Option<FrameIdentity> {
+    let significant =
+        frame.function.is_some() || frame.module.is_some() || frame.filename.is_some();
+    significant.then(|| FrameIdentity::Derived {
+        function: frame.function.as_deref().map(normalize_identifier),
+        module: frame.module.as_deref().map(normalize_identifier),
+        path: frame.filename.as_deref().map(normalize_path),
+        line: frame.function.is_none().then_some(frame.line).flatten(),
+    })
 }
 
 fn append_frame_components(components: &mut Vec<GroupingComponent>, frames: &[FrameIdentity]) {
@@ -1187,6 +1193,70 @@ mod tests {
         let second = group(project, 1, &event, Some(&mapped("login"))).unwrap();
         assert_eq!(first.strategy, GroupingStrategy::ExceptionStack);
         assert_ne!(first.key, second.key);
+    }
+
+    #[test]
+    fn javascript_frames_left_out_of_symbolication_keep_raw_rules() {
+        let project = ProjectId::new(42).unwrap();
+        // The first frame is symbolicated; the last one could not be sent to
+        // Symbolicator and has only its raw form.
+        let key_with = |last: NormalizedFrame| {
+            let mut event = body();
+            event.platform = EventPlatform::JavaScript;
+            event.exceptions = vec![exception(
+                "TypeError",
+                vec![frame("minified", "assets/app.min.js"), last],
+            )];
+            let symbolication = SymbolicationResult {
+                kind: crate::symbolication::SymbolicationKind::JavaScript,
+                status: SymbolicationStatus::Partial,
+                disposition: SymbolicationDisposition::Continue,
+                raw: vec![crate::symbolication::RawStacktrace {
+                    origin: RawTraceOrigin::Exception { index: 0 },
+                    frames: event.exceptions[0].stacktrace.clone(),
+                }],
+                derived: vec![SymbolicatedStacktrace {
+                    origin: RawTraceOrigin::Exception { index: 0 },
+                    frames: vec![SymbolicatedFrame {
+                        original_index: 0,
+                        function: Some("checkout".into()),
+                        filename: Some("src/app.ts".into()),
+                        module: Some("frontend".into()),
+                        line: Some(10),
+                        column: Some(2),
+                    }],
+                }],
+                missing_debug_ids: Vec::new(),
+                diagnostics: Vec::new(),
+            };
+            group(project, 1, &event, Some(&symbolication)).unwrap().key
+        };
+        let library = |function: &str| NormalizedFrame {
+            function: Some(function.into()),
+            filename: None,
+            module: None,
+            line: None,
+            in_app: Some(false),
+            ..frame("", "")
+        };
+        let path_only = |path: &str| NormalizedFrame {
+            function: None,
+            filename: None,
+            module: None,
+            line: None,
+            absolute_path: Some(path.into()),
+            ..frame("", "")
+        };
+        // Library frames stay out of the key, as they do without symbolication.
+        assert_eq!(
+            key_with(library("Array.map")),
+            key_with(library("Array.forEach"))
+        );
+        // A frame known only by its path still tells errors apart.
+        assert_ne!(
+            key_with(path_only("https://example.invalid/static/checkout.js")),
+            key_with(path_only("https://example.invalid/static/login.js"))
+        );
     }
 
     #[test]
