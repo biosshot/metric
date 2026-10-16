@@ -177,6 +177,18 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
             },
         )
         .await?;
+    // A build's source-map upload token: artifact:write is all it needs.
+    let artifact_token = identity
+        .create_api_token(
+            &token_context,
+            CreateApiTokenRequest {
+                name: TokenName::new("source-maps")?,
+                scopes: PermissionSet::from_permissions([Permission::ArtifactWrite]),
+                expires_at: Timestamp::from_unix_millis(now.unix_millis() + 86_400_000)?,
+                request_id: metric_domain::BoundedId::new("phase17-artifact-token")?,
+            },
+        )
+        .await?;
     let root = std::env::temp_dir().join(format!("metric-debug-e2e-{}", uuid::Uuid::new_v4()));
     let blobs: Arc<dyn BlobStore> = Arc::new(
         LocalBlobStore::new(
@@ -292,7 +304,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         let cli_root = cli_root.clone();
         let fixture = sourcemap_fixture.clone();
         let url = format!("http://{address}/");
-        let secret = token.secret.encode_hex();
+        let secret = artifact_token.secret.encode_hex();
         let output = tokio::task::spawn_blocking(move || {
             run_sourcemaps_cli(cli_executable(&cli_root, package)?, fixture, url, secret)
         })
@@ -402,7 +414,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
             let cli_root = cli_root.clone();
             let fixture = sourcemap_fixture.clone();
             let url = format!("http://{address}/");
-            let secret = token.secret.encode_hex();
+            let secret = artifact_token.secret.encode_hex();
             let config = js_config.clone();
             tokio::task::spawn_blocking(move || {
                 run_js_sourcemaps_cli(&cli_root, fixture, prefix, url, secret, config)
