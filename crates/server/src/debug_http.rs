@@ -16,6 +16,7 @@ use metric_application::{
     auth::IdentityService,
     debug_files::{
         AssembleDebugFile, AssembleState, DebugFileError, DebugFileService, SENTRY_CLI_CHUNK_BYTES,
+        SENTRY_CLI_CHUNKS_PER_REQUEST, SENTRY_CLI_MAX_REQUEST_BYTES,
     },
 };
 use metric_domain::{
@@ -32,7 +33,10 @@ use crate::config::TrustedProxy;
 use crate::debug_http::DebugHttpError::{InvalidRequest, Unauthorized};
 
 const MAX_ASSEMBLE_BODY_BYTES: usize = 1024 * 1024;
-const MAX_CHUNK_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+/// Clients fill `maxRequestSize` with chunk bytes alone, so the request limit adds
+/// 1 KiB per part for the multipart boundary and part headers.
+const MAX_CHUNK_REQUEST_BYTES: usize =
+    SENTRY_CLI_MAX_REQUEST_BYTES + SENTRY_CLI_CHUNKS_PER_REQUEST * 1024;
 
 #[derive(Clone)]
 struct DebugHttpState {
@@ -169,9 +173,9 @@ async fn chunk_options(
     Ok(Json(json!({
         "url": upload_url,
         "chunkSize": SENTRY_CLI_CHUNK_BYTES,
-        "chunksPerRequest": 64,
+        "chunksPerRequest": SENTRY_CLI_CHUNKS_PER_REQUEST,
         "maxFileSize": maximum_file_bytes,
-        "maxRequestSize": 32 * 1024 * 1024,
+        "maxRequestSize": SENTRY_CLI_MAX_REQUEST_BYTES,
         "concurrency": 4,
         "hashAlgorithm": "sha1",
         // No transport codec on purpose. With gzip advertised getsentry/cli stores bundle
@@ -227,15 +231,7 @@ async fn chunk_upload(
     request: Request,
 ) -> Result<Json<Value>, DebugHttpError> {
     let context = authenticate_upload_token(&state, request.headers()).await?;
-    let boundary = multipart_boundary(request.headers())?;
-    let body = to_bytes(request.into_body(), MAX_CHUNK_REQUEST_BYTES)
-        .await
-        .map_err(|_| InvalidRequest)?;
-    let parts = multipart_parts(&body, &boundary)?;
-    if parts.is_empty() || parts.len() > 64 {
-        return Err(InvalidRequest);
-    }
-    for part in parts {
+    for part in chunk_parts(request).await? {
         let checksum = checksum_from_part(&part.headers)?;
         let bytes = chunk_bytes(part)?;
         state
@@ -250,6 +246,19 @@ async fn chunk_upload(
             .map_err(map_debug)?;
     }
     Ok(Json(json!({})))
+}
+
+/// Multipart parts of one chunk upload request.
+async fn chunk_parts(request: Request) -> Result<Vec<MultipartPart>, DebugHttpError> {
+    let boundary = multipart_boundary(request.headers())?;
+    let body = to_bytes(request.into_body(), MAX_CHUNK_REQUEST_BYTES)
+        .await
+        .map_err(|_| InvalidRequest)?;
+    let parts = multipart_parts(&body, &boundary)?;
+    if parts.is_empty() || parts.len() > SENTRY_CLI_CHUNKS_PER_REQUEST {
+        return Err(InvalidRequest);
+    }
+    Ok(parts)
 }
 
 #[derive(Deserialize)]
@@ -892,6 +901,51 @@ mod tests {
             &vec![0; SENTRY_CLI_CHUNK_BYTES + 1],
         );
         assert!(chunk_bytes(oversized).is_err());
+    }
+
+    /// A chunk upload request carrying `chunks` full chunks.
+    fn chunk_batch_request(chunks: usize) -> Request {
+        let boundary = "metric-chunk-batch";
+        let mut body = Vec::new();
+        for index in 0..chunks {
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; \
+                     filename=\"{index:040x}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.resize(body.len() + SENTRY_CLI_CHUNK_BYTES, 7);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        axum::http::Request::builder()
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn full_chunk_batch_fits_with_its_multipart_framing() {
+        // Clients fill maxRequestSize with chunk bytes alone.
+        let chunks = SENTRY_CLI_MAX_REQUEST_BYTES / SENTRY_CLI_CHUNK_BYTES;
+        let parts = chunk_parts(chunk_batch_request(chunks)).await.unwrap();
+        assert_eq!(parts.len(), chunks);
+        for part in parts {
+            assert_eq!(chunk_bytes(part).unwrap().len(), SENTRY_CLI_CHUNK_BYTES);
+        }
+    }
+
+    #[tokio::test]
+    async fn chunk_batch_over_the_request_limit_is_rejected() {
+        let chunks = SENTRY_CLI_MAX_REQUEST_BYTES / SENTRY_CLI_CHUNK_BYTES + 1;
+        assert!(matches!(
+            chunk_parts(chunk_batch_request(chunks)).await,
+            Err(InvalidRequest)
+        ));
     }
 
     #[test]

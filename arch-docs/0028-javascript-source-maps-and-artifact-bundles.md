@@ -113,10 +113,12 @@ or random-access readers.
 
 Two layouts are accepted. `sentry-cli` puts entries under `files/` and writes a
 bundle `debug_id` attribute. getsentry/cli (the `sentry` npm package behind
-`@sentry/bundler-plugins` 11) puts them at the archive root as `_/_/<path>` and
-writes no bundle `debug_id`. In either layout the manifest has to list every
-entry. A bundle without its own `debug_id` gets one derived from its content: the
-first 128 bits of its BLAKE3.
+`@sentry/bundler-plugins` 11) puts them at the archive root and writes no bundle
+`debug_id`. It keys a `~/` URL as `_/_/<path>` and any other URL as `_/<url>`,
+such as `_/https://cdn.example.com/app.js` or `_//static/app.js`, so empty path
+segments are allowed; `.` and `..` segments and absolute paths are not. In either
+layout the manifest has to list every entry. A bundle without its own `debug_id`
+gets one derived from its content: the first 128 bits of its BLAKE3.
 
 Configurable limits cover compressed bundle bytes, total logical/uncompressed bytes,
 entry count, individual entry bytes, manifest bytes, path and URL length, metadata

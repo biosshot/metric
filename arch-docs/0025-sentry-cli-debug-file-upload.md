@@ -54,6 +54,10 @@ entries uncompressed and gzips the chunks instead, and Metric keeps bundles as
 uploaded, so they would take about four times the space. Clients that gzip
 anyway are still accepted.
 
+`maxRequestSize` is a budget for chunk bytes: `sentry-cli` fills it with them
+alone, four uncompressed 8 MiB chunks in one request. The HTTP request limit adds
+1 KiB per part, 64 KiB in all, for the multipart boundaries and part headers.
+
 Size, concurrency, wait, and temporary-retention limits are configurable with safe
 validated bounds. `artifact_bundles` is advertised only with ADR-0028 enabled.
 `sources`, `bcsymbolmaps`, `il2cpp`, `proguard`, `release_files`, and unimplemented

@@ -686,7 +686,7 @@ fn validate_source_bundle(
     let mut compressed = 0_u64;
     // Entries may sit anywhere in the archive: sentry-cli puts them under `files/`,
     // getsentry/cli (the `sentry` package behind `@sentry/bundler-plugins` 11) at the
-    // root as `_/_/<path>`. The manifest has to list every one of them either way.
+    // root under `_/`, keyed by URL. The manifest has to list every one of them either way.
     for index in 0..archive.len() {
         check_deadline(deadline)?;
         let entry = archive
@@ -783,12 +783,14 @@ fn validate_source_bundle(
     let mut debug_ids = Vec::new();
     for (path, info) in &manifest.files {
         check_deadline(deadline)?;
+        // Empty segments are allowed: getsentry/cli keys a file by `_/<url>` for any
+        // prefix other than `~/`, as in `_/https://cdn.example.com/app.js` or
+        // `_//static/app.js`.
         if path.is_empty()
             || path.len() > config.maximum_path_bytes
             || path.contains('\\')
-            || path
-                .split('/')
-                .any(|part| part.is_empty() || part == "." || part == "..")
+            || path.starts_with('/')
+            || path.split('/').any(|part| part == "." || part == "..")
             || info.path.len() > config.maximum_path_bytes
             || info.url.len() > config.maximum_url_bytes
             || info.headers.len() > config.maximum_metadata_fields
@@ -1016,6 +1018,44 @@ mod tests {
         assert_eq!(output.bundle_debug_id, None);
         assert_eq!(output.debug_ids.len(), 1);
         assert_eq!(output.debug_ids[0].to_string(), debug_id);
+    }
+
+    #[test]
+    fn accepts_url_keyed_entries_but_not_traversal_or_absolute_paths() {
+        let validate = |key: &str| {
+            let manifest = serde_json::json!({
+                "files": { key: { "type": "minified_source", "headers": { "debug-id": "67e9247c-814e-392b-a027-dbde6748fcbf" } } }
+            });
+            let bytes = archive(
+                &[
+                    ("manifest.json", &serde_json::to_vec(&manifest).unwrap()),
+                    (key, b"function a(){}"),
+                ],
+                SimpleFileOptions::default(),
+            );
+            validate_source_bundle(
+                &bytes,
+                ArtifactConfig::default(),
+                Instant::now() + Duration::from_secs(1),
+            )
+        };
+        // getsentry/cli keys files by `_/<url>` for prefixes other than `~/`.
+        for key in [
+            "_/https://cdn.example.com/static/app.js",
+            "_//static/app.js",
+        ] {
+            assert!(validate(key).is_ok(), "{key}");
+        }
+        for key in [
+            "../app.js",
+            "_/https://cdn.example.com/../app.js",
+            "_//./app.js",
+            "/static/app.js",
+            "//cdn.example.com/static/app.js",
+            r"_/https://cdn.example.com/static\..\app.js",
+        ] {
+            assert!(validate(key).is_err(), "{key}");
+        }
     }
 
     #[test]

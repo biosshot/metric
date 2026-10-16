@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     error::Error,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -256,6 +257,35 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    // Five 8 MiB chunks: sentry-cli sends four of them in one request, filling
+    // maxRequestSize with chunk bytes alone, without room for the multipart framing.
+    let large_root =
+        std::env::temp_dir().join(format!("metric-large-dif-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&large_root)?;
+    let large = large_root.join("large.sym");
+    write_large_breakpad(&large, 33 * 1024 * 1024)?;
+    let output = {
+        let cli_root = cli_root.clone();
+        let large = large.clone();
+        let url = format!("http://{address}/");
+        let secret = token.secret.encode_hex();
+        tokio::task::spawn_blocking(move || {
+            run_cli(
+                cli_executable(&cli_root, "@sentry/cli")?,
+                large,
+                url,
+                secret,
+            )
+        })
+        .await??
+    };
+    std::fs::remove_dir_all(&large_root)?;
+    assert!(
+        output.status.success(),
+        "real @sentry/cli failed on a full chunk batch:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let sourcemap_fixture = cli_root.join("fixtures").join("sourcemaps");
     for package in ["@sentry/cli", "sentry-cli-v2"] {
@@ -358,28 +388,36 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
     assert_eq!(artifact_cross.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     // getsentry/cli is what @sentry/bundler-plugins 11 uploads with. Its bundles keep the
-    // entries at the root without a bundle debug_id, and with no transport codec
-    // advertised it deflates them itself.
-    let js_config = std::env::temp_dir().join(format!("metric-sentry-js-{}", uuid::Uuid::new_v4()));
-    let output = {
-        let cli_root = cli_root.clone();
-        let fixture = sourcemap_fixture.clone();
-        let url = format!("http://{address}/");
-        let secret = token.secret.encode_hex();
-        let config = js_config.clone();
-        tokio::task::spawn_blocking(move || {
-            run_js_sourcemaps_cli(&cli_root, fixture, url, secret, config)
-        })
-        .await??
-    };
-    let _ = std::fs::remove_dir_all(&js_config);
-    assert!(
-        output.status.success(),
-        "real sentry (getsentry/cli) sourcemaps failed:\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let mut js_bundle_found = false;
+    // entries at the root, as `_/_/<path>` for `~/` URLs and `_/<url>` for any other
+    // prefix, without a bundle debug_id; with no transport codec advertised it deflates
+    // them itself. It joins the prefix and the file name as they are.
+    for prefix in [
+        "~/static/",
+        "https://cdn.example.invalid/static/",
+        "/static/",
+    ] {
+        let js_config =
+            std::env::temp_dir().join(format!("metric-sentry-js-{}", uuid::Uuid::new_v4()));
+        let output = {
+            let cli_root = cli_root.clone();
+            let fixture = sourcemap_fixture.clone();
+            let url = format!("http://{address}/");
+            let secret = token.secret.encode_hex();
+            let config = js_config.clone();
+            tokio::task::spawn_blocking(move || {
+                run_js_sourcemaps_cli(&cli_root, fixture, prefix, url, secret, config)
+            })
+            .await??
+        };
+        let _ = std::fs::remove_dir_all(&js_config);
+        assert!(
+            output.status.success(),
+            "real sentry (getsentry/cli) with urlPrefix {prefix} failed:\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let mut js_entries = BTreeSet::new();
     for candidate in artifact_service
         .lookup(
             ProjectId::new(7)?,
@@ -406,21 +444,28 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         }
         for index in 0..archive.len() {
             let entry = archive.by_index(index)?;
-            if entry.name() != "manifest.json" && entry.size() > 0 {
-                assert_eq!(
-                    entry.compression(),
-                    zip::CompressionMethod::Deflated,
-                    "{} is stored uncompressed",
-                    entry.name()
-                );
+            if entry.name() == "manifest.json" {
+                continue;
             }
+            assert_eq!(
+                entry.compression(),
+                zip::CompressionMethod::Deflated,
+                "{} is stored uncompressed",
+                entry.name()
+            );
+            js_entries.insert(entry.name().to_owned());
         }
-        js_bundle_found = true;
     }
-    assert!(
-        js_bundle_found,
-        "no getsentry/cli bundle is linked to the debug id"
-    );
+    for entry in [
+        "_/_/static/app.min.js",
+        "_/https://cdn.example.invalid/static/app.min.js",
+        "_//static/app.min.js",
+    ] {
+        assert!(
+            js_entries.contains(entry),
+            "no getsentry/cli bundle linked to the debug id has {entry}: {js_entries:?}"
+        );
+    }
 
     let release_id = derive_release_id(bootstrap.organization_id, "metric-phase18@1.0.0");
     let native_binding =
@@ -1037,9 +1082,29 @@ fn run_sourcemaps_cli(
     Ok(child.wait_with_output()?)
 }
 
+/// A Breakpad file of at least `size` bytes with public symbols only.
+fn write_large_breakpad(path: &Path, size: usize) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    writeln!(
+        file,
+        "MODULE windows x86_64 222222223333444455556666666666661 large.pdb"
+    )?;
+    let mut written = 0;
+    let mut address = 0x1000_u64;
+    while written < size {
+        let line = format!("PUBLIC {address:x} 0 metric_large_symbol_{address:x}\n");
+        file.write_all(line.as_bytes())?;
+        written += line.len();
+        address += 0x10;
+    }
+    file.flush()
+}
+
 fn run_js_sourcemaps_cli(
     root: &Path,
     fixture: PathBuf,
+    url_prefix: &str,
     url: String,
     secret: String,
     config_dir: PathBuf,
@@ -1057,7 +1122,7 @@ fn run_js_sourcemaps_cli(
                 directory: process.argv[1],
                 release: "metric-phase18@1.0.0",
                 dist: "windows",
-                urlPrefix: "~/static",
+                urlPrefix: process.argv[2],
             })
             .catch((error) => {
                 console.error(error);
@@ -1068,6 +1133,7 @@ fn run_js_sourcemaps_cli(
         .current_dir(root)
         .args(["-e", script])
         .arg(fixture)
+        .arg(url_prefix)
         .env("SENTRY_URL", url)
         .env("SENTRY_AUTH_TOKEN", secret)
         // Keep the CLI's state out of the developer's home and its telemetry off.
