@@ -42,11 +42,17 @@ The GET response advertises only implemented capabilities. Initial defaults are:
   "maxRequestSize": 33554432,
   "concurrency": 4,
   "hashAlgorithm": "sha1",
-  "compression": ["gzip"],
+  "compression": [],
   "accept": ["debug_files", "pdbs", "portablepdbs", "artifact_bundles"],
   "maxWait": 300
 }
 ```
+
+No transport codec is advertised. With gzip advertised, getsentry/cli (the
+`sentry` npm package behind `@sentry/bundler-plugins` 11) stores artifact-bundle
+entries uncompressed and gzips the chunks instead, and Metric keeps bundles as
+uploaded, so they would take about four times the space. Clients that gzip
+anyway are still accepted.
 
 Size, concurrency, wait, and temporary-retention limits are configurable with safe
 validated bounds. `artifact_bundles` is advertised only with ADR-0028 enabled.
@@ -100,7 +106,8 @@ debug-chunks/{organization_id}/{sha1}
 ```
 
 The POST handler streams each multipart part, performs bounded gzip decompression
-when the field is `file_gzip`, computes its SHA-1, rejects a mismatch, and publishes
+when the field is `file_gzip`, takes a `file` part as is and rejects any other field,
+computes its SHA-1, rejects a mismatch, and publishes
 the object atomically only after validation. It then returns the ordinary successful
 HTTP status expected by `sentry-cli`.
 

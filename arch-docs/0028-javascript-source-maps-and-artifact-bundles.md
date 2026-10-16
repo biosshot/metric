@@ -111,6 +111,13 @@ archive into a general filesystem directory. It validates the header, ZIP direct
 manifest, entry paths, entry types, metadata, and Debug IDs through bounded streaming
 or random-access readers.
 
+Two layouts are accepted. `sentry-cli` puts entries under `files/` and writes a
+bundle `debug_id` attribute. getsentry/cli (the `sentry` npm package behind
+`@sentry/bundler-plugins` 11) puts them at the archive root as `_/_/<path>` and
+writes no bundle `debug_id`. In either layout the manifest has to list every
+entry. A bundle without its own `debug_id` gets one derived from its content: the
+first 128 bits of its BLAKE3.
+
 Configurable limits cover compressed bundle bytes, total logical/uncompressed bytes,
 entry count, individual entry bytes, manifest bytes, path and URL length, metadata
 cardinality, compression ratio, parse time, and assembly concurrency. Duplicate

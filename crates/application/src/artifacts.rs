@@ -517,6 +517,15 @@ impl ArtifactService {
                     )
                     .await;
                 if permanent {
+                    // Upload tools hide the `artifact_error_N` detail, so the log is
+                    // the only place that says why a bundle was rejected.
+                    tracing::warn!(
+                        operation = "artifacts.assemble",
+                        organization_id = record.upload.organization_id.get(),
+                        sha1 = %hex::encode(record.upload.sha1),
+                        error_code = error.code(),
+                        "artifact bundle was rejected"
+                    );
                     Ok(AssembleArtifactState::Error { code: error.code() })
                 } else {
                     Err(error)
@@ -611,7 +620,9 @@ impl ArtifactService {
             id,
             organization_id: upload.organization_id,
             bindings: upload.bindings.clone(),
-            bundle_debug_id: validated.bundle_debug_id,
+            bundle_debug_id: validated
+                .bundle_debug_id
+                .unwrap_or_else(|| derived_bundle_debug_id(&checksum)),
             debug_id_tokens: tokens,
             checksum,
             sha1: upload.sha1,
@@ -629,7 +640,7 @@ impl ArtifactService {
 
 struct ValidatedBundle {
     bytes: Vec<u8>,
-    bundle_debug_id: DebugId,
+    bundle_debug_id: Option<DebugId>,
     debug_ids: Vec<DebugId>,
 }
 
@@ -673,6 +684,9 @@ fn validate_source_bundle(
     let mut names = BTreeSet::new();
     let mut logical = 0_u64;
     let mut compressed = 0_u64;
+    // Entries may sit anywhere in the archive: sentry-cli puts them under `files/`,
+    // getsentry/cli (the `sentry` package behind `@sentry/bundler-plugins` 11) at the
+    // root as `_/_/<path>`. The manifest has to list every one of them either way.
     for index in 0..archive.len() {
         check_deadline(deadline)?;
         let entry = archive
@@ -688,7 +702,6 @@ fn validate_source_bundle(
             || entry
                 .unix_mode()
                 .is_some_and(|mode| mode & 0o170000 == 0o120000)
-            || (name != "manifest.json" && !name.starts_with("files/"))
             || !names.insert(name.to_owned())
         {
             return Err(ArtifactError::MalformedBundle);
@@ -739,12 +752,17 @@ fn validate_source_bundle(
     {
         return Err(ArtifactError::ArchiveLimit);
     }
+    // getsentry/cli writes no bundle debug_id; assembly then derives one from the content.
     let bundle_debug_id = manifest
         .attributes
         .get("debug_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(ArtifactError::MalformedBundle)
-        .and_then(|value| DebugId::parse(value).map_err(|_| ArtifactError::MalformedBundle))?;
+        .map(|value| {
+            value
+                .as_str()
+                .and_then(|value| DebugId::parse(value).ok())
+                .ok_or(ArtifactError::MalformedBundle)
+        })
+        .transpose()?;
     for value in manifest.attributes.values() {
         let Some(value) = value.as_str() else {
             return Err(ArtifactError::MalformedBundle);
@@ -768,7 +786,6 @@ fn validate_source_bundle(
         if path.is_empty()
             || path.len() > config.maximum_path_bytes
             || path.contains('\\')
-            || !path.starts_with("files/")
             || path
                 .split('/')
                 .any(|part| part.is_empty() || part == "." || part == "..")
@@ -849,6 +866,14 @@ fn read_entry(
     Ok(bytes)
 }
 
+/// Debug id for a bundle whose manifest has none. It comes from the content, so the
+/// same bundle uploaded again keeps its id.
+fn derived_bundle_debug_id(checksum: &[u8; 32]) -> DebugId {
+    let mut uuid = [0_u8; 16];
+    uuid.copy_from_slice(&checksum[..16]);
+    DebugId::Uuid { uuid, appendix: 0 }
+}
+
 fn check_deadline(deadline: Instant) -> Result<(), ArtifactError> {
     (Instant::now() <= deadline)
         .then_some(())
@@ -911,22 +936,26 @@ mod tests {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
-    fn bundle(path: &str, manifest: serde_json::Value, body: &[u8]) -> Vec<u8> {
+    fn archive(entries: &[(&str, &[u8])], options: SimpleFileOptions) -> Vec<u8> {
         let mut cursor = Cursor::new(Vec::new());
         cursor.write_all(b"SYSB").unwrap();
         cursor.write_all(&2_u32.to_le_bytes()).unwrap();
         let mut writer = zip::ZipWriter::new(cursor);
-        writer
-            .start_file("manifest.json", SimpleFileOptions::default())
-            .unwrap();
-        writer
-            .write_all(&serde_json::to_vec(&manifest).unwrap())
-            .unwrap();
-        writer
-            .start_file(format!("files/{path}"), SimpleFileOptions::default())
-            .unwrap();
-        writer.write_all(body).unwrap();
+        for (name, body) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(body).unwrap();
+        }
         writer.finish().unwrap().into_inner()
+    }
+
+    fn bundle(path: &str, manifest: serde_json::Value, body: &[u8]) -> Vec<u8> {
+        archive(
+            &[
+                ("manifest.json", &serde_json::to_vec(&manifest).unwrap()),
+                (&format!("files/{path}"), body),
+            ],
+            SimpleFileOptions::default(),
+        )
     }
 
     #[test]
@@ -947,6 +976,67 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output.debug_ids[0].to_string(), debug_id);
+        assert_eq!(
+            output.bundle_debug_id.map(|id| id.to_string()).as_deref(),
+            Some("11111111-2222-3333-4444-555555555555")
+        );
+    }
+
+    #[test]
+    fn validates_getsentry_cli_bundle_without_files_prefix_or_bundle_debug_id() {
+        let debug_id = "67e9247c-814e-392b-a027-dbde6748fcbf";
+        // The layout getsentry/cli 0.44 writes: entries at the root, deflated by the CLI
+        // when the server advertises no transport codec, and no bundle debug_id.
+        let manifest = serde_json::json!({
+            "org": "acme",
+            "project": "web",
+            "release": "web@1.0.0",
+            "files": {
+                "_/_/app.js": { "url": "~/app.js", "type": "minified_source", "headers": { "debug-id": debug_id, "Sourcemap": "app.js.map" } },
+                "_/_/app.js.map": { "url": "~/app.js.map", "type": "source_map", "headers": { "debug-id": debug_id } }
+            }
+        });
+        let bytes = archive(
+            &[
+                ("manifest.json", &serde_json::to_vec(&manifest).unwrap()),
+                ("_/_/app.js", b"function a(){}"),
+                (
+                    "_/_/app.js.map",
+                    br#"{"version":3,"sources":[],"names":[],"mappings":""}"#,
+                ),
+            ],
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+        );
+        let output = validate_source_bundle(
+            &bytes,
+            ArtifactConfig::default(),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(output.bundle_debug_id, None);
+        assert_eq!(output.debug_ids.len(), 1);
+        assert_eq!(output.debug_ids[0].to_string(), debug_id);
+    }
+
+    #[test]
+    fn rejects_invalid_bundle_debug_id() {
+        let bytes = bundle(
+            "app.js",
+            serde_json::json!({
+                "debug_id": "not-a-debug-id",
+                "files": { "files/app.js": { "type": "minified_source" } }
+            }),
+            b"ok",
+        );
+        assert_eq!(
+            validate_source_bundle(
+                &bytes,
+                ArtifactConfig::default(),
+                Instant::now() + Duration::from_secs(1)
+            )
+            .err(),
+            Some(ArtifactError::MalformedBundle)
+        );
     }
 
     #[test]

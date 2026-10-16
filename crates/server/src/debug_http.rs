@@ -14,7 +14,9 @@ use flate2::read::GzDecoder;
 use metric_application::{
     artifacts::{ArtifactError, ArtifactService, AssembleArtifact, AssembleArtifactState},
     auth::IdentityService,
-    debug_files::{AssembleDebugFile, AssembleState, DebugFileError, DebugFileService},
+    debug_files::{
+        AssembleDebugFile, AssembleState, DebugFileError, DebugFileService, SENTRY_CLI_CHUNK_BYTES,
+    },
 };
 use metric_domain::{
     ProjectId,
@@ -166,13 +168,16 @@ async fn chunk_options(
     let maximum_file_bytes = state.debug_files.maximum_file_bytes();
     Ok(Json(json!({
         "url": upload_url,
-        "chunkSize": 8 * 1024 * 1024,
+        "chunkSize": SENTRY_CLI_CHUNK_BYTES,
         "chunksPerRequest": 64,
         "maxFileSize": maximum_file_bytes,
         "maxRequestSize": 32 * 1024 * 1024,
         "concurrency": 4,
         "hashAlgorithm": "sha1",
-        "compression": ["gzip"],
+        // No transport codec on purpose. With gzip advertised getsentry/cli stores bundle
+        // entries uncompressed and gzips the chunks instead; bundles are kept as uploaded,
+        // so they would take about four times the space. Gzipped chunks are still accepted.
+        "compression": [],
         "accept": if state.artifacts.is_some() {
             vec![
                 "debug_files",
@@ -232,16 +237,7 @@ async fn chunk_upload(
     }
     for part in parts {
         let checksum = checksum_from_part(&part.headers)?;
-        let mut decoder = GzDecoder::new(part.body.as_slice());
-        let mut bytes = Vec::with_capacity(8 * 1024 * 1024);
-        decoder
-            .by_ref()
-            .take(8 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| InvalidRequest)?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return Err(InvalidRequest);
-        }
+        let bytes = chunk_bytes(part)?;
         state
             .debug_files
             .upload_chunk(
@@ -716,6 +712,44 @@ fn multipart_parts(body: &[u8], boundary: &[u8]) -> Result<Vec<MultipartPart>, D
     Ok(parts)
 }
 
+/// Chunk content of a multipart part: the client names gzipped chunks `file_gzip`
+/// and plain ones `file`.
+fn chunk_bytes(part: MultipartPart) -> Result<Vec<u8>, DebugHttpError> {
+    let bytes = match field_name(&part.headers)? {
+        "file" => part.body,
+        "file_gzip" => {
+            let mut bytes = Vec::with_capacity(SENTRY_CLI_CHUNK_BYTES);
+            GzDecoder::new(part.body.as_slice())
+                .take(SENTRY_CLI_CHUNK_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| InvalidRequest)?;
+            bytes
+        }
+        _ => return Err(InvalidRequest),
+    };
+    if bytes.len() > SENTRY_CLI_CHUNK_BYTES {
+        return Err(InvalidRequest);
+    }
+    Ok(bytes)
+}
+
+/// The `name` parameter of the part's `Content-Disposition` header.
+fn field_name(headers: &[u8]) -> Result<&str, DebugHttpError> {
+    let text = std::str::from_utf8(headers).map_err(|_| InvalidRequest)?;
+    text.lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(header, _)| header.trim().eq_ignore_ascii_case("content-disposition"))
+        .and_then(|(_, value)| {
+            value.split(';').find_map(|parameter| {
+                let (key, value) = parameter.split_once('=')?;
+                key.trim()
+                    .eq_ignore_ascii_case("name")
+                    .then(|| value.trim().trim_matches('"'))
+            })
+        })
+        .ok_or(InvalidRequest)
+}
+
 fn checksum_from_part(headers: &[u8]) -> Result<[u8; 20], DebugHttpError> {
     let text = std::str::from_utf8(headers).map_err(|_| InvalidRequest)?;
     text.split(['"', '=', ';', ' ', '\r', '\n'])
@@ -815,6 +849,49 @@ mod tests {
             "http"
         );
         assert_eq!(request_scheme(proxy, &headers(None), &proxies()), "http");
+    }
+
+    fn part(disposition: &str, body: &[u8]) -> MultipartPart {
+        MultipartPart {
+            headers: format!(
+                "Content-Disposition: {disposition}\r\nContent-Type: application/octet-stream"
+            )
+            .into_bytes(),
+            body: body.to_vec(),
+        }
+    }
+
+    #[test]
+    fn chunk_is_plain_or_gzipped_by_field_name() {
+        let sha1 = "0123456789abcdef0123456789abcdef01234567";
+        let plain = part(
+            &format!(r#"form-data; name="file"; filename="{sha1}""#),
+            b"chunk",
+        );
+        assert_eq!(chunk_bytes(plain).unwrap(), b"chunk");
+
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gzip, b"chunk").unwrap();
+        let gzipped = part(
+            &format!(r#"form-data; name="file_gzip"; filename="{sha1}""#),
+            &gzip.finish().unwrap(),
+        );
+        assert_eq!(chunk_bytes(gzipped).unwrap(), b"chunk");
+    }
+
+    #[test]
+    fn chunk_without_known_field_name_or_over_chunk_size_is_rejected() {
+        let sha1 = "0123456789abcdef0123456789abcdef01234567";
+        // `filename` is not the field name.
+        let unnamed = part(&format!(r#"form-data; filename="{sha1}""#), b"chunk");
+        assert!(chunk_bytes(unnamed).is_err());
+        let foreign = part(r#"form-data; name="attachment""#, b"chunk");
+        assert!(chunk_bytes(foreign).is_err());
+        let oversized = part(
+            r#"form-data; name="file""#,
+            &vec![0; SENTRY_CLI_CHUNK_BYTES + 1],
+        );
+        assert!(chunk_bytes(oversized).is_err());
     }
 
     #[test]

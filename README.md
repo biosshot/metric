@@ -136,7 +136,9 @@ Metric's release checks use real processes of:
 - Python `sentry-sdk` 2.32.0 and Java `sentry-java` 8.50.1;
 - .NET `Sentry` 6.7.0, Go `sentry-go` 0.48.0 and Rust `sentry` 0.48.5;
 - `sentry-cli` 3.6.2 and 2.58.6 for debug files, source maps and artifact
-  bundles.
+  bundles;
+- getsentry/cli (`sentry` on npm) 0.44.1, which `@sentry/bundler-plugins` 11
+  uploads source maps with.
 
 Compatibility claims are fail-closed: Metric advertises a platform only after
 its release test passes. Untested SDK families are listed explicitly in
