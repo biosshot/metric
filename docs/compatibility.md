@@ -52,7 +52,7 @@ Metric also accepts:
 
 Some features depend on the SDK. Session Replay is tested with the listed browser
 SDK, attachments are tested with the listed Node.js SDK, and debug-file uploads
-are tested with the listed Sentry CLI versions. Other SDK and data-type
+and release commands are tested with the listed Sentry CLI versions. Other SDK and data-type
 combinations may work but are not all part of the release tests.
 
 Session Replay is disabled for each new project until you enable it.

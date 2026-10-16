@@ -78,6 +78,16 @@ pub fn router(
             "/api/0/organizations/{organization_slug}/releases/{version}/deploys/",
             post(create_deploy),
         )
+        // sentry-cli 2.x creates and finalizes a release of one project on the project's
+        // own routes, which older Sentry servers expect; 3.x uses the organization ones.
+        .route(
+            "/api/0/projects/{organization_slug}/{project_slug}/releases/",
+            post(create_project_release),
+        )
+        .route(
+            "/api/0/projects/{organization_slug}/{project_slug}/releases/{version}/",
+            put(finalize_project_release),
+        )
         .with_state(ReleaseHttpState { identity, releases })
 }
 
@@ -97,20 +107,50 @@ async fn create_release(
     State(state): State<ReleaseHttpState>,
     Path(organization_slug): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<CompatibleCreateRelease>,
+    Json(mut body): Json<CompatibleCreateRelease>,
 ) -> Result<Json<Value>, ReleaseHttpError> {
     let context = authenticate(&state, &headers).await?;
     if body.projects.is_empty() || body.projects.len() > MAX_BODY_PROJECTS {
         return Err(ReleaseHttpError::Invalid);
     }
+    let projects = std::mem::take(&mut body.projects);
+    create_compatible_release(&state, &context, &organization_slug, projects, body).await
+}
+
+/// As in Sentry, the project in the path is the release's project; `projects` in the body
+/// is ignored.
+async fn create_project_release(
+    State(state): State<ReleaseHttpState>,
+    Path((organization_slug, project_slug)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<CompatibleCreateRelease>,
+) -> Result<Json<Value>, ReleaseHttpError> {
+    let context = authenticate(&state, &headers).await?;
+    create_compatible_release(
+        &state,
+        &context,
+        &organization_slug,
+        vec![project_slug],
+        body,
+    )
+    .await
+}
+
+async fn create_compatible_release(
+    state: &ReleaseHttpState,
+    context: &AuthContext,
+    organization_slug: &str,
+    project_slugs: Vec<String>,
+    body: CompatibleCreateRelease,
+) -> Result<Json<Value>, ReleaseHttpError> {
     let (_, projects) = state
         .releases
         .resolve_cli_projects(
-            &context,
-            &organization_slug,
-            body.projects
-                .iter()
-                .map(|value| value.clone().into_boxed_str())
+            context,
+            organization_slug,
+            project_slugs
+                .into_iter()
+                .map(String::into_boxed_str)
                 .collect(),
         )
         .await
@@ -118,7 +158,7 @@ async fn create_release(
     let release = state
         .releases
         .create(
-            &context,
+            context,
             projects,
             body.version.into_boxed_str(),
             body.url.map(String::into_boxed_str),
@@ -130,7 +170,7 @@ async fn create_release(
     let release = if let Some(value) = body.date_released {
         state
             .releases
-            .finalize(&context, release.id, Some(parse_timestamp(&value)?))
+            .finalize(context, release.id, Some(parse_timestamp(&value)?))
             .await
             .map_err(map_release)?
     } else {
@@ -158,6 +198,46 @@ async fn finalize_release(
         .load_version(&context, &version)
         .await
         .map_err(map_release)?;
+    finalize_compatible_release(&state, &context, release, body).await
+}
+
+/// As in Sentry, the release has to belong to the project in the path.
+async fn finalize_project_release(
+    State(state): State<ReleaseHttpState>,
+    Path((organization_slug, project_slug, version)): Path<(String, String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<CompatibleFinalizeRelease>,
+) -> Result<Json<Value>, ReleaseHttpError> {
+    let context = authenticate(&state, &headers).await?;
+    let (_, projects) = state
+        .releases
+        .resolve_cli_projects(
+            &context,
+            &organization_slug,
+            vec![project_slug.into_boxed_str()],
+        )
+        .await
+        .map_err(map_release)?;
+    let release = state
+        .releases
+        .load_version(&context, &version)
+        .await
+        .map_err(map_release)?;
+    if !projects
+        .iter()
+        .all(|project| release.project_ids.contains(project))
+    {
+        return Err(ReleaseHttpError::NotFound);
+    }
+    finalize_compatible_release(&state, &context, release, body).await
+}
+
+async fn finalize_compatible_release(
+    state: &ReleaseHttpState,
+    context: &AuthContext,
+    release: metric_domain::releases::ReleaseRecord,
+    body: CompatibleFinalizeRelease,
+) -> Result<Json<Value>, ReleaseHttpError> {
     if body.url.is_some() && body.url.as_deref() != release.url.as_deref() {
         return Err(ReleaseHttpError::Conflict);
     }
@@ -168,7 +248,7 @@ async fn finalize_release(
         .transpose()?;
     let release = state
         .releases
-        .finalize(&context, release.id, released_at)
+        .finalize(context, release.id, released_at)
         .await
         .map_err(map_release)?;
     compatible_release(&release)

@@ -47,6 +47,9 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use wait_timeout::ChildExt;
 
+mod sentry_cli;
+use sentry_cli::{PACKAGES, cli_executable, repository_root};
+
 #[tokio::test]
 #[ignore = "requires local MongoDB and npm ci in sdk-tests/sentry-cli"]
 async fn real_pinned_sentry_cli_upload_private_isolation_and_exact_delete() {
@@ -241,7 +244,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
 
     let cli_root = repository_root().join("sdk-tests").join("sentry-cli");
     let fixture = cli_root.join("fixtures").join("metric.sym");
-    for package in ["@sentry/cli", "sentry-cli-v2"] {
+    for package in PACKAGES {
         let cli_root = cli_root.clone();
         let fixture = fixture.clone();
         let url = format!("http://{address}/");
@@ -288,7 +291,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
     );
 
     let sourcemap_fixture = cli_root.join("fixtures").join("sourcemaps");
-    for package in ["@sentry/cli", "sentry-cli-v2"] {
+    for package in PACKAGES {
         let cli_root = cli_root.clone();
         let fixture = sourcemap_fixture.clone();
         let url = format!("http://{address}/");
@@ -984,42 +987,6 @@ fn upload_id(project_id: ProjectId, sha1: [u8; 20]) -> [u8; 16] {
     id
 }
 
-fn cli_executable(root: &Path, package: &str) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
-    // Let the pinned npm package select its native binary for the current OS/arch.
-    let mut child = Command::new("node")
-        .current_dir(root)
-        .args([
-            "-e",
-            "const cli = require(process.argv[1]); process.stdout.write((cli.SentryCli ?? cli).getPath())",
-            package,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    if child.wait_timeout(Duration::from_secs(20))?.is_none() {
-        child.kill()?;
-        child.wait()?;
-        return Err(format!("timed out resolving the native binary for {package}").into());
-    }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "could not resolve {package}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    let executable = PathBuf::from(String::from_utf8(output.stdout)?);
-    if !executable.is_file() {
-        return Err(format!(
-            "resolved {package} binary does not exist: {}",
-            executable.display()
-        )
-        .into());
-    }
-    Ok(executable)
-}
-
 fn run_cli(
     executable: PathBuf,
     fixture: PathBuf,
@@ -1147,14 +1114,6 @@ fn run_js_sourcemaps_cli(
         child.kill()?;
     }
     Ok(child.wait_with_output()?)
-}
-
-fn repository_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("server crate lives under repository/crates")
-        .to_path_buf()
 }
 
 async fn test_database() -> Result<Database, Box<dyn Error + Send + Sync>> {

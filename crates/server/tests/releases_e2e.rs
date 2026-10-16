@@ -1,5 +1,6 @@
 use std::{
     error::Error,
+    path::Path,
     process::{Command, Output, Stdio},
     sync::{
         Arc,
@@ -30,8 +31,11 @@ use metric_testkit::FixedClock;
 use mongodb::{Client, Database, bson::doc};
 use wait_timeout::ChildExt;
 
+mod sentry_cli;
+use sentry_cli::{PACKAGES, cli_executable, repository_root};
+
 #[tokio::test]
-#[ignore = "requires local MongoDB and globally installed sentry-cli"]
+#[ignore = "requires local MongoDB and npm ci in sdk-tests/sentry-cli"]
 async fn real_sentry_cli_release_finalize_and_idempotent_deploy() {
     let database = test_database().await.unwrap();
     let result = exercise(&database).await;
@@ -124,111 +128,116 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
     let url = format!("http://{address}/");
     let secret = token.secret.encode_hex();
-    for arguments in [
-        vec![
-            "releases",
-            "new",
-            "--org",
-            "acme",
-            "--project",
-            "backend",
-            "backend@2.4.0",
-        ],
-        vec![
-            "releases",
-            "finalize",
-            "--org",
-            "acme",
-            "--project",
-            "backend",
-            "--released",
-            "1700000000",
-            "backend@2.4.0",
-        ],
-        vec![
-            "releases",
-            "deploys",
-            "new",
-            "--org",
-            "acme",
-            "--project",
-            "backend",
-            "--release",
-            "backend@2.4.0",
-            "--env",
-            "production",
-            "--started",
-            "1700000000",
-            "--finished",
-            "1700000060",
-        ],
-        vec![
-            "releases",
-            "deploys",
-            "new",
-            "--org",
-            "acme",
-            "--project",
-            "backend",
-            "--release",
-            "backend@2.4.0",
-            "--env",
-            "production",
-            "--started",
-            "1700000000",
-            "--finished",
-            "1700000060",
-        ],
-    ] {
-        let url = url.clone();
-        let secret = secret.clone();
-        let output =
-            tokio::task::spawn_blocking(move || run_cli(&arguments, &url, &secret)).await??;
-        assert!(
-            output.status.success(),
-            "sentry-cli failed:\nstdout={}\nstderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+    let cli_root = repository_root().join("sdk-tests").join("sentry-cli");
+    // A release of one project: 3.x creates and finalizes it on the organization routes,
+    // 2.x on the project's own.
+    for (package, version) in PACKAGES.into_iter().zip(["backend@2.4.0", "backend@2.5.0"]) {
+        let executable = cli_executable(&cli_root, package)?;
+        for arguments in [
+            vec![
+                "releases",
+                "new",
+                "--org",
+                "acme",
+                "--project",
+                "backend",
+                version,
+            ],
+            vec![
+                "releases",
+                "finalize",
+                "--org",
+                "acme",
+                "--project",
+                "backend",
+                "--released",
+                "1700000000",
+                version,
+            ],
+            vec![
+                "releases",
+                "deploys",
+                "new",
+                "--org",
+                "acme",
+                "--project",
+                "backend",
+                "--release",
+                version,
+                "--env",
+                "production",
+                "--started",
+                "1700000000",
+                "--finished",
+                "1700000060",
+            ],
+            vec![
+                "releases",
+                "deploys",
+                "new",
+                "--org",
+                "acme",
+                "--project",
+                "backend",
+                "--release",
+                version,
+                "--env",
+                "production",
+                "--started",
+                "1700000000",
+                "--finished",
+                "1700000060",
+            ],
+        ] {
+            let executable = executable.clone();
+            let url = url.clone();
+            let secret = secret.clone();
+            let output = tokio::task::spawn_blocking(move || {
+                run_cli(&executable, &arguments, &url, &secret)
+            })
+            .await??;
+            assert!(
+                output.status.success(),
+                "real {package} failed:\nstdout={}\nstderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let release_id = derive_release_id(bootstrap.organization_id, version);
+        let release = store
+            .load_release(bootstrap.organization_id, release_id)
+            .await?;
+        assert!(release.explicit, "{package} did not create {version}");
+        assert_eq!(
+            release.released_at,
+            Some(Timestamp::from_unix_millis(1_700_000_000_000)?)
+        );
+        let deploys = store
+            .list_deploys(
+                bootstrap.organization_id,
+                ProjectId::new(29)?,
+                release_id,
+                None,
+                10,
+            )
+            .await?;
+        assert_eq!(deploys.len(), 1, "the retried deploy must be idempotent");
+        assert_eq!(deploys[0].environment.as_ref(), "production");
+        assert_eq!(
+            deploys[0].finished_at,
+            Some(Timestamp::from_unix_millis(1_700_000_060_000)?)
         );
     }
     server.abort();
-    let release_id = derive_release_id(bootstrap.organization_id, "backend@2.4.0");
-    let release = store
-        .load_release(bootstrap.organization_id, release_id)
-        .await?;
-    assert!(release.explicit);
-    assert_eq!(
-        release.released_at,
-        Some(Timestamp::from_unix_millis(1_700_000_000_000)?)
-    );
-    let deploys = store
-        .list_deploys(
-            bootstrap.organization_id,
-            ProjectId::new(29)?,
-            release_id,
-            None,
-            10,
-        )
-        .await?;
-    assert_eq!(deploys.len(), 1, "the retried deploy must be idempotent");
-    assert_eq!(deploys[0].environment.as_ref(), "production");
-    assert_eq!(
-        deploys[0].finished_at,
-        Some(Timestamp::from_unix_millis(1_700_000_060_000)?)
-    );
     Ok(())
 }
 
 fn run_cli(
+    executable: &Path,
     arguments: &[&str],
     url: &str,
     secret: &str,
 ) -> Result<Output, Box<dyn Error + Send + Sync>> {
-    let executable = if cfg!(windows) {
-        "sentry-cli.cmd"
-    } else {
-        "sentry-cli"
-    };
     let mut child = Command::new(executable)
         .args(arguments)
         .env("SENTRY_URL", url)
