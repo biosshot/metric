@@ -27,6 +27,9 @@ use mongodb::{
     bson::{Binary, Bson, DateTime, Document, doc, spec::BinarySubtype},
 };
 
+mod command_gate;
+use command_gate::{Gate, gated_client};
+
 #[tokio::test]
 #[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
 async fn infrastructure_retention_pending_safety_reconciliation_and_bounded_plans() {
@@ -468,12 +471,15 @@ fn binary<const N: usize>(bytes: [u8; N]) -> Binary {
     }
 }
 
-async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+fn test_uri() -> String {
+    std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
         "mongodb://127.0.0.1:27017/?retryWrites=false&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000"
             .to_owned()
-    });
-    let client = Client::with_uri_str(uri).await?;
+    })
+}
+
+async fn test_database() -> Result<Database, mongodb::error::Error> {
+    let client = Client::with_uri_str(test_uri()).await?;
     client
         .database("admin")
         .run_command(doc! { "ping": 1 })
@@ -619,7 +625,7 @@ async fn exercise_artifact_publication(database: &Database) -> Result<(), Box<dy
     for binding in stored.bindings {
         assert!(
             store
-                .remove_binding(bundle.organization_id, bundle.id, binding, now)
+                .remove_binding(bundle.organization_id, bundle.id, binding, now, None)
                 .await?
                 .is_some()
         );
@@ -656,5 +662,380 @@ async fn exercise_artifact_publication(database: &Database) -> Result<(), Box<dy
         .unwrap();
     assert_eq!(quota.get_i64("ab")?, 3);
     assert_eq!(quota.get_i64("ac")?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn artifact_retention_listings_page_newest_first_and_follow_project_states() {
+    let database = test_database().await.unwrap();
+    let result = exercise_artifact_retention_listings(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn exercise_artifact_retention_listings(database: &Database) -> Result<(), Box<dyn Error>> {
+    use metric_domain::{
+        artifacts::{ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactUpload},
+        debug_files::DebugId,
+    };
+    use metric_mongo::{ArtifactQuota, MongoArtifactStore};
+    use metric_ports::{ArtifactStore, ArtifactStoreError};
+
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
+    control
+        .insert_project(ProjectIdentity {
+            id: ProjectId::new(8)?,
+            slug: Slug::new("phase14-second-project")?,
+            ..project()
+        })
+        .await?;
+    let store = MongoArtifactStore::from_database(database.clone(), ArtifactQuota::default());
+    // Bundles 3 and 4 share an upload time, so their ids order them.
+    for (seed, uploaded_at, project_id) in [
+        (1_u8, 10, 7),
+        (2, 30, 7),
+        (3, 20, 7),
+        (4, 20, 7),
+        (5, 40, 8),
+        (6, 50, 7),
+    ] {
+        let uploaded_at = Timestamp::from_unix_millis(1_800_000_000_000 + uploaded_at)?;
+        let upload = ArtifactUpload {
+            id: [seed; 16],
+            organization_id: OrganizationId::new(1)?,
+            sha1: [seed; 20],
+            chunks: vec![[seed; 20]],
+            bindings: vec![ArtifactBinding::new(
+                ProjectId::new(project_id)?,
+                None,
+                None,
+            )?],
+            created_at: uploaded_at,
+            updated_at: uploaded_at,
+        };
+        store.upsert_upload(upload.clone()).await?;
+        store
+            .publish_bundle(
+                upload.id,
+                ArtifactBundle {
+                    id: ArtifactBundleId::from_bytes([seed; 16]),
+                    organization_id: upload.organization_id,
+                    bindings: upload.bindings.clone(),
+                    bundle_debug_id: DebugId::Uuid {
+                        uuid: [seed; 16],
+                        appendix: 0,
+                    },
+                    debug_id_tokens: Vec::new(),
+                    checksum: [seed; 32],
+                    sha1: upload.sha1,
+                    size: 3,
+                    uploaded_at,
+                    generation: 0,
+                },
+            )
+            .await?;
+    }
+    let organization_id = OrganizationId::new(1)?;
+    let orphan_at = Timestamp::from_unix_millis(1_800_000_000_000)?;
+    // An unbound bundle leaves both listings before garbage collection deletes it.
+    store
+        .remove_binding(
+            organization_id,
+            ArtifactBundleId::from_bytes([6; 16]),
+            ArtifactBinding::new(ProjectId::new(7)?, None, None)?,
+            orphan_at,
+            None,
+        )
+        .await?;
+    assert_eq!(
+        store.bound_projects().await?,
+        vec![
+            (organization_id, ProjectId::new(7)?),
+            (organization_id, ProjectId::new(8)?)
+        ]
+    );
+    let mut seen = Vec::new();
+    let mut before = None;
+    loop {
+        let page = store
+            .project_bundles(organization_id, ProjectId::new(7)?, before, 2)
+            .await?;
+        seen.extend(page.iter().map(|bundle| bundle.id.as_bytes()[0]));
+        match page.last() {
+            Some(last) if page.len() == 2 => before = Some((last.uploaded_at, last.id)),
+            _ => break,
+        }
+    }
+    assert_eq!(seen, vec![2, 4, 3, 1]);
+    assert!(
+        store
+            .project_bundles(OrganizationId::new(2)?, ProjectId::new(7)?, None, 2)
+            .await?
+            .is_empty()
+    );
+    assert!(
+        store
+            .project_bundles(organization_id, ProjectId::new(7)?, None, 0)
+            .await
+            .is_err()
+    );
+    // Retention keeps serving a disabled project; deletion owns one being deleted.
+    control
+        .set_project_acceptance(ProjectId::new(8)?, ProjectAcceptanceState::Disabled)
+        .await?;
+    control
+        .set_project_acceptance(ProjectId::new(7)?, ProjectAcceptanceState::PendingDelete)
+        .await?;
+    assert_eq!(
+        store.bound_projects().await?,
+        vec![(organization_id, ProjectId::new(8)?)]
+    );
+    assert!(
+        store
+            .remove_binding(
+                organization_id,
+                ArtifactBundleId::from_bytes([5; 16]),
+                ArtifactBinding::new(ProjectId::new(8)?, None, None)?,
+                orphan_at,
+                None,
+            )
+            .await?
+            .is_some()
+    );
+    // The deletion job, not a removal here, must orphan the bundles of a project being
+    // deleted: it waits for the garbage collection of the ones it marks.
+    let deleting = ArtifactBinding::new(ProjectId::new(7)?, None, None)?;
+    assert_eq!(
+        store
+            .remove_binding(
+                organization_id,
+                ArtifactBundleId::from_bytes([1; 16]),
+                deleting.clone(),
+                orphan_at,
+                None,
+            )
+            .await,
+        Err(ArtifactStoreError::NotFound)
+    );
+    assert_eq!(
+        store
+            .load_for_project(ProjectId::new(7)?, ArtifactBundleId::from_bytes([1; 16]))
+            .await?
+            .bindings,
+        vec![deleting]
+    );
+    assert!(store.bound_projects().await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn artifact_removal_keeps_a_binding_republished_since_it_was_read() {
+    let database = test_database().await.unwrap();
+    let result = exercise_republished_removal(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn exercise_republished_removal(database: &Database) -> Result<(), Box<dyn Error>> {
+    use metric_domain::{
+        artifacts::{ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactUpload},
+        debug_files::DebugId,
+    };
+    use metric_mongo::{ArtifactQuota, MongoArtifactStore};
+    use metric_ports::ArtifactStore;
+
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
+    let store = MongoArtifactStore::from_database(database.clone(), ArtifactQuota::default());
+    let binding = ArtifactBinding::new(ProjectId::new(7)?, None, None)?;
+    let first = Timestamp::from_unix_millis(1_800_000_000_000)?;
+    let again = Timestamp::from_unix_millis(1_800_000_060_000)?;
+    let upload = ArtifactUpload {
+        id: [1; 16],
+        organization_id: OrganizationId::new(1)?,
+        sha1: [1; 20],
+        chunks: vec![[1; 20]],
+        bindings: vec![binding.clone()],
+        created_at: first,
+        updated_at: first,
+    };
+    let bundle = ArtifactBundle {
+        id: ArtifactBundleId::from_bytes([1; 16]),
+        organization_id: upload.organization_id,
+        bindings: upload.bindings.clone(),
+        bundle_debug_id: DebugId::Uuid {
+            uuid: [1; 16],
+            appendix: 0,
+        },
+        debug_id_tokens: Vec::new(),
+        checksum: [1; 32],
+        sha1: upload.sha1,
+        size: 3,
+        uploaded_at: first,
+        generation: 0,
+    };
+    store.upsert_upload(upload.clone()).await?;
+    store.publish_bundle(upload.id, bundle.clone()).await?;
+    // A new upload of the same content refreshes the upload time, never backwards.
+    // Lookups take the newest uploads first: the bound project's revision advances.
+    assert_eq!(
+        store
+            .publish_bundle(
+                upload.id,
+                ArtifactBundle {
+                    uploaded_at: again,
+                    ..bundle.clone()
+                },
+            )
+            .await?,
+        vec![(binding.project_id, 2)]
+    );
+    assert!(
+        store
+            .publish_bundle(upload.id, bundle.clone())
+            .await?
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .load_for_project(binding.project_id, bundle.id)
+            .await?
+            .uploaded_at,
+        again
+    );
+    // Retention read the bundle before that publication.
+    assert_eq!(
+        store
+            .remove_binding(
+                bundle.organization_id,
+                bundle.id,
+                binding.clone(),
+                again,
+                Some(first)
+            )
+            .await?,
+        None
+    );
+    assert_eq!(
+        store
+            .load_for_project(binding.project_id, bundle.id)
+            .await?
+            .bindings,
+        vec![binding.clone()]
+    );
+    assert!(
+        store
+            .remove_binding(
+                bundle.organization_id,
+                bundle.id,
+                binding,
+                again,
+                Some(again)
+            )
+            .await?
+            .is_some()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a real MongoDB configured by METRIC_TEST_MONGODB_URI"]
+async fn artifact_publications_racing_keep_the_latest_upload_time() {
+    let database = test_database().await.unwrap();
+    let result = exercise_racing_publications(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn exercise_racing_publications(database: &Database) -> Result<(), Box<dyn Error>> {
+    use metric_domain::{
+        artifacts::{ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactUpload},
+        debug_files::DebugId,
+    };
+    use metric_mongo::{ArtifactQuota, MongoArtifactStore};
+    use metric_ports::ArtifactStore;
+
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project()).await?;
+    let store = MongoArtifactStore::from_database(database.clone(), ArtifactQuota::default());
+    let binding = ArtifactBinding::new(ProjectId::new(7)?, None, None)?;
+    let first = Timestamp::from_unix_millis(1_800_000_000_000)?;
+    let earlier = Timestamp::from_unix_millis(1_800_000_060_000)?;
+    let latest = Timestamp::from_unix_millis(1_800_000_120_000)?;
+    let upload = ArtifactUpload {
+        id: [1; 16],
+        organization_id: OrganizationId::new(1)?,
+        sha1: [1; 20],
+        chunks: vec![[1; 20]],
+        bindings: vec![binding.clone()],
+        created_at: first,
+        updated_at: first,
+    };
+    let bundle = ArtifactBundle {
+        id: ArtifactBundleId::from_bytes([1; 16]),
+        organization_id: upload.organization_id,
+        bindings: upload.bindings.clone(),
+        bundle_debug_id: DebugId::Uuid {
+            uuid: [1; 16],
+            appendix: 0,
+        },
+        debug_id_tokens: Vec::new(),
+        checksum: [1; 32],
+        sha1: upload.sha1,
+        size: 3,
+        uploaded_at: first,
+        generation: 0,
+    };
+    store.upsert_upload(upload.clone()).await?;
+    store.publish_bundle(upload.id, bundle.clone()).await?;
+    // An earlier upload's publication has read the bundle; a later one writes first.
+    let write = Gate::armed();
+    let delayed = MongoArtifactStore::from_database(
+        gated_client(
+            &test_uri(),
+            vec![("update", "artifact_bundles", write.clone())],
+        )
+        .await?
+        .database(database.name()),
+        ArtifactQuota::default(),
+    );
+    let publication = tokio::spawn({
+        let earlier = ArtifactBundle {
+            uploaded_at: earlier,
+            ..bundle.clone()
+        };
+        async move { delayed.publish_bundle(upload.id, earlier).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), write.entered.notified()).await?;
+    store
+        .publish_bundle(
+            upload.id,
+            ArtifactBundle {
+                uploaded_at: latest,
+                ..bundle.clone()
+            },
+        )
+        .await?;
+    write.release();
+    publication.await??;
+    assert_eq!(
+        store
+            .load_for_project(binding.project_id, bundle.id)
+            .await?
+            .uploaded_at,
+        latest
+    );
     Ok(())
 }

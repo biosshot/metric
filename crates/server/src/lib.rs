@@ -19,6 +19,9 @@ use std::{io, process::ExitCode};
 use config::{BlobBackend, Cli, ConfigError};
 use metric_application::{
     archive::{ArchiveConfig, ArchiveError, ArchiveService, ArchiveTask, start_archive_worker},
+    artifact_retention::{
+        ArtifactRetention, ArtifactRetentionConfig, ArtifactRetentionTask, start_artifact_retention,
+    },
     artifacts::{
         ArtifactCleanupTask, ArtifactConfig, ArtifactError, ArtifactService, start_artifact_cleanup,
     },
@@ -203,6 +206,7 @@ struct RuntimeModules {
     private_source_signer: Option<metric_symbolication::PrivateSourceSigner>,
     debug_file_cleanup_task: Option<DebugFileCleanupTask>,
     artifact_cleanup_task: Option<ArtifactCleanupTask>,
+    artifact_retention_task: Option<ArtifactRetentionTask>,
 }
 
 pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
@@ -340,6 +344,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
         private_source_signer: runtime_private_source_signer,
         debug_file_cleanup_task,
         artifact_cleanup_task,
+        artifact_retention_task,
     } = if config.storage.backend == config::StorageBackend::Postgres {
         let uri = secrets
             .postgres_uri
@@ -547,6 +552,7 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
             private_source_signer: None,
             debug_file_cleanup_task: None,
             artifact_cleanup_task: None,
+            artifact_retention_task: None,
         }
     };
     let mut ingest_service = metric_application::ingest::IngestService::new(
@@ -875,6 +881,9 @@ pub async fn execute(cli: Cli) -> Result<ExitCode, ServerError> {
     if let Some(task) = artifact_cleanup_task {
         task.wait().await;
     }
+    if let Some(task) = artifact_retention_task {
+        task.wait().await;
+    }
     if let Some(task) = writer_task {
         task.wait().await;
     }
@@ -1097,7 +1106,7 @@ where
     let investigation: std::sync::Arc<dyn metric_ports::InvestigationStore> = stores.investigation;
     let release_store: std::sync::Arc<dyn metric_ports::ReleaseStore> = stores.releases;
     let release_service = std::sync::Arc::new(ReleaseService::new(
-        release_store,
+        std::sync::Arc::clone(&release_store),
         std::sync::Arc::clone(&clock),
     ));
     let search = std::sync::Arc::new(
@@ -1311,6 +1320,18 @@ where
         shutdown.signal(),
     )?;
     let artifact_metadata: std::sync::Arc<dyn metric_ports::ArtifactStore> = stores.artifacts;
+    let artifact_retention = std::sync::Arc::new(ArtifactRetention::new(
+        std::sync::Arc::clone(&artifact_metadata),
+        release_store,
+        std::sync::Arc::clone(&clock),
+        ArtifactRetentionConfig {
+            mode: config.artifacts.retention_mode,
+            max_age: config.artifacts.retention_max_age.get(),
+            keep_latest: config.artifacts.retention_keep_latest,
+            interval: config.artifacts.retention_interval.get(),
+            orphan_grace: config.artifacts.orphan_grace.get(),
+        },
+    )?);
     let artifact_service = std::sync::Arc::new(ArtifactService::new(
         artifact_metadata,
         std::sync::Arc::clone(&blob_store),
@@ -1342,6 +1363,7 @@ where
         config.artifacts.gc_interval.get(),
         shutdown.signal(),
     )?;
+    let artifact_retention_task = start_artifact_retention(artifact_retention, shutdown.signal());
     let event_store = stores.events;
     let blob_references: std::sync::Arc<dyn BlobReferenceStore> = event_store.clone();
     let blob_cleanup_task = start_blob_cleanup_worker(
@@ -1531,6 +1553,7 @@ where
         private_source_signer,
         debug_file_cleanup_task: Some(debug_file_cleanup_task),
         artifact_cleanup_task: Some(artifact_cleanup_task),
+        artifact_retention_task: Some(artifact_retention_task),
     })
 }
 

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Amended: 2026-10-16
 
 ## Context
 
@@ -179,10 +180,69 @@ TTL to remove BlobStore data.
 - A temporary backend failure leaves the object and its charge intact and retries
   with backoff.
 
-The existing project/uploaded-time debug-file index supports debug retention. The
-initial Artifact Bundle worker performs a low-frequency bounded `_id` reconciliation
-scan rather than adding an organization/uploaded-time index to every ready bundle.
-A dedicated index requires measured evidence from enabled large deployments.
+The existing project/uploaded-time debug-file index supports debug retention.
+Artifact Bundle retention reads each project's bundles, newest upload first,
+through the existing project/upload-time index, so it adds no index.
+
+### Artifact Bundle retention policy
+
+Amended 2026-10-16. Age alone is the wrong rule for source maps: a CI pipeline that
+uploads a bundle on every build would lose the maps of a release that still raises
+Events, and a project that has not built for a month would lose all of them. The
+implemented policy keeps a project's binding while any of these holds:
+
+- the bundle is among the project's newest `retention_keep_latest` uploads;
+- it was uploaded within `retention_max_age`;
+- the binding's release has `last_seen` within `retention_max_age`.
+
+```toml
+[artifacts]
+retention_mode = "off"   # "report" only logs, "enforce" removes
+retention_max_age = "30d"
+retention_keep_latest = 20
+retention_interval = "1h"
+```
+
+The release rule protects only bindings that carry a release; bundles uploaded
+without one rely on age and count. A release is organization-wide, so an Event of
+the release in any project keeps it active. Event finalization already maintains
+release `last_seen`, so the rule needs no `last_used_at` field, no write on
+symbolication and no schema migration.
+
+Each pass visits every active or disabled project that binds a ready bundle; a
+disabled project's bundles still hold storage and quota. Projects in deletion are
+left to ADR-0030, and a project that enters deletion during the pass is skipped:
+binding removal refuses it, so the deletion job still finds every bundle whose
+garbage collection it waits for. PostgreSQL checks the state under the project row
+lock. MongoDB has no such lock, so a deletion request can land between its check and
+its write. There the write that takes a bundle's last binding also records the
+releasing project in `j`, as four bytes that never equal a sixteen-byte deletion
+operation, and the deletion job finishes only when no bundle carries its operation
+or its project's mark. A bundle the project released shortly before its deletion
+therefore delays that deletion until garbage collection, at most by `orphan_grace`.
+Pages follow the organization upload timeline, as lookups do. Releases are looked
+up once per page and only their `last_seen` and version are kept, so a page bounds
+the memory of a pass. `report` logs every binding past retention and a summary of the
+pass, and changes nothing, so an operator sees what enforcement would remove before
+enabling it. `enforce` removes those bindings through the exact-binding removal
+above, conditioned on the upload time the pass read. A new upload of content that is
+already stored refreshes that time in both backends, never moving it back; MongoDB
+conditions its replacement on the time it read, so a slower concurrent publication
+cannot move it back either. Lookups return the newest uploads first, so a refresh
+that moves the time on advances the ADR-0028 artifact revision of every project bound
+to the bundle, not only of new bindings, and cached lookups are not served stale.
+PostgreSQL locks those projects with the ones being bound, in one id-ordered pass
+before the organization, as every transaction that locks both does; a publication
+that finds a project bound after it read them starts over. Age therefore counts from
+the latest upload, and a binding published again after the pass read the page is
+kept. A bundle left without bindings becomes an ADR-0031 orphan and is deleted, with
+its quota charge released,
+once `orphan_grace` has passed since its removal. A storage error ends the pass; the
+next pass starts over.
+
+Passes run in their own task: the first right after startup, then every
+`retention_interval`. Garbage collection never waits for a pass, and shutdown drops
+a pass in progress between storage calls, which leaves the state a crash there would.
 
 ### Project deletion
 

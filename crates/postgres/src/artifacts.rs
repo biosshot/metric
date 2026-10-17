@@ -66,7 +66,14 @@ impl PostgresArtifactStore {
             return Err(ArtifactStoreError::InvalidData);
         }
         let mut tx = self.database.pool.begin().await.map_err(error)?;
-        lock_projects(&mut tx, upload.organization_id, &upload.bindings, false).await?;
+        lock_projects(
+            &mut tx,
+            upload.organization_id,
+            &upload.bindings,
+            &[],
+            false,
+        )
+        .await?;
         let chunks: Vec<u8> = upload
             .chunks
             .iter()
@@ -180,9 +187,39 @@ impl PostgresArtifactStore {
         if bundle.debug_id_tokens.len() > MAX_ARTIFACT_DEBUG_IDS {
             return Err(ArtifactStoreError::InvalidData);
         }
+        // Start over only when a project was bound between the read of the bound
+        // projects and the bundle lock.
+        for _ in 0..16 {
+            if let Some(revisions) = self.publish_attempt(id, &bundle).await? {
+                return Ok(revisions);
+            }
+        }
+        Err(ArtifactStoreError::Busy)
+    }
+    async fn publish_attempt(
+        &self,
+        id: [u8; 16],
+        bundle: &ArtifactBundle,
+    ) -> Result<Option<Vec<(ProjectId, u64)>>> {
         let size = i64::try_from(bundle.size).map_err(|_| ArtifactStoreError::InvalidData)?;
         let mut tx = self.database.pool.begin().await.map_err(error)?;
-        lock_projects(&mut tx, bundle.organization_id, &bundle.bindings, true).await?;
+        // A refreshed upload time advances the revisions of the projects already bound,
+        // so they are locked with the ones being bound, before the organization.
+        let bound = bindings(
+            &mut tx,
+            BindingOwner::Bundle,
+            bundle.organization_id,
+            bundle.id.as_bytes(),
+        )
+        .await?;
+        let locked = lock_projects(
+            &mut tx,
+            bundle.organization_id,
+            &bundle.bindings,
+            &bound,
+            true,
+        )
+        .await?;
         let organization = lock_organization(&mut tx, bundle.organization_id).await?;
         let upload = decode_upload(&upload_row(&mut tx, id).await?, Vec::new())?;
         if upload.upload.organization_id != bundle.organization_id
@@ -192,6 +229,7 @@ impl PostgresArtifactStore {
         }
         let existing = bundle_by_sha(&mut tx, bundle.organization_id, bundle.sha1, true).await?;
         let mut reserve = false;
+        let mut refreshed = false;
         let before = if let Some(row) = existing.as_ref() {
             if fixed::<16>(row, "bundle_id")? != bundle.id.as_bytes()
                 || fixed::<32>(row, "checksum")? != bundle.checksum
@@ -201,6 +239,7 @@ impl PostgresArtifactStore {
             }
             match get::<i16>(row, "state")? {
                 0 => {
+                    refreshed = timestamp(row, "uploaded_at")? < bundle.uploaded_at;
                     bindings(
                         &mut tx,
                         BindingOwner::Bundle,
@@ -223,6 +262,16 @@ impl PostgresArtifactStore {
             reserve = true;
             Vec::new()
         };
+        // Lookups take the newest uploads first: a time that moves on can change them
+        // for every project already bound.
+        let mut affected: BTreeSet<ProjectId> = if refreshed {
+            before.iter().map(|binding| binding.project_id).collect()
+        } else {
+            BTreeSet::new()
+        };
+        if !affected.is_subset(&locked) {
+            return Ok(None);
+        }
         let merged = canonical(
             before
                 .iter()
@@ -265,13 +314,13 @@ impl PostgresArtifactStore {
                 sqlx::query("UPDATE metric.artifact_bundles SET state=0,due_at=NULL,claim=NULL,deletion_operation=NULL,bundle_debug_id=$3,debug_tokens=$4,checksum=$5,size=$6,uploaded_at=$7 WHERE organization_id=$1 AND bundle_id=$2")
                     .bind(bundle.organization_id.get() as i64).bind(bundle.id.as_bytes().as_slice()).bind(bundle.bundle_debug_id.encode().into_vec()).bind(tokens).bind(bundle.checksum.as_slice()).bind(size).bind(bundle.uploaded_at.unix_millis()).execute(&mut *tx).await.map_err(error)?;
             } else {
-                sqlx::query("UPDATE metric.artifact_bundles SET due_at=NULL,deletion_operation=NULL WHERE organization_id=$1 AND bundle_id=$2").bind(bundle.organization_id.get() as i64).bind(bundle.id.as_bytes().as_slice()).execute(&mut *tx).await.map_err(error)?;
+                // A new upload of stored content refreshes its upload time, never backwards.
+                sqlx::query("UPDATE metric.artifact_bundles SET due_at=NULL,deletion_operation=NULL,uploaded_at=GREATEST(uploaded_at,$3) WHERE organization_id=$1 AND bundle_id=$2").bind(bundle.organization_id.get() as i64).bind(bundle.id.as_bytes().as_slice()).bind(bundle.uploaded_at.unix_millis()).execute(&mut *tx).await.map_err(error)?;
             }
         } else {
             sqlx::query("INSERT INTO metric.artifact_bundles(bundle_id,organization_id,sha1,bundle_debug_id,debug_tokens,checksum,size,uploaded_at,generation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
                 .bind(bundle.id.as_bytes().as_slice()).bind(bundle.organization_id.get() as i64).bind(bundle.sha1.as_slice()).bind(bundle.bundle_debug_id.encode().into_vec()).bind(tokens).bind(bundle.checksum.as_slice()).bind(size).bind(bundle.uploaded_at.unix_millis()).bind(i64::from(bundle.generation)).execute(&mut *tx).await.map_err(error)?;
         }
-        let mut affected = BTreeSet::new();
         for binding in merged.iter().filter(|binding| !before.contains(binding)) {
             insert_binding(
                 &mut tx,
@@ -287,7 +336,7 @@ impl PostgresArtifactStore {
         sqlx::query("UPDATE metric.artifact_uploads SET state=2,final_id=$2,error_code=NULL,updated_at=$3,expire_at=$4 WHERE upload_id=$1 AND organization_id=$5")
             .bind(id.as_slice()).bind(bundle.id.as_bytes().as_slice()).bind(bundle.uploaded_at.unix_millis()).bind(expiry(ArtifactUploadState::Complete,bundle.uploaded_at)?).bind(bundle.organization_id.get() as i64).execute(&mut *tx).await.map_err(error)?;
         tx.commit().await.map_err(error)?;
-        Ok(revisions)
+        Ok(Some(revisions))
     }
     async fn by_sha(&self, org: OrganizationId, sha: [u8; 20]) -> Result<Option<ArtifactBundle>> {
         let mut tx = self.database.pool.begin().await.map_err(error)?;
@@ -410,22 +459,91 @@ impl PostgresArtifactStore {
         tx.commit().await.map_err(error)?;
         Ok(bundle)
     }
+    async fn bound(&self) -> Result<Vec<(OrganizationId, ProjectId)>> {
+        // Active and disabled projects; deletion owns the bindings of the others.
+        let rows: Vec<(i64, i32)> = sqlx::query_as("SELECT p.organization_id,p.id FROM metric.projects p WHERE p.state IN(0,1) AND EXISTS(SELECT 1 FROM metric.artifact_bundle_bindings r WHERE r.project_id=p.id AND r.organization_id=p.organization_id) ORDER BY p.id")
+            .fetch_all(&self.database.pool)
+            .await
+            .map_err(error)?;
+        rows.into_iter()
+            .map(|(org, id)| {
+                Ok((
+                    organization_id(org)?,
+                    ProjectId::new(id).map_err(|_| ArtifactStoreError::InvalidData)?,
+                ))
+            })
+            .collect()
+    }
+    async fn project_page(
+        &self,
+        org: OrganizationId,
+        project: ProjectId,
+        before: Option<(Timestamp, ArtifactBundleId)>,
+        limit: usize,
+    ) -> Result<Vec<ArtifactBundle>> {
+        if !(1..=100).contains(&limit) {
+            return Err(ArtifactStoreError::InvalidData);
+        }
+        let mut tx = self.database.pool.begin().await.map_err(error)?;
+        readonly(&mut tx).await?;
+        // The organization lets artifact_organization_timeline give the order and the cursor.
+        let mut query = QueryBuilder::<Postgres>::new("SELECT ");
+        query.push(BUNDLE_COLUMNS).push(" FROM metric.artifact_bundles b WHERE organization_id=").push_bind(org.get() as i64)
+            .push(" AND state=0 AND EXISTS(SELECT 1 FROM metric.artifact_bundle_bindings r WHERE r.organization_id=b.organization_id AND r.bundle_id=b.bundle_id AND r.project_id=").push_bind(project.get()).push(")");
+        if let Some((uploaded_at, id)) = before {
+            query
+                .push(" AND (uploaded_at,bundle_id)<(")
+                .push_bind(uploaded_at.unix_millis())
+                .push(",")
+                .push_bind(id.as_bytes().to_vec())
+                .push(")");
+        }
+        query
+            .push(" ORDER BY uploaded_at DESC,bundle_id DESC LIMIT ")
+            .push_bind(limit as i64);
+        let rows = query.build().fetch_all(&mut *tx).await.map_err(error)?;
+        let mut bundles = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = fixed::<16>(&row, "bundle_id")?;
+            bundles.push(decode_bundle(
+                &row,
+                bindings(&mut tx, BindingOwner::Bundle, org, id).await?,
+            )?);
+        }
+        tx.commit().await.map_err(error)?;
+        Ok(bundles)
+    }
     async fn remove(
         &self,
         org: OrganizationId,
         id: ArtifactBundleId,
         binding: ArtifactBinding,
         orphan: Timestamp,
+        uploaded_at: Option<Timestamp>,
     ) -> Result<Option<u64>> {
         canonical(vec![binding.clone()], false)?;
         let mut tx = self.database.pool.begin().await.map_err(error)?;
-        lock_projects(&mut tx, org, std::slice::from_ref(&binding), true).await?;
+        // Unlike publication, removal also serves a disabled project (retention).
+        sqlx::query("SELECT id FROM metric.projects WHERE organization_id=$1 AND id=$2 AND state IN(0,1) FOR UPDATE")
+            .bind(org.get() as i64)
+            .bind(binding.project_id.get())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(error)?
+            .ok_or(ArtifactStoreError::NotFound)?;
         lock_organization(&mut tx, org).await?;
-        let row=sqlx::query("SELECT sha1,state FROM metric.artifact_bundles WHERE organization_id=$1 AND bundle_id=$2 FOR UPDATE").bind(org.get() as i64).bind(id.as_bytes().as_slice()).fetch_optional(&mut *tx).await.map_err(error)?;
+        let row=sqlx::query("SELECT sha1,state,uploaded_at FROM metric.artifact_bundles WHERE organization_id=$1 AND bundle_id=$2 FOR UPDATE").bind(org.get() as i64).bind(id.as_bytes().as_slice()).fetch_optional(&mut *tx).await.map_err(error)?;
         let Some(row) = row else {
             return Ok(None);
         };
         if get::<i16>(&row, "state")? != 0 {
+            return Ok(None);
+        }
+        // A newer publication of the same content refreshed the upload time: it keeps its
+        // binding.
+        if let Some(expected) = uploaded_at
+            && timestamp(&row, "uploaded_at")? != expected
+        {
             return Ok(None);
         }
         if !delete_binding(&mut tx, BindingOwner::Bundle, org, id.as_bytes(), &binding).await? {
@@ -659,14 +777,27 @@ impl ArtifactStore for PostgresArtifactStore {
     ) -> PortFuture<'_, Result<ArtifactBundle>> {
         Box::pin(self.load_project(project_id, bundle_id))
     }
+    fn bound_projects(&self) -> PortFuture<'_, Result<Vec<(OrganizationId, ProjectId)>>> {
+        Box::pin(self.bound())
+    }
+    fn project_bundles(
+        &self,
+        organization_id: OrganizationId,
+        project_id: ProjectId,
+        before: Option<(Timestamp, ArtifactBundleId)>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ArtifactBundle>>> {
+        Box::pin(self.project_page(organization_id, project_id, before, limit))
+    }
     fn remove_binding(
         &self,
         organization_id: OrganizationId,
         bundle_id: ArtifactBundleId,
         binding: ArtifactBinding,
         orphan_at: Timestamp,
+        uploaded_at: Option<Timestamp>,
     ) -> PortFuture<'_, Result<Option<u64>>> {
-        Box::pin(self.remove(organization_id, bundle_id, binding, orphan_at))
+        Box::pin(self.remove(organization_id, bundle_id, binding, orphan_at, uploaded_at))
     }
     fn recoverable_uploads(
         &self,
@@ -823,33 +954,44 @@ async fn delete_binding(
         .rows_affected()
         == 1)
 }
+/// Locks projects in one id-ordered pass, before the organization, as every transaction
+/// that locks both does. The projects of `bindings` must be active; those of `bound`,
+/// already bound to stored content, may be in any state.
 async fn lock_projects(
     connection: &mut PgConnection,
     org: OrganizationId,
     bindings: &[ArtifactBinding],
+    bound: &[ArtifactBinding],
     exclusive: bool,
-) -> Result<()> {
-    let ids: Vec<i32> = bindings
+) -> Result<BTreeSet<ProjectId>> {
+    let required: BTreeSet<i32> = bindings
         .iter()
         .map(|binding| binding.project_id.get())
+        .collect();
+    let ids: Vec<i32> = required
+        .iter()
+        .copied()
+        .chain(bound.iter().map(|binding| binding.project_id.get()))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
     let query = if exclusive {
-        "SELECT id FROM metric.projects WHERE organization_id=$1 AND id=ANY($2) AND state=0 ORDER BY id FOR UPDATE"
+        "SELECT id,state FROM metric.projects WHERE organization_id=$1 AND id=ANY($2) ORDER BY id FOR UPDATE"
     } else {
-        "SELECT id FROM metric.projects WHERE organization_id=$1 AND id=ANY($2) AND state=0 ORDER BY id FOR SHARE"
+        "SELECT id,state FROM metric.projects WHERE organization_id=$1 AND id=ANY($2) ORDER BY id FOR SHARE"
     };
-    let rows = sqlx::query(query)
+    let rows: Vec<(i32, i16)> = sqlx::query_as(query)
         .bind(org.get() as i64)
         .bind(&ids)
         .fetch_all(connection)
         .await
         .map_err(error)?;
-    if rows.len() != ids.len() {
+    if required.iter().any(|id| !rows.contains(&(*id, 0))) {
         return Err(ArtifactStoreError::NotFound);
     }
-    Ok(())
+    rows.into_iter()
+        .map(|(id, _)| ProjectId::new(id).map_err(|_| ArtifactStoreError::InvalidData))
+        .collect()
 }
 async fn lock_organization(connection: &mut PgConnection, org: OrganizationId) -> Result<PgRow> {
     sqlx::query("SELECT * FROM metric.organizations WHERE id=$1 FOR UPDATE")

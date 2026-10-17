@@ -98,6 +98,21 @@ JavaScript stack traces using debug files and source maps uploaded to Metric.
 Its API port is available only inside the Compose network. Min and Low omit it
 and retain raw frames instead.
 
+Uploaded source maps stay until they are removed. Builds that upload them on
+every run fill the organization bundle quota and the BlobStore over time. To
+remove old ones, set `artifacts.retention_mode`. A project keeps a bundle while
+any of these holds:
+
+- it is among the project's `artifacts.retention_keep_latest` newest bundles;
+- it was uploaded within `artifacts.retention_max_age`;
+- its release received an event within `artifacts.retention_max_age`.
+
+Start with `report`: each pass then logs `artifact bundle binding is past
+retention` for every bundle it would remove, followed by a summary, and changes
+nothing. With `enforce` the bundle is detached from the project, and its file is
+deleted after `artifacts.orphan_grace`. Events from a release whose source maps
+are gone keep their minified frames.
+
 The `symbolicator-cleanup` container removes expired cache files. The cache is
 stored in `metric_symbolicator-cache` and may be deleted and rebuilt without
 losing Metric data.

@@ -20,6 +20,8 @@ pub enum ArtifactValueError {
     InvalidBinding,
     #[error("artifact upload manifest is invalid")]
     InvalidManifest,
+    #[error("artifact retention mode must be off, report or enforce")]
+    InvalidRetentionMode,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -199,6 +201,41 @@ pub struct ArtifactGcClaim {
     pub lease_until: Timestamp,
 }
 
+/// What the Artifact Bundle retention pass does with bindings past retention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactRetentionMode {
+    /// No pass runs: bundles stay until their bindings are removed explicitly.
+    Off,
+    /// The pass logs what enforcement would unbind and changes nothing.
+    Report,
+    /// The pass unbinds them; garbage collection deletes bundles left unbound.
+    Enforce,
+}
+
+impl ArtifactRetentionMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Report => "report",
+            Self::Enforce => "enforce",
+        }
+    }
+}
+
+impl std::str::FromStr for ArtifactRetentionMode {
+    type Err = ArtifactValueError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "off" => Ok(Self::Off),
+            "report" => Ok(Self::Report),
+            "enforce" => Ok(Self::Enforce),
+            _ => Err(ArtifactValueError::InvalidRetentionMode),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +262,17 @@ mod tests {
         let project = ProjectId::new(1).unwrap();
         assert!(ArtifactBinding::new(project, None, Some("web".into())).is_err());
         assert!(ArtifactBundleId::parse("bad").is_err());
+    }
+
+    #[test]
+    fn retention_modes_round_trip_their_configuration_names() {
+        for mode in [
+            ArtifactRetentionMode::Off,
+            ArtifactRetentionMode::Report,
+            ArtifactRetentionMode::Enforce,
+        ] {
+            assert_eq!(mode.as_str().parse(), Ok(mode));
+        }
+        assert!("delete".parse::<ArtifactRetentionMode>().is_err());
     }
 }

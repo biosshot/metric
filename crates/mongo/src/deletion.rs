@@ -1000,10 +1000,15 @@ impl MongoProjectStore {
         let operation = job
             .get_binary_generic("_id")
             .map_err(|_| ProjectDeletionStoreError::InvalidData)?;
+        // Besides the bundles this job orphaned, wait for the ones the project released
+        // through binding removal: one may have lost its binding during the purge.
         if self
             .database
             .collection::<Document>("artifact_bundles")
-            .find_one(doc! { "j": generic_binary(operation) })
+            .find_one(doc! { "j": { "$in": [
+                generic_binary(operation),
+                crate::artifacts::released_by(project_id),
+            ] } })
             .await
             .map_err(|_| ProjectDeletionStoreError::Unavailable)?
             .is_some()
