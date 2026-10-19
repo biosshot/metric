@@ -224,6 +224,7 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         Some(Arc::clone(&service)),
         Some(Arc::clone(&artifact_service)),
         Some(signer.clone()),
+        Url::parse(&format!("http://{address}/"))?,
         // The test client stands in for a proxy that terminates TLS.
         vec![
             "127.0.0.1/32"
@@ -357,19 +358,33 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         "artifact lookup explain did not select an artifact binding index: {explain_text}"
     );
     let client = reqwest::Client::new();
-    let private_index = client
+    // Symbolicator reads each result as a bundle (symbolicator-js `RawJsLookupResult`) and
+    // downloads it from its absolute `url` with the same token.
+    let private_index: Vec<serde_json::Value> = client
         .get(format!(
             "http://{address}/internal/symbolicator/projects/7/artifact-lookup/?revision=1&debug_id={modern_debug_id}"
         ))
         .bearer_auth(signer.artifact_token(ProjectId::new(7)?))
         .send()
+        .await?
+        .error_for_status()?
+        .json()
         .await?;
-    assert_eq!(private_index.status(), reqwest::StatusCode::OK);
+    assert!(
+        private_index
+            .iter()
+            .all(|entry| { entry["type"] == "bundle" && entry["resolved_with"] == "debug-id" })
+    );
+    let modern_entry = private_index
+        .iter()
+        .find(|entry| entry["id"] == modern[0].bundle.id.to_string().as_str())
+        .ok_or("the lookup did not return the uploaded bundle")?;
     let private_download = client
-        .get(format!(
-            "http://{address}/internal/symbolicator/projects/7/artifact-lookup/?revision=1&id={}",
-            modern[0].bundle.id
-        ))
+        .get(
+            modern_entry["url"]
+                .as_str()
+                .ok_or("the lookup result has no url")?,
+        )
         .bearer_auth(signer.artifact_token(ProjectId::new(7)?))
         .send()
         .await?;

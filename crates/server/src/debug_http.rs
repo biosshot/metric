@@ -21,7 +21,7 @@ use metric_application::{
 };
 use metric_domain::{
     ProjectId,
-    artifacts::ArtifactBundleId,
+    artifacts::{ArtifactBundleId, ArtifactResolution},
     auth::{AuthContext, Permission, PlainSecret},
     debug_files::{CodeId, DebugFileId, DebugId},
 };
@@ -44,6 +44,8 @@ struct DebugHttpState {
     debug_files: Arc<DebugFileService>,
     artifacts: Option<Arc<ArtifactService>>,
     signer: PrivateSourceSigner,
+    /// The base Symbolicator reaches the private sources at.
+    callback_base_url: url::Url,
     trusted_proxies: Arc<[TrustedProxy]>,
 }
 
@@ -102,6 +104,7 @@ pub fn router(
     debug_files: Option<Arc<DebugFileService>>,
     artifacts: Option<Arc<ArtifactService>>,
     signer: Option<PrivateSourceSigner>,
+    callback_base_url: url::Url,
     trusted_proxies: Vec<TrustedProxy>,
 ) -> Router {
     let (Some(identity), Some(debug_files), Some(signer)) = (identity, debug_files, signer) else {
@@ -140,6 +143,7 @@ pub fn router(
         debug_files,
         artifacts,
         signer,
+        callback_base_url,
         trusted_proxies: trusted_proxies.into(),
     })
 }
@@ -357,7 +361,6 @@ async fn private_artifact(
             _ => {}
         }
     }
-    let _revision = revision;
     let artifacts = state
         .artifacts
         .as_ref()
@@ -397,16 +400,49 @@ async fn private_artifact(
         )
         .await
         .map_err(map_artifact)?;
-    Ok(Json(json!(
-        candidates
-            .into_iter()
-            .map(|candidate| json!({
-                "id": candidate.bundle.id.to_string(),
-                "symbolType": "sourcebundle",
-            }))
-            .collect::<Vec<_>>()
-    ))
-    .into_response())
+    let entries = candidates
+        .into_iter()
+        .map(|candidate| {
+            artifact_lookup_entry(
+                &state.callback_base_url,
+                project_id,
+                revision,
+                candidate.bundle.id,
+                candidate.resolved_with,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(Value::Array(entries)).into_response())
+}
+
+/// One artifact lookup result as Symbolicator reads it (`RawJsLookupResult::Bundle` in
+/// symbolicator-js `api_lookup.rs`): it downloads the bundle from `url` with the same
+/// source token, so `url` is absolute and points back at this route.
+fn artifact_lookup_entry(
+    callback_base_url: &url::Url,
+    project_id: ProjectId,
+    revision: u64,
+    bundle_id: ArtifactBundleId,
+    resolved_with: ArtifactResolution,
+) -> Result<Value, DebugHttpError> {
+    let mut url = callback_base_url
+        .join(&format!(
+            "internal/symbolicator/projects/{}/artifact-lookup/",
+            project_id.get()
+        ))
+        .map_err(|_| DebugHttpError::Unavailable)?;
+    url.query_pairs_mut()
+        .append_pair("revision", &revision.to_string())
+        .append_pair("id", &bundle_id.to_string());
+    Ok(json!({
+        "type": "bundle",
+        "id": bundle_id.to_string(),
+        "url": url.as_str(),
+        "resolved_with": match resolved_with {
+            ArtifactResolution::DebugId => "debug-id",
+            ArtifactResolution::Release => "release",
+        },
+    }))
 }
 
 #[derive(Deserialize)]
@@ -959,5 +995,58 @@ mod tests {
             request_scheme(None, &headers(Some("https")), &proxies()),
             "http"
         );
+    }
+
+    /// symbolicator-js 26.6.0 `api_lookup.rs` `RawJsLookupResult`: the shape Symbolicator
+    /// reads each artifact lookup result into.
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum SymbolicatorLookupResult {
+        Bundle {
+            id: String,
+            // `url::Url` there; parsed below, since it has to be absolute.
+            url: String,
+            resolved_with: SymbolicatorResolvedWith,
+        },
+    }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    enum SymbolicatorResolvedWith {
+        DebugId,
+        Release,
+    }
+
+    #[test]
+    fn artifact_lookup_entry_is_a_bundle_symbolicator_downloads_from_its_url() {
+        let base = url::Url::parse("http://metric:4001/").unwrap();
+        let bundle_id = ArtifactBundleId::parse("AAECAwQFBgcICQoLDA0ODw").unwrap();
+        for (resolution, expected) in [
+            (
+                ArtifactResolution::DebugId,
+                SymbolicatorResolvedWith::DebugId,
+            ),
+            (
+                ArtifactResolution::Release,
+                SymbolicatorResolvedWith::Release,
+            ),
+        ] {
+            let entry =
+                artifact_lookup_entry(&base, ProjectId::new(7).unwrap(), 3, bundle_id, resolution)
+                    .unwrap();
+            let SymbolicatorLookupResult::Bundle {
+                id,
+                url,
+                resolved_with,
+            } = serde_json::from_value(entry).unwrap();
+            assert_eq!(id, bundle_id.to_string());
+            assert_eq!(
+                url::Url::parse(&url).unwrap().as_str(),
+                format!(
+                    "http://metric:4001/internal/symbolicator/projects/7/artifact-lookup/?revision=3&id={bundle_id}"
+                )
+            );
+            assert_eq!(resolved_with, expected);
+        }
     }
 }
