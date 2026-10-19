@@ -1,6 +1,7 @@
 //! External Symbolicator HTTP adapter and private-source token contract.
 
 use std::{
+    collections::BTreeMap,
     sync::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering},
@@ -12,9 +13,10 @@ use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use metric_domain::{
     ProjectId,
+    event::NormalizedFrame,
     symbolication::{
-        BackendSymbolicationResult, BackendSymbolicationStatus, RawTraceOrigin, SymbolicatedFrame,
-        SymbolicatedStacktrace, SymbolicationDiagnosticCode, SymbolicationKind,
+        BackendSymbolicationResult, BackendSymbolicationStatus, RawStacktrace, RawTraceOrigin,
+        SymbolicatedFrame, SymbolicatedStacktrace, SymbolicationDiagnosticCode, SymbolicationKind,
         SymbolicationRequest,
     },
 };
@@ -148,6 +150,7 @@ impl ExternalSymbolicator {
             .iter()
             .map(|trace| trace.origin)
             .collect::<Vec<_>>();
+        let mut js_plans = Vec::new();
         let (endpoint, payload) = match request.kind {
             SymbolicationKind::JavaScript => {
                 let source_url = self
@@ -170,18 +173,20 @@ impl ExternalSymbolicator {
                 endpoint
                     .query_pairs_mut()
                     .append_pair("scope", &format!("project-{}", project_id.get()));
+                let (wire, plans) = JsWireRequest::from_domain(
+                    request,
+                    WireSource {
+                        id: format!("private-js-project-{}", project_id.get()),
+                        ty: "sentry",
+                        url: source_url.as_str().to_owned(),
+                        token: self.signer.artifact_token(project_id),
+                    },
+                );
+                js_plans = plans;
                 (
                     endpoint,
-                    serde_json::to_value(JsWireRequest::from_domain(
-                        request,
-                        WireSource {
-                            id: format!("private-js-project-{}", project_id.get()),
-                            ty: "sentry",
-                            url: source_url.as_str().to_owned(),
-                            token: self.signer.artifact_token(project_id),
-                        },
-                    ))
-                    .map_err(|_| SymbolicationBackendError::MalformedResponse)?,
+                    serde_json::to_value(wire)
+                        .map_err(|_| SymbolicationBackendError::MalformedResponse)?,
                 )
             }
             SymbolicationKind::Native => {
@@ -257,7 +262,7 @@ impl ExternalSymbolicator {
         let result = if javascript {
             serde_json::from_slice::<JsWireResponse>(&bytes)
                 .map_err(|_| SymbolicationBackendError::MalformedResponse)
-                .and_then(|wire| wire.into_domain(&origins))
+                .and_then(|wire| wire.into_domain(js_plans))
         } else {
             serde_json::from_slice::<WireResponse>(&bytes)
                 .map_err(|_| SymbolicationBackendError::MalformedResponse)
@@ -399,29 +404,17 @@ struct JsWireRequest {
 }
 
 impl JsWireRequest {
-    fn from_domain(request: SymbolicationRequest, source: WireSource) -> Self {
-        Self {
+    fn from_domain(request: SymbolicationRequest, source: WireSource) -> (Self, Vec<JsTracePlan>) {
+        let mut stacktraces = Vec::new();
+        let plans = request
+            .traces
+            .into_iter()
+            .map(|trace| JsTracePlan::cut(trace, &mut stacktraces))
+            .collect();
+        let wire = Self {
             platform: "javascript",
             source,
-            stacktraces: request
-                .traces
-                .into_iter()
-                .map(|trace| JsWireTrace {
-                    frames: trace
-                        .frames
-                        .into_iter()
-                        .map(|frame| JsWireFrame {
-                            function: frame.function,
-                            module: frame.module,
-                            filename: frame.filename,
-                            abs_path: frame.absolute_path,
-                            lineno: frame.line,
-                            colno: frame.column,
-                            in_app: frame.in_app,
-                        })
-                        .collect(),
-                })
-                .collect(),
+            stacktraces,
             modules: request
                 .modules
                 .into_iter()
@@ -429,18 +422,24 @@ impl JsWireRequest {
                     Some(JsWireModule {
                         code_file: module.code_file?,
                         debug_id: module.debug_id?,
-                        ty: "debug_id",
+                        // Symbolicator's `JsModuleType` has a single variant.
+                        ty: "sourcemap",
                     })
                 })
                 .collect(),
             release: request.release,
             dist: request.dist,
-            scraping: JsScraping { enabled: false },
+            scraping: JsScraping {
+                enabled: false,
+                allowed_origins: Vec::new(),
+                headers: BTreeMap::new(),
+            },
             options: JsWireOptions {
                 apply_source_context: true,
                 frame_order: "caller_first",
             },
-        }
+        };
+        (wire, plans)
     }
 }
 
@@ -449,15 +448,83 @@ struct JsWireTrace {
     frames: Vec<JsWireFrame>,
 }
 
+/// How one raw trace was sent.
+///
+/// Symbolicator names a frame after its caller's call site, so the frames on either
+/// side of one that cannot be sent must not look adjacent. Each run of sendable
+/// frames goes as its own stacktrace. Frames left out get no derived frame, and
+/// grouping keeps their raw identity.
+struct JsTracePlan {
+    origin: RawTraceOrigin,
+    /// Raw frame indexes of each sent run, in request order.
+    runs: Vec<Vec<usize>>,
+    unsent: usize,
+}
+
+impl JsTracePlan {
+    fn cut(trace: RawStacktrace, stacktraces: &mut Vec<JsWireTrace>) -> Self {
+        let mut plan = Self {
+            origin: trace.origin,
+            runs: Vec::new(),
+            unsent: 0,
+        };
+        let mut run = (Vec::new(), Vec::new());
+        for (index, frame) in trace.frames.iter().enumerate() {
+            if let Some(wire) = JsWireFrame::from_domain(frame) {
+                run.0.push(index);
+                run.1.push(wire);
+            } else {
+                plan.close(&mut run, stacktraces);
+                plan.unsent += 1;
+            }
+        }
+        plan.close(&mut run, stacktraces);
+        plan
+    }
+
+    fn close(
+        &mut self,
+        run: &mut (Vec<usize>, Vec<JsWireFrame>),
+        stacktraces: &mut Vec<JsWireTrace>,
+    ) {
+        if !run.0.is_empty() {
+            self.runs.push(std::mem::take(&mut run.0));
+            stacktraces.push(JsWireTrace {
+                frames: std::mem::take(&mut run.1),
+            });
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct JsWireFrame {
     function: Option<Box<str>>,
     module: Option<Box<str>>,
     filename: Option<Box<str>>,
-    abs_path: Option<Box<str>>,
-    lineno: Option<u64>,
+    abs_path: Box<str>,
+    lineno: u32,
     colno: Option<u64>,
     in_app: Option<bool>,
+}
+
+impl JsWireFrame {
+    /// Symbolicator rejects the whole request when a frame lacks a path or a line.
+    /// Sentry JavaScript SDKs send `filename` without `abs_path`, and frames of
+    /// native code have no line; such frames are not sent.
+    fn from_domain(frame: &NormalizedFrame) -> Option<Self> {
+        Some(Self {
+            function: frame.function.clone(),
+            module: frame.module.clone(),
+            filename: frame.filename.clone(),
+            abs_path: frame
+                .absolute_path
+                .clone()
+                .or_else(|| frame.filename.clone())?,
+            lineno: frame.line.and_then(|line| u32::try_from(line).ok())?,
+            colno: frame.column,
+            in_app: frame.in_app,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -468,9 +535,13 @@ struct JsWireModule {
     ty: &'static str,
 }
 
+/// Symbolicator requires every field even when scraping is off, and a missing
+/// `scraping` object would mean scraping from any origin.
 #[derive(Serialize)]
 struct JsScraping {
     enabled: bool,
+    allowed_origins: Vec<Box<str>>,
+    headers: BTreeMap<Box<str>, Box<str>>,
 }
 
 #[derive(Serialize)]
@@ -492,37 +563,51 @@ struct JsWireResponse {
 impl JsWireResponse {
     fn into_domain(
         self,
-        origins: &[RawTraceOrigin],
+        plans: Vec<JsTracePlan>,
     ) -> Result<BackendSymbolicationResult, SymbolicationBackendError> {
-        if self.stacktraces.len() != origins.len()
-            || (!self.raw_stacktraces.is_empty() && self.raw_stacktraces.len() != origins.len())
+        let runs = plans.iter().map(|plan| plan.runs.len()).sum::<usize>();
+        if self.stacktraces.len() != runs
+            || (!self.raw_stacktraces.is_empty() && self.raw_stacktraces.len() != runs)
         {
             return Err(SymbolicationBackendError::MalformedResponse);
         }
-        let derived = self
-            .stacktraces
-            .into_iter()
-            .zip(origins.iter().copied())
-            .map(|(trace, origin)| SymbolicatedStacktrace {
-                origin,
-                frames: trace
-                    .frames
-                    .into_iter()
-                    .enumerate()
-                    .map(|(original_index, frame)| SymbolicatedFrame {
+        let mut responses = self.stacktraces.into_iter();
+        let (mut sent, mut unsent) = (0, 0);
+        let mut derived = Vec::with_capacity(plans.len());
+        for plan in plans {
+            unsent += plan.unsent;
+            // A trace with nothing sent gets no derived trace, so it is grouped by its
+            // raw frames; an empty one would make grouping skip it.
+            if plan.runs.is_empty() && plan.unsent > 0 {
+                continue;
+            }
+            let mut frames = Vec::new();
+            for indexes in plan.runs {
+                let response = responses
+                    .next()
+                    .ok_or(SymbolicationBackendError::MalformedResponse)?;
+                if response.frames.len() != indexes.len() {
+                    return Err(SymbolicationBackendError::MalformedResponse);
+                }
+                sent += indexes.len();
+                frames.extend(response.frames.into_iter().zip(indexes).map(
+                    |(frame, original_index)| SymbolicatedFrame {
                         original_index,
                         function: frame.function.map(Into::into),
                         filename: frame.filename.map(Into::into),
                         module: frame.module.map(Into::into),
                         line: frame.lineno,
                         column: frame.colno,
-                    })
-                    .collect(),
-            })
-            .collect::<Vec<_>>();
-        let has_frames = derived.iter().any(|trace| !trace.frames.is_empty());
+                    },
+                ));
+            }
+            derived.push(SymbolicatedStacktrace {
+                origin: plan.origin,
+                frames,
+            });
+        }
         let has_errors = !self.errors.is_empty();
-        let status = match (has_frames, has_errors) {
+        let status = match (sent > 0, has_errors || unsent > 0) {
             (true, true) => BackendSymbolicationStatus::Partial,
             (true, false) => BackendSymbolicationStatus::Complete,
             (false, _) => BackendSymbolicationStatus::Missing,
@@ -776,56 +861,31 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut bytes = vec![0_u8; 32 * 1024];
-            let count = stream.read(&mut bytes).await.unwrap();
-            let request = String::from_utf8_lossy(&bytes[..count]);
-            assert!(request.starts_with("POST /symbolicate-js?scope=project-7 "));
-            assert!(request.contains("artifact-lookup/?revision=43"));
-            assert!(request.contains("\"stacktraces\""));
-            assert!(request.contains("\"scraping\":{\"enabled\":false}"));
-            let body = response_body;
-            stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            stream.write_all(body.as_bytes()).await.unwrap();
+            let (head, body) = read_request(&mut stream).await;
+            assert!(head.starts_with("POST /symbolicate-js?scope=project-7 "));
+            assert!(body.to_string().contains("artifact-lookup/?revision=43"));
+            assert_eq!(
+                body["scraping"],
+                serde_json::json!({ "enabled": false, "allowed_origins": [], "headers": {} })
+            );
+            // Symbolicator 26.6.0 requires `abs_path` and `lineno` on every frame and
+            // accepts only the `sourcemap` module type; anything else fails the request.
+            let frame = &body["stacktraces"][0]["frames"][0];
+            assert_eq!(
+                frame["abs_path"],
+                "https://example.invalid/static/app.min.js"
+            );
+            assert_eq!(frame["lineno"], 1);
+            assert_eq!(body["modules"][0]["type"], "sourcemap");
+            respond(&mut stream, &response_body).await;
         });
-        let adapter = ExternalSymbolicator::new(
-            ExternalSymbolicatorConfig {
-                endpoint: Url::parse(&format!("http://{address}/symbolicate")).unwrap(),
-                callback_base_url: Url::parse("http://127.0.0.1:4001/").unwrap(),
-                request_timeout: Duration::from_secs(2),
-                maximum_concurrency: 1,
-                circuit_failure_threshold: 2,
-                circuit_cooldown: Duration::from_secs(30),
-                maximum_response_bytes: 4096,
-            },
-            PrivateSourceSigner::new(vec![1; 32], None).unwrap(),
-        )
-        .unwrap();
-        let frame = NormalizedFrame {
-            filename: Some("app.min.js".into()),
-            absolute_path: Some("https://example.invalid/static/app.min.js".into()),
-            function: Some("fail".into()),
-            module: None,
-            package: None,
-            instruction_address: None,
-            symbol_address: None,
-            line: Some(1),
-            column: Some(50),
-            in_app: Some(true),
-            context_line: None,
-            pre_context: Vec::new(),
-            post_context: Vec::new(),
-            variables: BTreeMap::new(),
-            unknown: BTreeMap::new(),
-        };
+        let adapter = javascript_adapter(address);
+        let frame = javascript_frame(
+            Some("app.min.js"),
+            Some("https://example.invalid/static/app.min.js"),
+            Some(1),
+            "fail",
+        );
         let output = adapter
             .symbolicate(SymbolicationRequest {
                 project_id: ProjectId::new(7).unwrap(),
@@ -856,6 +916,231 @@ mod tests {
         );
         assert_eq!(output.derived[0].frames[0].line, Some(6));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn javascript_frames_symbolicator_cannot_take_stay_raw() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_once(
+            listener,
+            |body| {
+                // The frame without a line splits the run, so symbolicator cannot
+                // name the frame after it from the call site in the frame before.
+                let stacktraces = body["stacktraces"].as_array().unwrap();
+                assert_eq!(stacktraces.len(), 2);
+                assert_eq!(stacktraces[0]["frames"].as_array().unwrap().len(), 1);
+                // Sentry JavaScript SDKs send `filename` without `abs_path`.
+                assert_eq!(stacktraces[0]["frames"][0]["abs_path"], "app.min.js");
+                assert_eq!(
+                    stacktraces[1]["frames"][0]["abs_path"],
+                    "https://example.invalid/static/vendor.min.js"
+                );
+            },
+            r#"{"stacktraces":[
+                {"frames":[{"function":"fail","filename":"app.js","lineno":6,"colno":9}]},
+                {"frames":[{"function":"boot","filename":"vendor.js","lineno":3,"colno":1}]}
+            ],"raw_stacktraces":[],"errors":[]}"#,
+        );
+        let output = javascript_adapter(address)
+            .symbolicate(SymbolicationRequest {
+                project_id: ProjectId::new(7).unwrap(),
+                debug_file_revision: 0,
+                artifact_revision: 1,
+                kind: SymbolicationKind::JavaScript,
+                traces: vec![RawStacktrace {
+                    origin: RawTraceOrigin::Event,
+                    frames: vec![
+                        javascript_frame(Some("app.min.js"), None, Some(1), "a"),
+                        javascript_frame(
+                            None,
+                            Some("https://example.invalid/static/app.min.js"),
+                            None,
+                            "b",
+                        ),
+                        javascript_frame(
+                            None,
+                            Some("https://example.invalid/static/vendor.min.js"),
+                            Some(2),
+                            "c",
+                        ),
+                    ],
+                }],
+                modules: Vec::new(),
+                release: None,
+                dist: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.status, BackendSymbolicationStatus::Partial);
+        assert_eq!(
+            frame_names(&output.derived[0]),
+            vec![(0, Some("fail")), (2, Some("boot"))]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn javascript_trace_without_sendable_frames_gets_no_derived_trace() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_once(
+            listener,
+            |body| assert_eq!(body["stacktraces"].as_array().unwrap().len(), 1),
+            r#"{"stacktraces":[
+                {"frames":[{"function":"fail","filename":"app.js","lineno":6,"colno":9}]}
+            ],"raw_stacktraces":[],"errors":[]}"#,
+        );
+        let output = javascript_adapter(address)
+            .symbolicate(SymbolicationRequest {
+                project_id: ProjectId::new(7).unwrap(),
+                debug_file_revision: 0,
+                artifact_revision: 1,
+                kind: SymbolicationKind::JavaScript,
+                traces: vec![
+                    RawStacktrace {
+                        origin: RawTraceOrigin::Exception { index: 0 },
+                        frames: vec![javascript_frame(
+                            None,
+                            Some("https://example.invalid/static/app.min.js"),
+                            Some(1),
+                            "a",
+                        )],
+                    },
+                    RawStacktrace {
+                        origin: RawTraceOrigin::Exception { index: 1 },
+                        frames: vec![javascript_frame(
+                            None,
+                            Some("https://example.invalid/static/app.min.js"),
+                            None,
+                            "b",
+                        )],
+                    },
+                ],
+                modules: Vec::new(),
+                release: None,
+                dist: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.status, BackendSymbolicationStatus::Partial);
+        // An empty derived trace would make grouping skip the second exception;
+        // without one it is grouped by its raw frames.
+        assert_eq!(output.derived.len(), 1);
+        assert_eq!(
+            output.derived[0].origin,
+            RawTraceOrigin::Exception { index: 0 }
+        );
+        assert_eq!(frame_names(&output.derived[0]), vec![(0, Some("fail"))]);
+        server.await.unwrap();
+    }
+
+    fn frame_names(trace: &SymbolicatedStacktrace) -> Vec<(usize, Option<&str>)> {
+        trace
+            .frames
+            .iter()
+            .map(|frame| (frame.original_index, frame.function.as_deref()))
+            .collect()
+    }
+
+    /// Answers one request with `response` once `check` has looked at its body.
+    fn serve_once(
+        listener: tokio::net::TcpListener,
+        check: impl FnOnce(&serde_json::Value) + Send + 'static,
+        response: &'static str,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (_, body) = read_request(&mut stream).await;
+            check(&body);
+            respond(&mut stream, response).await;
+        })
+    }
+
+    fn javascript_adapter(address: std::net::SocketAddr) -> ExternalSymbolicator {
+        ExternalSymbolicator::new(
+            ExternalSymbolicatorConfig {
+                endpoint: Url::parse(&format!("http://{address}/symbolicate")).unwrap(),
+                callback_base_url: Url::parse("http://127.0.0.1:4001/").unwrap(),
+                request_timeout: Duration::from_secs(2),
+                maximum_concurrency: 1,
+                circuit_failure_threshold: 2,
+                circuit_cooldown: Duration::from_secs(30),
+                maximum_response_bytes: 4096,
+            },
+            PrivateSourceSigner::new(vec![1; 32], None).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn javascript_frame(
+        filename: Option<&str>,
+        absolute_path: Option<&str>,
+        line: Option<u64>,
+        function: &str,
+    ) -> NormalizedFrame {
+        NormalizedFrame {
+            filename: filename.map(Into::into),
+            absolute_path: absolute_path.map(Into::into),
+            function: Some(function.into()),
+            module: None,
+            package: None,
+            instruction_address: None,
+            symbol_address: None,
+            line,
+            column: Some(50),
+            in_app: Some(true),
+            context_line: None,
+            pre_context: Vec::new(),
+            post_context: Vec::new(),
+            variables: BTreeMap::new(),
+            unknown: BTreeMap::new(),
+        }
+    }
+
+    /// Reads one HTTP request and returns its head and JSON body.
+    async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, serde_json::Value) {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 8 * 1024];
+        loop {
+            let count = stream.read(&mut chunk).await.unwrap();
+            assert!(
+                count > 0,
+                "connection closed before the request was complete"
+            );
+            bytes.extend_from_slice(&chunk[..count]);
+            let Some(head_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&bytes[..head_end]).into_owned();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let body_start = head_end + 4;
+            if bytes.len() >= body_start + length {
+                let body = serde_json::from_slice(&bytes[body_start..body_start + length]).unwrap();
+                return (head, body);
+            }
+        }
+    }
+
+    async fn respond(stream: &mut tokio::net::TcpStream, body: &str) {
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(body.as_bytes()).await.unwrap();
     }
 
     #[tokio::test]
