@@ -55,7 +55,7 @@ pub struct SymbolicationRequest {
     pub dist: Option<Box<str>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SymbolicatedFrame {
     pub original_index: usize,
     pub function: Option<Box<str>>,
@@ -63,6 +63,9 @@ pub struct SymbolicatedFrame {
     pub module: Option<Box<str>>,
     pub line: Option<u64>,
     pub column: Option<u64>,
+    pub context_line: Option<Box<str>>,
+    pub pre_context: Vec<Box<str>>,
+    pub post_context: Vec<Box<str>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

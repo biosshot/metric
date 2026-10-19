@@ -625,6 +625,7 @@ fn decode_file(document: &Document) -> Result<DebugFile, DebugFileStoreError> {
         3 => DebugFileType::Pdb,
         4 => DebugFileType::PortablePdb,
         5 => DebugFileType::Breakpad,
+        6 => DebugFileType::SourceBundle,
         _ => return Err(DebugFileStoreError::InvalidData),
     };
     let debug_id = optional_binary(document, "d")?

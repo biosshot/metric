@@ -414,7 +414,9 @@ impl ProcessingProjectStore for MongoEventStore {
                 .database
                 .collection::<Document>("projects")
                 .find_one(doc! { "_id": project_id.get() })
-                .projection(doc! { "state": 1, "items.error": 1, "grouping_revision": 1 })
+                .projection(
+                    doc! { "state": 1, "items.error": 1, "grouping_revision": 1, "dr": 1, "ar": 1 },
+                )
                 .await
                 .map_err(|_| ProcessingProjectError::Unavailable)?
                 .ok_or(ProcessingProjectError::NotFound)?;
@@ -906,6 +908,40 @@ fn event_index(
 mod tests {
     use super::*;
     use metric_domain::ProjectId;
+
+    #[tokio::test]
+    #[ignore = "requires the synthetic MongoDB fixture"]
+    async fn processing_project_reads_current_symbol_source_revisions() {
+        let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+            "mongodb://metric:metric-local-only@127.0.0.1:27018/?authSource=admin".to_owned()
+        });
+        let client = mongodb::Client::with_uri_str(uri).await.unwrap();
+        let database = client.database(&format!(
+            "metric_symbol_revisions_{}",
+            mongodb::bson::oid::ObjectId::new().to_hex()
+        ));
+        let projects = database.collection::<Document>("projects");
+        projects.insert_one(doc! { "_id": 7, "state": "active", "items": {"error": true}, "grouping_revision": 1_i64, "dr": 3_i64, "ar": 5_i64 }).await.unwrap();
+        let store = MongoEventStore::from_database(database.clone(), EventCodecConfig::default());
+        let first = store
+            .load_processing_project(ProjectId::new(7).unwrap())
+            .await;
+        projects
+            .update_one(
+                doc! { "_id": 7 },
+                doc! { "$inc": { "dr": 1_i64, "ar": 1_i64 } },
+            )
+            .await
+            .unwrap();
+        let later = store
+            .load_processing_project(ProjectId::new(7).unwrap())
+            .await;
+        database.drop().await.unwrap();
+        let first = first.unwrap();
+        let later = later.unwrap();
+        assert_eq!((first.debug_file_revision, first.artifact_revision), (3, 5));
+        assert_eq!((later.debug_file_revision, later.artifact_revision), (4, 6));
+    }
 
     fn event(payload: &[u8]) -> AcceptedEvent {
         let value: Value = serde_json::from_slice(payload).unwrap();

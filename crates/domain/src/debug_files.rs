@@ -259,12 +259,15 @@ pub enum DebugFileType {
     Pdb = 3,
     PortablePdb = 4,
     Breakpad = 5,
+    SourceBundle = 6,
 }
 
 impl DebugFileType {
     pub fn from_name(name: &str) -> Result<Self, DebugFileValueError> {
         let lowercase = name.to_ascii_lowercase();
-        if lowercase.ends_with(".sym") {
+        if lowercase.ends_with(".src.zip") {
+            Ok(Self::SourceBundle)
+        } else if lowercase.ends_with(".sym") {
             Ok(Self::Breakpad)
         } else if lowercase.ends_with(".pdb") {
             Ok(Self::Pdb)
@@ -288,6 +291,7 @@ impl DebugFileType {
             Self::Pdb => "pdb",
             Self::PortablePdb => "portablepdb",
             Self::Breakpad => "breakpad",
+            Self::SourceBundle => "sourcebundle",
         }
     }
 }

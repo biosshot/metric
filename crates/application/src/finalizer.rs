@@ -127,7 +127,10 @@ impl Finalizer {
         if issue.issue_id != grouping.issue_id || issue.grouping_key != grouping.key {
             return Err(FinalizerError::InvalidIdentity);
         }
-        let payload = processed_payload(event, symbolication)?;
+        let mut payload = processed_payload(event, symbolication, true)?;
+        if payload.len() > self.config.max_processed_body_bytes {
+            payload = processed_payload(event, symbolication, false)?;
+        }
         if payload.len() > self.config.max_processed_body_bytes {
             return Err(FinalizerError::OutputTooLarge);
         }
@@ -204,6 +207,7 @@ fn validate_event(event: &FinalizeEvent, max_body_bytes: usize) -> Result<(), Fi
 fn processed_payload(
     event: &NormalizedEvent,
     symbolication: &SymbolicationResult,
+    include_source_context: bool,
 ) -> Result<Vec<u8>, FinalizerError> {
     let Value::Object(mut root) = canonical_body_value(&event.body) else {
         return Err(FinalizerError::InvalidIdentity);
@@ -224,7 +228,7 @@ fn processed_payload(
         .map(|trace| {
             json!({
                 "origin": origin_value(trace.origin),
-                "frames": trace.frames.iter().map(frame_value).collect::<Vec<_>>(),
+                "frames": trace.frames.iter().map(|frame| frame_value(frame, include_source_context)).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -260,12 +264,21 @@ fn origin_value(origin: RawTraceOrigin) -> Value {
     }
 }
 
-fn frame_value(frame: &SymbolicatedFrame) -> Value {
+fn frame_value(frame: &SymbolicatedFrame, include_source_context: bool) -> Value {
     let mut value = Map::new();
     value.insert("original_index".to_owned(), json!(frame.original_index));
     optional_string(&mut value, "function", frame.function.as_deref());
     optional_string(&mut value, "filename", frame.filename.as_deref());
     optional_string(&mut value, "module", frame.module.as_deref());
+    if include_source_context {
+        optional_string(&mut value, "context_line", frame.context_line.as_deref());
+        if !frame.pre_context.is_empty() {
+            value.insert("pre_context".to_owned(), json!(frame.pre_context));
+        }
+        if !frame.post_context.is_empty() {
+            value.insert("post_context".to_owned(), json!(frame.post_context));
+        }
+    }
     if let Some(line) = frame.line {
         value.insert("line".to_owned(), json!(line));
     }
@@ -420,6 +433,48 @@ mod tests {
             store.batch.lock().unwrap().as_ref().unwrap().events.len(),
             1
         );
+    }
+
+    #[test]
+    fn persists_optional_source_context_and_drops_it_before_rejecting_an_oversized_event() {
+        let event = event();
+        let grouping = group(event.project_id, 1, &event.body, None).unwrap();
+        let mut symbols = symbolication();
+        symbols.derived = vec![metric_domain::symbolication::SymbolicatedStacktrace {
+            origin: RawTraceOrigin::Event,
+            frames: vec![SymbolicatedFrame {
+                function: Some("fail".into()),
+                line: Some(42),
+                context_line: Some("".into()),
+                pre_context: vec!["before();".into()],
+                post_context: vec!["after();".into()],
+                ..SymbolicatedFrame::default()
+            }],
+        }];
+        let full = processed_payload(&event, &symbols, true).unwrap();
+        let value: Value = serde_json::from_slice(&full).unwrap();
+        let frame = &value["_metric"]["symbolication"]["derived"][0]["frames"][0];
+        assert_eq!(frame["context_line"], "");
+        assert_eq!(frame["pre_context"][0], "before();");
+        assert_eq!(frame["post_context"][0], "after();");
+        let without_context = processed_payload(&event, &symbols, false).unwrap();
+        let finalizer = Finalizer::new(
+            Arc::new(FakeFinalizationStore::default()),
+            FinalizerConfig {
+                max_processed_body_bytes: without_context.len(),
+                ..FinalizerConfig::default()
+            },
+        )
+        .unwrap();
+        let saved = finalizer
+            .prepare(
+                &event,
+                &symbols,
+                &grouping,
+                prepare_issue_occurrence(&event, &grouping).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(saved.payload.as_bytes(), without_context);
     }
 
     #[tokio::test]

@@ -192,11 +192,12 @@ async fn chunk_options(
                 "release_files",
                 "pdbs",
                 "portablepdbs",
+                "sources",
                 "artifact_bundles",
                 "artifact_bundles_v2",
             ]
         } else {
-            vec!["debug_files", "pdbs", "portablepdbs"]
+            vec!["debug_files", "pdbs", "portablepdbs", "sources"]
         },
         "maxWait": 300,
     })))
@@ -527,7 +528,11 @@ async fn assemble(
                     "cpuName": "unknown",
                     "objectName": file.name,
                     "symbolType": file.file_type.symbolicator_name(),
-                    "features": ["debug"],
+                    "features": if file.file_type == metric_domain::debug_files::DebugFileType::SourceBundle {
+                        vec!["sources"]
+                    } else {
+                        vec!["debug"]
+                    },
                     "sha1": sha1_text,
                     "size": file.size,
                 }

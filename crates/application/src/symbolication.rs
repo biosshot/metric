@@ -20,6 +20,9 @@ const HARD_MAX_CONCURRENCY: usize = 4_096;
 const HARD_MAX_COLLECTION: usize = 65_536;
 const HARD_MAX_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_MODULE_TEXT_BYTES: usize = 512;
+const MAX_SOURCE_CONTEXT_BYTES: usize = 128 * 1024;
+const MAX_SOURCE_LINE_BYTES: usize = 4096;
+const MAX_SOURCE_CONTEXT_LINES: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SymbolicationConfig {
@@ -360,7 +363,7 @@ fn request_exceeds_limits(
 fn map_backend_result(
     kind: SymbolicationKind,
     raw: Vec<RawStacktrace>,
-    response: BackendSymbolicationResult,
+    mut response: BackendSymbolicationResult,
     config: SymbolicationConfig,
 ) -> SymbolicationResult {
     if response.derived.len() > config.max_derived_traces
@@ -387,6 +390,7 @@ fn map_backend_result(
             SymbolicationDiagnosticCode::MalformedBackendResponse,
         );
     }
+    bound_source_context(&mut response.derived);
     let (status, disposition, default_diagnostic) = match response.status {
         BackendSymbolicationStatus::Complete => (
             SymbolicationStatus::Complete,
@@ -427,6 +431,30 @@ fn map_backend_result(
     )
 }
 
+fn bound_source_context(traces: &mut [SymbolicatedStacktrace]) {
+    let mut remaining = MAX_SOURCE_CONTEXT_BYTES;
+    for frame in traces.iter_mut().flat_map(|trace| &mut trace.frames) {
+        let lines = frame
+            .pre_context
+            .iter()
+            .chain(frame.context_line.iter())
+            .chain(&frame.post_context);
+        let bytes = lines.clone().map(|line| line.len()).sum::<usize>();
+        if frame.pre_context.len() > MAX_SOURCE_CONTEXT_LINES
+            || frame.post_context.len() > MAX_SOURCE_CONTEXT_LINES
+            || lines.clone().any(|line| line.len() > MAX_SOURCE_LINE_BYTES)
+            || bytes > remaining
+        {
+            // Optional snippets must never invalidate otherwise usable symbols.
+            frame.context_line = None;
+            frame.pre_context.clear();
+            frame.post_context.clear();
+        } else {
+            remaining -= bytes;
+        }
+    }
+}
+
 fn derived_matches_raw(derived: &[SymbolicatedStacktrace], raw: &[RawStacktrace]) -> bool {
     let mut origins = BTreeSet::new();
     derived.iter().all(|derived_trace| {
@@ -441,8 +469,8 @@ fn derived_matches_raw(derived: &[SymbolicatedStacktrace], raw: &[RawStacktrace]
                     .iter()
                     .map(|frame| frame.original_index)
                     .collect::<BTreeSet<_>>();
-                indexes.len() == derived_trace.frames.len()
-                    && indexes.iter().all(|index| *index < raw_trace.frames.len())
+                // A native instruction can expand to several inline frames.
+                indexes.iter().all(|index| *index < raw_trace.frames.len())
             })
     })
 }
@@ -453,13 +481,12 @@ fn complete_covers_raw(derived: &[SymbolicatedStacktrace], raw: &[RawStacktrace]
             .iter()
             .find(|derived_trace| derived_trace.origin == raw_trace.origin)
             .is_some_and(|derived_trace| {
-                derived_trace.frames.len() == raw_trace.frames.len()
-                    && derived_trace
-                        .frames
-                        .iter()
-                        .map(|frame| frame.original_index)
-                        .collect::<BTreeSet<_>>()
-                        == (0..raw_trace.frames.len()).collect::<BTreeSet<_>>()
+                derived_trace
+                    .frames
+                    .iter()
+                    .map(|frame| frame.original_index)
+                    .collect::<BTreeSet<_>>()
+                    == (0..raw_trace.frames.len()).collect::<BTreeSet<_>>()
             })
     })
 }
@@ -643,6 +670,7 @@ mod tests {
                     module: Some("demo".into()),
                     line: Some(42),
                     column: None,
+                    ..SymbolicatedFrame::default()
                 }],
             }]
         } else {
@@ -658,6 +686,50 @@ mod tests {
             },
             diagnostics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn inline_frames_cover_their_original_instruction_without_losing_identity() {
+        let raw = collect_raw_traces(&native_event().body);
+        let mut response = backend_result(BackendSymbolicationStatus::Complete);
+        let mut inline = response.derived[0].frames[0].clone();
+        inline.function = Some("inlined_helper".into());
+        response.derived[0].frames.insert(0, inline);
+        assert!(derived_matches_raw(&response.derived, &raw));
+        assert!(complete_covers_raw(&response.derived, &raw));
+        response.derived[0].frames[0].original_index = 1;
+        assert!(!derived_matches_raw(&response.derived, &raw));
+    }
+
+    #[test]
+    fn excessive_source_context_is_optional_and_never_discards_resolved_symbols() {
+        let mut response = backend_result(BackendSymbolicationStatus::Complete);
+        let frame = &mut response.derived[0].frames[0];
+        frame.context_line = Some("x".repeat(MAX_SOURCE_LINE_BYTES + 1).into());
+        let mapped = map_backend_result(
+            SymbolicationKind::Native,
+            collect_raw_traces(&native_event().body),
+            response,
+            SymbolicationConfig::default(),
+        );
+        assert_eq!(mapped.status, SymbolicationStatus::Complete);
+        assert_eq!(
+            mapped.derived[0].frames[0].function.as_deref(),
+            Some("main")
+        );
+        assert_eq!(mapped.derived[0].frames[0].context_line, None);
+
+        let mut traces = backend_result(BackendSymbolicationStatus::Complete).derived;
+        traces[0].frames[0].context_line = Some("".into());
+        traces[0].frames[0].pre_context = vec!["before();".into()];
+        bound_source_context(&mut traces);
+        assert_eq!(traces[0].frames[0].context_line.as_deref(), Some(""));
+        traces[0].frames[0].pre_context =
+            vec!["x".repeat(MAX_SOURCE_LINE_BYTES).into(); MAX_SOURCE_CONTEXT_LINES];
+        traces[0].frames[0].post_context = traces[0].frames[0].pre_context.clone();
+        bound_source_context(&mut traces);
+        assert_eq!(traces[0].frames[0].context_line, None);
+        assert!(traces[0].frames[0].pre_context.is_empty());
     }
 
     #[tokio::test]
@@ -807,6 +879,7 @@ mod tests {
                     module: None,
                     line: None,
                     column: None,
+                    ..SymbolicatedFrame::default()
                 }],
             }],
             missing_debug_ids: Vec::new(),

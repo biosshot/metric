@@ -6,7 +6,7 @@ use sqlx::{
 };
 use std::{borrow::Cow, future::Future, pin::Pin, time::Duration};
 
-const SCHEMA_GENERATION: i64 = 21;
+const SCHEMA_GENERATION: i64 = 22;
 // Fixed application lock namespace, independent of table existence or Mongo generation.
 const MIGRATION_LOCK: i64 = 0x4d45_5452_4943_5047;
 // This is application-owned static SQL, never configurable or derived from input.
@@ -337,6 +337,13 @@ fn registry() -> Migrator {
                 Cow::Borrowed("durable bounded project deletion"),
                 MigrationType::Simple,
                 include_str!("../migrations/0021_project_deletion.sql").into_sql_str(),
+                false,
+            ),
+            Migration::new(
+                22,
+                Cow::Borrowed("native source bundle debug files"),
+                MigrationType::Simple,
+                include_str!("../migrations/0022_native_source_bundles.sql").into_sql_str(),
                 false,
             ),
         ]),
@@ -743,6 +750,61 @@ mod tests {
         assert!(!exists);
         owner.close().await.unwrap();
         bootstrap(&fixture).await;
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker PostgreSQL"]
+    async fn source_bundle_upgrade_from_twenty_one_preserves_existing_debug_files() {
+        let fixture = Fixture::new().await;
+        let mut legacy = registry();
+        legacy.migrations.to_mut().retain(|step| step.version <= 21);
+        PostgresSchemaManager::ensure_registry(
+            &fixture.uri,
+            &fixture.policy,
+            &MigrationPolicy::default(),
+            &legacy,
+            &[],
+            21,
+        )
+        .await
+        .unwrap();
+        let db = crate::PostgresDatabase::connect(&fixture.uri, &fixture.policy)
+            .await
+            .unwrap();
+        crate::test_support::seed_projects(db.clone(), 32).await;
+        sqlx::query("INSERT INTO metric.debug_files(project_id,file_id,debug_id,file_type,checksum,sha1,size,name,uploaded_at) VALUES(1,$1,$2,3,$3,$4,12,'existing.pdb',1800000000000)")
+            .bind([1_u8;16].as_slice()).bind([2_u8;16].as_slice()).bind([3_u8;32].as_slice()).bind([4_u8;20].as_slice()).execute(&db.pool).await.unwrap();
+        let before: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(f) FROM metric.debug_files f")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            sqlx::query("UPDATE metric.debug_files SET file_type=6")
+                .execute(&db.pool)
+                .await
+                .is_err()
+        );
+        bootstrap(&fixture).await;
+        bootstrap(&fixture).await;
+        let after: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(f) FROM metric.debug_files f")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(before, after);
+        sqlx::query("UPDATE metric.debug_files SET file_type=6")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            sqlx::query("UPDATE metric.debug_files SET file_type=7")
+                .execute(&db.pool)
+                .await
+                .is_err()
+        );
+        db.pool.close().await;
         fixture.cleanup().await;
     }
 

@@ -14,6 +14,22 @@ interface Frame {
   pre_context?: string[];
   post_context?: string[];
   in_app?: boolean;
+  instruction_addr?: string;
+}
+
+interface DerivedTrace {
+  origin: { kind: string; index?: number };
+  frames: Array<{
+    original_index: number;
+    function?: string;
+    filename?: string;
+    module?: string;
+    line?: number;
+    column?: number;
+    context_line?: string;
+    pre_context?: string[];
+    post_context?: string[];
+  }>;
 }
 
 interface SourceLine {
@@ -26,18 +42,64 @@ interface SourceLine {
 const props = defineProps<{ body: Record<string, unknown> }>();
 const expanded = ref(false);
 const INITIAL_FRAMES = 40;
+const showOriginal = ref(false);
+const symbolication = computed(
+  () =>
+    (
+      props.body._metric as
+        | {
+            symbolication?: { status?: string; derived?: DerivedTrace[] };
+          }
+        | undefined
+    )?.symbolication,
+);
+const hasSymbols = computed(
+  () =>
+    ['complete', 'partial'].includes(symbolication.value?.status ?? '') &&
+    symbolication.value?.derived?.some((trace) => trace.frames.length),
+);
+
+function resolvedFrames(raw: Frame[], kind: string, index?: number): Frame[] {
+  if (showOriginal.value || !hasSymbols.value) return raw;
+  const trace = symbolication.value?.derived?.find(
+    (value) => value.origin.kind === kind && value.origin.index === index,
+  );
+  return raw.flatMap((frame, originalIndex) => {
+    const derived = trace?.frames.filter((value) => value.original_index === originalIndex);
+    if (!derived?.length) return [frame];
+    return derived.map((value) => ({
+      ...frame,
+      function: value.function ?? frame.function,
+      filename: value.filename ?? frame.filename,
+      module: value.module ?? frame.module,
+      lineno: value.line,
+      colno: value.column,
+      context_line: value.context_line,
+      pre_context: value.pre_context,
+      post_context: value.post_context,
+    }));
+  });
+}
 
 const frames = computed<Frame[]>(() => {
   const exception = props.body.exception as { values?: unknown[] } | undefined;
   const values = Array.isArray(exception?.values) ? exception.values : [];
-  const exceptionFrames = values.flatMap((value) => {
-    const item = value as { stacktrace?: { frames?: unknown[] } };
-    return Array.isArray(item.stacktrace?.frames) ? (item.stacktrace.frames as Frame[]) : [];
+  const exceptionFrames = values.flatMap((value, index) => {
+    const item = value as {
+      stacktrace?: { frames?: Frame[] };
+      raw_stacktrace?: { frames?: Frame[] };
+    };
+    if (Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length) {
+      return resolvedFrames(item.stacktrace.frames, 'exception', index);
+    }
+    return Array.isArray(item.raw_stacktrace?.frames)
+      ? resolvedFrames(item.raw_stacktrace.frames, 'exception_raw', index)
+      : [];
   });
   if (exceptionFrames.length) return exceptionFrames.toReversed();
   const stacktrace = props.body.stacktrace as { frames?: unknown[] } | undefined;
   if (Array.isArray(stacktrace?.frames) && stacktrace.frames.length) {
-    return (stacktrace.frames as Frame[]).toReversed();
+    return resolvedFrames(stacktrace.frames as Frame[], 'event').toReversed();
   }
   const threads = props.body.threads as { values?: unknown[] } | undefined;
   const threadValues = Array.isArray(threads?.values) ? threads.values : [];
@@ -70,11 +132,13 @@ const visibleFrames = computed(() =>
 function sourceLines(frame: Frame): SourceLine[] {
   const before = Array.isArray(frame.pre_context) ? frame.pre_context : [];
   const after = Array.isArray(frame.post_context) ? frame.post_context : [];
-  const content = [...before, ...(frame.context_line ? [frame.context_line] : []), ...after];
+  const currentLine = frame.context_line;
+  const hasCurrentLine = typeof currentLine === 'string';
+  const content = [...before, ...(hasCurrentLine ? [currentLine] : []), ...after];
   return content.map((line, index) => ({
     content: line,
     lineNumber: frame.lineno ? frame.lineno - before.length + index : undefined,
-    current: Boolean(frame.context_line) && index === before.length,
+    current: hasCurrentLine && index === before.length,
     tokens: tokenizeSyntaxLine(line),
   }));
 }
@@ -86,7 +150,18 @@ function sourceLines(frame: Frame): SourceLine[] {
       <div>
         <p class="eyebrow">{{ $t('stack.title') }}</p>
         <h2 id="stack-heading">{{ $t('stack.frames', frames.length) }}</h2>
+        <p v-if="hasSymbols" class="muted">
+          {{ $t(symbolication?.status === 'partial' ? 'stack.partial' : 'stack.symbolicated') }}
+        </p>
       </div>
+      <button
+        v-if="hasSymbols"
+        class="button button--secondary"
+        type="button"
+        @click="showOriginal = !showOriginal"
+      >
+        {{ $t(showOriginal ? 'stack.showSymbolicated' : 'stack.showOriginal') }}
+      </button>
       <button
         v-if="frames.length > INITIAL_FRAMES"
         class="button button--secondary"
@@ -109,7 +184,13 @@ function sourceLines(frame: Frame): SourceLine[] {
         <div>
           <strong>{{ frame.function || $t('stack.unknownFunction') }}</strong>
           <p>
-            {{ frame.filename || frame.abs_path || frame.module || $t('stack.unknownSource') }}
+            {{
+              frame.filename ||
+              frame.abs_path ||
+              frame.module ||
+              frame.instruction_addr ||
+              $t('stack.unknownSource')
+            }}
             <span v-if="frame.lineno"
               >:{{ frame.lineno }}<template v-if="frame.colno">:{{ frame.colno }}</template></span
             >

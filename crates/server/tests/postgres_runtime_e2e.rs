@@ -6,7 +6,7 @@ use std::process::Command;
 fn postgres_runtime_without_mongo_auth_ingest_scope_and_restart() {
     let report = run_suite("server");
     assert!(report["passed"].as_u64().unwrap() > 0);
-    assert_eq!(report["schema_generation"], 21);
+    assert_eq!(report["schema_generation"], 22);
 }
 
 #[test]

@@ -750,7 +750,7 @@ async fn symbolicate_uploaded_native(
         let request = String::from_utf8_lossy(&request[..count]);
         assert!(request.contains("revision=1"));
         assert!(request.contains(&expected_debug_id.to_string()));
-        let body = r#"{"status":"complete","stacktraces":[{"frames":[{"status":"symbolicated","original_index":0,"function":"MetricSdkCompatibilityError","filename":"metric.c","module":"metric","lineno":42}]}],"missing_debug_ids":[]}"#;
+        let body = r#"{"status":"completed","stacktraces":[{"frames":[{"status":"symbolicated","original_index":0,"function":"MetricSdkCompatibilityError","filename":"metric.c","module":"metric","lineno":42}]}],"missing_debug_ids":[]}"#;
         stream
             .write_all(
                 format!(
@@ -812,7 +812,7 @@ async fn symbolicate_uploaded_javascript(
         let mut request = vec![0_u8; 32 * 1024];
         let count = stream.read(&mut request).await.unwrap();
         let request = String::from_utf8_lossy(&request[..count]);
-        assert!(request.starts_with("POST /symbolicate-js?scope=project-7 "));
+        assert!(request.starts_with("POST /symbolicate-js?scope=project-7-debug-0-artifacts-1 "));
         assert!(request.contains("artifact-lookup/?revision=1"));
         assert!(request.contains(&expected_debug_id.to_string()));
         let body_start = request.find("\r\n\r\n").unwrap() + 4;
@@ -833,6 +833,13 @@ async fn symbolicate_uploaded_javascript(
             candidates
                 .as_array()
                 .is_some_and(|values| !values.is_empty())
+        );
+        assert_eq!(candidates[0]["type"], "bundle");
+        assert!(
+            candidates[0]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with(source["url"].as_str().unwrap())
         );
         let pinned: serde_json::Value = serde_json::from_str(include_str!(
             "../../../sdk-tests/symbolicator/26.6.0-javascript-contract.json"
@@ -884,7 +891,7 @@ async fn symbolicate_uploaded_javascript(
         output.derived[0].frames[0].function.as_deref(),
         Some("fail")
     );
-    assert_eq!(output.derived[0].frames[0].line, Some(6));
+    assert_eq!(output.derived[0].frames[0].line, Some(2));
     fake.await?;
     Ok(())
 }

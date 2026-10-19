@@ -95,8 +95,21 @@ The first symbolication scope is native:
 - Rust, C++, Objective-C, and Swift demangling where supported.
 
 ADR-0028 adds JavaScript and Node.js source maps through whole artifact bundles and
-Symbolicator's `/symbolicate-js` endpoint. ProGuard/R8, full minidump stackwalking,
-native source bundles, BCSymbolMaps, and IL2CPP remain later format-specific stages.
+Symbolicator's `/symbolicate-js` endpoint. Native source bundles are supported as
+of 2026-10-15 through the same CLI debug-file upload and private lookup/download
+path (`sourcebundle`, storage type 6). PostgreSQL migration 0022 widens the existing
+file-type constraint; MongoDB reads the additional type without rewriting data.
+ProGuard/R8, full minidump stackwalking, BCSymbolMaps, and IL2CPP remain later
+format-specific stages.
+
+Derived native and JavaScript frames retain optional `pre_context`, `context_line`
+and `post_context` in the event's existing `_metric.symbolication.derived` JSON.
+The pinned Symbolicator supplies up to five lines on each side. Metric bounds
+derived snippets to 128 KiB per result, 20 lines on each side and 4096 bytes per
+line; excessive snippets are omitted without discarding resolved coordinates.
+Finalization omits derived snippets if they alone would exceed the event-size
+limit. Original SDK frames remain unchanged, and missing source context does not
+mean that function/file/line symbolication failed.
 
 ### Persistent debug-file storage
 

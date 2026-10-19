@@ -4,6 +4,19 @@ This file is the canonical navigation entry for `arch-docs`. It prevents histori
 phase contracts and superseded proposals from being mistaken for current runtime
 behavior.
 
+## Symbolication repair plan
+
+[The symbolication repair plan dated 2026-10-15](verification/2026-10-15-symbolication-repair-plan.md)
+defines the scoped adapter fix, local checks of native and JavaScript contracts,
+and a required real-Symbolicator CI gate. The local implementation and verification
+are recorded in [the repair results](verification/2026-10-15-symbolication-repair-results.md);
+the SDK matrix is unchanged. GitHub Actions execution remains separate from the
+local verification.
+
+[The integration report dated 2026-10-19](verification/2026-10-19-symbolication-context-integration.md)
+records source-context and Vue integration on top of merged PRs #13–#20, including
+real Symbolicator checks on PostgreSQL and MongoDB.
+
 ## Current execution status
 
 Status as of 2026-10-08:

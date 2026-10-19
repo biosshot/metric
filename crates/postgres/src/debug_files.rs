@@ -417,6 +417,7 @@ fn decode_file(row: &PgRow) -> Result<DebugFile> {
             3 => DebugFileType::Pdb,
             4 => DebugFileType::PortablePdb,
             5 => DebugFileType::Breakpad,
+            6 => DebugFileType::SourceBundle,
             _ => return Err(DebugFileStoreError::InvalidData),
         },
         checksum: fixed(row, "checksum")?,

@@ -242,6 +242,53 @@ jobs:
       - name: Verify external databases requiring client certificates
         run: python scripts/test-installer.py --transport tls
 
+  symbolication:
+    name: Real native and JavaScript symbolication
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            sdk-tests/sentry-cli/package-lock.json
+            sdk-tests/browser/package-lock.json
+      - name: Prepare locked CLI and source-map compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang lld llvm
+          npm ci --prefix sdk-tests/sentry-cli
+          npm ci --prefix sdk-tests/browser
+      - name: Start synthetic PostgreSQL and pin the real Symbolicator
+        run: |
+          docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml up -d --wait postgres
+          docker pull ghcr.io/getsentry/symbolicator:26.6.0@sha256:b66d1d5c796e056bf19f597bb7d1ac39604a767eac501dee3710b8844b12228f
+      - name: Build Metric
+        run: cargo build -p metric-server --bin metric-server --locked -j1
+      - name: Require actual symbols after private download and finalization
+        run: python scripts/test-symbolication.py --backend postgres
+      - name: Retain contract evidence and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbolication-contracts
+          path: |
+            target/symbolication-tests/**/report.json
+            target/symbolication-tests/**/metric.log
+            target/symbolication-tests/**/symbolicator.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop this job's database fixture
+        if: always()
+        run: docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml down --volumes
+
   browser:
     name: Browser SDK
     runs-on: ubuntu-latest

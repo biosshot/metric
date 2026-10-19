@@ -1022,6 +1022,7 @@ mod tests {
                     module: Some("demo".into()),
                     line: Some(99),
                     column: None,
+                    ..SymbolicatedFrame::default()
                 }],
             }],
             missing_debug_ids: Vec::new(),
@@ -1184,6 +1185,7 @@ mod tests {
                     module: Some("frontend".into()),
                     line: Some(10),
                     column: Some(2),
+                    ..SymbolicatedFrame::default()
                 }],
             }],
             missing_debug_ids: Vec::new(),
@@ -1224,6 +1226,7 @@ mod tests {
                         module: Some("frontend".into()),
                         line: Some(10),
                         column: Some(2),
+                        ..SymbolicatedFrame::default()
                     }],
                 }],
                 missing_debug_ids: Vec::new(),

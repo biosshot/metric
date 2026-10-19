@@ -226,9 +226,9 @@ identity and the absence of blob objects for a base Error Event.
 
 ## Sentry CLI debug files
 
-`sentry-cli/` pins current 3.x (`3.6.2`) and retained 2.x (`2.58.6`) contracts.
-Install with `npm ci`, verify both binaries with `npm run versions`, then point a
-real upload at Metric:
+`sentry-cli/` pins current 3.x (`3.6.2`), retained 2.x (`2.58.6`), and
+getsentry/cli (`sentry` on npm, `0.44.1`) contracts. Install with `npm ci`, verify
+the pinned versions with `npm run versions`, then point a real upload at Metric:
 
 ```powershell
 $env:SENTRY_URL = "http://127.0.0.1:4001/"
@@ -238,6 +238,95 @@ $env:SENTRY_PROJECT = "<project slug>"
 npx sentry-cli debug-files upload fixtures/metric.sym
 ```
 
-`symbolicator/26.6.0-native-contract.json` pins the external native HTTP schema
-used by the adapter test. The external process remains separately deployed and is
-never bundled into Metric.
+## Real symbolication contracts and local demo
+
+`scripts/test-symbolication.py` runs the actual Symbolicator 26.6.0 image pinned by
+digest, the built Metric server and private lookup/download callbacks. It uploads
+files with the existing real CLI 3.x, ingests events and reads finalized results
+through Metric's public API. No new SDK family is added.
+
+Prepare the existing CLI/browser dependencies and the synthetic database fixture:
+
+```text
+npm ci --prefix sdk-tests/sentry-cli
+npm ci --prefix sdk-tests/browser
+docker compose -p metric-pg-dev -f deploy/compose.postgres.dev.yml up -d --wait postgres
+cargo build -p metric-server --bin metric-server --locked
+python scripts/test-symbolication.py
+```
+
+Linux needs GCC, `nm` and `readelf` to build the small ELF/DWARF fixture. The real
+Windows PDB fixture needs `clang`, `lld-link` and `llvm-pdbutil` on PATH, on both
+Linux and Windows (`apt-get install clang lld llvm` on Ubuntu). It is cross-compiled
+without a Windows SDK or CRT. On Windows the coordinator invokes the ELF tools in
+the Ubuntu WSL distribution and the LLVM tools natively. Docker must
+support `host.docker.internal:host-gateway`; Metric and the callback recorder bind
+on host interfaces so the container can reach them. Arbitrary source scraping and
+`connect_to_reserved_ips` stay disabled. Private downloads use project credentials.
+
+The mandatory suite covers Breakpad, ELF/DWARF and a genuine compiled Windows PDB.
+It uploads the PDB through `sentry-cli debug-files upload`, then repeats with
+`--include-sources` and requires a published `sourcebundle`. Three PDB frames must
+resolve to the expected callers and exact source snippets (five lines before and
+after each location). PDB-only and foreign-project events must not acquire source
+context from another project. Native frame addresses come from the PDB's line
+records; the freestanding executable is not run and this is not a minidump test.
+
+The suite also covers native partial and multiple traces, source maps by Debug ID and release/dist,
+missing files, warm and negative caches, revisions and project isolation. Tests
+also verify that the real backend fetched the private index and downloaded files.
+JavaScript positions are captured from an actual three-call minified stack; all
+three original functions and their exact source context are checked. Exact output
+values come from fixture source, not a fake response. A missing
+dependency or unexecuted required case fails the command.
+
+JavaScript regression cases also insert a frame without a source location between
+resolved frames and require the original indexes, coordinates and source context
+to survive. A trace with no sendable frames must retain its raw stack and report
+`missing`. These cases cover the interaction between incomplete-stack handling
+and source-context preservation.
+
+Use `--backend mongodb` with the existing Mongo fixture for the same contracts:
+
+```text
+docker compose -p metric-pg-baseline -f deploy/compose.dev.yml up -d --wait mongodb
+python scripts/test-symbolication.py --backend mongodb
+```
+
+`--faults` adds a controlled HTTP 503 test through the complete server, checking
+raw fallback after retries and recovery of subsequent successful symbolication.
+`--sdk` additionally runs real Browser/Node source-map errors and the existing
+nine pinned SDK senders. Prepare their runtimes and dependencies using the sections
+above. For Chromium, run `npx playwright install chromium` in `sdk-tests/browser`.
+
+Build the Web UI to verify visible three-call stacks, highlighted source context and
+the original-frame toggle. To leave the synthetic installation available locally:
+
+```text
+npm ci --prefix web
+npm run build --prefix web
+python scripts/test-symbolication.py --sdk --ui --keep --port 4001
+```
+
+Open `http://localhost:4001`. The command prints synthetic login credentials and
+direct native/JavaScript event URLs. They are also saved in the run's
+`target/symbolication-tests/<run>/DEMO-RU.txt`. `--ui` saves `native-event.png` and
+`javascript-event.png` after checking caller order, eleven source lines around the
+failure, the highlighted line, and the original-frame toggle. Ctrl+C or creating an empty `STOP` file in
+that run directory stops the demo and drops its owned database. Normal test runs
+clean up automatically; shared development database containers remain available.
+The kept demo runs a private copy of the built binary so Windows does not lock
+Cargo's `target/debug/metric-server.exe` during subsequent builds.
+
+Each run retains `report.json` with case results, finalized event IDs, sanitized
+real HTTP contracts, callback observations and the image digest. No DSN or service
+token is written into this report. The external Symbolicator remains separately
+deployed and is never bundled into Metric.
+
+The `symbolication` job in `.github/workflows/ci.yml` runs the mandatory real suite
+on PRs, main pushes and release Checks. Release publication depends on Checks;
+the job has no successful skip or `continue-on-error`. The small JSON files under
+`symbolicator/` are decoder unit fixtures; they do not establish real integration
+success by themselves. Portable PDB, Mach-O and minidump processing are not covered
+by the new native fixtures. PostgreSQL migration 0022 adds the native source bundle
+file type; existing event JSON and debug files require no data conversion.

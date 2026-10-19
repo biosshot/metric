@@ -3,7 +3,7 @@
   "endpoint": "/symbolicate",
   "request_contract": {
     "platform": "native",
-    "threads": [],
+    "stacktraces": [],
     "modules": [],
     "options": {
       "dif_candidates": true,
@@ -12,10 +12,8 @@
     }
   },
   "response": {
-    "status": "complete",
+    "status": "completed",
     "stacktraces": [],
-    "missing_debug_ids": [
-      "67e9247c-814e-392b-a027-dbde6748fcbf-1"
-    ]
+    "modules": []
   }
 }

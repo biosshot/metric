@@ -2,17 +2,19 @@
   "image": "ghcr.io/getsentry/symbolicator:26.6.0",
   "endpoint": "/symbolicate-js",
   "response": {
+    "status": "completed",
     "stacktraces": [
       {
         "frames": [
           {
+            "data": { "symbolicated": true },
             "function": "fail",
             "filename": "app.js",
-            "module": "static/app",
-            "abs_path": "webpack:///app.js",
-            "lineno": 6,
+            "module": "app",
+            "abs_path": "https://example.invalid/static/app.js",
+            "lineno": 2,
             "colno": 9,
-            "context_line": "throw new Error(greet('Metric'));"
+            "context_line": "  return `hello ${name}`;"
           }
         ]
       }

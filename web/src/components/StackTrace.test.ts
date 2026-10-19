@@ -22,6 +22,123 @@ function eventWithFrames(count: number): Record<string, unknown> {
 }
 
 describe('StackTrace', () => {
+  it('renders derived source context for every caller and restores raw context on toggle', async () => {
+    const raw = { function: 'a', filename: 'bundle.js', lineno: 1, context_line: 'generated();' };
+    const body = {
+      stacktrace: { frames: [raw, { instruction_addr: '0x10001000' }] },
+      _metric: {
+        symbolication: {
+          status: 'complete',
+          derived: [
+            {
+              origin: { kind: 'event' },
+              frames: [
+                {
+                  original_index: 0,
+                  function: 'caller',
+                  filename: 'app.ts',
+                  line: 8,
+                  pre_context: ['prepare();'],
+                  context_line: 'fail();',
+                  post_context: ['finish();'],
+                },
+                {
+                  original_index: 1,
+                  function: 'fail',
+                  filename: 'native.c',
+                  line: 42,
+                  pre_context: ['before();'],
+                  context_line: '',
+                  post_context: ['after();'],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const original = JSON.stringify(body);
+    render(StackTrace, { props: { body } });
+    expect(
+      Array.from(document.querySelectorAll('.stack-frame strong')).map((node) => node.textContent),
+    ).toEqual(['fail', 'caller']);
+    expect(document.querySelectorAll('.source-context__current')).toHaveLength(2);
+    expect(document.querySelector('.source-context__current')).toHaveTextContent('42');
+    expect(document.querySelectorAll('.source-context li')).toHaveLength(6);
+    expect(document.querySelector('.stack-list')).not.toHaveTextContent('generated();');
+    await fireEvent.click(screen.getByRole('button', { name: 'Show original frames' }));
+    expect(document.querySelector('.source-context code')).toHaveTextContent('generated();');
+    expect(document.querySelector('.stack-list')).not.toHaveTextContent('before();');
+    expect(JSON.stringify(body)).toBe(original);
+  });
+
+  it('displays derived native frames with their matching exception and keeps raw data intact', () => {
+    const body = {
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [{ function: 'otherException', filename: 'other.py', lineno: 3 }],
+            },
+          },
+          { stacktrace: { frames: [{ instruction_addr: '0x10001000', in_app: true }] } },
+        ],
+      },
+      _metric: {
+        symbolication: {
+          status: 'complete',
+          derived: [
+            {
+              origin: { kind: 'exception', index: 1 },
+              frames: [
+                {
+                  original_index: 0,
+                  function: 'metric_sdk_compatibility',
+                  filename: 'src/main.rs',
+                  line: 42,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const original = JSON.stringify(body);
+    render(StackTrace, { props: { body } });
+    expect(screen.getByText('metric_sdk_compatibility')).toBeVisible();
+    expect(screen.getByText('otherException')).toBeVisible();
+    expect(screen.getByText('src/main.rs', { exact: false })).toHaveTextContent(':42');
+    expect(JSON.stringify(body)).toBe(original);
+  });
+
+  it('keeps unresolved frames in a partial event and does not show stale generated context', () => {
+    const body = {
+      stacktrace: {
+        frames: [
+          { function: 'a', filename: 'bundle.js', lineno: 1, context_line: 'minified();' },
+          { function: 'unresolved', filename: 'vendor.js', lineno: 2 },
+        ],
+      },
+      _metric: {
+        symbolication: {
+          status: 'partial',
+          derived: [
+            {
+              origin: { kind: 'event' },
+              frames: [
+                { original_index: 0, function: 'explode', filename: 'app.ts', line: 12, column: 5 },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    render(StackTrace, { props: { body } });
+    expect(screen.getByText('explode')).toBeVisible();
+    expect(screen.getByText('unresolved')).toBeVisible();
+    expect(screen.queryByText('minified();')).not.toBeInTheDocument();
+  });
+
   it('renders pre, current, and post source context with line numbers', () => {
     const body = {
       exception: {

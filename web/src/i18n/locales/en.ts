@@ -186,6 +186,10 @@ export default {
     durableNote: 'No Event is accepted before its project policy and DSN are durably stored.',
   },
   stack: {
+    symbolicated: 'Symbols resolved',
+    partial: 'Symbols partially resolved',
+    showOriginal: 'Show original frames',
+    showSymbolicated: 'Show resolved frames',
     title: 'Stack trace',
     frames: 'no frames | {count} frame | {count} frames',
     showFirst: 'Show first 40',

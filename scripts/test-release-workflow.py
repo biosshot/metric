@@ -8,6 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseChecks(unittest.TestCase):
+    def test_real_symbolication_is_an_unconditional_check(self):
+        ci = yaml.load((ROOT / '.github/workflows/ci.yml').read_text(), Loader=yaml.BaseLoader)
+        job = ci['jobs']['symbolication']
+        self.assertNotIn('if', job)
+        self.assertNotIn('continue-on-error', job)
+        commands = [step for step in job['steps'] if 'scripts/test-symbolication.py' in step.get('run', '')]
+        self.assertEqual(len(commands), 1)
+        self.assertNotIn('if', commands[0])
+        self.assertNotIn('continue-on-error', commands[0])
+        self.assertIn('--backend postgres', commands[0]['run'])
+
     def test_same_commit_checks_gate_all_publishers(self):
         ci = yaml.load((ROOT / '.github/workflows/ci.yml').read_text(), Loader=yaml.BaseLoader)
         release = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)

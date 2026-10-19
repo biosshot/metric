@@ -150,8 +150,15 @@ impl ExternalSymbolicator {
             .iter()
             .map(|trace| trace.origin)
             .collect::<Vec<_>>();
+        let frame_counts = request
+            .traces
+            .iter()
+            .map(|trace| trace.frames.len())
+            .collect::<Vec<_>>();
+        let debug_revision = request.debug_file_revision;
+        let artifact_revision = request.artifact_revision;
         let mut js_plans = Vec::new();
-        let (endpoint, payload) = match request.kind {
+        let (mut endpoint, payload) = match request.kind {
             SymbolicationKind::JavaScript => {
                 let source_url = self
                     .config
@@ -170,9 +177,6 @@ impl ExternalSymbolicator {
                 } else {
                     endpoint.set_path("/symbolicate-js");
                 }
-                endpoint
-                    .query_pairs_mut()
-                    .append_pair("scope", &format!("project-{}", project_id.get()));
                 let (wire, plans) = JsWireRequest::from_domain(
                     request,
                     WireSource {
@@ -217,6 +221,15 @@ impl ExternalSymbolicator {
                 return Err(SymbolicationBackendError::MalformedResponse);
             }
         };
+        // Both successful and negative caches must be private to a project and
+        // invalidated when a newly uploaded artifact changes its source index.
+        endpoint.query_pairs_mut().append_pair(
+            "scope",
+            &format!(
+                "project-{}-debug-{debug_revision}-artifacts-{artifact_revision}",
+                project_id.get()
+            ),
+        );
         let javascript = request_kind(&payload) != "native";
         let response = match self.client.post(endpoint).json(&payload).send().await {
             Ok(response) => response,
@@ -266,7 +279,7 @@ impl ExternalSymbolicator {
         } else {
             serde_json::from_slice::<WireResponse>(&bytes)
                 .map_err(|_| SymbolicationBackendError::MalformedResponse)
-                .and_then(|wire| wire.into_domain(&origins))
+                .and_then(|wire| wire.into_domain(&origins, &frame_counts))
         }
         .inspect_err(|_| self.record_failure())?;
         self.consecutive_failures.store(0, Ordering::Release);
@@ -308,7 +321,7 @@ impl SymbolicationBackend for ExternalSymbolicator {
 struct WireRequest {
     platform: &'static str,
     sources: [WireSource; 1],
-    threads: Vec<WireTrace>,
+    stacktraces: Vec<WireTrace>,
     modules: Vec<WireModule>,
     options: WireOptions,
 }
@@ -318,7 +331,7 @@ impl WireRequest {
         Self {
             platform: "native",
             sources: [source],
-            threads: request
+            stacktraces: request
                 .traces
                 .into_iter()
                 .map(|trace| WireTrace {
@@ -341,7 +354,7 @@ impl WireRequest {
                     code_id: module.code_id.map(Into::into),
                     debug_file: module.code_file.map(Into::into),
                     image_addr: module.image_address.map(Into::into),
-                    image_size: module.image_size.map(|size| format!("0x{size:x}")),
+                    image_size: module.image_size,
                 })
                 .collect(),
             options: WireOptions {
@@ -381,7 +394,7 @@ struct WireModule {
     code_id: Option<String>,
     debug_file: Option<String>,
     image_addr: Option<String>,
-    image_size: Option<String>,
+    image_size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -552,6 +565,7 @@ struct JsWireOptions {
 
 #[derive(Deserialize)]
 struct JsWireResponse {
+    status: String,
     #[serde(default)]
     stacktraces: Vec<JsResponseTrace>,
     #[serde(default)]
@@ -565,6 +579,7 @@ impl JsWireResponse {
         self,
         plans: Vec<JsTracePlan>,
     ) -> Result<BackendSymbolicationResult, SymbolicationBackendError> {
+        completed_status(&self.status)?;
         let runs = plans.iter().map(|plan| plan.runs.len()).sum::<usize>();
         if self.stacktraces.len() != runs
             || (!self.raw_stacktraces.is_empty() && self.raw_stacktraces.len() != runs)
@@ -572,10 +587,10 @@ impl JsWireResponse {
             return Err(SymbolicationBackendError::MalformedResponse);
         }
         let mut responses = self.stacktraces.into_iter();
-        let (mut sent, mut unsent) = (0, 0);
+        let mut had_missing = false;
         let mut derived = Vec::with_capacity(plans.len());
         for plan in plans {
-            unsent += plan.unsent;
+            had_missing |= plan.unsent > 0;
             // A trace with nothing sent gets no derived trace, so it is grouped by its
             // raw frames; an empty one would make grouping skip it.
             if plan.runs.is_empty() && plan.unsent > 0 {
@@ -589,15 +604,23 @@ impl JsWireResponse {
                 if response.frames.len() != indexes.len() {
                     return Err(SymbolicationBackendError::MalformedResponse);
                 }
-                sent += indexes.len();
-                frames.extend(response.frames.into_iter().zip(indexes).map(
-                    |(frame, original_index)| SymbolicatedFrame {
-                        original_index,
-                        function: frame.function.map(Into::into),
-                        filename: frame.filename.map(Into::into),
-                        module: frame.module.map(Into::into),
-                        line: frame.lineno,
-                        column: frame.colno,
+                frames.extend(response.frames.into_iter().zip(indexes).filter_map(
+                    |(frame, original_index)| {
+                        if !frame.data.symbolicated {
+                            had_missing = true;
+                            return None;
+                        }
+                        Some(SymbolicatedFrame {
+                            original_index,
+                            function: frame.function.map(Into::into),
+                            filename: frame.filename.map(Into::into),
+                            module: frame.module.map(Into::into),
+                            line: frame.lineno,
+                            column: frame.colno,
+                            context_line: frame.context_line.map(Into::into),
+                            pre_context: frame.pre_context.into_iter().map(Into::into).collect(),
+                            post_context: frame.post_context.into_iter().map(Into::into).collect(),
+                        })
                     },
                 ));
             }
@@ -606,8 +629,9 @@ impl JsWireResponse {
                 frames,
             });
         }
-        let has_errors = !self.errors.is_empty();
-        let status = match (sent > 0, has_errors || unsent > 0) {
+        let has_frames = derived.iter().any(|trace| !trace.frames.is_empty());
+        let has_errors = had_missing || !self.errors.is_empty();
+        let status = match (has_frames, has_errors) {
             (true, true) => BackendSymbolicationStatus::Partial,
             (true, false) => BackendSymbolicationStatus::Complete,
             (false, _) => BackendSymbolicationStatus::Missing,
@@ -616,7 +640,7 @@ impl JsWireResponse {
             status,
             derived,
             missing_debug_ids: Vec::new(),
-            diagnostics: has_errors
+            diagnostics: (status == BackendSymbolicationStatus::Partial)
                 .then_some(SymbolicationDiagnosticCode::BackendPartial)
                 .into_iter()
                 .collect(),
@@ -632,11 +656,32 @@ struct JsResponseTrace {
 
 #[derive(Deserialize)]
 struct JsResponseFrame {
+    #[serde(default)]
+    data: JsResponseFrameData,
     function: Option<String>,
     filename: Option<String>,
     module: Option<String>,
     lineno: Option<u64>,
     colno: Option<u64>,
+    context_line: Option<String>,
+    #[serde(default)]
+    pre_context: Vec<String>,
+    #[serde(default)]
+    post_context: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct JsResponseFrameData {
+    #[serde(default)]
+    symbolicated: bool,
+}
+
+fn completed_status(status: &str) -> Result<(), SymbolicationBackendError> {
+    match status {
+        "completed" => Ok(()),
+        "pending" => Err(SymbolicationBackendError::Timeout),
+        _ => Err(SymbolicationBackendError::MalformedResponse),
+    }
 }
 
 #[derive(Deserialize)]
@@ -646,23 +691,24 @@ struct WireResponse {
     stacktraces: Vec<WireSymbolicatedTrace>,
     #[serde(default)]
     missing_debug_ids: Vec<String>,
+    #[serde(default)]
+    modules: Vec<WireResponseModule>,
+}
+
+#[derive(Deserialize)]
+struct WireResponseModule {
+    debug_status: Option<String>,
+    debug_id: Option<String>,
 }
 
 impl WireResponse {
     fn into_domain(
         self,
         origins: &[RawTraceOrigin],
+        frame_counts: &[usize],
     ) -> Result<BackendSymbolicationResult, SymbolicationBackendError> {
-        if self.status == "pending" {
-            return Err(SymbolicationBackendError::Timeout);
-        }
-        if self.status == "error" {
-            return Err(SymbolicationBackendError::MalformedResponse);
-        }
-        if self.status != "complete" {
-            return Err(SymbolicationBackendError::MalformedResponse);
-        }
-        if self.stacktraces.len() != origins.len() {
+        completed_status(&self.status)?;
+        if self.stacktraces.len() != origins.len() || origins.len() != frame_counts.len() {
             return Err(SymbolicationBackendError::MalformedResponse);
         }
         let mut had_missing = false;
@@ -670,7 +716,8 @@ impl WireResponse {
             .stacktraces
             .into_iter()
             .zip(origins.iter().copied())
-            .map(|(trace, origin)| trace.into_domain(origin, &mut had_missing))
+            .zip(frame_counts.iter().copied())
+            .map(|((trace, origin), count)| trace.into_domain(origin, count, &mut had_missing))
             .collect::<Result<Vec<_>, _>>()?;
         let has_symbols = derived.iter().any(|trace| !trace.frames.is_empty());
         let status = if had_missing && has_symbols {
@@ -680,11 +727,18 @@ impl WireResponse {
         } else {
             BackendSymbolicationStatus::Complete
         };
+        let mut missing_debug_ids = self.missing_debug_ids;
+        missing_debug_ids.extend(self.modules.into_iter().filter_map(|module| {
+            (module.debug_status.as_deref() == Some("missing"))
+                .then_some(module.debug_id)
+                .flatten()
+        }));
+        missing_debug_ids.sort_unstable();
+        missing_debug_ids.dedup();
         Ok(BackendSymbolicationResult {
             status,
             derived,
-            missing_debug_ids: self
-                .missing_debug_ids
+            missing_debug_ids: missing_debug_ids
                 .into_iter()
                 .map(String::into_boxed_str)
                 .collect(),
@@ -708,6 +762,7 @@ impl WireSymbolicatedTrace {
     fn into_domain(
         self,
         expected_origin: RawTraceOrigin,
+        original_frame_count: usize,
         had_missing: &mut bool,
     ) -> Result<SymbolicatedStacktrace, SymbolicationBackendError> {
         if let Some(origin) = &self.origin
@@ -715,28 +770,37 @@ impl WireSymbolicatedTrace {
         {
             return Err(SymbolicationBackendError::MalformedResponse);
         }
+        let mut frames = Vec::new();
+        for frame in self.frames {
+            // 26.6.0 returns frames in caller-first order, but original_index is
+            // assigned after its internal reversal to callee-first order.
+            let original_index = frame
+                .original_index
+                .checked_add(1)
+                .and_then(|index| original_frame_count.checked_sub(index))
+                .ok_or(SymbolicationBackendError::MalformedResponse)?;
+            if frame.status.as_deref() != Some("symbolicated") {
+                *had_missing = true;
+                continue;
+            }
+            frames.push(SymbolicatedFrame {
+                original_index,
+                function: frame.function.map(String::into_boxed_str),
+                filename: frame
+                    .abs_path
+                    .or(frame.filename)
+                    .map(String::into_boxed_str),
+                module: frame.module.map(String::into_boxed_str),
+                line: frame.line,
+                column: frame.column,
+                context_line: frame.context_line.map(Into::into),
+                pre_context: frame.pre_context.into_iter().map(Into::into).collect(),
+                post_context: frame.post_context.into_iter().map(Into::into).collect(),
+            });
+        }
         Ok(SymbolicatedStacktrace {
             origin: expected_origin,
-            frames: self
-                .frames
-                .into_iter()
-                .filter_map(|frame| {
-                    let symbolicated =
-                        frame.status.as_deref() == Some("symbolicated") || frame.function.is_some();
-                    if !symbolicated {
-                        *had_missing = true;
-                        return None;
-                    }
-                    Some(SymbolicatedFrame {
-                        original_index: frame.original_index,
-                        function: frame.function.map(String::into_boxed_str),
-                        filename: frame.filename.map(String::into_boxed_str),
-                        module: frame.module.map(String::into_boxed_str),
-                        line: frame.line,
-                        column: frame.column,
-                    })
-                })
-                .collect(),
+            frames,
         })
     }
 }
@@ -748,11 +812,17 @@ struct WireSymbolicatedFrame {
     original_index: usize,
     function: Option<String>,
     filename: Option<String>,
+    abs_path: Option<String>,
     module: Option<String>,
     #[serde(rename = "lineno")]
     line: Option<u64>,
     #[serde(rename = "colno")]
     column: Option<u64>,
+    context_line: Option<String>,
+    #[serde(default)]
+    pre_context: Vec<String>,
+    #[serde(default)]
+    post_context: Vec<String>,
 }
 
 fn parse_origin(value: &str) -> Result<RawTraceOrigin, SymbolicationBackendError> {
@@ -838,6 +908,310 @@ mod tests {
     use std::collections::BTreeMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[tokio::test]
+    async fn transport_failures_are_bounded_and_never_report_symbols() {
+        for (status, body, delay, expected) in [
+            (503, "", false, SymbolicationBackendError::Unavailable),
+            (422, "", false, SymbolicationBackendError::MalformedResponse),
+            (
+                200,
+                "not JSON",
+                false,
+                SymbolicationBackendError::MalformedResponse,
+            ),
+            (
+                200,
+                r#"{"status":"completed","stacktraces":{}}"#,
+                false,
+                SymbolicationBackendError::MalformedResponse,
+            ),
+            (
+                200,
+                r#"{"status":"pending"}"#,
+                false,
+                SymbolicationBackendError::Timeout,
+            ),
+            (200, "", true, SymbolicationBackendError::Timeout),
+            (
+                200,
+                &"x".repeat(2048),
+                false,
+                SymbolicationBackendError::MalformedResponse,
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = body.to_owned();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 8192];
+                let _ = stream.read(&mut request).await;
+                if delay {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+                let _ = stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            });
+            let adapter = ExternalSymbolicator::new(
+                ExternalSymbolicatorConfig {
+                    endpoint: Url::parse(&format!("http://{address}/symbolicate")).unwrap(),
+                    callback_base_url: Url::parse("http://127.0.0.1:4001/").unwrap(),
+                    request_timeout: Duration::from_millis(150),
+                    maximum_concurrency: 1,
+                    circuit_failure_threshold: 2,
+                    circuit_cooldown: Duration::from_secs(1),
+                    maximum_response_bytes: 1024,
+                },
+                PrivateSourceSigner::new(vec![7; 32], None).unwrap(),
+            )
+            .unwrap();
+            let request = SymbolicationRequest {
+                project_id: ProjectId::new(7).unwrap(),
+                debug_file_revision: 0,
+                artifact_revision: 0,
+                kind: SymbolicationKind::Native,
+                traces: Vec::new(),
+                modules: Vec::new(),
+                release: None,
+                dist: None,
+            };
+            assert_eq!(adapter.symbolicate(request).await, Err(expected));
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn native_frame_status_is_authoritative_and_preserves_inline_indices() {
+        let response: WireResponse = serde_json::from_value(serde_json::json!({
+            "status": "completed", "stacktraces": [{"frames": [
+                {"status": "symbolicated", "original_index": 1, "function": "inline", "abs_path": "src/main.rs", "filename": "main.rs", "lineno": 42,
+                 "pre_context": ["before();"], "context_line": "", "post_context": ["after();"]},
+                {"status": "symbolicated", "original_index": 1, "function": "caller"},
+                {"status": "missing", "original_index": 0, "function": "untrusted_raw_name"}
+            ]}], "modules": [{"debug_status": "missing", "debug_id": "missing-module"}]
+        })).unwrap();
+        let result = response
+            .into_domain(&[RawTraceOrigin::Exception { index: 2 }], &[2])
+            .unwrap();
+        assert_eq!(result.status, BackendSymbolicationStatus::Partial);
+        assert_eq!(
+            result.derived[0].origin,
+            RawTraceOrigin::Exception { index: 2 }
+        );
+        assert_eq!(result.derived[0].frames.len(), 2);
+        assert_eq!(
+            result.derived[0].frames[0].context_line.as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            result.derived[0].frames[0].pre_context[0].as_ref(),
+            "before();"
+        );
+        assert_eq!(
+            result.derived[0].frames[0].post_context[0].as_ref(),
+            "after();"
+        );
+        assert_eq!(
+            result.missing_debug_ids,
+            vec![Box::<str>::from("missing-module")]
+        );
+        assert_eq!(
+            result.derived[0].frames[0].filename.as_deref(),
+            Some("src/main.rs")
+        );
+        assert!(
+            result.derived[0]
+                .frames
+                .iter()
+                .all(|frame| frame.original_index == 0)
+        );
+    }
+
+    fn javascript_plans(frame_count: usize) -> Vec<JsTracePlan> {
+        vec![JsTracePlan {
+            origin: RawTraceOrigin::Event,
+            runs: vec![(0..frame_count).collect()],
+            unsent: 0,
+        }]
+    }
+
+    #[test]
+    fn javascript_requires_completed_response_and_explicit_symbolication_flags() {
+        for (flags, expected, indexes) in [
+            (
+                vec![false, false],
+                BackendSymbolicationStatus::Missing,
+                vec![],
+            ),
+            (
+                vec![true, false],
+                BackendSymbolicationStatus::Partial,
+                vec![0],
+            ),
+            (
+                vec![false, true],
+                BackendSymbolicationStatus::Partial,
+                vec![1],
+            ),
+            (
+                vec![true, true],
+                BackendSymbolicationStatus::Complete,
+                vec![0, 1],
+            ),
+        ] {
+            let frames = flags.into_iter().map(|symbolicated| serde_json::json!({
+                "function": "present_even_without_symbols", "data": {"symbolicated": symbolicated}
+            })).collect::<Vec<_>>();
+            let response: JsWireResponse = serde_json::from_value(serde_json::json!({
+                "status": "completed", "stacktraces": [{"frames": frames}]
+            }))
+            .unwrap();
+            let result = response.into_domain(javascript_plans(2)).unwrap();
+            assert_eq!(result.status, expected);
+            assert_eq!(
+                result.derived[0]
+                    .frames
+                    .iter()
+                    .map(|frame| frame.original_index)
+                    .collect::<Vec<_>>(),
+                indexes
+            );
+        }
+        assert_eq!(
+            completed_status("pending"),
+            Err(SymbolicationBackendError::Timeout)
+        );
+        assert_eq!(
+            completed_status("complete"),
+            Err(SymbolicationBackendError::MalformedResponse)
+        );
+        let missing_flag: JsWireResponse = serde_json::from_value(serde_json::json!({
+            "status": "completed", "stacktraces": [{"frames": [{"function": "raw"}]}]
+        }))
+        .unwrap();
+        assert_eq!(
+            missing_flag
+                .into_domain(javascript_plans(1))
+                .unwrap()
+                .status,
+            BackendSymbolicationStatus::Missing
+        );
+        let wrong_count: JsWireResponse =
+            serde_json::from_value(serde_json::json!({"status": "completed", "stacktraces": []}))
+                .unwrap();
+        assert_eq!(
+            wrong_count.into_domain(javascript_plans(1)),
+            Err(SymbolicationBackendError::MalformedResponse)
+        );
+    }
+
+    #[test]
+    fn javascript_preserves_original_source_context_and_accepts_older_responses() {
+        for context in [
+            serde_json::json!({}),
+            serde_json::json!({
+                "pre_context": ["const value = 42;"], "context_line": "throw new Error();", "post_context": ["}"]
+            }),
+        ] {
+            let mut frame = serde_json::json!({"data": {"symbolicated": true}, "function": "fail", "lineno": 42});
+            frame
+                .as_object_mut()
+                .unwrap()
+                .extend(context.as_object().unwrap().clone());
+            let response: JsWireResponse = serde_json::from_value(serde_json::json!({
+                "status": "completed", "stacktraces": [{"frames": [frame]}]
+            }))
+            .unwrap();
+            let result = response.into_domain(javascript_plans(1)).unwrap();
+            let frame = &result.derived[0].frames[0];
+            assert_eq!(
+                frame.context_line.as_deref(),
+                context["context_line"].as_str()
+            );
+            assert_eq!(
+                frame.pre_context.len(),
+                context["pre_context"].as_array().map_or(0, Vec::len)
+            );
+            assert_eq!(
+                frame.post_context.len(),
+                context["post_context"].as_array().map_or(0, Vec::len)
+            );
+        }
+    }
+
+    #[test]
+    fn javascript_gaps_and_unresolved_frames_keep_source_context_on_original_indexes() {
+        let mut wire_traces = Vec::new();
+        let plan = JsTracePlan::cut(
+            RawStacktrace {
+                origin: RawTraceOrigin::Exception { index: 1 },
+                frames: vec![
+                    javascript_frame(Some("app.min.js"), None, Some(1), "a"),
+                    javascript_frame(None, None, None, "native"),
+                    javascript_frame(Some("app.min.js"), None, Some(3), "c"),
+                ],
+            },
+            &mut wire_traces,
+        );
+        assert_eq!(wire_traces.len(), 2);
+        let response: JsWireResponse = serde_json::from_value(serde_json::json!({
+            "status": "completed",
+            "stacktraces": [
+                {"frames": [{"function": "raw_name", "data": {"symbolicated": false}}]},
+                {"frames": [{"function": "fail", "data": {"symbolicated": true},
+                    "pre_context": ["before();"], "context_line": "throw error;", "post_context": ["after();"]}]}
+            ]
+        })).unwrap();
+        let result = response.into_domain(vec![plan]).unwrap();
+        assert_eq!(result.status, BackendSymbolicationStatus::Partial);
+        assert_eq!(
+            result.diagnostics,
+            vec![SymbolicationDiagnosticCode::BackendPartial]
+        );
+        assert_eq!(
+            result.derived[0].origin,
+            RawTraceOrigin::Exception { index: 1 }
+        );
+        assert_eq!(result.derived[0].frames.len(), 1);
+        let frame = &result.derived[0].frames[0];
+        assert_eq!(frame.original_index, 2);
+        assert_eq!(frame.context_line.as_deref(), Some("throw error;"));
+        assert_eq!(frame.pre_context[0].as_ref(), "before();");
+        assert_eq!(frame.post_context[0].as_ref(), "after();");
+    }
+
+    #[test]
+    fn native_request_uses_stacktraces_and_numeric_image_size() {
+        let wire = WireRequest::from_domain(
+            SymbolicationRequest {
+                project_id: ProjectId::new(7).unwrap(),
+                debug_file_revision: 1,
+                artifact_revision: 0,
+                kind: SymbolicationKind::Native,
+                traces: Vec::new(),
+                modules: vec![SymbolicationModule {
+                    kind: Some("elf".into()),
+                    debug_id: None,
+                    code_id: None,
+                    code_file: Some("native".into()),
+                    image_address: Some("0x0".into()),
+                    image_size: Some(8192),
+                }],
+                release: None,
+                dist: None,
+            },
+            WireSource {
+                id: "test".into(),
+                ty: "sentry",
+                url: "http://localhost/".into(),
+                token: "synthetic".into(),
+            },
+        );
+        let value = serde_json::to_value(wire).unwrap();
+        assert!(value.get("threads").is_none());
+        assert!(value["stacktraces"].is_array());
+        assert_eq!(value["modules"][0]["image_size"], 8192);
+    }
+
     #[test]
     fn private_source_token_is_project_scoped_and_rotatable() {
         let signer = PrivateSourceSigner::new(vec![1; 32], Some(vec![2; 32])).unwrap();
@@ -862,7 +1236,9 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let (head, body) = read_request(&mut stream).await;
-            assert!(head.starts_with("POST /symbolicate-js?scope=project-7 "));
+            assert!(
+                head.starts_with("POST /symbolicate-js?scope=project-7-debug-42-artifacts-43 ")
+            );
             assert!(body.to_string().contains("artifact-lookup/?revision=43"));
             assert_eq!(
                 body["scraping"],
@@ -914,7 +1290,7 @@ mod tests {
             output.derived[0].frames[0].function.as_deref(),
             Some("fail")
         );
-        assert_eq!(output.derived[0].frames[0].line, Some(6));
+        assert_eq!(output.derived[0].frames[0].line, Some(2));
         server.await.unwrap();
     }
 
@@ -937,9 +1313,9 @@ mod tests {
                     "https://example.invalid/static/vendor.min.js"
                 );
             },
-            r#"{"stacktraces":[
-                {"frames":[{"function":"fail","filename":"app.js","lineno":6,"colno":9}]},
-                {"frames":[{"function":"boot","filename":"vendor.js","lineno":3,"colno":1}]}
+            r#"{"status":"completed","stacktraces":[
+                {"frames":[{"data":{"symbolicated":true},"function":"fail","filename":"app.js","lineno":6,"colno":9}]},
+                {"frames":[{"data":{"symbolicated":true},"function":"boot","filename":"vendor.js","lineno":3,"colno":1}]}
             ],"raw_stacktraces":[],"errors":[]}"#,
         );
         let output = javascript_adapter(address)
@@ -987,8 +1363,8 @@ mod tests {
         let server = serve_once(
             listener,
             |body| assert_eq!(body["stacktraces"].as_array().unwrap().len(), 1),
-            r#"{"stacktraces":[
-                {"frames":[{"function":"fail","filename":"app.js","lineno":6,"colno":9}]}
+            r#"{"status":"completed","stacktraces":[
+                {"frames":[{"data":{"symbolicated":true},"function":"fail","filename":"app.js","lineno":6,"colno":9}]}
             ],"raw_stacktraces":[],"errors":[]}"#,
         );
         let output = javascript_adapter(address)

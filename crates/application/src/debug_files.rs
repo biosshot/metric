@@ -431,12 +431,13 @@ impl DebugFileService {
             let _ = writer.abort().await;
             return Err(DebugFileError::InvalidRequest);
         }
-        let file_type =
-            DebugFileType::from_name(&upload.name).map_err(|_| DebugFileError::InvalidRequest)?;
-        if file_type == DebugFileType::Breakpad && !header.starts_with(b"MODULE ") {
-            let _ = writer.abort().await;
-            return Err(DebugFileError::InvalidRequest);
-        }
+        let file_type = match detect_file_type(&upload.name, &header) {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                let _ = writer.abort().await;
+                return Err(error);
+            }
+        };
         let checksum = *blake3.finalize().as_bytes();
         let id = DebugFileId::derive(upload.project_id, checksum);
         let lock = self.lock_for(id);
@@ -561,6 +562,29 @@ pub fn start_debug_file_cleanup(
     Ok(DebugFileCleanupTask { handle })
 }
 
+fn detect_file_type(name: &str, header: &[u8]) -> Result<DebugFileType, DebugFileError> {
+    // CLI-generated bundles can retain the original debug file's name.
+    let file_type = if header.starts_with(b"SYSB") {
+        DebugFileType::SourceBundle
+    } else {
+        DebugFileType::from_name(name).map_err(|_| DebugFileError::InvalidRequest)?
+    };
+    if file_type == DebugFileType::Breakpad && !header.starts_with(b"MODULE ") {
+        return Err(DebugFileError::InvalidRequest);
+    }
+    if file_type == DebugFileType::SourceBundle
+        && !(header.len() >= 8
+            && header.starts_with(b"SYSB")
+            && matches!(
+                u32::from_le_bytes(header[4..8].try_into().expect("bundle version")),
+                1 | 2
+            ))
+    {
+        return Err(DebugFileError::InvalidRequest);
+    }
+    Ok(file_type)
+}
+
 fn upload_id(project_id: ProjectId, sha1: [u8; 20]) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"metric/debug-upload-id/v1");
@@ -618,4 +642,42 @@ fn subtract(now: Timestamp, duration: Duration) -> Result<Timestamp, DebugFileEr
             .ok_or(DebugFileError::InvalidRequest)?,
     )
     .map_err(|_| DebugFileError::InvalidRequest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_bundle_detection_uses_magic_and_rejects_missing_or_unknown_versions() {
+        for name in ["native.pdb", "native.src.zip"] {
+            for version in [1_u32, 2] {
+                let mut header = b"SYSB".to_vec();
+                header.extend(version.to_le_bytes());
+                assert_eq!(
+                    detect_file_type(name, &header),
+                    Ok(DebugFileType::SourceBundle)
+                );
+            }
+        }
+        for header in [
+            b"SYSB".as_slice(),
+            b"SYSB\0\0\0\0",
+            b"SYSB\x03\0\0\0",
+            b"not a source bundle",
+        ] {
+            assert_eq!(
+                detect_file_type("native.src.zip", header),
+                Err(DebugFileError::InvalidRequest)
+            );
+        }
+        assert_eq!(
+            detect_file_type("native.pdb", b"Microsoft C/C++ MSF"),
+            Ok(DebugFileType::Pdb)
+        );
+        assert_eq!(
+            detect_file_type("native.sym", b"MODULE windows"),
+            Ok(DebugFileType::Breakpad)
+        );
+    }
 }
