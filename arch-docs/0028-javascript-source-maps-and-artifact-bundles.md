@@ -245,8 +245,10 @@ artifact:write
 artifact:delete
 ```
 
-Upload and assemble require write permission for all selected projects. Lookup and UI
-listing require read permission; explicit removal requires delete permission.
+Upload and assemble require write permission for all selected projects. The chunk upload
+shared with ADR-0025 takes either `artifact:write` or `debug_file:write`, so a token for
+source maps needs only `artifact:write`. Lookup and UI listing require read permission;
+explicit removal requires delete permission.
 Symbolicator uses only the separate internal service credential.
 
 Ready bundles are project-private and have no automatic expiration in this decision.

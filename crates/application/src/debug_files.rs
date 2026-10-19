@@ -153,7 +153,10 @@ impl DebugFileService {
         sha1: [u8; 20],
         bytes: Box<[u8]>,
     ) -> Result<BlobObject, DebugFileError> {
-        require(context, Permission::DebugFileWrite)?;
+        // Chunks carry artifact bundles too (ADR-0028), so either upload scope may send them.
+        if !context.permissions.contains(Permission::DebugFileWrite) {
+            require(context, Permission::ArtifactWrite)?;
+        }
         if context.organization_id != organization_id || bytes.len() > SENTRY_CLI_CHUNK_BYTES {
             return Err(DebugFileError::InvalidRequest);
         }
