@@ -8,6 +8,7 @@
   },
   "devDependencies": {
     "@sentry/cli": "3.6.2",
+    "sentry": "0.44.1",
     "sentry-cli-v2": "npm:@sentry/cli@2.58.6"
   }
 }

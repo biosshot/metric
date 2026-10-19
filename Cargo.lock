@@ -2424,6 +2424,7 @@ dependencies = [
  "url",
  "uuid",
  "wait-timeout",
+ "zip",
 ]
 
 [[package]]
