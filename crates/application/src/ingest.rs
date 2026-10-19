@@ -2334,6 +2334,8 @@ fn validate_and_scrub_event(
         fields.message = value
             .get("message")
             .and_then(Value::as_str)
+            .or_else(|| value.pointer("/message/formatted").and_then(Value::as_str))
+            .or_else(|| value.pointer("/message/message").and_then(Value::as_str))
             .or_else(|| value.pointer("/logentry/formatted").and_then(Value::as_str))
             .or_else(|| value.pointer("/logentry/message").and_then(Value::as_str));
         fields.exception_type = value
@@ -3760,6 +3762,46 @@ mod tests {
             .code(),
             "conflicting_event_id"
         );
+    }
+
+    #[test]
+    fn message_filter_matches_cocoa_object_form() {
+        use metric_domain::inbound_filter::{
+            InboundFilterOperation, InboundFilterPolicy, InboundFilterRule,
+        };
+
+        let mut snapshot = snapshot();
+        snapshot.inbound_filters = Arc::new(
+            InboundFilterPolicy::new(vec![InboundFilterRule {
+                signal: InboundFilterSignal::Error,
+                field: InboundFilterField::Message,
+                operation: InboundFilterOperation::Exact,
+                pattern: "WebView load failed".into(),
+            }])
+            .unwrap()
+            .compile()
+            .unwrap(),
+        );
+        for raw in [
+            br#"{"message":"WebView load failed"}"#.as_slice(),
+            br#"{"message":{"formatted":"WebView load failed","params":[]}}"#.as_slice(),
+            br#"{"message":{"message":"WebView load failed"}}"#.as_slice(),
+        ] {
+            let validated = validate_and_scrub_event(
+                PrimaryEvent {
+                    header_event_id: None,
+                    raw_json: raw.into(),
+                },
+                Some(EventId::from_bytes([7; 16])),
+                &snapshot,
+            )
+            .unwrap();
+            assert!(
+                matches!(validated, ValidatedPrimaryEvent::Filtered { .. }),
+                "{}",
+                String::from_utf8_lossy(raw)
+            );
+        }
     }
 
     #[test]

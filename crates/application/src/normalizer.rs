@@ -340,15 +340,22 @@ fn truncate_utf8(value: &str, maximum: usize) -> String {
 }
 
 fn normalize_message(root: &Map<String, Value>, context: &mut Context) -> Option<Box<str>> {
-    if let Some(message) = root.get("message")
-        && let Some(message) = value_string(message, MAX_MESSAGE_BYTES, "message", context)
-    {
-        return Some(message);
-    }
-    root.get("logentry")
-        .and_then(Value::as_object)
-        .and_then(|entry| entry.get("formatted").or_else(|| entry.get("message")))
-        .and_then(|value| value_string(value, MAX_MESSAGE_BYTES, "logentry", context))
+    message_field(root.get("message"), "message", context)
+        .or_else(|| message_field(root.get("logentry"), "logentry", context))
+}
+
+/// Accepts both the plain string form and the logentry object form; Cocoa
+/// SDKs send `message` as `{"formatted": ..., "message": ..., "params": ...}`.
+fn message_field(
+    value: Option<&Value>,
+    path: &'static str,
+    context: &mut Context,
+) -> Option<Box<str>> {
+    let value = match value? {
+        Value::Object(entry) => entry.get("formatted").or_else(|| entry.get("message"))?,
+        value => value,
+    };
+    value_string(value, MAX_MESSAGE_BYTES, path, context)
 }
 
 fn normalize_platform(value: Option<&Value>, context: &mut Context) -> EventPlatform {
@@ -1255,6 +1262,21 @@ mod tests {
             native.body.stacktrace[0].instruction_address.as_deref(),
             Some("0x10")
         );
+    }
+
+    #[test]
+    fn message_accepts_cocoa_object_form() {
+        let normalizer = Normalizer::new(NormalizerLimits::default()).unwrap();
+        for json in [
+            r#"{"platform":"cocoa","message":{"formatted":"WebView load failed","params":[]}}"#,
+            r#"{"platform":"cocoa","message":{"message":"WebView load failed"}}"#,
+            r#"{"message":"WebView load failed"}"#,
+            r#"{"logentry":{"formatted":"WebView load failed"}}"#,
+        ] {
+            let output = normalizer.normalize(&accepted(json)).unwrap();
+            assert_eq!(output.body.message.as_deref(), Some("WebView load failed"));
+            assert!(output.diagnostics.is_empty(), "{json}");
+        }
     }
 
     #[test]
