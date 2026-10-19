@@ -36,7 +36,7 @@ use metric_ports::{
     ArtifactStore, BlobStore, BlobStoreError, Clock, DebugFileStore, ProjectStore, RandomError,
     RandomSource, SymbolicationBackend,
 };
-use metric_server::debug_http;
+use metric_server::{config::TrustedProxy, debug_http};
 use metric_symbolication::{ExternalSymbolicator, ExternalSymbolicatorConfig, PrivateSourceSigner};
 use metric_testkit::FixedClock;
 use mongodb::{Client, Database, bson::doc};
@@ -223,8 +223,20 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
         Some(Arc::clone(&service)),
         Some(Arc::clone(&artifact_service)),
         Some(signer.clone()),
+        // The test client stands in for a proxy that terminates TLS.
+        vec![
+            "127.0.0.1/32"
+                .parse::<TrustedProxy>()
+                .expect("valid proxy network"),
+        ],
     );
-    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+    });
 
     let cli_root = repository_root().join("sdk-tests").join("sentry-cli");
     let fixture = cli_root.join("fixtures").join("metric.sym");
@@ -262,6 +274,23 @@ async fn exercise(database: &Database) -> Result<(), Box<dyn Error + Send + Sync
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    // Behind a proxy that terminates TLS the upload URL keeps the client's scheme;
+    // sentry-cli refuses to send its token to a URL whose scheme differs.
+    let options: serde_json::Value = reqwest::Client::new()
+        .get(format!(
+            "http://{address}/api/0/organizations/acme/chunk-upload/"
+        ))
+        .bearer_auth(token.secret.encode_hex())
+        .header("x-forwarded-proto", "https")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        options["url"],
+        format!("https://{address}/api/0/organizations/acme/chunk-upload/")
+    );
     let modern_debug_id = DebugId::parse("67e9247c-814e-392b-a027-dbde6748fcbf")?;
     let modern = artifact_service
         .lookup(

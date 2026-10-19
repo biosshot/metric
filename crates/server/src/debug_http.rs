@@ -1,11 +1,11 @@
 //! Sentry CLI DIF upload and private Symbolicator source HTTP adapters.
 
-use std::{collections::BTreeMap, io::Read, sync::Arc};
+use std::{collections::BTreeMap, io::Read, net::SocketAddr, sync::Arc};
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::{Body, to_bytes},
-    extract::{Path, Query, RawQuery, Request, State},
+    extract::{ConnectInfo, Path, Query, RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -26,6 +26,7 @@ use metric_symbolication::PrivateSourceSigner;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::config::TrustedProxy;
 use crate::debug_http::DebugHttpError::{InvalidRequest, Unauthorized};
 
 const MAX_ASSEMBLE_BODY_BYTES: usize = 1024 * 1024;
@@ -37,6 +38,7 @@ struct DebugHttpState {
     debug_files: Arc<DebugFileService>,
     artifacts: Option<Arc<ArtifactService>>,
     signer: PrivateSourceSigner,
+    trusted_proxies: Arc<[TrustedProxy]>,
 }
 
 #[derive(Debug)]
@@ -94,6 +96,7 @@ pub fn router(
     debug_files: Option<Arc<DebugFileService>>,
     artifacts: Option<Arc<ArtifactService>>,
     signer: Option<PrivateSourceSigner>,
+    trusted_proxies: Vec<TrustedProxy>,
 ) -> Router {
     let (Some(identity), Some(debug_files), Some(signer)) = (identity, debug_files, signer) else {
         return Router::new();
@@ -131,12 +134,14 @@ pub fn router(
         debug_files,
         artifacts,
         signer,
+        trusted_proxies: trusted_proxies.into(),
     })
 }
 
 async fn chunk_options(
     State(state): State<DebugHttpState>,
     Path(organization_slug): Path<String>,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, DebugHttpError> {
     let _ = authenticate_upload_token(&state, &headers).await?;
@@ -151,7 +156,13 @@ async fn chunk_options(
                     .all(|byte| byte.is_ascii_alphanumeric() || b".:-[]".contains(&byte))
         })
         .ok_or(InvalidRequest)?;
-    let upload_url = format!("http://{host}/api/0/organizations/{organization_slug}/chunk-upload/");
+    let scheme = request_scheme(
+        connect_info.map(|Extension(ConnectInfo(peer))| peer),
+        &headers,
+        &state.trusted_proxies,
+    );
+    let upload_url =
+        format!("{scheme}://{host}/api/0/organizations/{organization_slug}/chunk-upload/");
     let maximum_file_bytes = state.debug_files.maximum_file_bytes();
     Ok(Json(json!({
         "url": upload_url,
@@ -176,6 +187,33 @@ async fn chunk_options(
         },
         "maxWait": 300,
     })))
+}
+
+/// Scheme the client used to reach Metric. Behind a TLS-terminating proxy the
+/// request itself is plain HTTP, and sentry-cli refuses to send its token to a URL
+/// whose scheme or host differs from its configured one, so `X-Forwarded-Proto`
+/// from a trusted proxy wins.
+fn request_scheme(
+    peer: Option<SocketAddr>,
+    headers: &HeaderMap,
+    trusted_proxies: &[TrustedProxy],
+) -> &'static str {
+    let from_trusted_proxy = peer.is_some_and(|peer| {
+        trusted_proxies
+            .iter()
+            .any(|proxy| proxy.contains(peer.ip()))
+    });
+    // The first value is the one the client used when several proxies append theirs.
+    let forwarded_https = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("https"));
+    if from_trusted_proxy && forwarded_https {
+        "https"
+    } else {
+        "http"
+    }
 }
 
 async fn chunk_upload(
@@ -736,5 +774,59 @@ fn map_artifact(error: ArtifactError) -> DebugHttpError {
         ArtifactError::Quota => DebugHttpError::Quota,
         ArtifactError::Conflict | ArtifactError::Busy => DebugHttpError::Conflict,
         ArtifactError::Unavailable => DebugHttpError::Unavailable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    fn headers(proto: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(proto) = proto {
+            headers.insert("x-forwarded-proto", HeaderValue::from_str(proto).unwrap());
+        }
+        headers
+    }
+
+    fn proxies() -> [TrustedProxy; 1] {
+        [TrustedProxy::from_str("10.42.0.0/16").unwrap()]
+    }
+
+    #[test]
+    fn upload_url_scheme_follows_trusted_proxy() {
+        let proxy = Some(SocketAddr::from(([10, 42, 0, 7], 41_000)));
+        assert_eq!(
+            request_scheme(proxy, &headers(Some("https")), &proxies()),
+            "https"
+        );
+        assert_eq!(
+            request_scheme(proxy, &headers(Some("HTTPS")), &proxies()),
+            "https"
+        );
+        assert_eq!(
+            request_scheme(proxy, &headers(Some("https, http")), &proxies()),
+            "https"
+        );
+        assert_eq!(
+            request_scheme(proxy, &headers(Some("http")), &proxies()),
+            "http"
+        );
+        assert_eq!(request_scheme(proxy, &headers(None), &proxies()), "http");
+    }
+
+    #[test]
+    fn upload_url_scheme_ignores_untrusted_forwarding() {
+        let client = Some(SocketAddr::from(([203, 0, 113, 9], 41_000)));
+        assert_eq!(
+            request_scheme(client, &headers(Some("https")), &proxies()),
+            "http"
+        );
+        assert_eq!(
+            request_scheme(None, &headers(Some("https")), &proxies()),
+            "http"
+        );
     }
 }
