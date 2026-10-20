@@ -228,7 +228,7 @@ async fn scoped_merge_publication_lookup_exact_binding_and_revisions() {
     assert!(store.lookup(request).await.unwrap().is_empty());
     assert_eq!(
         store
-            .remove_binding(org(1), b.id, binding(1), a.updated_at)
+            .remove_binding(org(1), b.id, binding(1), a.updated_at, None)
             .await
             .unwrap(),
         Some(3)
@@ -239,14 +239,14 @@ async fn scoped_merge_publication_lookup_exact_binding_and_revisions() {
     );
     assert_eq!(
         store
-            .remove_binding(org(1), b.id, binding(1), a.updated_at)
+            .remove_binding(org(1), b.id, binding(1), a.updated_at, None)
             .await
             .unwrap(),
         None
     );
     assert_eq!(
         store
-            .remove_binding(org(1), b.id, exact, a.updated_at)
+            .remove_binding(org(1), b.id, exact, a.updated_at, None)
             .await
             .unwrap(),
         Some(4)
@@ -346,7 +346,7 @@ async fn orphan_rescue_expired_claim_and_post_tombstone_generation_fence() {
     store.upsert_upload(a.clone()).await.unwrap();
     store.publish_bundle(a.id, b.clone()).await.unwrap();
     store
-        .remove_binding(org(1), b.id, binding(1), now)
+        .remove_binding(org(1), b.id, binding(1), now, None)
         .await
         .unwrap();
     assert_eq!(
@@ -367,7 +367,7 @@ async fn orphan_rescue_expired_claim_and_post_tombstone_generation_fence() {
             .is_empty()
     );
     store
-        .remove_binding(org(1), b.id, binding(1), now)
+        .remove_binding(org(1), b.id, binding(1), now, None)
         .await
         .unwrap();
     store.upsert_upload(a.clone()).await.unwrap();
@@ -493,12 +493,14 @@ async fn native_lost_commit_replies_preserve_all_generation_and_quota_boundaries
     );
     proxy.drop_next_commit_reply();
     assert_eq!(
-        store.remove_binding(org(1), b.id, binding(1), now).await,
+        store
+            .remove_binding(org(1), b.id, binding(1), now, None)
+            .await,
         Err(ArtifactStoreError::Unavailable)
     );
     assert_eq!(
         store
-            .remove_binding(org(1), b.id, binding(1), now)
+            .remove_binding(org(1), b.id, binding(1), now, None)
             .await
             .unwrap(),
         None
@@ -711,7 +713,7 @@ async fn upload_recovery_bounds_corrupt_metadata_and_native_expiry_are_safe() {
     let b = bundle(&a);
     store.publish_bundle(a.id, b.clone()).await.unwrap();
     store
-        .remove_binding(org(1), b.id, binding(1), a.updated_at)
+        .remove_binding(org(1), b.id, binding(1), a.updated_at, None)
         .await
         .unwrap();
     let until = at(a.updated_at.unix_millis() + 1000);
@@ -798,6 +800,17 @@ async fn lookup_and_gc_use_native_scoped_indexes_and_bounded_claims() {
     let plan:serde_json::Value=sqlx::query_scalar("EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) SELECT bundle_id FROM metric.artifact_bundle_bindings WHERE organization_id=$1 AND project_id=$2 AND release_id=$3 AND dist=$4 LIMIT $5")
         .bind(1i64).bind(1i32).bind(release.as_bytes().as_slice()).bind("web").bind(2i64).fetch_one(&db.pool).await.unwrap();
     assert!(plan.to_string().contains("artifact_project_release"));
+    let plan:serde_json::Value=sqlx::query_scalar("EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) SELECT bundle_id FROM metric.artifact_bundles b WHERE organization_id=$1 AND state=0 AND EXISTS(SELECT 1 FROM metric.artifact_bundle_bindings r WHERE r.organization_id=b.organization_id AND r.bundle_id=b.bundle_id AND r.project_id=$2) AND (uploaded_at,bundle_id)<($3,$4) ORDER BY uploaded_at DESC,bundle_id DESC LIMIT $5")
+        .bind(1i64).bind(1i32).bind(1_800_000_002_000i64).bind([0xff_u8; 16].as_slice()).bind(100i64).fetch_one(&db.pool).await.unwrap();
+    assert!(plan.to_string().contains("artifact_organization_timeline"));
+    assert_eq!(
+        store
+            .project_bundles(org(1), pid(1), None, 100)
+            .await
+            .unwrap()
+            .len(),
+        100
+    );
     sqlx::query("DELETE FROM metric.artifact_bundle_bindings")
         .execute(&db.pool)
         .await
@@ -925,10 +938,30 @@ async fn existing_artifact_service_streams_real_source_bundle_and_gc_with_postgr
         panic!("did not assemble artifact")
     };
     assert_eq!(bundle.generation, 0);
+    // Uploading the stored content again counts as a new upload.
+    let later = at(1_800_000_060_000);
+    let again = ArtifactService::new(
+        Arc::new(store.clone()),
+        blobs.clone(),
+        Arc::new(metric_testkit::FixedClock(later)),
+        Arc::new(metric_testkit::FixedRandom(7)),
+        ArtifactConfig::default(),
+    )
+    .unwrap();
     assert!(matches!(
-        service.assemble(&context, "org-1", request).await.unwrap(),
+        again.assemble(&context, "org-1", request).await.unwrap(),
         AssembleArtifactState::Ok { .. }
     ));
+    drop(again);
+    assert_eq!(
+        store
+            .load_by_sha1(org(1), sha1)
+            .await
+            .unwrap()
+            .unwrap()
+            .uploaded_at,
+        later
+    );
     let (_, mut reader) = service.open(pid(1), bundle.id).await.unwrap();
     let mut restored = Vec::new();
     while let Some(chunk) = reader.read_chunk(4096).await.unwrap() {
@@ -949,7 +982,7 @@ async fn existing_artifact_service_streams_real_source_bundle_and_gc_with_postgr
         .unwrap();
     assert_eq!(lookup.len(), 1);
     store
-        .remove_binding(org(1), bundle.id, binding(1), bundle.uploaded_at)
+        .remove_binding(org(1), bundle.id, binding(1), bundle.uploaded_at, None)
         .await
         .unwrap();
     assert_eq!(service.gc_once().await.unwrap(), 1);
@@ -969,6 +1002,264 @@ async fn existing_artifact_service_streams_real_source_bundle_and_gc_with_postgr
                 .starts_with("pg-artifact-")
     );
     std::fs::remove_dir_all(resolved).unwrap();
+    db.pool.close().await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires real PostgreSQL Docker"]
+async fn retention_listings_page_newest_first_and_follow_project_states() {
+    let (fixture, db, store) = setup(ArtifactQuota::default()).await;
+    // Bundles 3 and 4 share an upload time, so their ids order them.
+    for (seed, uploaded_at, project) in [
+        (1, 10, 1),
+        (2, 30, 1),
+        (3, 20, 1),
+        (4, 20, 1),
+        (5, 40, 3),
+        (6, 50, 1),
+    ] {
+        let mut value = upload(seed, 1, project);
+        value.updated_at = at(1_800_000_000_000 + uploaded_at);
+        store.upsert_upload(value.clone()).await.unwrap();
+        store
+            .publish_bundle(value.id, bundle(&value))
+            .await
+            .unwrap();
+    }
+    let orphan_at = at(1_800_000_000_000);
+    // An unbound bundle leaves both listings before garbage collection deletes it.
+    store
+        .remove_binding(
+            org(1),
+            ArtifactBundleId::from_bytes([6; 16]),
+            binding(1),
+            orphan_at,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.bound_projects().await.unwrap(),
+        vec![(org(1), pid(1)), (org(1), pid(3))]
+    );
+    let mut seen = Vec::new();
+    let mut before = None;
+    loop {
+        let page = store
+            .project_bundles(org(1), pid(1), before, 2)
+            .await
+            .unwrap();
+        seen.extend(page.iter().map(|bundle| bundle.id.as_bytes()[0]));
+        match page.last() {
+            Some(last) if page.len() == 2 => before = Some((last.uploaded_at, last.id)),
+            _ => break,
+        }
+    }
+    assert_eq!(seen, vec![2, 4, 3, 1]);
+    assert!(
+        store
+            .project_bundles(org(2), pid(1), None, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .project_bundles(org(1), pid(1), None, 0)
+            .await
+            .is_err()
+    );
+    // Retention keeps serving a disabled project; deletion owns one being deleted.
+    let projects =
+        crate::PostgresProjectStore::new(db.clone(), metric_domain::SecretBytes::new([42; 32]), 32)
+            .unwrap();
+    projects
+        .set_project_acceptance(pid(3), ProjectAcceptanceState::Disabled)
+        .await
+        .unwrap();
+    projects
+        .set_project_acceptance(pid(1), ProjectAcceptanceState::PendingDelete)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.bound_projects().await.unwrap(),
+        vec![(org(1), pid(3))]
+    );
+    assert!(
+        store
+            .remove_binding(
+                org(1),
+                ArtifactBundleId::from_bytes([5; 16]),
+                binding(3),
+                orphan_at,
+                None
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        store
+            .remove_binding(
+                org(1),
+                ArtifactBundleId::from_bytes([1; 16]),
+                binding(1),
+                orphan_at,
+                None
+            )
+            .await,
+        Err(ArtifactStoreError::NotFound)
+    );
+    assert!(store.bound_projects().await.unwrap().is_empty());
+    db.pool.close().await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires real PostgreSQL Docker"]
+async fn republication_refreshes_upload_time_and_keeps_its_binding() {
+    let (fixture, db, store) = setup(ArtifactQuota::default()).await;
+    let a = upload(1, 1, 1);
+    let b = bundle(&a);
+    store.upsert_upload(a.clone()).await.unwrap();
+    store.publish_bundle(a.id, b.clone()).await.unwrap();
+    // Retention read the bundle, then the same content was uploaded again.
+    let read = b.uploaded_at;
+    let again = at(read.unix_millis() + 60_000);
+    let republished = ArtifactBundle {
+        uploaded_at: again,
+        ..b.clone()
+    };
+    // Lookups take the newest uploads first: the bound project's revision advances.
+    assert_eq!(
+        store
+            .publish_bundle(a.id, republished.clone())
+            .await
+            .unwrap(),
+        vec![(pid(1), 2)]
+    );
+    assert!(
+        store
+            .publish_bundle(a.id, b.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let stored = store.load_for_project(pid(1), b.id).await.unwrap();
+    assert_eq!(stored.uploaded_at, again);
+    assert_eq!(
+        store
+            .remove_binding(org(1), b.id, binding(1), again, Some(read))
+            .await,
+        Ok(None)
+    );
+    assert_eq!(stored.bindings, vec![binding(1)]);
+    assert_eq!(
+        store.load_for_project(pid(1), b.id).await.unwrap().bindings,
+        vec![binding(1)]
+    );
+    assert!(
+        store
+            .remove_binding(org(1), b.id, binding(1), again, Some(again))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    db.pool.close().await;
+    fixture.cleanup().await;
+}
+
+/// Waits until `count` sessions of the test database wait for a lock.
+async fn lock_waiters(db: &PostgresDatabase, count: i64) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+            < count
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires real PostgreSQL Docker"]
+async fn refresh_and_publication_for_another_bound_project_do_not_deadlock() {
+    let (fixture, db, store) = setup(ArtifactQuota::default()).await;
+    let mut shared = upload(1, 1, 1);
+    shared.bindings = vec![binding(1), binding(3)];
+    store.upsert_upload(shared.clone()).await.unwrap();
+    store
+        .publish_bundle(shared.id, bundle(&shared))
+        .await
+        .unwrap();
+    let other = upload(2, 1, 3);
+    store.upsert_upload(other.clone()).await.unwrap();
+    // The organization lock queues a refresh of the shared content for project 1, then
+    // a publication for project 3, whose revision the refresh also advances.
+    let mut blocker = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM metric.organizations WHERE id=1 FOR UPDATE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let mut refreshed = bundle(&shared);
+    refreshed.bindings = vec![binding(1)];
+    refreshed.uploaded_at = at(refreshed.uploaded_at.unix_millis() + 60_000);
+    let refresh = tokio::spawn({
+        let store = store.clone();
+        async move { store.publish_bundle(shared.id, refreshed).await }
+    });
+    lock_waiters(&db, 1).await;
+    let publication = tokio::spawn({
+        let store = store.clone();
+        async move { store.publish_bundle(other.id, bundle(&other)).await }
+    });
+    lock_waiters(&db, 2).await;
+    blocker.commit().await.unwrap();
+    assert_eq!(refresh.await.unwrap(), Ok(vec![(pid(1), 2), (pid(3), 2)]));
+    assert_eq!(publication.await.unwrap(), Ok(vec![(pid(3), 3)]));
+    db.pool.close().await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires real PostgreSQL Docker"]
+async fn refresh_starts_over_when_a_project_is_bound_after_its_read() {
+    let (fixture, db, store) = setup(ArtifactQuota::default()).await;
+    let a = upload(1, 1, 1);
+    let b = bundle(&a);
+    store.upsert_upload(a.clone()).await.unwrap();
+    store.publish_bundle(a.id, b.clone()).await.unwrap();
+    // Behind a lock of project 1 queue a publication that binds project 3, then a
+    // refresh that read the bound projects before project 3 was bound.
+    let mut blocker = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM metric.projects WHERE id=1 FOR UPDATE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let id = a.id;
+    let mut third = b.clone();
+    third.bindings = vec![binding(3)];
+    third.uploaded_at = at(b.uploaded_at.unix_millis() + 1_000);
+    let binder = tokio::spawn({
+        let store = store.clone();
+        async move { store.publish_bundle(id, third).await }
+    });
+    lock_waiters(&db, 1).await;
+    let mut refreshed = b.clone();
+    refreshed.uploaded_at = at(b.uploaded_at.unix_millis() + 2_000);
+    let refresh = tokio::spawn({
+        let store = store.clone();
+        async move { store.publish_bundle(id, refreshed).await }
+    });
+    lock_waiters(&db, 2).await;
+    blocker.commit().await.unwrap();
+    assert_eq!(binder.await.unwrap(), Ok(vec![(pid(1), 2), (pid(3), 1)]));
+    assert_eq!(refresh.await.unwrap(), Ok(vec![(pid(1), 3), (pid(3), 2)]));
     db.pool.close().await;
     fixture.cleanup().await;
 }

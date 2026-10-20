@@ -390,7 +390,7 @@ impl ArtifactService {
         }
         let orphan_at = add_duration(self.clock.now(), self.config.orphan_grace)?;
         self.metadata
-            .remove_binding(organization_id, bundle_id, binding, orphan_at)
+            .remove_binding(organization_id, bundle_id, binding, orphan_at, None)
             .await
             .map(|revision| revision.is_some())
             .map_err(map_store)
@@ -469,6 +469,8 @@ impl ArtifactService {
                 .map_err(map_store)?
         {
             bundle.bindings = record.upload.bindings.clone();
+            // Uploading stored content again is a new upload: retention ages it from now.
+            bundle.uploaded_at = self.clock.now();
             self.metadata
                 .publish_bundle(record.upload.id, bundle.clone())
                 .await
@@ -900,7 +902,7 @@ fn require(context: &AuthContext, permission: Permission) -> Result<(), Artifact
         .ok_or(ArtifactError::Forbidden)
 }
 
-fn map_store(error: ArtifactStoreError) -> ArtifactError {
+pub(crate) fn map_store(error: ArtifactStoreError) -> ArtifactError {
     match error {
         ArtifactStoreError::NotFound => ArtifactError::NotFound,
         ArtifactStoreError::Conflict => ArtifactError::Conflict,
@@ -920,7 +922,10 @@ fn map_blob(error: BlobStoreError) -> ArtifactError {
     }
 }
 
-fn add_duration(value: Timestamp, duration: Duration) -> Result<Timestamp, ArtifactError> {
+pub(crate) fn add_duration(
+    value: Timestamp,
+    duration: Duration,
+) -> Result<Timestamp, ArtifactError> {
     Timestamp::from_unix_millis(
         value
             .unix_millis()

@@ -290,23 +290,33 @@ impl MongoArtifactStore {
                         .cloned()
                         .chain(bundle.bindings.iter().cloned()),
                 )?;
-                let affected = affected_projects(&existing, &merged);
+                let mut affected = affected_projects(&existing, &merged);
                 let mut updated_bundle = bundle.clone();
                 updated_bundle.bindings = merged;
-                let mut filter = if state == Some(3) {
+                let filter = if state == Some(3) {
                     doc! { "_id": binary(&bundle.id.as_bytes()), "s": 3_i32, "v": i32::try_from(bundle.generation).map_err(|_| ArtifactStoreError::InvalidData)? }
                 } else {
-                    doc! { "_id": binary(&bundle.id.as_bytes()), "s": { "$exists": false } }
-                };
-                if state != Some(3) {
-                    filter.insert(
-                        "b",
-                        document
+                    // A new upload of stored content refreshes its upload time, never
+                    // backwards. The time read joins the condition: a concurrent
+                    // publication that moved it sends this one back to read again.
+                    // Lookups take the newest uploads first: a time that moves on can
+                    // change them for every project already bound.
+                    let uploaded_at = timestamp(&document, "u")?;
+                    if uploaded_at < updated_bundle.uploaded_at {
+                        affected.extend(existing.iter().map(|binding| binding.project_id));
+                    } else {
+                        updated_bundle.uploaded_at = uploaded_at;
+                    }
+                    doc! {
+                        "_id": binary(&bundle.id.as_bytes()),
+                        "s": { "$exists": false },
+                        "u": datetime(uploaded_at),
+                        "b": document
                             .get("b")
                             .cloned()
                             .unwrap_or_else(|| Bson::Document(doc! { "$exists": false })),
-                    );
-                }
+                    }
+                };
                 if state == Some(3) {
                     self.reserve_quota(bundle.organization_id, bundle.size)
                         .await?;
@@ -523,6 +533,7 @@ impl MongoArtifactStore {
         bundle_id: ArtifactBundleId,
         binding: ArtifactBinding,
         orphan_at: Timestamp,
+        uploaded_at: Option<Timestamp>,
     ) -> Result<Option<u64>, ArtifactStoreError> {
         let collection = self.database.collection::<Document>("artifact_bundles");
         for _ in 0..16 {
@@ -537,22 +548,37 @@ impl MongoArtifactStore {
             if !existing.contains(&binding) {
                 return Ok(None);
             }
+            // A newer publication of the same content refreshed the upload time: it keeps
+            // its binding. The write below repeats the condition.
+            if let Some(expected) = uploaded_at
+                && timestamp(&document, "u")? != expected
+            {
+                return Ok(None);
+            }
             let remaining = existing
                 .iter()
                 .filter(|candidate| **candidate != binding)
                 .cloned()
                 .collect::<Vec<_>>();
             let old = encode_bindings(&existing)?;
+            // The orphan keeps the project that released it, in the same write: if that
+            // project's deletion was requested meanwhile, its job waits for this bundle
+            // as for the ones it orphans itself.
             let update = if remaining.is_empty() {
-                doc! { "$unset": { "b": "" }, "$set": { "e": datetime(orphan_at) } }
+                doc! { "$unset": { "b": "" }, "$set": { "e": datetime(orphan_at), "j": released_by(binding.project_id) } }
             } else {
                 doc! { "$set": { "b": encode_bindings(&remaining)? } }
             };
+            // A project already in deletion loses its bindings to the deletion job alone.
+            if !self.project_live(binding.project_id).await? {
+                return Err(ArtifactStoreError::NotFound);
+            }
+            let mut filter = doc! { "_id": binary(&bundle_id.as_bytes()), "b": old };
+            if let Some(expected) = uploaded_at {
+                filter.insert("u", datetime(expected));
+            }
             let result = collection
-                .update_one(
-                    doc! { "_id": binary(&bundle_id.as_bytes()), "b": old },
-                    update,
-                )
+                .update_one(filter, update)
                 .await
                 .map_err(unavailable)?;
             if result.modified_count == 1 {
@@ -565,6 +591,20 @@ impl MongoArtifactStore {
             }
         }
         Err(ArtifactStoreError::Busy)
+    }
+
+    async fn project_live(&self, project_id: ProjectId) -> Result<bool, ArtifactStoreError> {
+        Ok(self
+            .database
+            .collection::<Document>("projects")
+            .find_one(doc! {
+                "_id": project_id.get(),
+                "state": { "$in": ["active", "disabled"] },
+            })
+            .projection(doc! { "_id": 1 })
+            .await
+            .map_err(unavailable)?
+            .is_some())
     }
 
     async fn remove_upload_binding(
@@ -613,6 +653,74 @@ impl MongoArtifactStore {
                 .map_err(unavailable)?;
         }
         Ok(())
+    }
+
+    async fn bound(&self) -> Result<Vec<(OrganizationId, ProjectId)>, ArtifactStoreError> {
+        // Only a ready, bound bundle has `b`. Without the filter, distinct also returns
+        // null for every bundle that has none.
+        let ids = self
+            .database
+            .collection::<Document>("artifact_bundles")
+            .distinct("b.p", doc! { "b": { "$exists": true } })
+            .await
+            .map_err(unavailable)?;
+        let mut cursor = self
+            .database
+            .collection::<Document>("projects")
+            .find(doc! { "_id": { "$in": ids }, "state": { "$in": ["active", "disabled"] } })
+            .projection(doc! { "_id": 1, "organization_id": 1 })
+            .sort(doc! { "_id": 1 })
+            .await
+            .map_err(unavailable)?;
+        let mut projects = Vec::new();
+        while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+            let project_id = document
+                .get_i32("_id")
+                .ok()
+                .and_then(|id| ProjectId::new(id).ok())
+                .ok_or(ArtifactStoreError::InvalidData)?;
+            projects.push((organization_id(&document)?, project_id));
+        }
+        Ok(projects)
+    }
+
+    async fn bundles_of(
+        &self,
+        organization_id: OrganizationId,
+        project_id: ProjectId,
+        before: Option<(Timestamp, ArtifactBundleId)>,
+        limit: usize,
+    ) -> Result<Vec<ArtifactBundle>, ArtifactStoreError> {
+        if !(1..=100).contains(&limit) {
+            return Err(ArtifactStoreError::InvalidData);
+        }
+        let mut filter = doc! {
+            "o": i64::try_from(organization_id.get()).map_err(|_| ArtifactStoreError::InvalidData)?,
+            "b": { "$elemMatch": { "p": project_id.get() } },
+            "s": { "$exists": false },
+        };
+        if let Some((uploaded_at, id)) = before {
+            filter.insert(
+                "$or",
+                vec![
+                    doc! { "u": { "$lt": datetime(uploaded_at) } },
+                    doc! { "u": datetime(uploaded_at), "_id": { "$lt": binary(&id.as_bytes()) } },
+                ],
+            );
+        }
+        let mut cursor = self
+            .database
+            .collection::<Document>("artifact_bundles")
+            .find(filter)
+            .sort(doc! { "u": -1, "_id": -1 })
+            .limit(i64::try_from(limit).map_err(|_| ArtifactStoreError::InvalidData)?)
+            .await
+            .map_err(unavailable)?;
+        let mut bundles = Vec::with_capacity(limit);
+        while let Some(document) = cursor.try_next().await.map_err(unavailable)? {
+            bundles.push(decode_bundle(&document)?);
+        }
+        Ok(bundles)
     }
 
     async fn recoverable(
@@ -823,14 +931,31 @@ impl ArtifactStore for MongoArtifactStore {
         })
     }
 
+    fn bound_projects(
+        &self,
+    ) -> PortFuture<'_, Result<Vec<(OrganizationId, ProjectId)>, ArtifactStoreError>> {
+        Box::pin(self.bound())
+    }
+
+    fn project_bundles(
+        &self,
+        organization_id: OrganizationId,
+        project_id: ProjectId,
+        before: Option<(Timestamp, ArtifactBundleId)>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ArtifactBundle>, ArtifactStoreError>> {
+        Box::pin(self.bundles_of(organization_id, project_id, before, limit))
+    }
+
     fn remove_binding(
         &self,
         organization_id: OrganizationId,
         bundle_id: ArtifactBundleId,
         binding: ArtifactBinding,
         orphan_at: Timestamp,
+        uploaded_at: Option<Timestamp>,
     ) -> PortFuture<'_, Result<Option<u64>, ArtifactStoreError>> {
-        Box::pin(self.remove(organization_id, bundle_id, binding, orphan_at))
+        Box::pin(self.remove(organization_id, bundle_id, binding, orphan_at, uploaded_at))
     }
     fn recoverable_uploads(
         &self,
@@ -1289,6 +1414,11 @@ fn binary(bytes: &[u8]) -> Binary {
         subtype: BinarySubtype::Generic,
         bytes: bytes.to_vec(),
     }
+}
+/// The `j` value of an orphan whose last binding a removal released. Four bytes never
+/// equal the sixteen-byte deletion operation that the deletion job writes there.
+pub(crate) fn released_by(project_id: ProjectId) -> Binary {
+    binary(&project_id.get().to_be_bytes())
 }
 fn binary_slice<'a>(document: &'a Document, field: &str) -> Result<&'a [u8], ArtifactStoreError> {
     document

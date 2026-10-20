@@ -6,7 +6,7 @@ not count as implementations. Presence is not behavioral verification;
 see the phase report for actual Docker evidence. Blob bytes remain in
 the existing shared Blob adapter.
 
-Implemented signatures: 164/164. Delivery requires every row
+Implemented signatures: 166/166. Delivery requires every row
 and its conformance evidence, including signatures added after this snapshot.
 
 | Port method | Explicit implementation |
@@ -161,11 +161,13 @@ and its conformance evidence, including signatures added after this snapshot.
 | `DebugFileStore::resolve_project_slugs` | `crates/postgres/src/debug_files.rs` |
 | `DebugFileStore::set_upload_state` | `crates/postgres/src/debug_files.rs` |
 | `DebugFileStore::upsert_upload` | `crates/postgres/src/debug_files.rs` |
+| `ArtifactStore::bound_projects` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::claim_gc` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::finish_gc` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::load_by_sha1` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::load_for_project` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::lookup` | `crates/postgres/src/artifacts.rs` |
+| `ArtifactStore::project_bundles` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::project_organization` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::publication_generation` | `crates/postgres/src/artifacts.rs` |
 | `ArtifactStore::publish_bundle` | `crates/postgres/src/artifacts.rs` |

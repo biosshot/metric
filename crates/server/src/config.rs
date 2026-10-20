@@ -15,7 +15,7 @@ use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
-use metric_domain::{BoundedDuration, ByteSize};
+use metric_domain::{BoundedDuration, ByteSize, artifacts::ArtifactRetentionMode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -169,6 +169,10 @@ pub struct ArtifactSettings {
     pub gc_max_concurrency: usize,
     pub maximum_bytes_per_organization: u64,
     pub maximum_bundles_per_organization: u64,
+    pub retention_mode: ArtifactRetentionMode,
+    pub retention_max_age: ProjectDeletionDuration,
+    pub retention_keep_latest: usize,
+    pub retention_interval: SchedulerInterval,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -934,6 +938,10 @@ struct RawArtifactSettings {
     gc_max_concurrency: usize,
     maximum_bytes_per_organization: String,
     maximum_bundles_per_organization: u64,
+    retention_mode: String,
+    retention_max_age: String,
+    retention_keep_latest: usize,
+    retention_interval: String,
 }
 
 impl Default for RawArtifactSettings {
@@ -954,6 +962,10 @@ impl Default for RawArtifactSettings {
             gc_max_concurrency: 4,
             maximum_bytes_per_organization: "0 B".to_owned(),
             maximum_bundles_per_organization: 0,
+            retention_mode: "off".to_owned(),
+            retention_max_age: "30d".to_owned(),
+            retention_keep_latest: 20,
+            retention_interval: "1h".to_owned(),
         }
     }
 }
@@ -1827,6 +1839,15 @@ impl TryFrom<RawConfig> for AppConfig {
                 .map_err(|_| ConfigError::InvalidArtifactConfig)?;
         let artifact_gc_interval = SchedulerInterval::from_str(&raw.artifacts.gc_interval)
             .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_retention_mode =
+            ArtifactRetentionMode::from_str(&raw.artifacts.retention_mode)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_retention_max_age =
+            ProjectDeletionDuration::from_str(&raw.artifacts.retention_max_age)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
+        let artifact_retention_interval =
+            SchedulerInterval::from_str(&raw.artifacts.retention_interval)
+                .map_err(|_| ConfigError::InvalidArtifactConfig)?;
         let capsule_total =
             ConfiguredBytes::from_str(&raw.incident_capsule.max_total_uncompressed_bytes)
                 .map_err(|_| ConfigError::InvalidIncidentCapsuleConfig)?;
@@ -1922,6 +1943,9 @@ impl TryFrom<RawConfig> for AppConfig {
             || !(1..=100).contains(&raw.artifacts.gc_batch_size)
             || !(1..=4).contains(&raw.artifacts.gc_max_concurrency)
             || raw.artifacts.maximum_bundles_per_organization > 1_000_000_000
+            || artifact_retention_max_age.get().is_zero()
+            || raw.artifacts.retention_keep_latest > 10_000
+            || artifact_retention_interval.get().is_zero()
         {
             return Err(ConfigError::InvalidArtifactConfig);
         }
@@ -2039,6 +2063,10 @@ impl TryFrom<RawConfig> for AppConfig {
                 gc_max_concurrency: raw.artifacts.gc_max_concurrency,
                 maximum_bytes_per_organization: artifact_quota_bytes.get(),
                 maximum_bundles_per_organization: raw.artifacts.maximum_bundles_per_organization,
+                retention_mode: artifact_retention_mode,
+                retention_max_age: artifact_retention_max_age,
+                retention_keep_latest: raw.artifacts.retention_keep_latest,
+                retention_interval: artifact_retention_interval,
             },
             incident_capsule: IncidentCapsuleSettings {
                 max_events: raw.incident_capsule.max_events,
@@ -2299,7 +2327,7 @@ impl AppConfig {
             .as_ref()
             .map_or("<disabled>", url::Url::as_str);
         let rendered_extensions = format!(
-            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n\n[artifacts]\nmaximum_bundle_bytes = {}\nmaximum_logical_bytes = {}\nmaximum_entries = {}\nmaximum_entry_bytes = {}\nmaximum_concurrent_assemblies = {}\nparse_timeout = \"{}\"\norphan_grace = \"{}\"\nclaim_lease = \"{}\"\nblob_operation_timeout = \"{}\"\ntombstone_retention = \"{}\"\ngc_interval = \"{}\"\ngc_batch_size = {}\ngc_max_concurrency = {}\nmaximum_bytes_per_organization = {}\nmaximum_bundles_per_organization = {}\n\n[incident_capsule]\nmax_events = {}\nmax_activities = {}\nmax_total_uncompressed_bytes = {}\nmax_entry_bytes = {}\ngeneration_timeout = \"{}\"\nmax_concurrency = {}\nstream_chunk_bytes = {}\nstream_buffer_chunks = {}\n",
+            "{rendered}\n[symbolicator]\nendpoint = \"{endpoint}\"\ncallback_base_url = \"{}\"\nrequest_timeout = \"{}\"\nmaximum_concurrency = {}\ncircuit_failure_threshold = {}\ncircuit_cooldown = \"{}\"\nmaximum_response_bytes = {}\n\n[artifacts]\nmaximum_bundle_bytes = {}\nmaximum_logical_bytes = {}\nmaximum_entries = {}\nmaximum_entry_bytes = {}\nmaximum_concurrent_assemblies = {}\nparse_timeout = \"{}\"\norphan_grace = \"{}\"\nclaim_lease = \"{}\"\nblob_operation_timeout = \"{}\"\ntombstone_retention = \"{}\"\ngc_interval = \"{}\"\ngc_batch_size = {}\ngc_max_concurrency = {}\nmaximum_bytes_per_organization = {}\nmaximum_bundles_per_organization = {}\nretention_mode = \"{}\"\nretention_max_age = \"{}\"\nretention_keep_latest = {}\nretention_interval = \"{}\"\n\n[incident_capsule]\nmax_events = {}\nmax_activities = {}\nmax_total_uncompressed_bytes = {}\nmax_entry_bytes = {}\ngeneration_timeout = \"{}\"\nmax_concurrency = {}\nstream_chunk_bytes = {}\nstream_buffer_chunks = {}\n",
             self.symbolicator.callback_base_url,
             humantime::format_duration(self.symbolicator.request_timeout.get()),
             self.symbolicator.maximum_concurrency,
@@ -2321,6 +2349,10 @@ impl AppConfig {
             self.artifacts.gc_max_concurrency,
             self.artifacts.maximum_bytes_per_organization,
             self.artifacts.maximum_bundles_per_organization,
+            self.artifacts.retention_mode.as_str(),
+            humantime::format_duration(self.artifacts.retention_max_age.get()),
+            self.artifacts.retention_keep_latest,
+            humantime::format_duration(self.artifacts.retention_interval.get()),
             self.incident_capsule.max_events,
             self.incident_capsule.max_activities,
             self.incident_capsule.max_total_uncompressed_bytes,
@@ -2996,6 +3028,22 @@ mod tests {
             },
             RawArtifactSettings {
                 gc_max_concurrency: 5,
+                ..RawArtifactSettings::default()
+            },
+            RawArtifactSettings {
+                retention_mode: "delete".to_owned(),
+                ..RawArtifactSettings::default()
+            },
+            RawArtifactSettings {
+                retention_max_age: "0s".to_owned(),
+                ..RawArtifactSettings::default()
+            },
+            RawArtifactSettings {
+                retention_keep_latest: 10_001,
+                ..RawArtifactSettings::default()
+            },
+            RawArtifactSettings {
+                retention_interval: "25h".to_owned(),
                 ..RawArtifactSettings::default()
             },
         ] {

@@ -298,6 +298,10 @@ These defaults are used when an `[artifacts]` section is not present.
 | `artifacts.gc_max_concurrency` | `4` | Maximum cleanup operations at the same time. |
 | `artifacts.maximum_bytes_per_organization` | `0 B` | Organization byte quota. Zero means unlimited. |
 | `artifacts.maximum_bundles_per_organization` | `0` | Organization bundle quota. Zero means unlimited. |
+| `artifacts.retention_mode` | `off` | Removal of old source-map bundles: `off`, `report` (log what would be removed) or `enforce`. |
+| `artifacts.retention_max_age` | `30d` | Bundles uploaded within this time are kept, and so are bundles of a release with an event within it. |
+| `artifacts.retention_keep_latest` | `20` | Newest bundles each project keeps regardless of age. |
+| `artifacts.retention_interval` | `1h` | How often retention runs. The first run follows startup. |
 
 ## Incident Capsule export
 

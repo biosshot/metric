@@ -15,6 +15,9 @@ use mongodb::{
     bson::{Binary, DateTime, doc, spec::BinarySubtype},
 };
 
+mod command_gate;
+use command_gate::{Gate, gated_client};
+
 #[tokio::test]
 #[ignore = "requires a real MongoDB"]
 async fn infrastructure_project_deletion_cancel_restart_rescan_and_tombstone() {
@@ -473,11 +476,14 @@ fn generic_binary(bytes: &[u8]) -> Binary {
     }
 }
 
-async fn test_database() -> Result<Database, mongodb::error::Error> {
-    let uri = std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
+fn test_uri() -> String {
+    std::env::var("METRIC_TEST_MONGODB_URI").unwrap_or_else(|_| {
         "mongodb://127.0.0.1:27017/?serverSelectionTimeoutMS=2000&connectTimeoutMS=2000".to_owned()
-    });
-    let client = Client::with_uri_str(uri).await?;
+    })
+}
+
+async fn test_database() -> Result<Database, mongodb::error::Error> {
+    let client = Client::with_uri_str(test_uri()).await?;
     client
         .database("admin")
         .run_command(doc! { "ping": 1 })
@@ -486,4 +492,155 @@ async fn test_database() -> Result<Database, mongodb::error::Error> {
         "metric_phase15_test_{}",
         mongodb::bson::oid::ObjectId::new().to_hex()
     )))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a real MongoDB"]
+async fn deletion_waits_for_a_bundle_a_racing_removal_orphaned() {
+    let database = test_database().await.unwrap();
+    let result = exercise_removal_race(&database).await;
+    let cleanup = database.drop().await;
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+async fn exercise_removal_race(database: &Database) -> Result<(), Box<dyn Error>> {
+    use metric_domain::{
+        artifacts::{ArtifactBinding, ArtifactBundle, ArtifactBundleId, ArtifactUpload},
+        debug_files::DebugId,
+    };
+    use metric_mongo::{ArtifactQuota, DATASET_REGISTRY, MongoArtifactStore};
+    use metric_ports::ArtifactStore;
+    use mongodb::bson::Document;
+
+    let control = MongoProjectStore::from_database(database.clone(), SecretBytes::new([7; 32]), 32);
+    control.bootstrap_or_validate().await?;
+    control.insert_organization(organization()).await?;
+    control.insert_project(project(42, "removal-race")).await?;
+    let store = MongoArtifactStore::from_database(database.clone(), ArtifactQuota::default());
+    let organization_id = OrganizationId::new(1)?;
+    let now = Timestamp::from_unix_millis(DateTime::now().timestamp_millis())?;
+    let id = ArtifactBundleId::from_bytes([13; 16]);
+    let binding = ArtifactBinding::new(ProjectId::new(42)?, None, None)?;
+    let upload = ArtifactUpload {
+        id: [13; 16],
+        organization_id,
+        sha1: [13; 20],
+        chunks: vec![[13; 20]],
+        bindings: vec![binding.clone()],
+        created_at: now,
+        updated_at: now,
+    };
+    store.upsert_upload(upload.clone()).await?;
+    store
+        .publish_bundle(
+            upload.id,
+            ArtifactBundle {
+                id,
+                organization_id,
+                bindings: upload.bindings.clone(),
+                bundle_debug_id: DebugId::Uuid {
+                    uuid: [13; 16],
+                    appendix: 0,
+                },
+                debug_id_tokens: Vec::new(),
+                checksum: [13; 32],
+                sha1: [13; 20],
+                size: 3,
+                uploaded_at: now,
+                generation: 0,
+            },
+        )
+        .await?;
+
+    // The removal's state check passes, deletion is requested before its bundle write,
+    // and the whole purge runs before its next command.
+    let write = Gate::armed();
+    let after_write = Gate::armed();
+    let racing = MongoArtifactStore::from_database(
+        gated_client(
+            &test_uri(),
+            vec![
+                ("update", "artifact_bundles", write.clone()),
+                ("find", "artifact_uploads", after_write.clone()),
+            ],
+        )
+        .await?
+        .database(database.name()),
+        ArtifactQuota::default(),
+    );
+    let removal = tokio::spawn({
+        let binding = binding.clone();
+        async move {
+            racing
+                .remove_binding(organization_id, id, binding, now, None)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), write.entered.notified()).await?;
+    control
+        .request_deletion(deletion_request(
+            ProjectDeletionOperationId::from_bytes([14; 16]),
+            now.unix_millis(),
+            now.unix_millis(),
+        ))
+        .await?;
+    write.release();
+    tokio::time::timeout(Duration::from_secs(5), after_write.entered.notified()).await?;
+
+    // The write that took the last binding also named the project.
+    let orphan = database
+        .collection::<Document>("artifact_bundles")
+        .find_one(doc! { "_id": generic_binary(&id.as_bytes()) })
+        .await?
+        .ok_or("the bundle is gone")?;
+    assert!(!orphan.contains_key("b"));
+    assert_eq!(
+        orphan.get_binary_generic("j")?,
+        &42_i32.to_be_bytes().to_vec()
+    );
+    let purge = ProjectPurgeRequest {
+        now,
+        batch_size: 100,
+        retry_base: Duration::from_millis(1),
+        retry_max: Duration::from_secs(1),
+        completed_retention: Duration::from_secs(60),
+        slug_reservation: Duration::from_secs(30),
+    };
+    let project_id = ProjectId::new(42)?;
+    for _ in 0..(2 * DATASET_REGISTRY.len() + 16) {
+        control.purge_next(purge).await?;
+    }
+    assert_ne!(
+        control.deletion_status(project_id).await?.phase,
+        ProjectDeletionPhase::Deleted
+    );
+
+    // Once garbage collection deletes the bundle, the deletion completes.
+    let collected = Timestamp::from_unix_millis(now.unix_millis() + 1_000)?;
+    let lease = Timestamp::from_unix_millis(now.unix_millis() + 60_000)?;
+    let claims = store.claim_gc(collected, lease, [15; 16], 10).await?;
+    assert_eq!(claims.len(), 1);
+    for claimed in claims {
+        assert!(
+            store
+                .finish_gc(
+                    claimed.bundle.id,
+                    claimed.bundle.generation,
+                    claimed.claim,
+                    lease
+                )
+                .await?
+        );
+    }
+    for _ in 0..(2 * DATASET_REGISTRY.len() + 16) {
+        control.purge_next(purge).await?;
+    }
+    assert_eq!(
+        control.deletion_status(project_id).await?.phase,
+        ProjectDeletionPhase::Deleted
+    );
+    after_write.release();
+    assert!(removal.await??.is_some());
+    Ok(())
 }

@@ -366,13 +366,32 @@ pub trait ArtifactStore: Send + Sync + 'static {
         bundle_id: ArtifactBundleId,
     ) -> PortFuture<'_, Result<ArtifactBundle, ArtifactStoreError>>;
 
-    /// Removes one exact binding and returns the new project revision.
+    /// Active and disabled projects that bind at least one ready bundle, with their
+    /// organization, in project order. Deletion handles the bindings of the others.
+    fn bound_projects(
+        &self,
+    ) -> PortFuture<'_, Result<Vec<(metric_domain::OrganizationId, ProjectId)>, ArtifactStoreError>>;
+
+    /// Ready bundles bound to the project, newest upload first, continuing after the
+    /// `(uploaded_at, id)` position of the previous page.
+    fn project_bundles(
+        &self,
+        organization_id: metric_domain::OrganizationId,
+        project_id: ProjectId,
+        before: Option<(Timestamp, ArtifactBundleId)>,
+        limit: usize,
+    ) -> PortFuture<'_, Result<Vec<ArtifactBundle>, ArtifactStoreError>>;
+
+    /// Removes one exact binding and returns the new project revision. With `uploaded_at`,
+    /// only while the bundle still has that upload time: a newer publication of the same
+    /// content keeps its binding, and the result is `None`.
     fn remove_binding(
         &self,
         organization_id: metric_domain::OrganizationId,
         bundle_id: ArtifactBundleId,
         binding: ArtifactBinding,
         orphan_at: Timestamp,
+        uploaded_at: Option<Timestamp>,
     ) -> PortFuture<'_, Result<Option<u64>, ArtifactStoreError>>;
 
     fn recoverable_uploads(
