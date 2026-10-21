@@ -22,7 +22,7 @@ Most installations only need the values already created in `.env`:
 Advanced settings live in `metric.toml` beside `compose.yml`. Metric reads them
 once at startup, so restart the container after a change.
 
-The 0.1.8 [installer](getting-started.md) selects MongoDB (default) or PostgreSQL,
+The 0.1.9 [installer](getting-started.md) selects MongoDB (default) or PostgreSQL,
 bundled or existing. See [Installer options](installer-options.md) for CLI and
 environment names. PostgreSQL variants share application profile settings;
 Mongo-only sizing measurements do not establish PostgreSQL capacity guarantees.
@@ -31,10 +31,10 @@ Mongo-only sizing measurements do not establish PostgreSQL capacity guarantees.
 
 | Profile file | Main purpose |
 | --- | --- |
-| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
-| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
-| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
-| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
+| [`min.toml`](https://github.com/biosshot/metric/blob/v0.1.9/deploy/profiles/min.toml) | Minimum memory and disk use; no Symbolicator or attachments. |
+| [`low.toml`](https://github.com/biosshot/metric/blob/v0.1.9/deploy/profiles/low.toml) | Small installation with attachments but no Symbolicator. |
+| [`medium.toml`](https://github.com/biosshot/metric/blob/v0.1.9/deploy/profiles/medium.toml) | Recommended default with Symbolicator. |
+| [`high.toml`](https://github.com/biosshot/metric/blob/v0.1.9/deploy/profiles/high.toml) | Larger queues, files, storage and retention. |
 
 Profile settings are designed as a group. Copying only High queue sizes into Min
 can make a 1 GiB server run out of memory. Copying only High retention into a
@@ -177,7 +177,7 @@ Temporary unavailability can retry in startup maintenance. The driver defaults
 pass them explicitly into the container when needed. Certificate paths are local
 mounted files, with no external HTTP certificate download required.
 
-PostgreSQL requires schema generation **21**. Missing immutable migrations run
+PostgreSQL requires schema generation **22**. Missing immutable migrations run
 sequentially with a transaction per SQL step and an ownership lock. The journal
 is `metric._sqlx_migrations`; successful steps are not rerun. Ordinary application
 workers start only after verification of the target schema. Switching a backend

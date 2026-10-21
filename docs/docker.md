@@ -22,7 +22,7 @@ The web interface is included in the Metric image.
 
 | Service | Image |
 | --- | --- |
-| Metric | `ghcr.io/biosshot/metric:0.1.8` |
+| Metric | `ghcr.io/biosshot/metric:0.1.9` |
 | MongoDB | `mongo:8.0.12` |
 | PostgreSQL | `postgres:18.6-bookworm`, pinned by digest in the generated template |
 | Symbolicator | `ghcr.io/getsentry/symbolicator:26.6.0` |

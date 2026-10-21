@@ -21,16 +21,16 @@ same Rust binary.
 No SaaS account. No repository clone for Docker installation. No 65-service
 Compose stack. Your telemetry stays on infrastructure you control.
 
-> Metric 0.1.8 is an early release. Read the
+> Metric 0.1.9 is an early release. Read the
 > [known limits](https://biosshot.github.io/metric/known-limits) before using it
 > for important production data.
 
-## New in 0.1.8
+## New in 0.1.9
 
-PostgreSQL is available as an independent backend, with an explicit minimal setup
-wizard for shell and PowerShell. Existing unattended commands and MongoDB defaults
-are preserved. Read the
-[release notes](docs/releases/0.1.8.md) before updating an existing installation.
+Native and JavaScript symbolication now resolve source context in the event view.
+Sentry CLI uploads are more compatible, and optional artifact retention bounds
+old source-map storage. PostgreSQL advances to schema generation 22. Read the
+[release notes](docs/releases/0.1.9.md) before updating an existing installation.
 
 ## Why Metric exists
 
@@ -60,7 +60,7 @@ data-residency questions or the operational weight of self-hosted Sentry.
 
 ## Metric vs. self-hosted Sentry
 
-| | **Metric 0.1.8** | **Self-hosted Sentry 26.7.2** |
+| | **Metric 0.1.9** | **Self-hosted Sentry 26.7.2** |
 | --- | --- | --- |
 | Core stack | One Rust application serving the bundled Vue UI, plus MongoDB or PostgreSQL | Sentry, Relay, Snuba, Kafka, ClickHouse, PostgreSQL, Redis, workers and other services |
 | Compose footprint | **2 services** in Min/Low; **4 services** in Medium/High with Symbolicator and its cleanup companion | **65 service definitions** in the official release Compose file¹ |
@@ -180,17 +180,17 @@ unattended MongoDB defaults.
 Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.ps1 | iex
 ```
 
 The installer creates a `metric` directory, generates private passwords, pulls
-`ghcr.io/biosshot/metric:0.1.8` and starts the recommended Medium profile.
+`ghcr.io/biosshot/metric:0.1.9` and starts the recommended Medium profile.
 Running the installer again reuses the existing `.env` and database password.
 You do not need to clone the repository.
 
@@ -221,7 +221,7 @@ storing important data.
 Install Min on a small Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
@@ -279,7 +279,7 @@ chart always has the same version as Metric and its Docker image.
 - [Configuration](https://biosshot.github.io/metric/configuration)
 - [Capacity and profiles](https://biosshot.github.io/metric/capacity)
 - [Updates and rollback](https://biosshot.github.io/metric/upgrading)
-- [0.1.8 release notes](docs/releases/0.1.8.md)
+- [0.1.9 release notes](docs/releases/0.1.9.md)
 - [Troubleshooting](https://biosshot.github.io/metric/troubleshooting)
 
 ## Support the project

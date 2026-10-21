@@ -30,11 +30,12 @@ errors into issues and shows the result in a web interface.
 Use Metric when you want the Sentry workflow without running the full self-hosted
 Sentry stack.
 
-Metric 0.1.8 is an early release. Review the [known limits](known-limits.md)
+Metric 0.1.9 is an early release. Review the [known limits](known-limits.md)
 before using it for important production data.
 
-[What's new in 0.1.8](releases/0.1.8.md): independent PostgreSQL storage and an
-explicit minimal setup wizard, preserving unattended commands and Mongo defaults.
+[What's new in 0.1.9](releases/0.1.9.md): repaired native and JavaScript
+symbolication, resolved source context, Sentry CLI compatibility and optional
+artifact retention. PostgreSQL advances to schema generation 22.
 This release is being prepared; versioned downloads are not published yet.
 
 ## What you need

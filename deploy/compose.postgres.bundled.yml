@@ -26,7 +26,7 @@ services:
     logging: *default-logging
 
   metric:
-    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.8}
+    image: ${METRIC_IMAGE:-ghcr.io/biosshot/metric:0.1.9}
     restart: unless-stopped
     mem_limit: ${METRIC_APP_MEMORY_LIMIT:-2g}
     depends_on:
