@@ -4,9 +4,8 @@ You need Docker with Docker Compose. You do not need Git, Rust, Node.js or a cop
 of the source repository.
 
 ::: info Release preparation
-The 0.1.8 installer is being prepared on `feat/postgres`. The versioned download
-commands below become available when 0.1.8 is published; they do not install an
-already published 0.1.7 image with the new options.
+The versioned download commands below become available when 0.1.9 is published.
+Use the matching installer, application image and Helm chart for this release.
 :::
 
 ## Interactive installation
@@ -20,7 +19,7 @@ when needed. It does not ask about queues, retention or other internal settings.
 ### Linux or macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.sh \
   | METRIC_INTERACTIVE=1 sh
 ```
 
@@ -34,7 +33,7 @@ secrets are generated.
 ```powershell
 $env:METRIC_INTERACTIVE = '1'
 try {
-  irm https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.ps1 | iex
+  irm https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.ps1 | iex
 } finally {
   Remove-Item Env:METRIC_INTERACTIVE -ErrorAction SilentlyContinue
 }
@@ -70,13 +69,13 @@ Medium is used when no profile is specified.
 Medium:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.sh | sh
 ```
 
 Another profile:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.sh \
   | METRIC_PROFILE=min sh
 ```
 
@@ -87,14 +86,14 @@ Replace `min` with `low` or `high` when needed.
 Medium:
 
 ```powershell
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.ps1 | iex
 ```
 
 Another profile:
 
 ```powershell
 $env:METRIC_PROFILE = 'min'
-irm https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.ps1 | iex
+irm https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.ps1 | iex
 Remove-Item Env:METRIC_PROFILE
 ```
 
@@ -113,8 +112,8 @@ Bundled database ports are not published. Only Metric's selected HTTP port is
 published, on all host interfaces by default.
 
 You can review the
-[Linux installer](https://github.com/biosshot/metric/blob/v0.1.8/deploy/install.sh)
-or [Windows installer](https://github.com/biosshot/metric/blob/v0.1.8/deploy/install.ps1)
+[Linux installer](https://github.com/biosshot/metric/blob/v0.1.9/deploy/install.sh)
+or [Windows installer](https://github.com/biosshot/metric/blob/v0.1.9/deploy/install.ps1)
 before running it.
 
 ## Connect an existing database
@@ -130,7 +129,7 @@ your connection details; percent-encode reserved characters in its password.
 
 ```bash
 export METRIC_POSTGRES_URI='postgres://metric:replace-me@db.example:5432/metric'
-curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.sh \
   | METRIC_DATABASE_BACKEND=postgres METRIC_DATABASE_MODE=external METRIC_PROFILE=low sh
 unset METRIC_POSTGRES_URI
 ```
@@ -141,7 +140,7 @@ $env:METRIC_DATABASE_BACKEND = 'postgres'
 $env:METRIC_DATABASE_MODE = 'external'
 $env:METRIC_PROFILE = 'low'
 try {
-  irm https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/install.ps1 | iex
+  irm https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/install.ps1 | iex
 } finally {
   'METRIC_POSTGRES_URI','METRIC_DATABASE_BACKEND','METRIC_DATABASE_MODE','METRIC_PROFILE' |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
@@ -199,10 +198,10 @@ metric/
 
 Keep the generated files in the same directory:
 
-- [`compose.yml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/compose.yml)
+- [`compose.yml`](https://github.com/biosshot/metric/blob/v0.1.9/deploy/compose.yml)
   describes all available containers;
 - `metric.toml` is the selected Min, Low, Medium or High configuration;
-- [`symbolicator.yml`](https://github.com/biosshot/metric/blob/v0.1.8/deploy/symbolicator.yml)
+- [`symbolicator.yml`](https://github.com/biosshot/metric/blob/v0.1.9/deploy/symbolicator.yml)
   is used only by Medium and High;
 - `.env` contains the selected profile, passwords, image versions and Docker
   resource limits.
@@ -264,17 +263,17 @@ data.
 
 Create an empty directory and download:
 
-- [compose.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/compose.yml)
-- [symbolicator.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/symbolicator.yml)
+- [compose.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/compose.yml)
+- [symbolicator.yml](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/symbolicator.yml)
 
 Then choose one pair and save it under the name shown:
 
 | Profile | Save as `metric.toml` | Save as `.env` |
 | --- | --- | --- |
-| Min | [min.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/min.toml) | [min.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/min.env.example) |
-| Low | [low.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/low.toml) | [low.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/low.env.example) |
-| Medium | [medium.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/medium.toml) | [medium.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/medium.env.example) |
-| High | [high.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/high.toml) | [high.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.8/deploy/profiles/high.env.example) |
+| Min | [min.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/min.toml) | [min.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/min.env.example) |
+| Low | [low.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/low.toml) | [low.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/low.env.example) |
+| Medium | [medium.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/medium.toml) | [medium.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/medium.env.example) |
+| High | [high.toml](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/high.toml) | [high.env.example](https://raw.githubusercontent.com/biosshot/metric/v0.1.9/deploy/profiles/high.env.example) |
 
 Replace the two placeholder secrets in `.env`:
 

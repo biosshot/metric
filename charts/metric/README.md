@@ -15,7 +15,7 @@ matching published chart:
 
 ```bash
 helm install metric oci://ghcr.io/biosshot/charts/metric \
-  --version 0.1.8 --namespace metric --wait --timeout 10m
+  --version 0.1.9 --namespace metric --wait --timeout 10m
 kubectl --namespace metric port-forward service/metric 4001:4001
 ```
 
@@ -23,7 +23,7 @@ Before the initial OCI publication, build and load the checkout's image into a t
 cluster, then use `helm install metric ./charts/metric --namespace metric
 --set image.repository=metric-helm-test --set image.pullPolicy=Never --wait --timeout 10m`.
 Do not assume an image or chart is available just because its source is merged;
-the first public chart ships with Metric 0.1.8.
+the first public chart shipped with Metric 0.1.8.
 
 Default profile: Min. Application limits and resource ceilings come from the
 existing Compose profiles. Kubernetes 1.32+ and Helm 3.19+ are required; a StorageClass

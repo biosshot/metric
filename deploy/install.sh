@@ -8,7 +8,7 @@ case "$-" in *x*) set +x ;; esac
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 help() {
   cat <<'HELP'
-Metric installer (0.1.8 source; new options require this updated script)
+Metric installer (0.1.9 source; new options require this updated script)
 Without options: unattended Medium profile with bundled MongoDB.
   --interactive                    METRIC_INTERACTIVE=1
   --profile min|low|medium|high     METRIC_PROFILE
@@ -32,7 +32,7 @@ mode=${METRIC_DATABASE_MODE:-}; interactive=${METRIC_INTERACTIVE:-0}
 http_port=${METRIC_HTTP_PORT:-4001}; tls=${METRIC_DATABASE_TLS:-}
 ca=${METRIC_DATABASE_TLS_CA:-}; cert=${METRIC_DATABASE_TLS_CLIENT_CERT:-}
 key=${METRIC_DATABASE_TLS_CLIENT_KEY:-}; install_dir=${METRIC_INSTALL_DIR:-}
-version=${METRIC_VERSION:-0.1.8}
+version=${METRIC_VERSION:-0.1.9}
 download_base=${METRIC_DOWNLOAD_BASE:-https://raw.githubusercontent.com/biosshot/metric/v${version}/deploy}
 while [ "$#" -gt 0 ]; do
   case "$1" in

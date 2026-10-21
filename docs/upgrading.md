@@ -1,11 +1,11 @@
 # Update Metric
 
 Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
-`0.1.8`.
+`0.1.9`.
 
 ## Before updating
 
-1. Read the [0.1.8 release notes](releases/0.1.8.md).
+1. Read the [0.1.9 release notes](releases/0.1.9.md).
 2. Check the schema requirement for your selected backend.
 3. [Back up the database, file storage and secrets together](backup-restore.md).
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
@@ -20,12 +20,22 @@ The current Metric binary requires MongoDB schema generation **22 exactly** befo
 starting application workers. It automatically migrates complete generation-19, generation-20 and generation-21
 databases to generation 22 before ordinary startup.
 
-PostgreSQL requires schema generation **21**. It applies missing SQL migrations in
+PostgreSQL requires schema generation **22**. It applies missing SQL migrations in
 order and records them in `metric._sqlx_migrations`. Each SQL migration and its
 successful journal entry are one transaction. On failure, successful earlier steps
 remain; the failed step rolls back and is retried after the cause is corrected.
 Changed checksums and newer/unknown schemas stop startup. Never edit the journal or
 generation number to bypass a compatibility error.
+
+When upgrading from 0.1.8, migration `0022_native_source_bundles.sql` widens the
+debug-file type constraint to accept native source bundles and preserves existing
+debug files. A 0.1.8 binary cannot open the resulting PostgreSQL schema. Downgrade
+requires restoring a matching pre-upgrade backup of the database, BlobStore and
+secrets together.
+
+Artifact retention is disabled by default. Updating to 0.1.9 does not enable
+automatic removal of old source-map bundles. Start with `report` before choosing
+`enforce`; see [artifact retention](operations.md#symbolicator).
 
 Installer reruns preserve existing files and permanent secrets. An ordinary update
 does not change the backend or move data. Keep `.env`, `connection.env`, certificate

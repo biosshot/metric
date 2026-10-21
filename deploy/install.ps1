@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Help) {
     Write-Output @'
-Metric installer (0.1.8 source; new options require this updated script)
+Metric installer (0.1.9 source; new options require this updated script)
 Without options: unattended Medium profile with bundled MongoDB.
  -Interactive                      METRIC_INTERACTIVE=1
  -Profile min|low|medium|high        METRIC_PROFILE
@@ -35,7 +35,7 @@ URI input is visible. Existing configuration and secrets are retained.
 '@
     return
 }
-$version = if ($env:METRIC_VERSION) { $env:METRIC_VERSION } else { '0.1.8' }
+$version = if ($env:METRIC_VERSION) { $env:METRIC_VERSION } else { '0.1.9' }
 $downloadBase = if ($env:METRIC_DOWNLOAD_BASE) { $env:METRIC_DOWNLOAD_BASE } else {
     "https://raw.githubusercontent.com/biosshot/metric/v$version/deploy"
 }
