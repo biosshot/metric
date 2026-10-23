@@ -1,4 +1,4 @@
-//! Pure versioned deterministic Event grouping from ADR-0014.
+//! Pure versioned deterministic Event grouping from ADR-0014; revision 2 from ADR-0053.
 
 use std::fmt;
 
@@ -11,6 +11,9 @@ use crate::{
 };
 
 const REVISION_1: u16 = 1;
+const REVISION_2: u16 = 2;
+/// Revision pinned to newly created projects. An existing project keeps its own.
+pub const DEFAULT_REVISION: u16 = REVISION_2;
 const MAX_COMPONENTS: usize = 64;
 const MAX_COMPONENT_BYTES: usize = 2 * 1024;
 const MAX_GROUPING_FRAMES: usize = 8;
@@ -183,7 +186,7 @@ pub enum GroupingError {
 
 #[must_use]
 pub const fn supported_revisions() -> &'static [u16] {
-    &[REVISION_1]
+    &[REVISION_1, REVISION_2]
 }
 
 pub fn group(
@@ -194,10 +197,28 @@ pub fn group(
 ) -> Result<GroupingResult, GroupingError> {
     let revision =
         u16::try_from(pinned_revision).map_err(|_| GroupingError::UnsupportedRevision)?;
-    if revision != REVISION_1 {
+    if !supported_revisions().contains(&revision) {
         return Err(GroupingError::UnsupportedRevision);
     }
-    group_revision_1(project_id, body, symbolication)
+    let selected = if body.fingerprint.is_empty() {
+        select_default(revision, body, symbolication)?
+    } else {
+        select_fingerprint(revision, body, symbolication)?
+    };
+    validate_components(&selected.components)?;
+    // Where a newer revision selects what an older one did, it keeps the older key:
+    // moving a project to it then splits only the Issues the change is about.
+    let key = key_for(selected.revision, selected.strategy, &selected.components);
+    let issue_id = derive_issue_id(project_id, key);
+    Ok(GroupingResult {
+        key,
+        issue_id,
+        strategy: selected.strategy,
+        explanation: GroupingExplanation {
+            summary: selected.summary,
+            components: selected.components,
+        },
+    })
 }
 
 #[must_use]
@@ -217,37 +238,16 @@ pub fn verify_issue_id(project_id: ProjectId, key: GroupingKey, issue_id: IssueI
     derive_issue_id(project_id, key) == issue_id
 }
 
-fn group_revision_1(
-    project_id: ProjectId,
-    body: &NormalizedEventBody,
-    symbolication: Option<&SymbolicationResult>,
-) -> Result<GroupingResult, GroupingError> {
-    let selected = if body.fingerprint.is_empty() {
-        select_default(body, symbolication)?
-    } else {
-        select_fingerprint(body, symbolication)?
-    };
-    validate_components(&selected.components)?;
-    let key = key_for(REVISION_1, selected.strategy, &selected.components);
-    let issue_id = derive_issue_id(project_id, key);
-    Ok(GroupingResult {
-        key,
-        issue_id,
-        strategy: selected.strategy,
-        explanation: GroupingExplanation {
-            summary: selected.summary,
-            components: selected.components,
-        },
-    })
-}
-
 struct Selected {
     strategy: GroupingStrategy,
+    /// Revision whose rules chose the components; it prefixes the key.
+    revision: u16,
     components: Vec<GroupingComponent>,
     summary: Box<str>,
 }
 
 fn select_fingerprint(
+    revision: u16,
     body: &NormalizedEventBody,
     symbolication: Option<&SymbolicationResult>,
 ) -> Result<Selected, GroupingError> {
@@ -256,11 +256,11 @@ fn select_fingerprint(
         .iter()
         .any(|value| value.as_ref() == DEFAULT_FINGERPRINT);
     let default = needs_default
-        .then(|| select_default(body, symbolication))
+        .then(|| select_default(revision, body, symbolication))
         .transpose()?;
     let default_key = default
         .as_ref()
-        .map(|selected| key_for(REVISION_1, selected.strategy, &selected.components));
+        .map(|selected| key_for(selected.revision, selected.strategy, &selected.components));
     let mut components = Vec::with_capacity(body.fingerprint.len().saturating_add(2));
     for value in &body.fingerprint {
         if value.as_ref() == DEFAULT_FINGERPRINT {
@@ -286,6 +286,9 @@ fn select_fingerprint(
     }
     Ok(Selected {
         strategy: GroupingStrategy::SdkFingerprint,
+        revision: default
+            .as_ref()
+            .map_or(REVISION_1, |selected| selected.revision),
         summary: format!(
             "SDK fingerprint with {} component(s)",
             body.fingerprint.len()
@@ -296,6 +299,7 @@ fn select_fingerprint(
 }
 
 fn select_default(
+    revision: u16,
     body: &NormalizedEventBody,
     symbolication: Option<&SymbolicationResult>,
 ) -> Result<Selected, GroupingError> {
@@ -305,22 +309,122 @@ fn select_default(
     if let Some(selected) = native_stack(body) {
         return Ok(selected);
     }
+    // Revision 1 leaves an exception that got this far with an empty message as its
+    // only component, so every such exception of a project shares one Issue.
+    if revision == REVISION_2
+        && normalized_message(body).is_none()
+        && let Some(selected) = exception_fallback(body, symbolication)
+    {
+        return Ok(selected);
+    }
     Ok(message_strategy(body))
+}
+
+/// Frames that identify a failure: revision 1 takes application frames only, and the
+/// revision 2 exception fallback takes library frames as well.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FrameSelection {
+    Application,
+    WithLibrary,
+}
+
+impl FrameSelection {
+    const fn revision(self) -> u16 {
+        match self {
+            Self::Application => REVISION_1,
+            Self::WithLibrary => REVISION_2,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Application => "significant",
+            Self::WithLibrary => "library",
+        }
+    }
 }
 
 fn exception_stack(
     body: &NormalizedEventBody,
     symbolication: Option<&SymbolicationResult>,
 ) -> Option<Selected> {
-    if body
-        .exceptions
+    if has_native_frames(body) {
+        return None;
+    }
+    stack_strategy(body, symbolication, FrameSelection::Application)
+}
+
+/// Native frames are grouped by module-relative addresses only: their symbolicated
+/// names depend on which debug files were uploaded.
+fn has_native_frames(body: &NormalizedEventBody) -> bool {
+    body.exceptions
         .iter()
         .flat_map(|exception| &exception.stacktrace)
         .chain(&body.stacktrace)
         .any(|frame| frame.instruction_address.is_some() || frame.symbol_address.is_some())
-    {
+}
+
+fn stack_strategy(
+    body: &NormalizedEventBody,
+    symbolication: Option<&SymbolicationResult>,
+    selection: FrameSelection,
+) -> Option<Selected> {
+    let types = exception_types(body);
+    for (index, exception) in body.exceptions.iter().enumerate().rev() {
+        let origin = RawTraceOrigin::Exception { index };
+        let frames = grouping_frames(
+            &exception.stacktrace,
+            derived_frames(symbolication, origin),
+            selection,
+        );
+        if frames.is_empty() {
+            continue;
+        }
+        let summary = format!(
+            "exception stack with {} type(s) and {} {} frame(s)",
+            types.len(),
+            frames.len(),
+            selection.label()
+        );
+        return Some(stack_selected(&types, &frames, selection, summary));
+    }
+
+    let frames = grouping_frames(
+        &body.stacktrace,
+        derived_frames(symbolication, RawTraceOrigin::Event),
+        selection,
+    );
+    if frames.is_empty() {
         return None;
     }
+    let summary = format!(
+        "event stack with {} {} frame(s)",
+        frames.len(),
+        selection.label()
+    );
+    Some(stack_selected(&types, &frames, selection, summary))
+}
+
+fn stack_selected(
+    types: &[&str],
+    frames: &[FrameIdentity],
+    selection: FrameSelection,
+    summary: String,
+) -> Selected {
+    let mut components = Vec::new();
+    for ty in types {
+        push_component(&mut components, GroupingComponentKind::ExceptionType, ty);
+    }
+    append_frame_components(&mut components, frames);
+    Selected {
+        strategy: GroupingStrategy::ExceptionStack,
+        revision: selection.revision(),
+        summary: summary.into(),
+        components,
+    }
+}
+
+fn exception_types(body: &NormalizedEventBody) -> Vec<&str> {
     let mut types = body
         .exceptions
         .iter()
@@ -329,46 +433,52 @@ fn exception_stack(
         .take(MAX_EXCEPTION_TYPES)
         .collect::<Vec<_>>();
     types.reverse();
+    types
+}
 
-    for (index, exception) in body.exceptions.iter().enumerate().rev() {
-        let origin = RawTraceOrigin::Exception { index };
-        let frames =
-            significant_frames(&exception.stacktrace, derived_frames(symbolication, origin));
-        if frames.is_empty() {
-            continue;
-        }
-        let mut components = Vec::new();
-        for ty in &types {
-            push_component(&mut components, GroupingComponentKind::ExceptionType, ty);
-        }
-        append_frame_components(&mut components, &frames);
-        return Some(Selected {
-            strategy: GroupingStrategy::ExceptionStack,
-            summary: format!(
-                "exception stack with {} type(s) and {} significant frame(s)",
-                types.len(),
-                frames.len()
-            )
-            .into(),
-            components,
-        });
+/// Revision 2 for an exception that revision 1 groups by an empty message (ADR-0053):
+/// its types and library frames, newest first, and without a usable frame its types
+/// and normalized value.
+fn exception_fallback(
+    body: &NormalizedEventBody,
+    symbolication: Option<&SymbolicationResult>,
+) -> Option<Selected> {
+    if body.exceptions.is_empty() {
+        return None;
     }
+    // A native exception that `native_stack` could not place keeps to its type and
+    // value, so that symbol availability does not move it between Issues.
+    if !has_native_frames(body)
+        && let Some(selected) = stack_strategy(body, symbolication, FrameSelection::WithLibrary)
+    {
+        return Some(selected);
+    }
+    exception_value(body)
+}
 
-    let frames = significant_frames(
-        &body.stacktrace,
-        derived_frames(symbolication, RawTraceOrigin::Event),
-    );
-    if frames.is_empty() {
+fn exception_value(body: &NormalizedEventBody) -> Option<Selected> {
+    let types = exception_types(body);
+    let value = body
+        .exceptions
+        .iter()
+        .rev()
+        .filter_map(|exception| exception.value.as_deref())
+        .map(normalize_message)
+        .find(|value| !value.is_empty());
+    if types.is_empty() && value.is_none() {
         return None;
     }
     let mut components = Vec::new();
     for ty in &types {
         push_component(&mut components, GroupingComponentKind::ExceptionType, ty);
     }
-    append_frame_components(&mut components, &frames);
+    if let Some(value) = &value {
+        push_component(&mut components, GroupingComponentKind::Message, value);
+    }
     Some(Selected {
-        strategy: GroupingStrategy::ExceptionStack,
-        summary: format!("event stack with {} significant frame(s)", frames.len()).into(),
+        strategy: GroupingStrategy::Message,
+        revision: REVISION_2,
+        summary: "exception type and normalized value".into(),
         components,
     })
 }
@@ -415,9 +525,10 @@ impl FrameIdentity {
 /// Symbolicated frames stand in for the raw frames they came from. A derived trace
 /// may cover only some of them; the rest keep their raw identity and the raw
 /// selection rules, such as leaving out frames outside the application.
-fn significant_frames(
+fn grouping_frames(
     raw: &[NormalizedFrame],
     derived: Option<&[SymbolicatedFrame]>,
+    selection: FrameSelection,
 ) -> Vec<FrameIdentity> {
     let mut by_index = vec![None; raw.len()];
     for frame in derived.unwrap_or_default() {
@@ -430,16 +541,16 @@ fn significant_frames(
         .rev()
         .filter_map(|(raw, derived)| match derived {
             Some(derived) => derived_identity(derived),
-            None => raw_identity(raw),
+            None => raw_identity(raw, selection),
         })
         .take(MAX_GROUPING_FRAMES)
         .collect()
 }
 
-fn raw_identity(frame: &NormalizedFrame) -> Option<FrameIdentity> {
+fn raw_identity(frame: &NormalizedFrame, selection: FrameSelection) -> Option<FrameIdentity> {
     let significant = frame.instruction_address.is_none()
         && frame.symbol_address.is_none()
-        && frame.in_app != Some(false)
+        && (selection == FrameSelection::WithLibrary || frame.in_app != Some(false))
         && (frame.function.is_some()
             || frame.module.is_some()
             || frame.filename.is_some()
@@ -543,6 +654,7 @@ fn native_stack(body: &NormalizedEventBody) -> Option<Selected> {
     }
     Some(Selected {
         strategy: GroupingStrategy::NativeStack,
+        revision: REVISION_1,
         summary: format!("native stack with {} module-relative frame(s)", pairs.len()).into(),
         components,
     })
@@ -622,18 +734,21 @@ fn message_strategy(body: &NormalizedEventBody) -> Selected {
             &normalize_identifier(logger),
         );
     }
-    let message = body
-        .message
-        .as_deref()
-        .map(normalize_message)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "<empty error>".into());
+    let message = normalized_message(body).unwrap_or_else(|| "<empty error>".into());
     push_component(&mut components, GroupingComponentKind::Message, &message);
     Selected {
         strategy: GroupingStrategy::Message,
+        revision: REVISION_1,
         summary: "logger and normalized message".into(),
         components,
     }
+}
+
+fn normalized_message(body: &NormalizedEventBody) -> Option<Box<str>> {
+    body.message
+        .as_deref()
+        .map(normalize_message)
+        .filter(|value| !value.is_empty())
 }
 
 fn derived_frames(
@@ -855,15 +970,41 @@ mod tests {
         }
     }
 
+    /// A frame the SDK marked as library code, as Node marks everything in `node_modules`.
+    fn library_frame(function: &str, filename: &str) -> NormalizedFrame {
+        NormalizedFrame {
+            in_app: Some(false),
+            ..frame(function, filename)
+        }
+    }
+
+    /// An Error Event with an exception and no message, as SDKs capture an exception.
+    fn exception_body(exceptions: Vec<NormalizedException>) -> NormalizedEventBody {
+        let mut body = body();
+        body.platform = EventPlatform::Node;
+        body.logger = None;
+        body.message = None;
+        body.exceptions = exceptions;
+        body
+    }
+
+    fn valued(ty: &str, value: &str) -> NormalizedException {
+        NormalizedException {
+            value: Some(value.into()),
+            ..exception(ty, Vec::new())
+        }
+    }
+
     #[test]
     fn revision_registry_and_key_codec_fail_closed() {
-        assert_eq!(supported_revisions(), &[1]);
+        assert_eq!(supported_revisions(), &[1, 2]);
+        assert_eq!(DEFAULT_REVISION, 2);
         assert_eq!(
             group(ProjectId::new(1).unwrap(), 0, &body(), None),
             Err(GroupingError::UnsupportedRevision)
         );
         assert_eq!(
-            group(ProjectId::new(1).unwrap(), 2, &body(), None),
+            group(ProjectId::new(1).unwrap(), 3, &body(), None),
             Err(GroupingError::UnsupportedRevision)
         );
         assert_eq!(
@@ -1260,6 +1401,316 @@ mod tests {
             key_with(path_only("https://example.invalid/static/checkout.js")),
             key_with(path_only("https://example.invalid/static/login.js"))
         );
+    }
+
+    #[test]
+    fn revision_2_keeps_revision_1_keys_where_revision_1_had_a_signal() {
+        let project = ProjectId::new(42).unwrap();
+        let mut application = body();
+        application.exceptions = vec![exception(
+            "RuntimeError",
+            vec![frame("main", "/app/src/main.py")],
+        )];
+        let mut fingerprint = body();
+        fingerprint.fingerprint = vec!["billing".into(), "timeout".into()];
+        let mut with_default = body();
+        with_default.fingerprint = vec![DEFAULT_FINGERPRINT.into(), "tenant".into()];
+        // A message still names an exception that has only library frames.
+        let mut logged = exception_body(vec![exception(
+            "TimeoutError",
+            vec![library_frame(
+                "connect",
+                "/app/node_modules/pg/lib/client.js",
+            )],
+        )]);
+        logged.message = Some("checkout failed".into());
+        // Neither revision has anything to tell such an Event apart by.
+        let empty = exception_body(vec![NormalizedException {
+            ty: None,
+            ..exception("", Vec::new())
+        }]);
+        for event in [
+            body(),
+            application,
+            native_body("DEBUG-A", "0x1010"),
+            fingerprint,
+            with_default,
+            logged,
+            empty,
+        ] {
+            assert_eq!(
+                group(project, 2, &event, None).unwrap(),
+                group(project, 1, &event, None).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn revision_2_separates_exceptions_that_revision_1_merges_as_empty() {
+        let project = ProjectId::new(42).unwrap();
+        let query = exception_body(vec![exception(
+            "QueryFailedError",
+            vec![library_frame(
+                "PostgresQueryRunner.query",
+                "/app/node_modules/typeorm/driver/postgres/PostgresQueryRunner.js",
+            )],
+        )]);
+        let resolver = exception_body(vec![exception(
+            "ReferenceError",
+            vec![library_frame(
+                "SentryAdminTestResolver.createTestError",
+                "/app/node_modules/@vendure-community/sentry-plugin/dist/src/api/admin-test.resolver.js",
+            )],
+        )]);
+        let rejection = exception_body(vec![valued(
+            "TypeError",
+            "Failed to fetch dynamically imported module",
+        )]);
+        let events = [&query, &resolver, &rejection];
+
+        let merged = events.map(|event| group(project, 1, event, None).unwrap().key);
+        assert!(merged.iter().all(|key| *key == merged[0]));
+
+        let [query, resolver, rejection] =
+            events.map(|event| group(project, 2, event, None).unwrap());
+        assert_eq!(query.strategy, GroupingStrategy::ExceptionStack);
+        assert_eq!(rejection.strategy, GroupingStrategy::Message);
+        for grouped in [&query, &resolver, &rejection] {
+            assert_eq!(grouped.key.revision(), 2);
+        }
+        assert_ne!(query.key, resolver.key);
+        assert_ne!(resolver.key, rejection.key);
+        assert_ne!(query.key, rejection.key);
+    }
+
+    #[test]
+    fn revision_2_library_stack_is_newest_first_and_ignores_moved_lines() {
+        let project = ProjectId::new(42).unwrap();
+        let failure = |function: &str, line: u64| {
+            let mut thrown = library_frame(
+                function,
+                "/app/node_modules/@nestjs/core/helpers/external-context-creator.js",
+            );
+            thrown.line = Some(line);
+            exception_body(vec![exception(
+                "TypeError",
+                vec![
+                    library_frame(
+                        "processTicksAndRejections",
+                        "node:internal/process/task_queues",
+                    ),
+                    thrown,
+                ],
+            )])
+        };
+        let grouped = group(
+            project,
+            2,
+            &failure("ExternalContextCreator.create", 67),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            &*grouped.explanation.summary,
+            "exception stack with 1 type(s) and 2 library frame(s)"
+        );
+        let functions = grouped
+            .explanation
+            .components
+            .iter()
+            .filter(|component| component.kind == GroupingComponentKind::FrameFunction)
+            .map(|component| component.value.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            functions,
+            ["externalcontextcreator.create", "processticksandrejections"]
+        );
+        // A library release moves lines, not the failure.
+        assert_eq!(
+            grouped.key,
+            group(
+                project,
+                2,
+                &failure("ExternalContextCreator.create", 71),
+                None
+            )
+            .unwrap()
+            .key
+        );
+        assert_ne!(
+            grouped.key,
+            group(
+                project,
+                2,
+                &failure("ExternalContextCreator.intercept", 67),
+                None
+            )
+            .unwrap()
+            .key
+        );
+    }
+
+    #[test]
+    fn revision_2_fallback_keeps_symbols_out_of_native_identity() {
+        let project = ProjectId::new(42).unwrap();
+        // Native frames without a debug image to place them in: `native_stack` gives up.
+        let mut native_frame = frame("raw_name", "raw.cpp");
+        native_frame.instruction_address = Some("0x1010".into());
+        let event = exception_body(vec![NormalizedException {
+            value: Some("segmentation fault".into()),
+            ..exception("SIGSEGV", vec![native_frame])
+        }]);
+        let symbolicated = |function: &str| SymbolicationResult {
+            kind: crate::symbolication::SymbolicationKind::Native,
+            status: SymbolicationStatus::Complete,
+            disposition: SymbolicationDisposition::Continue,
+            raw: vec![crate::symbolication::RawStacktrace {
+                origin: RawTraceOrigin::Exception { index: 0 },
+                frames: event.exceptions[0].stacktrace.clone(),
+            }],
+            derived: vec![SymbolicatedStacktrace {
+                origin: RawTraceOrigin::Exception { index: 0 },
+                frames: vec![SymbolicatedFrame {
+                    original_index: 0,
+                    function: Some(function.into()),
+                    filename: Some("symbolicated.cpp".into()),
+                    module: Some("demo".into()),
+                    line: Some(99),
+                    column: None,
+                    ..SymbolicatedFrame::default()
+                }],
+            }],
+            missing_debug_ids: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let raw = group(project, 2, &event, None).unwrap();
+        assert_eq!(raw.strategy, GroupingStrategy::Message);
+        for function in ["one", "two"] {
+            assert_eq!(
+                raw.key,
+                group(project, 2, &event, Some(&symbolicated(function)))
+                    .unwrap()
+                    .key
+            );
+        }
+    }
+
+    #[test]
+    fn revision_2_value_skips_values_that_normalize_to_nothing() {
+        let project = ProjectId::new(42).unwrap();
+        // The newest exception says nothing; its cause still tells failures apart.
+        let chain =
+            |cause: &str| exception_body(vec![valued("Error", cause), valued("Error", "   ")]);
+        let refused = group(project, 2, &chain("connection refused"), None).unwrap();
+        assert!(
+            refused
+                .explanation
+                .components
+                .iter()
+                .any(|component| component.value.as_ref() == "connection refused")
+        );
+        assert_ne!(
+            refused.key,
+            group(project, 2, &chain("disk full"), None).unwrap().key
+        );
+    }
+
+    #[test]
+    fn revision_2_frameless_exception_uses_type_and_normalized_value() {
+        let project = ProjectId::new(42).unwrap();
+        let grouped = |ty: &str, value: &str| {
+            group(project, 2, &exception_body(vec![valued(ty, value)]), None).unwrap()
+        };
+        let first = grouped(
+            "Error",
+            "order 550e8400-e29b-41d4-a716-446655440000 not found",
+        );
+        assert_eq!(
+            &*first.explanation.summary,
+            "exception type and normalized value"
+        );
+        assert_eq!(
+            first.key,
+            grouped(
+                "Error",
+                "order 123e4567-e89b-12d3-a456-426614174000 not found"
+            )
+            .key
+        );
+        assert_ne!(
+            first.key,
+            grouped(
+                "TypeError",
+                "order 550e8400-e29b-41d4-a716-446655440000 not found"
+            )
+            .key
+        );
+        // Short numbers such as HTTP statuses still tell failures apart.
+        assert_ne!(
+            grouped("Error", "upstream answered 502").key,
+            grouped("Error", "upstream answered 504").key
+        );
+    }
+
+    #[test]
+    fn revision_2_default_placeholder_embeds_the_revision_2_default() {
+        let project = ProjectId::new(42).unwrap();
+        let mut event = exception_body(vec![valued(
+            "TypeError",
+            "Failed to fetch dynamically imported module",
+        )]);
+        event.fingerprint = vec![DEFAULT_FINGERPRINT.into(), "dashboard".into()];
+        let revision_1 = group(project, 1, &event, None).unwrap();
+        let revision_2 = group(project, 2, &event, None).unwrap();
+        assert_eq!(revision_2.strategy, GroupingStrategy::SdkFingerprint);
+        assert_eq!(revision_2.key.revision(), 2);
+        assert_ne!(revision_1.key, revision_2.key);
+        event.exceptions[0].value = Some("Load failed".into());
+        assert_ne!(revision_2.key, group(project, 2, &event, None).unwrap().key);
+    }
+
+    #[test]
+    fn exact_revision_2_golden_vectors() {
+        let project = ProjectId::new(42).unwrap();
+        let library = group(
+            project,
+            2,
+            &exception_body(vec![exception(
+                "TypeError",
+                vec![library_frame(
+                    "ExternalContextCreator.create",
+                    "/app/node_modules/@nestjs/core/helpers/external-context-creator.js",
+                )],
+            )]),
+            None,
+        )
+        .unwrap();
+        let value = group(
+            project,
+            2,
+            &exception_body(vec![valued(
+                "TypeError",
+                "Failed to fetch dynamically imported module",
+            )]),
+            None,
+        )
+        .unwrap();
+
+        for (grouped, expected_key, expected_issue) in [
+            (
+                library,
+                "000206c6472f5f2a4bd92d81d86977974f6c1bb2589868a748768924402a2a56f85a",
+                "2fe35977a808c961b91000c421c1518f",
+            ),
+            (
+                value,
+                "00027ca87713c32cafe2f5b4b40a3d88e8ff42228403b639ee8dbdcd0315d78217f8",
+                "331973b177dd6f398239164de6f0b0b9",
+            ),
+        ] {
+            assert_eq!(hex::encode(grouped.key.to_bytes()), expected_key);
+            assert_eq!(grouped.issue_id.to_string(), expected_issue);
+        }
     }
 
     #[test]
