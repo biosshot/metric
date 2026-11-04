@@ -101,29 +101,47 @@ const frames = computed<Frame[]>(() => {
   if (Array.isArray(stacktrace?.frames) && stacktrace.frames.length) {
     return resolvedFrames(stacktrace.frames as Frame[], 'event').toReversed();
   }
-  const threads = props.body.threads as { values?: unknown[] } | undefined;
-  const threadValues = Array.isArray(threads?.values) ? threads.values : [];
+  // The thread the server groups by (`normalize_thread_stacktrace`): crashed, else
+  // current, else the only one. Threads stay as the SDK sent them, so every value is
+  // checked here; `threads` and its `stacktrace` may also be bare arrays.
+  const threads = props.body.threads;
+  const threadList = isRecord(threads) ? threads.values : threads;
+  const threadValues = (Array.isArray(threadList) ? threadList : []).filter(isRecord);
   const selectedThread =
-    threadValues.find((value) => {
-      const item = value as { current?: boolean; stacktrace?: { frames?: unknown[] } };
-      return (
-        item.current && Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length
-      );
-    }) ??
-    threadValues.find((value) => {
-      const item = value as { crashed?: boolean; stacktrace?: { frames?: unknown[] } };
-      return (
-        item.crashed && Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length
-      );
-    }) ??
-    threadValues.find((value) => {
-      const item = value as { stacktrace?: { frames?: unknown[] } };
-      return Array.isArray(item.stacktrace?.frames) && item.stacktrace.frames.length;
-    });
-  const threadFrames = (selectedThread as { stacktrace?: { frames?: unknown[] } } | undefined)
-    ?.stacktrace?.frames;
-  return Array.isArray(threadFrames) ? (threadFrames as Frame[]).toReversed() : [];
+    threadValues.find((thread) => thread.crashed === true) ??
+    threadValues.find((thread) => thread.current === true) ??
+    (threadValues.length === 1 ? threadValues[0] : undefined);
+  const threadStack = selectedThread?.stacktrace;
+  const threadFrames = isRecord(threadStack) ? threadStack.frames : threadStack;
+  return Array.isArray(threadFrames)
+    ? threadFrames.filter(isRecord).map(threadFrame).toReversed()
+    : [];
 });
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// A thread frame gives the view only the fields of the type it expects.
+function threadFrame(frame: Record<string, unknown>): Frame {
+  const text = (value: unknown) => (typeof value === 'string' ? value : undefined);
+  const numeric = (value: unknown) => (typeof value === 'number' ? value : undefined);
+  const lines = (value: unknown) =>
+    Array.isArray(value) ? value.map((line: unknown) => text(line) ?? '') : undefined;
+  return {
+    filename: text(frame.filename),
+    abs_path: text(frame.abs_path),
+    function: text(frame.function),
+    module: text(frame.module),
+    lineno: numeric(frame.lineno),
+    colno: numeric(frame.colno),
+    context_line: text(frame.context_line),
+    pre_context: lines(frame.pre_context),
+    post_context: lines(frame.post_context),
+    in_app: frame.in_app === true,
+    instruction_addr: text(frame.instruction_addr),
+  };
+}
 
 const visibleFrames = computed(() =>
   expanded.value ? frames.value : frames.value.slice(0, INITIAL_FRAMES),

@@ -21,6 +21,13 @@ function eventWithFrames(count: number): Record<string, unknown> {
   };
 }
 
+function thread(fn: string, flags: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...flags,
+    stacktrace: { frames: [{ filename: 'main.go', function: fn, in_app: true }] },
+  };
+}
+
 describe('StackTrace', () => {
   it('renders derived source context for every caller and restores raw context on toggle', async () => {
     const raw = { function: 'a', filename: 'bundle.js', lineno: 1, context_line: 'generated();' };
@@ -216,5 +223,106 @@ describe('StackTrace', () => {
     expect(screen.getByRole('heading', { name: '1 frame' })).toBeVisible();
     expect(screen.getByText('metric_sdk_compatibility_rust::main')).toBeVisible();
     expect(screen.getByText('src/main.rs')).toBeVisible();
+  });
+
+  it('prefers the crashed thread and accepts threads as a bare array', () => {
+    render(StackTrace, {
+      props: {
+        body: {
+          message: 'alert',
+          threads: [
+            thread('main.current', { current: true }),
+            thread('main.crashed', { crashed: true }),
+          ],
+        },
+      },
+    });
+
+    expect(screen.getByText('main.crashed')).toBeVisible();
+    expect(screen.queryByText('main.current')).toBeNull();
+  });
+
+  it('takes the crashed and current flags only when they are true', () => {
+    render(StackTrace, {
+      props: {
+        body: {
+          message: 'alert',
+          threads: [
+            thread('main.other', { crashed: 'false' }),
+            thread('main.current', { current: true }),
+          ],
+        },
+      },
+    });
+
+    expect(screen.getByText('main.current')).toBeVisible();
+    expect(screen.queryByText('main.other')).toBeNull();
+  });
+
+  it('skips thread frames that are not objects and source lines that are not text', () => {
+    const frame = {
+      function: 'main',
+      lineno: 3,
+      pre_context: [null, 'prepare();'],
+      context_line: 'fail();',
+    };
+    render(StackTrace, {
+      props: {
+        body: {
+          message: 'alert',
+          threads: [{ current: true, stacktrace: { frames: [null, ['main.go'], frame] } }],
+        },
+      },
+    });
+
+    expect(screen.getByRole('heading', { name: '1 frame' })).toBeVisible();
+    expect(screen.getByText('main')).toBeVisible();
+    expect(document.querySelectorAll('.source-context li')).toHaveLength(3);
+    expect(document.querySelector('.source-context__current')).toHaveTextContent('3');
+  });
+
+  it.each([
+    ['several threads carry no flag', [thread('main.first'), thread('main.second')]],
+    [
+      'the crashed thread has no stack',
+      [{ crashed: true }, thread('main.current', { current: true })],
+    ],
+  ])('shows no thread stack where the server takes none: %s', (_, threads) => {
+    render(StackTrace, { props: { body: { message: 'alert', threads } } });
+
+    expect(document.querySelectorAll('.stack-frame')).toHaveLength(0);
+    expect(screen.getByText('This event does not contain stack frames.')).toBeVisible();
+  });
+
+  it('reads a thread stacktrace sent as a bare array, as the server does', () => {
+    render(StackTrace, {
+      props: {
+        body: {
+          message: 'alert',
+          threads: [{ current: true, stacktrace: [{ function: 'main', filename: 'main.go' }] }],
+        },
+      },
+    });
+
+    expect(screen.getByText('main')).toBeVisible();
+  });
+
+  it('shows only thread frame fields of the expected type', () => {
+    const frame = { function: 'main', filename: { toString: null }, lineno: '3', in_app: 'yes' };
+    render(StackTrace, {
+      props: {
+        body: { message: 'alert', threads: [{ current: true, stacktrace: { frames: [frame] } }] },
+      },
+    });
+
+    expect(screen.getByText('main')).toBeVisible();
+    expect(screen.getByText('unknown source')).toBeVisible();
+    expect(screen.queryByText('in app')).toBeNull();
+  });
+
+  it('ignores malformed thread values', () => {
+    render(StackTrace, { props: { body: { message: 'alert', threads: { values: {} } } } });
+
+    expect(document.querySelectorAll('.stack-frame')).toHaveLength(0);
   });
 });

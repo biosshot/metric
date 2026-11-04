@@ -309,6 +309,11 @@ fn select_default(
     if let Some(selected) = native_stack(body) {
         return Ok(selected);
     }
+    if revision == REVISION_2
+        && let Some(selected) = thread_stack(body)
+    {
+        return Ok(selected);
+    }
     // Revision 1 leaves an exception that got this far with an empty message as its
     // only component, so every such exception of a project shares one Issue.
     if revision == REVISION_2
@@ -320,11 +325,48 @@ fn select_default(
     Ok(message_strategy(body))
 }
 
-/// Frames that identify a failure: revision 1 takes application frames only, and the
-/// revision 2 exception fallback takes library frames as well.
+/// Revision 2 for a message whose only stack is a thread's (ADR-0053): the revision 1
+/// stack rules with that stack as the event stack, which revision 1 does not read,
+/// except that a stack that marks application frames counts only those.
+/// Thread frames are not symbolicated. An exception keeps out of it, as in Sentry: its
+/// thread stack shows where it was reported, so the failures of one handler would
+/// share an Issue. A native thread stack is left out too: its debug identifiers and
+/// addresses change with every build and OS version, so a message with one, as Cocoa
+/// sends it, keeps to its stable text.
+fn thread_stack(body: &NormalizedEventBody) -> Option<Selected> {
+    let frames = body.thread_only_stacktrace();
+    if !body.exceptions.is_empty() || frames.iter().any(is_native_frame) {
+        return None;
+    }
+    // The Android SDK marks only the application's own frames and leaves system and
+    // WebView frames unmarked. A WebView frame's file name carries the WebView build,
+    // so counting unmarked frames would split one message by device.
+    let selection = if frames.iter().any(|frame| frame.in_app == Some(true)) {
+        FrameSelection::MarkedApplication
+    } else {
+        FrameSelection::Application
+    };
+    let frames = grouping_frames(frames, None, selection);
+    if frames.is_empty() {
+        return None;
+    }
+    let summary = format!(
+        "event stack with {} significant frame(s) from a thread",
+        frames.len()
+    );
+    Some(Selected {
+        revision: REVISION_2,
+        ..stack_selected(&[], &frames, selection, summary)
+    })
+}
+
+/// Frames that identify a failure: revision 1 takes application frames only, a
+/// revision 2 thread stack that marks application frames takes the marked ones only,
+/// and the revision 2 exception fallback takes library frames as well.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameSelection {
     Application,
+    MarkedApplication,
     WithLibrary,
 }
 
@@ -332,14 +374,22 @@ impl FrameSelection {
     const fn revision(self) -> u16 {
         match self {
             Self::Application => REVISION_1,
-            Self::WithLibrary => REVISION_2,
+            Self::MarkedApplication | Self::WithLibrary => REVISION_2,
         }
     }
 
     const fn label(self) -> &'static str {
         match self {
-            Self::Application => "significant",
+            Self::Application | Self::MarkedApplication => "significant",
             Self::WithLibrary => "library",
+        }
+    }
+
+    fn selects(self, frame: &NormalizedFrame) -> bool {
+        match self {
+            Self::Application => frame.in_app != Some(false),
+            Self::MarkedApplication => frame.in_app == Some(true),
+            Self::WithLibrary => true,
         }
     }
 }
@@ -361,7 +411,11 @@ fn has_native_frames(body: &NormalizedEventBody) -> bool {
         .iter()
         .flat_map(|exception| &exception.stacktrace)
         .chain(&body.stacktrace)
-        .any(|frame| frame.instruction_address.is_some() || frame.symbol_address.is_some())
+        .any(is_native_frame)
+}
+
+fn is_native_frame(frame: &NormalizedFrame) -> bool {
+    frame.instruction_address.is_some() || frame.symbol_address.is_some()
 }
 
 fn stack_strategy(
@@ -550,7 +604,7 @@ fn grouping_frames(
 fn raw_identity(frame: &NormalizedFrame, selection: FrameSelection) -> Option<FrameIdentity> {
     let significant = frame.instruction_address.is_none()
         && frame.symbol_address.is_none()
-        && (selection == FrameSelection::WithLibrary || frame.in_app != Some(false))
+        && selection.selects(frame)
         && (frame.function.is_some()
             || frame.module.is_some()
             || frame.filename.is_some()
@@ -925,6 +979,7 @@ mod tests {
             fingerprint: Vec::new(),
             exceptions: Vec::new(),
             stacktrace: Vec::new(),
+            thread_stacktrace: Vec::new(),
             tags: vec![NormalizedTag {
                 key: "user".into(),
                 value: "ignored".into(),
@@ -985,6 +1040,26 @@ mod tests {
         body.logger = None;
         body.message = None;
         body.exceptions = exceptions;
+        body
+    }
+
+    /// A message Event whose stack is a thread's, as Go `CaptureMessage` sends it with
+    /// `AttachStacktrace`.
+    fn thread_body(message: &str) -> NormalizedEventBody {
+        let mut body = body();
+        body.platform = EventPlatform::Go;
+        body.logger = None;
+        body.message = Some(message.into());
+        // The frames of a real zerolog hook Event, oldest first: the SDK marks module
+        // cache frames such as zerolog in-app too.
+        body.thread_stacktrace = vec![
+            frame("main", "/app/main.go"),
+            frame("(*Event).Msg", "/go/pkg/mod/github.com/rs/zerolog/event.go"),
+            frame("(*Event).msg", "/go/pkg/mod/github.com/rs/zerolog/event.go"),
+            frame("AlertHook.Run", "/app/extensions/alert.go"),
+            frame("ZerologHandler.func1", "/app/dsentry/zerolog.go"),
+            frame("1", "/app/dsentry/zerolog.go"),
+        ];
         body
     }
 
@@ -1429,9 +1504,16 @@ mod tests {
             ty: None,
             ..exception("", Vec::new())
         }]);
+        // A thread stack stands in only for a missing stack.
+        let mut own_stack = thread_body("checkout failed");
+        own_stack.exceptions = vec![exception(
+            "RuntimeError",
+            vec![frame("main", "/app/src/main.py")],
+        )];
         for event in [
             body(),
             application,
+            own_stack,
             native_body("DEBUG-A", "0x1010"),
             fingerprint,
             with_default,
@@ -1481,6 +1563,128 @@ mod tests {
         assert_ne!(query.key, resolver.key);
         assert_ne!(resolver.key, rejection.key);
         assert_ne!(query.key, rejection.key);
+    }
+
+    #[test]
+    fn revision_2_groups_a_message_by_its_thread_stack() {
+        let project = ProjectId::new(42).unwrap();
+        let first = thread_body("alert on pod gql-api-7d9f4-abcde");
+        let second = thread_body("alert on pod gql-api-7d9f4-fghij");
+        assert_ne!(
+            group(project, 1, &first, None).unwrap().key,
+            group(project, 1, &second, None).unwrap().key
+        );
+        let grouped = group(project, 2, &first, None).unwrap();
+        assert_eq!(grouped.strategy, GroupingStrategy::ExceptionStack);
+        assert_eq!(grouped.key.revision(), 2);
+        assert_eq!(
+            &*grouped.explanation.summary,
+            "event stack with 6 significant frame(s) from a thread"
+        );
+        assert_eq!(grouped.key, group(project, 2, &second, None).unwrap().key);
+
+        // Without application frames the message still decides, as in revision 1.
+        let mut library = first.clone();
+        for frame in &mut library.thread_stacktrace {
+            frame.in_app = Some(false);
+        }
+        assert_eq!(
+            group(project, 2, &library, None).unwrap(),
+            group(project, 1, &library, None).unwrap()
+        );
+    }
+
+    #[test]
+    fn revision_2_thread_stack_counts_only_marked_frames_when_it_marks_any() {
+        let project = ProjectId::new(42).unwrap();
+        let unmarked = |function: &str, filename: &str| NormalizedFrame {
+            in_app: None,
+            ..frame(function, filename)
+        };
+        // An Android message, oldest first: the SDK marks the application's frames and
+        // leaves system and WebView frames unmarked. The WebView frame's file name
+        // carries the WebView build, which differs between devices.
+        let android = |webview: &str| {
+            let mut body = thread_body("WebView render process gone (crashed=false)");
+            body.platform = EventPlatform::Java;
+            body.thread_stacktrace = vec![
+                unmarked("main", "ZygoteInit.java"),
+                unmarked("loop", "Looper.java"),
+                unmarked("onRenderProcessGone", webview),
+                frame("onRenderProcessGone", "WebView.kt"),
+                frame("reportRenderProcessGone", "WebViewErrorReporter.kt"),
+                unmarked("getStackTrace", "Thread.java"),
+                unmarked("getThreadStackTrace", "VMStack.java"),
+            ];
+            body
+        };
+        let stable = android("chromium-SystemWebViewGoogle6432.aab-stable-805904303");
+        let beta = android("chromium-SystemWebViewGoogle6432.aab-beta-810301413");
+        let grouped = group(project, 2, &stable, None).unwrap();
+        assert_eq!(
+            &*grouped.explanation.summary,
+            "event stack with 2 significant frame(s) from a thread"
+        );
+        assert_eq!(grouped.key, group(project, 2, &beta, None).unwrap().key);
+
+        // A stack that marks nothing keeps the revision 1 rules: unmarked frames count.
+        let mut unmarked_only = stable.clone();
+        for frame in &mut unmarked_only.thread_stacktrace {
+            frame.in_app = None;
+        }
+        assert_eq!(
+            &*group(project, 2, &unmarked_only, None)
+                .unwrap()
+                .explanation
+                .summary,
+            "event stack with 7 significant frame(s) from a thread"
+        );
+    }
+
+    #[test]
+    fn revision_2_exception_without_a_stack_ignores_its_thread_stack() {
+        let project = ProjectId::new(42).unwrap();
+        // Rust `capture_error` with `attach_stacktrace`: the thread shows where the
+        // error was reported, not where it happened.
+        let mut event = exception_body(vec![valued("Panic", "called `Option::unwrap()`")]);
+        let value_only = group(project, 2, &event, None).unwrap();
+        assert_eq!(value_only.strategy, GroupingStrategy::Message);
+        assert_eq!(
+            &*value_only.explanation.summary,
+            "exception type and normalized value"
+        );
+        for frames in [
+            vec![frame("app::report", "/app/src/report.rs")],
+            vec![library_frame(
+                "sentry_core::capture_error",
+                "/cargo/registry/sentry-core/src/api.rs",
+            )],
+        ] {
+            event.thread_stacktrace = frames;
+            assert_eq!(group(project, 2, &event, None).unwrap(), value_only);
+        }
+    }
+
+    #[test]
+    fn revision_2_leaves_a_native_thread_stack_out() {
+        let project = ProjectId::new(42).unwrap();
+        // A Cocoa message: its stack only in the current thread, native frames only.
+        let mut message = native_body("DEBUG-A", "0x1010");
+        message.thread_stacktrace = std::mem::take(&mut message.stacktrace);
+        assert_eq!(
+            group(project, 2, &message, None).unwrap(),
+            group(project, 1, &message, None).unwrap()
+        );
+
+        let mut exception = message.clone();
+        exception.message = None;
+        exception.exceptions = vec![valued("NSInternalInconsistencyException", "bad state")];
+        let grouped = group(project, 2, &exception, None).unwrap();
+        assert_eq!(grouped.strategy, GroupingStrategy::Message);
+        assert_eq!(
+            &*grouped.explanation.summary,
+            "exception type and normalized value"
+        );
     }
 
     #[test]
@@ -1695,6 +1899,7 @@ mod tests {
             None,
         )
         .unwrap();
+        let thread = group(project, 2, &thread_body("alert"), None).unwrap();
 
         for (grouped, expected_key, expected_issue) in [
             (
@@ -1706,6 +1911,11 @@ mod tests {
                 value,
                 "00027ca87713c32cafe2f5b4b40a3d88e8ff42228403b639ee8dbdcd0315d78217f8",
                 "331973b177dd6f398239164de6f0b0b9",
+            ),
+            (
+                thread,
+                "000245e61ab1d464eba341a240765c355f60fb4d85db78a3b781de7429f986e96606",
+                "d0b363d6be80c13b1a2eabecc5a595a8",
             ),
         ] {
             assert_eq!(hex::encode(grouped.key.to_bytes()), expected_key);

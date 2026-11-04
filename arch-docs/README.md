@@ -193,8 +193,8 @@ Current limits are stated directly in `docs/known-limits.md`.
   security, migration interfaces and minimal Mongo changes; see the functional
   parity report for verification and deferred load testing.
 - [0053-grouping-revision-2.md](0053-grouping-revision-2.md): grouping revision 2 for
-  exceptions without application frames; revision 1 keys elsewhere, the default for
-  new projects and an explicit move for existing ones.
+  exceptions without application frames and for thread stacks; revision 1 keys
+  elsewhere, the default for new projects and an explicit move for existing ones.
 - [module-contracts/0052-postgresql-implementation-plan.md](module-contracts/0052-postgresql-implementation-plan.md):
   implementation stages, `feat/postgres`, Conventional Commits and mandatory Docker,
   security, migration, fault and regression gates.
