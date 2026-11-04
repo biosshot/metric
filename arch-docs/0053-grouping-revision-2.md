@@ -61,7 +61,19 @@ and no normalized message — the Events that revision 1 groups as
    step: `native_stack` could not place it, and its symbolicated names would make the
    Issue depend on which debug files were uploaded.
 2. `message` over the exception: the exception types plus the newest exception value
-   that is not empty after the revision 1 message normalizer.
+   that is not empty after normalization. The value normalizer extends the revision 1
+   message normalizer with one rule of Sentry's parameterization
+   (`sentry/grouping/parameterization.py`): a token with a URL becomes `{url}`.
+   Browsers put the failing URL into the value, so a dynamic import of a chunk named
+   after its build hash would open a new Issue on every deploy, and one failure would
+   split by host. Bare host names stay as they are: a token rule cannot tell them from
+   file names such as `index.js`. Everything else keeps the message rules of
+   ADR-0014, unlike in Sentry. E-mail and IP addresses stay, since a token rule
+   misreads forms such as `pkg@1.2.3` and `[::1]:`. A long number becomes `{number}`,
+   while a short one such as an HTTP status stays, because it tells failures apart. A
+   ServiceWorker script missing on one host (`404`) and a gateway failing on another
+   (`502`) are two failures. Messages keep the revision 1 normalizer, so their keys do
+   not change.
 
 An Event with no exception type, value or frame keeps the `<empty error>` component.
 

@@ -517,7 +517,7 @@ fn exception_value(body: &NormalizedEventBody) -> Option<Selected> {
         .iter()
         .rev()
         .filter_map(|exception| exception.value.as_deref())
-        .map(normalize_message)
+        .map(normalize_exception_value)
         .find(|value| !value.is_empty());
     if types.is_empty() && value.is_none() {
         return None;
@@ -841,12 +841,45 @@ fn normalize_path(value: &str) -> Box<str> {
 }
 
 fn normalize_message(value: &str) -> Box<str> {
+    normalize_tokens(value, normalize_message_token)
+}
+
+/// Revision 2 normalizer for exception values (ADR-0053): the message rules plus URLs,
+/// which become `{url}` as in Sentry. A chunk URL with a build hash would otherwise
+/// open an Issue on every deploy. The rest keeps the message rules (ADR-0014): e-mail
+/// and IP addresses stay, and so does a short number such as a status code, which
+/// tells failures apart.
+fn normalize_exception_value(value: &str) -> Box<str> {
+    normalize_tokens(value, |token| {
+        if is_url(token) {
+            "{url}".to_owned()
+        } else {
+            normalize_message_token(token)
+        }
+    })
+}
+
+fn normalize_tokens(value: &str, token: impl FnMut(&str) -> String) -> Box<str> {
     let normalized = value
         .split_whitespace()
-        .map(normalize_message_token)
+        .map(token)
         .collect::<Vec<_>>()
         .join(" ");
     truncate_utf8(&normalized, MAX_COMPONENT_BYTES).into()
+}
+
+/// A token that carries `scheme://`, quoted or bracketed as it may be.
+fn is_url(token: &str) -> bool {
+    token.find("://").is_some_and(|index| {
+        let scheme = token[..index]
+            .rsplit(|character: char| {
+                !character.is_ascii_alphanumeric() && !matches!(character, '+' | '-' | '.')
+            })
+            .next()
+            .unwrap_or_default();
+        scheme.starts_with(|character: char| character.is_ascii_alphabetic())
+            && token.len() > index + 3
+    })
 }
 
 fn truncate_utf8(value: &str, maximum: usize) -> String {
@@ -1849,11 +1882,90 @@ mod tests {
             )
             .key
         );
-        // Short numbers such as HTTP statuses still tell failures apart.
+        // Unlike in Sentry, and as in a message (ADR-0014), a status code still tells
+        // failures apart, while a long number is an identifier.
         assert_ne!(
             grouped("Error", "upstream answered 502").key,
             grouped("Error", "upstream answered 504").key
         );
+        assert_eq!(
+            grouped("Error", "order 1234567 not found").key,
+            grouped("Error", "order 7654321 not found").key
+        );
+        // As in a message, an e-mail or an IP address stays.
+        assert_ne!(
+            grouped("Error", "no account for ann@example.com").key,
+            grouped("Error", "no account for bob@example.org").key
+        );
+        assert_ne!(
+            grouped("Error", "no route to 10.0.0.1").key,
+            grouped("Error", "no route to 10.0.0.2").key
+        );
+    }
+
+    #[test]
+    fn revision_2_exception_value_parameterizes_urls_and_keeps_status_codes() {
+        let project = ProjectId::new(42).unwrap();
+        let key = |value: &str| {
+            group(
+                project,
+                2,
+                &exception_body(vec![valued("TypeError", value)]),
+                None,
+            )
+            .unwrap()
+            .key
+        };
+        // Real store-backend values: every Dashboard deploy renames its chunks.
+        let chunk = |name: &str| {
+            key(&format!(
+                "Failed to fetch dynamically imported module: \
+                 https://store.trainingendurance.ru/dashboard/assets/{name}.js"
+            ))
+        };
+        assert_eq!(chunk("index-BirG_phe"), chunk("index-TEigqH-z"));
+        assert_eq!(chunk("index-BirG_phe"), chunk("locale-EZ26tfIq"));
+
+        // Real app.trainingendurance.ru values.
+        let update = |host: &str, reason: &str| {
+            key(&format!(
+                "Failed to update a ServiceWorker for scope ('https://{host}/') with \
+                 script ('https://{host}/sw.js'): {reason}"
+            ))
+        };
+        let unknown = "An unknown error occurred when fetching the script.";
+        let response = |code: u16| {
+            format!("A bad HTTP response code ({code}) was received when fetching the script.")
+        };
+        assert_eq!(
+            update("app.trainingendurance.ru", unknown),
+            update("www.trainingendurance.ru", unknown)
+        );
+        assert_eq!(
+            update("www.trainingendurance.ru", &response(404)),
+            update("app.trainingendurance.ru", &response(404))
+        );
+        // A script missing on one host and a failing gateway are two failures.
+        assert_ne!(
+            update("www.trainingendurance.ru", &response(404)),
+            update("app.trainingendurance.ru", &response(502))
+        );
+        let not_found = key(
+            "Failed to update a ServiceWorker for scope ('https://app.trainingendurance.ru/') \
+             with script ('Unknown'): Not found",
+        );
+        let load = key("Script https://app.trainingendurance.ru/sw.js load failed");
+        let distinct = [
+            update("app.trainingendurance.ru", unknown),
+            update("app.trainingendurance.ru", &response(404)),
+            not_found,
+            load,
+        ];
+        for (index, left) in distinct.iter().enumerate() {
+            for right in &distinct[index + 1..] {
+                assert_ne!(left, right);
+            }
+        }
     }
 
     #[test]
