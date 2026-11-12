@@ -203,6 +203,7 @@ impl Normalizer {
             "unknown",
             &mut context,
         )?;
+        let thread_stacktrace = normalize_thread_stacktrace(unknown.get("threads"), self.limits);
 
         Ok(NormalizedEvent {
             project_id: event.project_id,
@@ -222,6 +223,7 @@ impl Normalizer {
                 fingerprint,
                 exceptions,
                 stacktrace,
+                thread_stacktrace,
                 tags,
                 request,
                 user,
@@ -540,6 +542,50 @@ fn normalize_stacktrace(
         .filter_map(Value::as_object)
         .map(|frame| normalize_frame(frame, context))
         .collect()
+}
+
+/// Reads the thread stack from the canonical `threads` kept in `unknown`, so that a
+/// canonical body normalizes back to the same stack. Its truncation was already
+/// reported there, hence the separate context. Only the chosen stack is converted.
+fn normalize_thread_stacktrace(
+    threads: Option<&CanonicalValue>,
+    limits: NormalizerLimits,
+) -> Vec<NormalizedFrame> {
+    let threads = match threads {
+        Some(CanonicalValue::Object(object)) => object.get("values"),
+        other => other,
+    };
+    let Some(CanonicalValue::Array(threads)) = threads else {
+        return Vec::new();
+    };
+    let threads = threads
+        .iter()
+        .filter_map(|thread| match thread {
+            CanonicalValue::Object(thread) => Some(thread),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let flagged = |flag: &str| {
+        threads
+            .iter()
+            .copied()
+            .find(|thread| thread.get(flag) == Some(&CanonicalValue::Bool(true)))
+    };
+    let Some(stacktrace) = flagged("crashed")
+        .or_else(|| flagged("current"))
+        .or_else(|| (threads.len() == 1).then(|| threads[0]))
+        .and_then(|thread| thread.get("stacktrace"))
+    else {
+        return Vec::new();
+    };
+    // The stack already passed the same limits deeper inside `unknown`, so this cannot
+    // fail; should it, the Event keeps no thread stack rather than being rejected.
+    normalize_stacktrace(
+        Some(&canonical_to_value(stacktrace)),
+        "threads.stacktrace",
+        &mut Context::new(limits),
+    )
+    .unwrap_or_default()
 }
 
 fn normalize_frame(
@@ -1280,12 +1326,53 @@ mod tests {
     }
 
     #[test]
+    fn thread_stack_comes_from_the_crashed_else_current_else_only_thread() {
+        let normalizer = Normalizer::new(NormalizerLimits::default()).unwrap();
+        let functions = |json: &str| {
+            let output = normalizer.normalize(&accepted(json)).unwrap();
+            assert!(output.body.unknown.contains_key("threads"), "{json}");
+            output
+                .body
+                .thread_stacktrace
+                .iter()
+                .map(|frame| frame.function.as_deref().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        // Go `CaptureMessage` with `AttachStacktrace`: one current thread, no exception.
+        assert_eq!(
+            functions(
+                r#"{"platform":"go","message":"alert","threads":[{"current":true,"stacktrace":{"frames":[{"function":"main","in_app":true}]}}]}"#
+            ),
+            ["main"]
+        );
+        assert_eq!(
+            functions(
+                r#"{"threads":{"values":[{"current":true,"stacktrace":{"frames":[{"function":"current"}]}},{"crashed":true,"stacktrace":{"frames":[{"function":"crashed"}]}}]}}"#
+            ),
+            ["crashed"]
+        );
+        assert_eq!(
+            functions(
+                r#"{"threads":{"values":[{"stacktrace":{"frames":[{"function":"only"}]}}]}}"#
+            ),
+            ["only"]
+        );
+        assert!(
+            functions(
+                r#"{"threads":[{"stacktrace":{"frames":[{"function":"a"}]}},{"stacktrace":{"frames":[{"function":"b"}]}}]}"#
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn canonical_projection_is_idempotent() {
         let normalizer = Normalizer::new(NormalizerLimits::default()).unwrap();
         let input = accepted(
-            r#"{"timestamp":"2026-07-21T18:00:08.054966Z","platform":"python","level":"error","tags":{"z":"2","a":"1"},"request":{"headers":{"x":"y"}},"future":{"b":2,"a":1}}"#,
+            r#"{"timestamp":"2026-07-21T18:00:08.054966Z","platform":"python","level":"error","tags":{"z":"2","a":"1"},"request":{"headers":{"x":"y"}},"future":{"b":2,"a":1},"threads":[{"current":true,"stacktrace":{"frames":[{"function":"main","lineno":3}]}}]}"#,
         );
         let first = normalizer.normalize(&input).unwrap();
+        assert_eq!(first.body.thread_stacktrace.len(), 1);
         let canonical = normalizer.canonical_json(&first.body);
         let second = normalizer
             .normalize(&AcceptedEvent {

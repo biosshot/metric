@@ -28,12 +28,33 @@ pub struct NormalizedEventBody {
     pub fingerprint: Vec<Box<str>>,
     pub exceptions: Vec<NormalizedException>,
     pub stacktrace: Vec<NormalizedFrame>,
+    /// Stack of the crashed, else the current, else the only thread. It is read from
+    /// `threads`, which stays in `unknown`, so it is never serialized on its own.
+    pub thread_stacktrace: Vec<NormalizedFrame>,
     pub tags: Vec<NormalizedTag>,
     pub request: Option<CanonicalValue>,
     pub user: Option<CanonicalValue>,
     pub contexts: BTreeMap<Box<str>, CanonicalValue>,
     pub breadcrumbs: Vec<NormalizedBreadcrumb>,
     pub unknown: BTreeMap<Box<str>, CanonicalValue>,
+}
+
+impl NormalizedEventBody {
+    /// The thread stack of an Event that has no exception or event stack, as Go
+    /// `CaptureMessage` sends it with `AttachStacktrace`; empty otherwise.
+    #[must_use]
+    pub fn thread_only_stacktrace(&self) -> &[NormalizedFrame] {
+        let own_stack = !self.stacktrace.is_empty()
+            || self
+                .exceptions
+                .iter()
+                .any(|exception| !exception.stacktrace.is_empty());
+        if own_stack {
+            &[]
+        } else {
+            &self.thread_stacktrace
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -385,6 +385,7 @@ mod tests {
                 fingerprint: Vec::new(),
                 exceptions: Vec::new(),
                 stacktrace: Vec::new(),
+                thread_stacktrace: Vec::new(),
                 tags: Vec::new(),
                 request: None,
                 user: Some(CanonicalValue::Object(std::collections::BTreeMap::from([

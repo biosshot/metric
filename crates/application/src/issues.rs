@@ -148,7 +148,9 @@ fn build_culprit(body: &NormalizedEventBody) -> Result<Option<IssueCulprit>, Iss
         .last()
         .map(|exception| exception.stacktrace.as_slice())
         .unwrap_or_default();
-    let frame = select_frame(exception_frames).or_else(|| select_frame(&body.stacktrace));
+    let frame = select_frame(exception_frames)
+        .or_else(|| select_frame(&body.stacktrace))
+        .or_else(|| select_frame(body.thread_only_stacktrace()));
     frame
         .and_then(frame_summary)
         .map(|value| {
@@ -325,6 +327,7 @@ mod tests {
                     unknown: BTreeMap::new(),
                 }],
                 stacktrace: Vec::new(),
+                thread_stacktrace: Vec::new(),
                 tags: Vec::new(),
                 request: None,
                 user: None,
@@ -372,5 +375,17 @@ mod tests {
         assert_eq!(recorded.title.as_str(), "Panic: line one line two");
         assert_eq!(recorded.culprit.as_ref().unwrap().as_str(), "crate::serve");
         assert_eq!(recorded.release.as_ref().unwrap().as_str(), "1.0.0");
+    }
+
+    #[test]
+    fn culprit_falls_back_to_the_thread_stack_of_an_event_without_one() {
+        let mut body = event().body;
+        let frames = std::mem::take(&mut body.exceptions[0].stacktrace);
+        assert!(build_culprit(&body).unwrap().is_none());
+        body.thread_stacktrace = frames;
+        assert_eq!(
+            build_culprit(&body).unwrap().unwrap().as_str(),
+            "crate::serve"
+        );
     }
 }

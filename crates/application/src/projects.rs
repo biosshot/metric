@@ -14,6 +14,7 @@ use metric_domain::{
     OrganizationIdentity, ProjectAcceptanceState, ProjectId, ProjectIdentity, ProjectIngestLimits,
     ProjectKeyIdentity, ProjectKeyLabel, ProjectKeyState, ProjectSnapshot, Slug,
     api::{ProjectKeyView, ProjectPolicyUpdate, ProjectView},
+    grouping,
 };
 use metric_ports::{
     Clock, PortFuture, ProjectResolveError, ProjectResolver, ProjectStore, ProjectStoreError,
@@ -321,7 +322,7 @@ impl ProjectService {
                 ip_policy: command.ip_policy,
                 items: command.items,
                 limits: command.limits,
-                grouping_revision: 1,
+                grouping_revision: u64::from(grouping::DEFAULT_REVISION),
                 created_at: self.clock.now(),
             };
             match self.store.insert_project(project).await {
