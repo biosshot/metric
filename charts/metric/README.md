@@ -15,7 +15,7 @@ matching published chart:
 
 ```bash
 helm install metric oci://ghcr.io/biosshot/charts/metric \
-  --version 0.1.9 --namespace metric --wait --timeout 10m
+  --version 0.1.10 --namespace metric --wait --timeout 10m
 kubectl --namespace metric port-forward service/metric 4001:4001
 ```
 

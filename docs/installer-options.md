@@ -1,7 +1,7 @@
 # Installer options
 
 The shell and PowerShell installers share the same choices. Without an interactive
-flag they never ask questions. Use the matching 0.1.9 script and assets when the
+flag they never ask questions. Use the matching 0.1.10 script and assets when the
 release is published.
 
 | Purpose | Shell | PowerShell | Environment |

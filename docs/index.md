@@ -30,13 +30,12 @@ errors into issues and shows the result in a web interface.
 Use Metric when you want the Sentry workflow without running the full self-hosted
 Sentry stack.
 
-Metric 0.1.9 is an early release. Review the [known limits](known-limits.md)
+Metric 0.1.10 is an early release. Review the [known limits](known-limits.md)
 before using it for important production data.
 
-[What's new in 0.1.9](releases/0.1.9.md): repaired native and JavaScript
-symbolication, resolved source context, Sentry CLI compatibility and optional
-artifact retention. PostgreSQL advances to schema generation 22.
-This release is being prepared; versioned downloads are not published yet.
+[What's new in 0.1.10](releases/0.1.10.md): new projects group more exceptions
+by their details and can group SDK messages by their thread stack. Existing
+projects keep their grouping revision.
 
 ## What you need
 
