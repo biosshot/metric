@@ -1,11 +1,11 @@
 # Update Metric
 
 Metric container versions follow the `MAJOR.MINOR.PATCH` format, for example
-`0.1.9`.
+`0.1.10`.
 
 ## Before updating
 
-1. Read the [0.1.9 release notes](releases/0.1.9.md).
+1. Read the [0.1.10 release notes](releases/0.1.10.md).
 2. Check the schema requirement for your selected backend.
 3. [Back up the database, file storage and secrets together](backup-restore.md).
 4. Keep a copy of `.env`, `metric.toml` and the previous image version.
@@ -33,8 +33,12 @@ debug files. A 0.1.8 binary cannot open the resulting PostgreSQL schema. Downgra
 requires restoring a matching pre-upgrade backup of the database, BlobStore and
 secrets together.
 
-Artifact retention is disabled by default. Updating to 0.1.9 does not enable
-automatic removal of old source-map bundles. Start with `report` before choosing
+Updating to 0.1.10 preserves each existing project's grouping revision. New
+projects use revision 2. Before downgrading to 0.1.9, follow the
+[grouping rollback instructions](releases/0.1.10.md#upgrades-and-downgrades).
+
+Artifact retention is disabled by default. An upgrade does not enable automatic
+removal of old source-map bundles. Start with `report` before choosing
 `enforce`; see [artifact retention](operations.md#symbolicator).
 
 Installer reruns preserve existing files and permanent secrets. An ordinary update

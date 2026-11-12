@@ -6,7 +6,7 @@ Ingress can be selected. The chart uses the same Min, Low, Medium and High
 application profiles as Docker Compose; Min is the chart default.
 
 The chart version, application version and exact Docker image tag are always the
-same: chart **0.1.9** selects Metric **0.1.9**. There is no separate chart release
+same: chart **0.1.10** selects Metric **0.1.10**. There is no separate chart release
 sequence. If Metric jumps to 2.0.0, its chart also becomes 2.0.0.
 
 ## Prerequisites
@@ -45,7 +45,7 @@ After the matching release has published the public OCI package:
 
 ```bash
 helm install metric oci://ghcr.io/biosshot/charts/metric \
-  --version 0.1.9 --namespace metric \
+  --version 0.1.10 --namespace metric \
   --set mongodb.enabled=true \
   --wait --timeout 10m
 ```
@@ -95,7 +95,7 @@ config:
 
 ```bash
 helm install metric oci://ghcr.io/biosshot/charts/metric \
-  --version 0.1.9 --namespace metric -f my-values.yaml \
+  --version 0.1.10 --namespace metric -f my-values.yaml \
   --wait --timeout 10m
 ```
 
@@ -282,8 +282,8 @@ generated files remain identical to their source configurations and resource lim
 python -m pip install -r scripts/helm-requirements.txt
 python scripts/validate-helm-chart.py
 python scripts/test-helm-publish.py
-docker build -t metric-helm-test:0.1.9 .
-python scripts/validate-helm-chart.py --image metric-helm-test:0.1.9
+docker build -t metric-helm-test:0.1.10 .
+python scripts/validate-helm-chart.py --image metric-helm-test:0.1.10
 ```
 
 `scripts/test-helm-cluster.py` requires an explicitly selected disposable `kind-`
@@ -313,9 +313,9 @@ owner can confirm that `charts/metric` does not exist, validate the exact releas
 checkout, and bootstrap the package using an authenticated Helm client:
 
 ```bash
-python scripts/validate-helm-chart.py --release-tag v0.1.9
+python scripts/validate-helm-chart.py --release-tag v0.1.10
 helm package charts/metric --destination target/helm-package
-helm push target/helm-package/metric-0.1.9.tgz oci://ghcr.io/biosshot/charts
+helm push target/helm-package/metric-0.1.10.tgz oci://ghcr.io/biosshot/charts
 ```
 
 Then link the package, make it public and rerun the release job. Never use this

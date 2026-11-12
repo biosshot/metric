@@ -37,7 +37,7 @@ export default defineConfig({
           { text: 'Running Metric', link: '/operations' },
           { text: 'Backup and restore', link: '/backup-restore' },
           { text: 'Update Metric', link: '/upgrading' },
-          { text: 'Release notes', link: '/releases/0.1.9' },
+          { text: 'Release notes', link: '/releases/0.1.10' },
           { text: 'Troubleshooting', link: '/troubleshooting' },
         ],
       },
